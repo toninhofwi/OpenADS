@@ -1,0 +1,37 @@
+# Build output
+build/
+build-*/
+out/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakePresets.json
+!third_party/**/*.cmake
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiler / linker artefacts
+*.obj
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+*.exe
+*.exp
+*.lib
+*.pdb
+*.ilk
