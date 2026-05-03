@@ -997,6 +997,18 @@ Execute `M0` using the saved plan. Two execution paths:
 - **Subagent-driven (recommended).** Dispatch a fresh subagent per task with two-stage review between tasks. See `superpowers:subagent-driven-development`.
 - **Inline.** Walk the plan in the current session with checkpoints. See `superpowers:executing-plans`.
 
+## Build (M0 skeleton)
+
+```
+git clone https://github.com/FiveTechSoft/OpenADS.git
+cd OpenADS
+cmake --preset default
+cmake --build build/default
+ctest --preset default --output-on-failure
+```
+
+Other presets: `debug`, `msvc-x64`, `ninja-clang` — see `CMakePresets.json`.
+
 ## License
 
 MIT.
