@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace openads::sql {
 
@@ -24,7 +25,8 @@ struct WhereCmp {
 
 struct SelectStmt {
     std::string              table;
-    std::optional<WhereCmp>  where;
+    // Zero or more WHERE comparisons combined by implicit AND.
+    std::vector<WhereCmp>    where;
 };
 
 util::Result<SelectStmt> parse_select(const std::string& sql);

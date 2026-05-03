@@ -145,29 +145,34 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected table name", sql};
     }
 
-    // Optional single-comparison WHERE.
+    // Optional WHERE: one or more comparisons joined by AND.
     if (c.match_keyword("WHERE")) {
-        WhereCmp w;
-        w.column = c.read_identifier();
-        if (w.column.empty()) {
-            return util::Error{7200, 0, "expected column name after WHERE", sql};
+        for (;;) {
+            WhereCmp w;
+            w.column = c.read_identifier();
+            if (w.column.empty()) {
+                return util::Error{7200, 0,
+                    "expected column name in WHERE clause", sql};
+            }
+            c.skip_ws();
+            if      (c.match_seq("<=")) w.op = WhereOp::Le;
+            else if (c.match_seq(">=")) w.op = WhereOp::Ge;
+            else if (c.match_seq("<>")) w.op = WhereOp::Ne;
+            else if (c.match_seq("!=")) w.op = WhereOp::Ne;
+            else if (c.match_char('=')) w.op = WhereOp::Eq;
+            else if (c.match_char('<')) w.op = WhereOp::Lt;
+            else if (c.match_char('>')) w.op = WhereOp::Gt;
+            else {
+                return util::Error{7200, 0,
+                    "expected =, !=, <>, <, >, <= or >= after column name", sql};
+            }
+            auto lit = c.read_string_literal();
+            if (!lit) return lit.error();
+            w.literal = std::move(lit).value();
+            stmt.where.push_back(std::move(w));
+
+            if (!c.match_keyword("AND")) break;
         }
-        c.skip_ws();
-        if      (c.match_seq("<=")) w.op = WhereOp::Le;
-        else if (c.match_seq(">=")) w.op = WhereOp::Ge;
-        else if (c.match_seq("<>")) w.op = WhereOp::Ne;
-        else if (c.match_seq("!=")) w.op = WhereOp::Ne;
-        else if (c.match_char('=')) w.op = WhereOp::Eq;
-        else if (c.match_char('<')) w.op = WhereOp::Lt;
-        else if (c.match_char('>')) w.op = WhereOp::Gt;
-        else {
-            return util::Error{7200, 0,
-                "expected =, !=, <>, <, >, <= or >= after column name", sql};
-        }
-        auto lit = c.read_string_literal();
-        if (!lit) return lit.error();
-        w.literal = std::move(lit).value();
-        stmt.where = std::move(w);
     }
 
     // Optional trailing semicolon.

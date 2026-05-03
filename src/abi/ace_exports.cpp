@@ -1075,28 +1075,39 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     openads::engine::Table* tbl = c->lookup_table(th.value());
     if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
 
-    // Compile the WHERE clause (if present) into a row predicate.
-    if (parsed.value().where.has_value()) {
-        const auto& w = *parsed.value().where;
-        std::int32_t fidx = tbl->field_index(w.column);
-        if (fidx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, w.column.c_str());
-        std::string literal = w.literal;
-        openads::sql::WhereOp op = w.op;
-        std::uint16_t fi = static_cast<std::uint16_t>(fidx);
-        tbl->set_filter([fi, literal, op](openads::engine::Table& t) {
-            auto v = t.read_field(fi);
-            if (!v) return false;
-            const std::string& s = v.value().as_string;
-            int cmp = s.compare(literal);
-            switch (op) {
-                case openads::sql::WhereOp::Eq: return cmp == 0;
-                case openads::sql::WhereOp::Ne: return cmp != 0;
-                case openads::sql::WhereOp::Lt: return cmp <  0;
-                case openads::sql::WhereOp::Gt: return cmp >  0;
-                case openads::sql::WhereOp::Le: return cmp <= 0;
-                case openads::sql::WhereOp::Ge: return cmp >= 0;
+    // Compile WHERE clauses (AND-joined) into a row predicate.
+    if (!parsed.value().where.empty()) {
+        struct Term {
+            std::uint16_t         field_index;
+            openads::sql::WhereOp op;
+            std::string           literal;
+        };
+        std::vector<Term> terms;
+        terms.reserve(parsed.value().where.size());
+        for (const auto& w : parsed.value().where) {
+            std::int32_t fidx = tbl->field_index(w.column);
+            if (fidx < 0) {
+                return fail(openads::AE_COLUMN_NOT_FOUND, w.column.c_str());
             }
-            return false;
+            terms.push_back({static_cast<std::uint16_t>(fidx), w.op, w.literal});
+        }
+        tbl->set_filter([terms = std::move(terms)](openads::engine::Table& t) {
+            for (const auto& term : terms) {
+                auto v = t.read_field(term.field_index);
+                if (!v) return false;
+                int cmp = v.value().as_string.compare(term.literal);
+                bool ok = false;
+                switch (term.op) {
+                    case openads::sql::WhereOp::Eq: ok = (cmp == 0); break;
+                    case openads::sql::WhereOp::Ne: ok = (cmp != 0); break;
+                    case openads::sql::WhereOp::Lt: ok = (cmp <  0); break;
+                    case openads::sql::WhereOp::Gt: ok = (cmp >  0); break;
+                    case openads::sql::WhereOp::Le: ok = (cmp <= 0); break;
+                    case openads::sql::WhereOp::Ge: ok = (cmp >= 0); break;
+                }
+                if (!ok) return false;
+            }
+            return true;
         });
     }
 

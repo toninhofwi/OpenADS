@@ -37,17 +37,30 @@ TEST_CASE("parse_select recognises a single-equality WHERE clause") {
     auto r = parse_select("SELECT * FROM data.dbf WHERE TAG = 'BAR'");
     REQUIRE(r.has_value());
     CHECK(r.value().table == "data.dbf");
-    REQUIRE(r.value().where.has_value());
-    CHECK(r.value().where->column  == "TAG");
-    CHECK(r.value().where->literal == "BAR");
+    REQUIRE(r.value().where.size() == 1);
+    CHECK(r.value().where[0].column  == "TAG");
+    CHECK(r.value().where[0].literal == "BAR");
 }
 
 TEST_CASE("parse_select WHERE accepts case-insensitive keyword and tight whitespace") {
     auto r = parse_select("select * from x where  Name='Anna'");
     REQUIRE(r.has_value());
-    REQUIRE(r.value().where.has_value());
-    CHECK(r.value().where->column  == "Name");
-    CHECK(r.value().where->literal == "Anna");
+    REQUIRE(r.value().where.size() == 1);
+    CHECK(r.value().where[0].column  == "Name");
+    CHECK(r.value().where[0].literal == "Anna");
+}
+
+TEST_CASE("parse_select WHERE supports AND-joined comparisons") {
+    auto r = parse_select(
+        "SELECT * FROM x WHERE A = 'foo' AND B != 'bar' AND C >= 'z'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where.size() == 3);
+    CHECK(r.value().where[0].column  == "A");
+    CHECK(r.value().where[0].op      == openads::sql::WhereOp::Eq);
+    CHECK(r.value().where[1].column  == "B");
+    CHECK(r.value().where[1].op      == openads::sql::WhereOp::Ne);
+    CHECK(r.value().where[2].column  == "C");
+    CHECK(r.value().where[2].op      == openads::sql::WhereOp::Ge);
 }
 
 TEST_CASE("parse_select WHERE accepts each comparison operator") {
@@ -66,8 +79,8 @@ TEST_CASE("parse_select WHERE accepts each comparison operator") {
         std::string sql = std::string("SELECT * FROM x WHERE TAG ") + tc.op + " 'A'";
         auto r = parse_select(sql);
         REQUIRE(r.has_value());
-        REQUIRE(r.value().where.has_value());
-        CHECK(r.value().where->op == tc.expected);
+        REQUIRE(r.value().where.size() == 1);
+        CHECK(r.value().where[0].op == tc.expected);
     }
 }
 
