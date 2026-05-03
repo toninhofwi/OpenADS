@@ -2,7 +2,9 @@
 
 #include "drivers/driver_trait.h"
 #include "drivers/dbf_common.h"
+#include "drivers/index_trait.h"
 #include "engine/lock_mgr.h"
+#include "engine/order.h"
 #include "util/result.h"
 
 #include <cstdint>
@@ -65,6 +67,17 @@ public:
     util::Result<void> lock_table_excl();
     util::Result<void> unlock_table();
 
+    // Order + scope surface (M3).
+    void               set_order(std::unique_ptr<drivers::IIndex> idx);
+    void               clear_order();
+    Order*             order() noexcept { return order_ ? &*order_ : nullptr; }
+    const Order*       order() const noexcept { return order_ ? &*order_ : nullptr; }
+    util::Result<bool> seek_key(const std::string& key, bool soft);
+    util::Result<void> set_scope(bool top, const std::string& key);
+    util::Result<void> clear_scope(bool top);
+    util::Result<void> clear_scopes();
+    std::optional<std::string> get_scope(bool top) const;
+
 private:
     enum class State { Bof, Positioned, Eof };
 
@@ -76,6 +89,9 @@ private:
     util::Result<void> load_record_(std::uint32_t recno);
     util::Result<void> writeback_record_();
 
+    bool key_in_top_scope_   (const std::string& key) const;
+    bool key_in_bottom_scope_(const std::string& key) const;
+
     TableTypeForLock to_lock_type_() const noexcept;
 
     std::unique_ptr<drivers::IDriver>             driver_;
@@ -85,6 +101,7 @@ private:
     LockMgr                                       locks_;
     std::unordered_map<std::uint32_t, LockHandle> recno_locks_;
     std::optional<LockHandle>                     table_lock_;
+    std::optional<Order>                          order_;
     State                                         state_  = State::Bof;
     std::uint32_t                                 recno_  = 0;
     std::vector<std::uint8_t>                     record_buf_;

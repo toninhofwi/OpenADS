@@ -22,7 +22,7 @@ util::Result<Table> Table::open(const std::string& path,
         case TableType::Adt:
         case TableType::Vfp:
             return util::Error{5004, 0,
-                               "table type not yet supported in M2", path};
+                               "table type not yet supported in M3", path};
     }
     drivers::DriverOpenMode dmode = drivers::DriverOpenMode::ReadOnly;
     switch (mode) {
@@ -71,7 +71,31 @@ util::Result<void> Table::writeback_record_() {
                                      record_buf_.size());
 }
 
+bool Table::key_in_top_scope_(const std::string& key) const {
+    if (!order_ || !order_->scope().top.has_value()) return true;
+    return key >= *order_->scope().top;
+}
+
+bool Table::key_in_bottom_scope_(const std::string& key) const {
+    if (!order_ || !order_->scope().bottom.has_value()) return true;
+    return key <= *order_->scope().bottom;
+}
+
 util::Result<void> Table::goto_top() {
+    if (order_ && order_->index()) {
+        auto* idx = order_->index();
+        util::Result<drivers::SeekOutcome> r = order_->scope().top.has_value()
+            ? idx->seek_key(*order_->scope().top, true)
+            : idx->seek_first();
+        if (!r) return r.error();
+        if (!r.value().positioned) {
+            state_ = State::Eof; recno_ = 0; return {};
+        }
+        if (!key_in_bottom_scope_(idx->current_key())) {
+            state_ = State::Eof; recno_ = 0; return {};
+        }
+        return load_record_(r.value().recno);
+    }
     if (driver_->record_count() == 0) {
         state_ = State::Eof; recno_ = 0; return {};
     }
@@ -79,6 +103,25 @@ util::Result<void> Table::goto_top() {
 }
 
 util::Result<void> Table::goto_bottom() {
+    if (order_ && order_->index()) {
+        auto* idx = order_->index();
+        util::Result<drivers::SeekOutcome> r = idx->seek_last();
+        if (!r) return r.error();
+        if (!r.value().positioned) {
+            state_ = State::Eof; recno_ = 0; return {};
+        }
+        // Walk backwards while bottom scope is exceeded.
+        while (r.value().positioned &&
+               !key_in_bottom_scope_(idx->current_key())) {
+            r = idx->prev();
+            if (!r) return r.error();
+        }
+        if (!r.value().positioned ||
+            !key_in_top_scope_(idx->current_key())) {
+            state_ = State::Eof; recno_ = 0; return {};
+        }
+        return load_record_(r.value().recno);
+    }
     auto n = driver_->record_count();
     if (n == 0) { state_ = State::Eof; recno_ = 0; return {}; }
     return load_record_(n);
@@ -93,6 +136,27 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
 }
 
 util::Result<void> Table::skip(std::int32_t delta) {
+    if (order_ && order_->index()) {
+        auto* idx = order_->index();
+        if (delta == 0) return {};
+        util::Result<drivers::SeekOutcome> r = drivers::SeekOutcome{};
+        for (std::int32_t i = 0; i < std::abs(delta); ++i) {
+            r = (delta > 0) ? idx->next() : idx->prev();
+            if (!r) return r.error();
+            if (!r.value().positioned) {
+                if (delta > 0) { state_ = State::Eof; recno_ = 0; }
+                else           { state_ = State::Bof; recno_ = 0; }
+                return {};
+            }
+            if (!key_in_top_scope_(idx->current_key()) ||
+                !key_in_bottom_scope_(idx->current_key())) {
+                if (delta > 0) { state_ = State::Eof; recno_ = 0; }
+                else           { state_ = State::Bof; recno_ = 0; }
+                return {};
+            }
+        }
+        return load_record_(r.value().recno);
+    }
     auto n = driver_->record_count();
     if (n == 0) { state_ = State::Eof; recno_ = 0; return {}; }
     std::int64_t target = static_cast<std::int64_t>(recno_) + delta;
@@ -238,6 +302,57 @@ util::Result<void> Table::unlock_table() {
         table_lock_.reset();
     }
     return {};
+}
+
+void Table::set_order(std::unique_ptr<drivers::IIndex> idx) {
+    order_.emplace(std::move(idx));
+}
+
+void Table::clear_order() {
+    order_.reset();
+}
+
+util::Result<bool>
+Table::seek_key(const std::string& key, bool soft) {
+    if (!order_ || !order_->index()) {
+        return util::Error{6105, 0, "no active index for seek", ""};
+    }
+    auto r = order_->index()->seek_key(key, soft);
+    if (!r) return r.error();
+    if (!r.value().positioned) {
+        state_ = State::Eof; recno_ = 0; return false;
+    }
+    auto load = load_record_(r.value().recno);
+    if (!load) return load.error();
+    return r.value().hit == drivers::SeekHit::Exact;
+}
+
+util::Result<void> Table::set_scope(bool top, const std::string& key) {
+    if (!order_) {
+        return util::Error{6105, 0, "no active index for scope", ""};
+    }
+    if (top) order_->scope().top    = key;
+    else     order_->scope().bottom = key;
+    return {};
+}
+
+util::Result<void> Table::clear_scope(bool top) {
+    if (!order_) return {};
+    if (top) order_->scope().top.reset();
+    else     order_->scope().bottom.reset();
+    return {};
+}
+
+util::Result<void> Table::clear_scopes() {
+    if (!order_) return {};
+    order_->scope().top.reset();
+    order_->scope().bottom.reset();
+    return {};
+}
+
+std::optional<std::string> Table::get_scope(bool top) const {
+    if (!order_) return std::nullopt;
+    return top ? order_->scope().top : order_->scope().bottom;
 }
 
 } // namespace openads::engine
