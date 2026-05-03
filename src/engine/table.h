@@ -3,6 +3,7 @@
 #include "drivers/driver_trait.h"
 #include "drivers/dbf_common.h"
 #include "drivers/index_trait.h"
+#include "drivers/memo_trait.h"
 #include "engine/lock_mgr.h"
 #include "engine/order.h"
 #include "util/result.h"
@@ -67,6 +68,10 @@ public:
     util::Result<void> lock_table_excl();
     util::Result<void> unlock_table();
 
+    // Memo surface (M4).
+    void               attach_memo(std::unique_ptr<drivers::IMemoStore> memo);
+    drivers::IMemoStore* memo() noexcept { return memo_.get(); }
+
     // Order + scope surface (M3).
     void               set_order(std::unique_ptr<drivers::IIndex> idx);
     void               clear_order();
@@ -95,6 +100,7 @@ private:
     TableTypeForLock to_lock_type_() const noexcept;
 
     std::unique_ptr<drivers::IDriver>             driver_;
+    std::unique_ptr<drivers::IMemoStore>          memo_;
     OpenMode                                      mode_     = OpenMode::Read;
     LockingMode                                   locking_  = LockingMode::Compatible;
     TableType                                     type_     = TableType::Cdx;

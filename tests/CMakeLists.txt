@@ -30,6 +30,7 @@ add_executable(openads_unit_tests
     unit/aes_test.cpp
     unit/dbt_memo_test.cpp
     unit/fpt_memo_test.cpp
+    unit/engine_memo_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

@@ -3,6 +3,8 @@
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/ntx/ntx_driver.h"
 
+#include <cstdio>
+#include <cstring>
 #include <utility>
 
 namespace openads::engine {
@@ -176,8 +178,32 @@ Table::read_field(std::uint16_t field_index) {
     if (field_index >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
-    return drivers::decode_field(driver_->fields().at(field_index),
-                                 record_buf_.data(), record_buf_.size());
+    const auto& f = driver_->fields().at(field_index);
+    auto v = drivers::decode_field(f, record_buf_.data(), record_buf_.size());
+    if (!v) return v.error();
+
+    // For M-type fields, the record stores a 10-byte ASCII block number
+    // referencing the memo store. Resolve it here.
+    if (f.type == drivers::DbfFieldType::Memo && memo_) {
+        std::string raw(reinterpret_cast<const char*>(
+            record_buf_.data() + f.record_offset), f.length);
+        // Skip leading spaces; trailing NULs/spaces ignored by stoul.
+        std::uint32_t block = 0;
+        try {
+            std::size_t pos = 0;
+            block = static_cast<std::uint32_t>(std::stoul(raw, &pos, 10));
+        } catch (...) {
+            block = 0;
+        }
+        if (block != 0) {
+            auto mr = memo_->read(block);
+            if (!mr) return mr.error();
+            drivers::DbfFieldValue out;
+            out.as_string = std::move(mr).value();
+            return out;
+        }
+    }
+    return v;
 }
 
 util::Result<void> Table::append_record() {
@@ -200,8 +226,28 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
-    auto r = drivers::encode_field_string(driver_->fields().at(idx),
-                                          record_buf_.data(),
+    const auto& f = driver_->fields().at(idx);
+
+    // Memo fields write to the memo store, then store the resulting
+    // block number as a right-aligned ASCII string in the record.
+    if (f.type == drivers::DbfFieldType::Memo) {
+        if (!memo_) {
+            return util::Error{5004, 0, "memo store not attached", ""};
+        }
+        auto wm = memo_->write(v);
+        if (!wm) return wm.error();
+        char buf[16];
+        int n = std::snprintf(buf, sizeof(buf), "%*u",
+                              static_cast<int>(f.length),
+                              static_cast<unsigned>(wm.value()));
+        if (n < 0 || static_cast<std::size_t>(n) > f.length) {
+            return util::Error{5000, 0, "memo block number overflows field", ""};
+        }
+        std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
+        return writeback_record_();
+    }
+
+    auto r = drivers::encode_field_string(f, record_buf_.data(),
                                           record_buf_.size(), v);
     if (!r) return r.error();
     return writeback_record_();
@@ -302,6 +348,10 @@ util::Result<void> Table::unlock_table() {
         table_lock_.reset();
     }
     return {};
+}
+
+void Table::attach_memo(std::unique_ptr<drivers::IMemoStore> memo) {
+    memo_ = std::move(memo);
 }
 
 void Table::set_order(std::unique_ptr<drivers::IIndex> idx) {
