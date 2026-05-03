@@ -171,6 +171,13 @@ UNSIGNED32 AdsDDRemoveTable      (ADSHANDLE hConnect,
                                   UNSIGNED8* pucAlias,
                                   UNSIGNED16 usDeleteFiles);
 
+UNSIGNED32 AdsCreateSQLStatement (ADSHANDLE hConnect, ADSHANDLE* phStatement);
+UNSIGNED32 AdsCloseSQLStatement  (ADSHANDLE hStatement);
+UNSIGNED32 AdsPrepareSQL         (ADSHANDLE hStatement, UNSIGNED8* pucSQL);
+UNSIGNED32 AdsExecuteSQL         (ADSHANDLE hStatement, ADSHANDLE* phCursor);
+UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
+                                  ADSHANDLE* phCursor);
+
 #define ADS_TOP            0
 #define ADS_BOTTOM         1
 #define ADS_SOFTSEEK       1

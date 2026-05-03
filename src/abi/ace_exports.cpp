@@ -11,6 +11,7 @@
 #include "drivers/index_trait.h"
 #include "drivers/ntx/ntx_index.h"
 #include "drivers/cdx/cdx_index.h"
+#include "sql/parser.h"
 
 #include <algorithm>
 
@@ -983,6 +984,98 @@ UNSIGNED32 AdsDDRemoveTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
     auto alias = openads::abi::to_internal(pucAlias, 0);
     auto r = c->dd()->remove_table(alias);
     if (!r) return fail(r.error());
+    return ok();
+}
+
+// --- M7.1 SQL surface -------------------------------------------------------
+
+extern "C++" {
+
+namespace {
+
+struct SqlStatement {
+    Connection* conn = nullptr;
+    std::string sql;
+};
+
+std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>>& stmt_map() {
+    static std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>> m;
+    return m;
+}
+
+ADSHANDLE next_stmt_handle() {
+    static std::uint64_t n = 0x60000000ULL;
+    return ++n;
+}
+
+} // namespace
+
+} // extern "C++"
+
+UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
+    if (phStatement == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto stmt = std::make_unique<SqlStatement>();
+    stmt->conn = c;
+    ADSHANDLE h = next_stmt_handle();
+    stmt_map()[h] = std::move(stmt);
+    *phStatement = h;
+    return ok();
+}
+
+UNSIGNED32 AdsCloseSQLStatement(ADSHANDLE hStatement) {
+    auto& m = stmt_map();
+    m.erase(hStatement);
+    return ok();
+}
+
+UNSIGNED32 AdsPrepareSQL(ADSHANDLE hStatement, UNSIGNED8* pucSQL) {
+    auto& m = stmt_map();
+    auto it = m.find(hStatement);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    it->second->sql = openads::abi::to_internal(pucSQL, 0);
+    return ok();
+}
+
+UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
+    auto& m = stmt_map();
+    auto it = m.find(hStatement);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    if (it->second->sql.empty()) {
+        return fail(openads::AE_PARSE_ERROR, "no prepared SQL");
+    }
+    UNSIGNED8 buf[2048];
+    std::size_t n = std::min<std::size_t>(it->second->sql.size(), sizeof(buf) - 1);
+    std::memcpy(buf, it->second->sql.data(), n);
+    buf[n] = '\0';
+    return AdsExecuteSQLDirect(hStatement, buf, phCursor);
+}
+
+UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
+                               ADSHANDLE* phCursor) {
+    if (phCursor == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto& m = stmt_map();
+    auto it = m.find(hStatement);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    Connection* c = it->second->conn;
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto sql = openads::abi::to_internal(pucSQL, 0);
+    auto parsed = openads::sql::parse_select(sql);
+    if (!parsed) return fail(parsed.error());
+
+    // Open the referenced table; return its handle as the cursor.
+    auto th = c->open_table(parsed.value().table,
+                            openads::engine::TableType::Cdx,
+                            openads::engine::OpenMode::Read);
+    if (!th) return fail(th.error());
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    openads::engine::Table* tbl = c->lookup_table(th.value());
+    ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);
+    *phCursor = gh;
     return ok();
 }
 

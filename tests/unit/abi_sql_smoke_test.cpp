@@ -1,0 +1,136 @@
+#include "doctest.h"
+#include "openads/ace.h"
+#include "openads/error.h"
+
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+fs::path make_dbf(const fs::path& dir, const char* leaf) {
+    fs::create_directories(dir);
+    auto p = dir / leaf;
+    fs::remove(p);
+    std::vector<std::uint8_t> file;
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0]  = 0x03;
+    hdr[4]  = 2;
+    hdr[8]  = 32 + 32 + 1; hdr[9]  = 0;
+    hdr[10] = 1 + 4;       hdr[11] = 0;
+    file.insert(file.end(), hdr.begin(), hdr.end());
+    std::array<std::uint8_t, 32> fd{};
+    std::strncpy(reinterpret_cast<char*>(fd.data()), "TAG", 11);
+    fd[11] = 'C'; fd[16] = 4;
+    file.insert(file.end(), fd.begin(), fd.end());
+    file.push_back(0x0D);
+    auto push = [&](const char* k){
+        file.push_back(' ');
+        for (int i = 0; i < 4; ++i)
+            file.push_back(i < (int)std::strlen(k)
+                           ? static_cast<std::uint8_t>(k[i]) : ' ');
+    };
+    push("FOO");
+    push("BAR");
+    file.push_back(0x1A);
+    std::ofstream(p, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+    return p;
+}
+
+} // namespace
+
+TEST_CASE("ABI SQL smoke: AdsExecuteSQLDirect on SELECT * FROM <table>") {
+    const auto dir = fs::temp_directory_path() / "openads_m71_sql";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    ADSHANDLE hCursor = 0;
+    UNSIGNED8 sql[128] = "SELECT * FROM data.dbf";
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCursor) == 0);
+
+    UNSIGNED32 count = 0;
+    REQUIRE(AdsGetRecordCount(hCursor, 0, &count) == 0);
+    CHECK(count == 2);
+
+    REQUIRE(AdsGotoTop(hCursor) == 0);
+    UNSIGNED8 fld[16] = "TAG";
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hCursor, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "FOO");
+
+    REQUIRE(AdsSkip(hCursor, 1) == 0);
+    cap = sizeof(buf); std::memset(buf, 0, sizeof(buf));
+    REQUIRE(AdsGetField(hCursor, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "BAR");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ABI SQL: AdsPrepareSQL + AdsExecuteSQL") {
+    const auto dir = fs::temp_directory_path() / "openads_m71_sql_prep";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+    UNSIGNED8 sql[64] = "SELECT * FROM data.dbf";
+    REQUIRE(AdsPrepareSQL(hStmt, sql) == 0);
+    ADSHANDLE hCursor = 0;
+    REQUIRE(AdsExecuteSQL(hStmt, &hCursor) == 0);
+    UNSIGNED32 count = 0;
+    REQUIRE(AdsGetRecordCount(hCursor, 0, &count) == 0);
+    CHECK(count == 2);
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ABI SQL: parse error on unsupported syntax") {
+    const auto dir = fs::temp_directory_path() / "openads_m71_sql_err";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+    ADSHANDLE hCursor = 0;
+    UNSIGNED8 sql[64] = "SELECT TAG FROM data.dbf";   // projection unsupported
+    auto r = AdsExecuteSQLDirect(hStmt, sql, &hCursor);
+    CHECK(r == openads::AE_PARSE_ERROR);
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}

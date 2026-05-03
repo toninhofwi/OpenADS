@@ -32,6 +32,7 @@ add_library(openads_core STATIC
     engine/tx.cpp
     engine/tx_log.cpp
     engine/data_dict.cpp
+    sql/parser.cpp
     drivers/dbf_common.cpp
     drivers/cdx/cdx_driver.cpp
     drivers/cdx/cdx_index.cpp
