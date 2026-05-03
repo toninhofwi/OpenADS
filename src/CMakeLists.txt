@@ -3,6 +3,15 @@ add_library(openads_core STATIC
     platform/path.cpp
     platform/time.cpp
     platform/thread.cpp
+    abi/ace_exports.cpp
+    abi/last_error.cpp
+    abi/charset.cpp
+    session/handle_registry.cpp
+    session/connection.cpp
+    engine/table.cpp
+    engine/cursor.cpp
+    drivers/dbf_common.cpp
+    drivers/cdx/cdx_driver.cpp
 )
 
 if(WIN32)
