@@ -17,14 +17,37 @@ namespace openads::session {
 
 util::Result<Connection> Connection::open(const std::string& data_dir) {
     namespace fs = std::filesystem;
-    std::error_code ec;
-    if (!fs::is_directory(data_dir, ec)) {
-        return util::Error{5103, 0, "data directory not found", data_dir};
-    }
     Connection c;
-    c.data_dir_ = data_dir;
 
-    fs::path log_path = fs::path(data_dir) / "openads.txlog";
+    // If the input ends with ".add", treat it as a Data Dictionary path
+    // and use its parent as the data directory.
+    fs::path p(data_dir);
+    bool is_add = p.has_extension() &&
+        (p.extension() == ".add" || p.extension() == ".ADD");
+
+    std::string actual_dir;
+    if (is_add) {
+        actual_dir = p.parent_path().string();
+        if (actual_dir.empty()) actual_dir = ".";
+    } else {
+        actual_dir = data_dir;
+    }
+
+    std::error_code ec;
+    if (!fs::is_directory(actual_dir, ec)) {
+        return util::Error{5103, 0, "data directory not found", actual_dir};
+    }
+    c.data_dir_ = actual_dir;
+
+    if (is_add) {
+        if (fs::exists(p, ec)) {
+            auto dd = engine::DataDict::open(p.string());
+            if (!dd) return dd.error();
+            c.dd_ = std::move(dd).value();
+        }
+    }
+
+    fs::path log_path = fs::path(actual_dir) / "openads.txlog";
     auto lr = c.tx_log_.open(log_path.string());
     if (!lr) return lr.error();
 
@@ -37,7 +60,9 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
                                             engine::OpenMode   mode,
                                             engine::LockingMode locking) {
     namespace fs = std::filesystem;
-    fs::path full = fs::path(data_dir_) / relative_path;
+    std::string effective = relative_path;
+    if (dd_.has_value()) effective = dd_->resolve(relative_path);
+    fs::path full = fs::path(data_dir_) / effective;
     auto resolved = platform::resolve_case_insensitive(full.string());
 
     auto t = engine::Table::open(resolved, type, mode, locking);

@@ -920,4 +920,70 @@ UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint)
     return ok();
 }
 
+// --- M6 Data Dictionary ----------------------------------------------------
+
+UNSIGNED32 AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 /*bEncrypt*/,
+                       UNSIGNED8* /*pucAdminPassword*/,
+                       ADSHANDLE* phConnect) {
+    if (pucDictionary == nullptr || phConnect == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null DD args");
+    }
+    auto path = openads::abi::to_internal(pucDictionary, 0);
+    // Materialise an empty DD on disk, then open a Connection rooted at it.
+    auto created = openads::engine::DataDict::create(path);
+    if (!created) return fail(created.error());
+
+    auto opened = Connection::open(path);
+    if (!opened) return fail(opened.error());
+
+    auto holder = std::make_unique<Connection>(std::move(opened).value());
+    Connection* raw = holder.get();
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Handle h = s.registry.register_object(HandleKind::Connection, raw);
+    s.conns.emplace(h, std::move(holder));
+    *phConnect = h;
+    return ok();
+}
+
+UNSIGNED32 AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+                         UNSIGNED8* pucTablePath, UNSIGNED8* /*pucIndexPath*/,
+                         UNSIGNED16 /*usCharType*/, UNSIGNED8* /*pucDescription*/,
+                         UNSIGNED8* /*pucValidationExpression*/,
+                         UNSIGNED8* /*pucValidationMessage*/) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!c->has_dd()) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "connection has no data dictionary");
+    }
+    if (pucAlias == nullptr || pucTablePath == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null DD-AddTable args");
+    }
+    auto alias = openads::abi::to_internal(pucAlias, 0);
+    auto path  = openads::abi::to_internal(pucTablePath, 0);
+    auto r = c->dd()->add_table(alias, path);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDRemoveTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+                            UNSIGNED16 /*usDeleteFiles*/) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!c->has_dd()) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "connection has no data dictionary");
+    }
+    if (pucAlias == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto alias = openads::abi::to_internal(pucAlias, 0);
+    auto r = c->dd()->remove_table(alias);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 } // extern "C"

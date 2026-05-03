@@ -155,6 +155,22 @@ UNSIGNED32 AdsInTransaction      (ADSHANDLE hConnect, UNSIGNED16* pbInTx);
 UNSIGNED32 AdsCreateSavepoint    (ADSHANDLE hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint);
 
+UNSIGNED32 AdsDDCreate           (UNSIGNED8* pucDictionary,
+                                  UNSIGNED16 bEncrypt,
+                                  UNSIGNED8* pucAdminPassword,
+                                  ADSHANDLE* phConnect);
+UNSIGNED32 AdsDDAddTable         (ADSHANDLE hConnect,
+                                  UNSIGNED8* pucAlias,
+                                  UNSIGNED8* pucTablePath,
+                                  UNSIGNED8* pucIndexPath,
+                                  UNSIGNED16 usCharType,
+                                  UNSIGNED8* pucDescription,
+                                  UNSIGNED8* pucValidationExpression,
+                                  UNSIGNED8* pucValidationMessage);
+UNSIGNED32 AdsDDRemoveTable      (ADSHANDLE hConnect,
+                                  UNSIGNED8* pucAlias,
+                                  UNSIGNED16 usDeleteFiles);
+
 #define ADS_TOP            0
 #define ADS_BOTTOM         1
 #define ADS_SOFTSEEK       1

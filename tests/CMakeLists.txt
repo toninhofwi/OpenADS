@@ -36,6 +36,8 @@ add_executable(openads_unit_tests
     unit/tx_log_test.cpp
     unit/abi_m5x_recovery_test.cpp
     unit/abi_savepoint_test.cpp
+    unit/data_dict_test.cpp
+    unit/abi_dd_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
