@@ -10,6 +10,7 @@
 #include "util/result.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -73,6 +74,13 @@ public:
     void               attach_memo(std::unique_ptr<drivers::IMemoStore> memo);
     drivers::IMemoStore* memo() noexcept { return memo_.get(); }
 
+    // Row filter (M7.3). When set, navigation methods automatically
+    // advance past non-matching records in their movement direction.
+    using RowPredicate = std::function<bool(Table&)>;
+    void set_filter(RowPredicate p)   { filter_ = std::move(p); }
+    void clear_filter()                { filter_ = nullptr; }
+    bool has_filter() const noexcept   { return static_cast<bool>(filter_); }
+
     // Transaction binding (M5). When a Connection has an active Tx,
     // it points each open Table at it via attach_tx so Table writes
     // record before-images for rollback.
@@ -112,6 +120,7 @@ private:
 
     std::unique_ptr<drivers::IDriver>             driver_;
     std::unique_ptr<drivers::IMemoStore>          memo_;
+    RowPredicate                                  filter_;
     Tx*                                           tx_       = nullptr;
     Tx::TableId                                   tid_      = 0;
     OpenMode                                      mode_     = OpenMode::Read;

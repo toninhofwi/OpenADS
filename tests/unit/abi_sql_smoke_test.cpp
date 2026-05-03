@@ -113,6 +113,42 @@ TEST_CASE("ABI SQL: AdsPrepareSQL + AdsExecuteSQL") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("ABI SQL: WHERE filter selects matching record") {
+    const auto dir = fs::temp_directory_path() / "openads_m73_sql_where";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    ADSHANDLE hCursor = 0;
+    UNSIGNED8 sql[128] = "SELECT * FROM data.dbf WHERE TAG = 'BAR'";
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCursor) == 0);
+
+    REQUIRE(AdsGotoTop(hCursor) == 0);
+    UNSIGNED8 fld[16] = "TAG";
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hCursor, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "BAR");
+
+    // Skipping past the matching row should hit EOF (only one BAR row).
+    REQUIRE(AdsSkip(hCursor, 1) == 0);
+    UNSIGNED16 at_eof = 0;
+    REQUIRE(AdsAtEOF(hCursor, &at_eof) == 0);
+    CHECK(at_eof == 1);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("ABI SQL: parse error on unsupported syntax") {
     const auto dir = fs::temp_directory_path() / "openads_m71_sql_err";
     std::error_code ec;

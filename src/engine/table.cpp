@@ -109,7 +109,11 @@ util::Result<void> Table::goto_top() {
     if (driver_->record_count() == 0) {
         state_ = State::Eof; recno_ = 0; return {};
     }
-    return load_record_(1);
+    if (auto r = load_record_(1); !r) return r.error();
+    if (filter_ && state_ == State::Positioned && !filter_(*this)) {
+        return skip(1);
+    }
+    return {};
 }
 
 util::Result<void> Table::goto_bottom() {
@@ -175,7 +179,23 @@ util::Result<void> Table::skip(std::int32_t delta) {
     if (target > static_cast<std::int64_t>(n)) {
         state_ = State::Eof; recno_ = n + 1; return {};
     }
-    return load_record_(static_cast<std::uint32_t>(target));
+    if (auto r = load_record_(static_cast<std::uint32_t>(target)); !r) {
+        return r.error();
+    }
+    if (filter_) {
+        std::int64_t step = (delta >= 0) ? 1 : -1;
+        while (state_ == State::Positioned && !filter_(*this)) {
+            std::int64_t nt = static_cast<std::int64_t>(recno_) + step;
+            if (nt < 1) { state_ = State::Bof; recno_ = 0; return {}; }
+            if (nt > static_cast<std::int64_t>(n)) {
+                state_ = State::Eof; recno_ = n + 1; return {};
+            }
+            if (auto r = load_record_(static_cast<std::uint32_t>(nt)); !r) {
+                return r.error();
+            }
+        }
+    }
+    return {};
 }
 
 util::Result<drivers::DbfFieldValue>

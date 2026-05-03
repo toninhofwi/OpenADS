@@ -1066,7 +1066,6 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     auto parsed = openads::sql::parse_select(sql);
     if (!parsed) return fail(parsed.error());
 
-    // Open the referenced table; return its handle as the cursor.
     auto th = c->open_table(parsed.value().table,
                             openads::engine::TableType::Cdx,
                             openads::engine::OpenMode::Read);
@@ -1074,6 +1073,22 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     auto& s = state();
     std::lock_guard<std::mutex> lk(s.mu);
     openads::engine::Table* tbl = c->lookup_table(th.value());
+    if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+
+    // Compile the WHERE clause (if present) into a row predicate.
+    if (parsed.value().where.has_value()) {
+        const auto& w = *parsed.value().where;
+        std::int32_t fidx = tbl->field_index(w.column);
+        if (fidx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, w.column.c_str());
+        std::string literal = w.literal;
+        std::uint16_t fi = static_cast<std::uint16_t>(fidx);
+        tbl->set_filter([fi, literal](openads::engine::Table& t) {
+            auto v = t.read_field(fi);
+            if (!v) return false;
+            return v.value().as_string == literal;
+        });
+    }
+
     ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);
     *phCursor = gh;
     return ok();
