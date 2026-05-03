@@ -33,6 +33,7 @@ add_executable(openads_unit_tests
     unit/engine_memo_test.cpp
     unit/abi_m4_smoke_test.cpp
     unit/abi_m5_smoke_test.cpp
+    unit/tx_log_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
