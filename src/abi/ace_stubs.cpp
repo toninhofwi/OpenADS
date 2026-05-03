@@ -175,13 +175,8 @@ uint32_t AdsStmtSetTableType() { STUB_TRACE(AdsStmtSetTableType); return 5004u; 
 uint32_t AdsVerifySQL() { STUB_TRACE(AdsVerifySQL); return 5004u; }
 uint32_t AdsWriteAllRecords() { STUB_TRACE(AdsWriteAllRecords); return 5004u; }
 
-// adsRefreshScope() reads BOF / EOF / IsFound. Until OpenADS' engine
-// tracks last-seek-hit state, report 'not found' so pArea->fFound
-// stays HB_FALSE instead of inheriting stack noise.
-uint32_t AdsIsFound(uint64_t /*hTable*/, uint16_t* pbFound) {
-    if (pbFound != nullptr) *pbFound = 0;
-    return 0u;
-}
+// AdsIsFound moved to ace_exports.cpp (real impl reading the table's
+// last-seek-hit state).
 
 // rddads' adsGetValue routes HB_FT_LOGICAL fields through
 // AdsGetLogical. Read the underlying field as raw character data and

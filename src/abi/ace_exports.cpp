@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -118,9 +119,19 @@ bool resolve_field_index(Table* tbl, UNSIGNED8* pucField, std::uint16_t* out) {
     return false;
 }
 
+// lookup_table_by_index — defined further down once IndexBinding is
+// known. Returns the Table bound to the given index handle, or null.
+Table* lookup_table_by_index(ADSHANDLE h);
+
 Table* get_table(ADSHANDLE h) {
     auto& s = state();
-    return s.registry.lookup<Table>(h, HandleKind::Table);
+    Table* t = s.registry.lookup<Table>(h, HandleKind::Table);
+    if (t != nullptr) return t;
+    // Real ACE accepts an index handle anywhere a table handle is
+    // expected — rddads' adsGoTop calls AdsGotoTop(hOrdCurrent) when
+    // an order is active. The index's bound Table is the same as the
+    // table's, so navigation works the same way.
+    return lookup_table_by_index(h);
 }
 
 } // namespace
@@ -531,6 +542,13 @@ std::unordered_map<ADSHANDLE, IndexBinding>& index_bindings() {
     return m;
 }
 
+Table* lookup_table_by_index(ADSHANDLE h) {
+    auto& m = index_bindings();
+    auto it = m.find(h);
+    if (it == m.end()) return nullptr;
+    return it->second.table;
+}
+
 ADSHANDLE next_index_handle() {
     static std::uint64_t n = 0x40000000ULL;  // disjoint from table handles
     return ++n;
@@ -573,7 +591,19 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     if (!t || phIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
     }
-    auto path = openads::abi::to_internal(pucName, 0);
+    auto raw = openads::abi::to_internal(pucName, 0);
+    namespace fs = std::filesystem;
+    fs::path p(raw);
+    // Resolve relative to the table's directory and auto-append the
+    // file-type extension when the caller passed a bare alias.
+    if (!p.is_absolute()) {
+        fs::path table_dir = fs::path(t->path()).parent_path();
+        p = table_dir / p;
+    }
+    if (!p.has_extension()) {
+        p.replace_extension(".cdx");
+    }
+    auto path = p.string();
     auto idx = make_index_for(path);
     if (auto r = idx->open(path, openads::drivers::IndexOpenMode::Shared); !r) {
         return fail(r.error());
@@ -744,21 +774,48 @@ UNSIGNED32 AdsSetIndexDirection(ADSHANDLE /*hIndex*/, UNSIGNED16 /*usDir*/) {
                 "AdsSetIndexDirection deferred");
 }
 
-UNSIGNED32 AdsSeek(ADSHANDLE hIndex, UNSIGNED8* pucKey,
-                   UNSIGNED16 usOption, UNSIGNED16* pbFound) {
+// ACE / rddads signature: 6 args.
+//   AdsSeek(hIndex, pucKey, u16KeyLen, u16KeyType, u16SeekType, &u16Found)
+//
+// u16KeyType  : ADS_STRINGKEY / ADS_NUMERICKEY / ... — describes
+//               pucKey's encoding. We accept whatever the caller sends
+//               and pass the bytes through as-is; the engine compares
+//               on raw bytes after padding to the index's key length.
+// u16SeekType : 0 = exact (hard), 1 = soft. Bit 1 = AfterKey.
+// rddads' hb_adsUpdateAreaFlags asks AdsIsFound after every seek to
+// decide whether Found() should report .T. — return the flag the
+// engine set inside seek_key.
+UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (pbFound != nullptr) *pbFound = t->last_seek_found() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
+                   UNSIGNED8* pucKey,
+                   UNSIGNED16 u16KeyLen,
+                   UNSIGNED16 /*u16KeyType*/,
+                   UNSIGNED16 u16SeekType,
+                   UNSIGNED16* pbFound) {
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
-    auto key = openads::abi::to_internal(pucKey, 0);
-    bool soft = (usOption & ADS_SOFTSEEK) != 0;
+    std::string key(reinterpret_cast<const char*>(pucKey),
+                    static_cast<std::size_t>(u16KeyLen));
+    bool soft = (u16SeekType & 0x01) != 0;
     auto r = t->seek_key(key, soft);
     if (!r) return fail(r.error());
     if (pbFound != nullptr) *pbFound = r.value() ? 1 : 0;
     return ok();
 }
 
-UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex, UNSIGNED8* pucKey,
+UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
+                       UNSIGNED8* pucKey,
+                       UNSIGNED16 u16KeyLen,
+                       UNSIGNED16 u16KeyType,
                        UNSIGNED16* pbFound) {
-    return AdsSeek(hIndex, pucKey, 0, pbFound);
+    return AdsSeek(hIndex, pucKey, u16KeyLen, u16KeyType,
+                   /*soft*/ 0, pbFound);
 }
 
 UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,

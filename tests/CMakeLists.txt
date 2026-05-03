@@ -53,3 +53,10 @@ target_include_directories(openads_unit_tests PRIVATE
 target_link_libraries(openads_unit_tests PRIVATE openads_core)
 
 add_test(NAME openads_unit_tests COMMAND openads_unit_tests)
+
+# Harbour smoke fixture builder (M8.6). Produces a CDX matching the
+# M8.5 fixture DBF using OpenADS' own CdxIndex::create + insert path,
+# so the Harbour smoke tests dbSeek end-to-end through OpenADS.
+add_executable(make_cdx harbour_smoke/make_cdx.cpp)
+target_include_directories(make_cdx PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(make_cdx PRIVATE openads_core)

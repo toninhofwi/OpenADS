@@ -16,6 +16,55 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.6 — Index seek through OpenADS' CDX
+
+The smoke now stages a CDX alongside the DBF (built by `make_cdx.exe`,
+which calls OpenADS' own `CdxIndex::create` + `insert`), opens both via
+`USE data INDEX data VIA "ADSCDX"`, walks records in NAME order, then
+exercises three `dbSeek` calls:
+
+```
+OrderName: NAME
+OrderKey : NAME
+Walking 3 records in NAME order:
+  rec 1 NAME=[ALPHA] AGE=30  ACTIVE=T BORN=19900101
+  rec 2 NAME=[BETA]  AGE=125 ACTIVE=F BORN=20000615
+  rec 3 NAME=[GAMMA] AGE=77  ACTIVE=T BORN=20251231
+Seek 'BETA':  Found=T RecNo=2 NAME=[BETA]
+Seek 'GAMMA': Found=T RecNo=3 NAME=[GAMMA]
+Seek 'NOPE':  Found=F EOF=T
+```
+
+This validates the entire M3.x CDX implementation through a real
+consumer: rddads reads OpenADS' compound CDX, locates each tag, walks
+the B+tree, and the `Found()` flag reflects the engine's actual
+seek-hit state.
+
+### M8.6 fixes
+
+- New `make_cdx.exe` CMake target writes a CDX from
+  `tests/harbour_smoke/make_cdx.cpp` using OpenADS' `CdxIndex::create`.
+  `run_build.bat` invokes it after the DBF fixture so each smoke run
+  starts from clean disk state.
+- `Table::path()` accessor lets the ABI layer resolve relative index
+  paths (e.g., `INDEX data` -> `<table_dir>/data.cdx`).
+- `AdsOpenIndex` now resolves the `pucName` argument relative to the
+  table's directory and auto-appends `.cdx` when the caller passed a
+  bare alias.
+- `get_table` now falls back to `lookup_table_by_index` when the
+  handle isn't a registered Table — real ACE polymorphism: rddads'
+  `adsGoTop` calls `AdsGotoTop(pArea->hOrdCurrent)` (the **index**
+  handle) when an order is active, and we have to navigate the same
+  underlying Table for it to work.
+- `AdsSeek` now matches rddads' real 6-arg signature
+  `(hIndex, pucKey, u16KeyLen, u16KeyType, u16SeekType, &pbFound)` —
+  the previous 4-arg shape was reading garbage from the stack and
+  causing a segfault. `AdsSeekLast` was widened to match.
+- New `Table::last_seek_found_` flag, set inside `seek_key`, is
+  surfaced through a real `AdsIsFound` implementation. rddads'
+  `hb_adsUpdateAreaFlags` calls `AdsIsFound` after every seek to
+  decide whether `Found()` should report `.T.`.
+
 ## M8.5 — Multi-field DBF (C / N / L / D)
 
 The fixture now declares four fields (NAME C(10), AGE N(3,0),

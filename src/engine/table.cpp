@@ -33,7 +33,9 @@ util::Result<Table> Table::open(const std::string& path,
         case OpenMode::Exclusive: dmode = drivers::DriverOpenMode::Exclusive; break;
     }
     if (auto r = drv->open(path, dmode); !r) return r.error();
-    return Table{std::move(drv), mode, locking, type};
+    Table t{std::move(drv), mode, locking, type};
+    t.path_ = path;
+    return t;
 }
 
 std::uint16_t Table::field_count() const noexcept {
@@ -401,11 +403,15 @@ Table::seek_key(const std::string& key, bool soft) {
     auto r = order_->index()->seek_key(key, soft);
     if (!r) return r.error();
     if (!r.value().positioned) {
-        state_ = State::Eof; recno_ = 0; return false;
+        state_ = State::Eof; recno_ = 0;
+        last_seek_found_ = false;
+        return false;
     }
     auto load = load_record_(r.value().recno);
     if (!load) return load.error();
-    return r.value().hit == drivers::SeekHit::Exact;
+    bool exact = r.value().hit == drivers::SeekHit::Exact;
+    last_seek_found_ = exact;
+    return exact;
 }
 
 util::Result<void> Table::set_scope(bool top, const std::string& key) {

@@ -1,9 +1,9 @@
-/* OpenADS / Harbour rddads smoke test (M8.5).
+/* OpenADS / Harbour rddads smoke test (M8.6).
  *
- * Multi-field DBF: NAME C(10), AGE N(3,0), ACTIVE L(1), BORN D(8).
- * Walks every record and prints all four field values, exercising the
- * Character / Numeric / Logical / Date code paths in OpenADS through
- * Harbour's contrib/rddads.
+ * Multi-field DBF + a pre-staged CDX index (built by make_cdx.exe via
+ * OpenADS' own CdxIndex::create). The smoke opens both, walks every
+ * record in NAME order, then exercises dbSeek for an existing key, a
+ * key-not-found key, and a soft-seek partial match.
  */
 #include "ads.ch"
 
@@ -14,7 +14,7 @@ PROCEDURE Main()
 
    ErrorBlock( {|oErr| MyHandler( oErr ) } )
 
-   ? "OpenADS smoke test (M8.5)"
+   ? "OpenADS smoke test (M8.6)"
    ? "ACE DLL reports:", AdsVersion()
 
    AdsSetFileType( ADS_CDX )
@@ -25,7 +25,7 @@ PROCEDURE Main()
       RETURN
    ENDIF
 
-   USE data VIA "ADSCDX"
+   USE data INDEX data VIA "ADSCDX"
    IF NetErr()
       ? "USE failed"
       RETURN
@@ -33,11 +33,15 @@ PROCEDURE Main()
 
    ? "Schema:"
    FOR nFld := 1 TO FCount()
-      ? "  ", nFld, FieldName(nFld), ;
-        FieldType(nFld), "len=", FieldLen(nFld), "dec=", FieldDec(nFld)
+      ? "  ", nFld, FieldName(nFld), FieldType(nFld), ;
+        "len=", FieldLen(nFld), "dec=", FieldDec(nFld)
    NEXT
 
-   ? "Walking", LastRec(), "records:"
+   ? "OrderName:", OrdName()
+   ? "OrderKey :", OrdKey()
+
+   ? "Walking", LastRec(), "records in NAME order:"
+   dbGoTop()
    DO WHILE ! Eof()
       ? "  rec", RecNo(), ;
         "NAME=[" + FIELD->NAME + "]", ;
@@ -46,6 +50,24 @@ PROCEDURE Main()
         "BORN=" + DToS(FIELD->BORN)
       dbSkip()
    ENDDO
+
+   ? ""
+   ? "Seek 'BETA' (exact)..."
+   dbSeek("BETA")
+   ? "  Found=" + iif(Found(), "T", "F"), ;
+     "RecNo=" + LTrim(Str(RecNo())), ;
+     "NAME=[" + FIELD->NAME + "]"
+
+   ? "Seek 'GAMMA' (exact, last key)..."
+   dbSeek("GAMMA")
+   ? "  Found=" + iif(Found(), "T", "F"), ;
+     "RecNo=" + LTrim(Str(RecNo())), ;
+     "NAME=[" + FIELD->NAME + "]"
+
+   ? "Seek 'NOPE' (miss)..."
+   dbSeek("NOPE")
+   ? "  Found=" + iif(Found(), "T", "F"), ;
+     "EOF=" + iif(Eof(), "T", "F")
 
    USE
    ? "Done."

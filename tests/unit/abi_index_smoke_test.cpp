@@ -91,7 +91,8 @@ TEST_CASE("ABI index smoke: create NTX, seek, walk in order, scope") {
     // Seek by key.
     UNSIGNED8 key[8] = "BBBB";
     UNSIGNED16 found = 0;
-    REQUIRE(AdsSeek(hIndex, key, 0, &found) == 0);
+    REQUIRE(AdsSeek(hIndex, key, 4 /*key_len*/, 0 /*key_type*/,
+                    0 /*seek_type=hard*/, &found) == 0);
     CHECK(found == 1);
     REQUIRE(AdsGetRecordNum(hTable, 0, &recno) == 0);
     CHECK(recno == 3);

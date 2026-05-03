@@ -109,8 +109,10 @@ UNSIGNED32 AdsGetIndexName  (ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir);
 
 UNSIGNED32 AdsSeek          (ADSHANDLE hIndex, UNSIGNED8* pucKey,
-                              UNSIGNED16 usOption, UNSIGNED16* pbFound);
+                              UNSIGNED16 usKeyLen, UNSIGNED16 usKeyType,
+                              UNSIGNED16 usSeekType, UNSIGNED16* pbFound);
 UNSIGNED32 AdsSeekLast      (ADSHANDLE hIndex, UNSIGNED8* pucKey,
+                              UNSIGNED16 usKeyLen, UNSIGNED16 usKeyType,
                               UNSIGNED16* pbFound);
 
 UNSIGNED32 AdsSetScope      (ADSHANDLE hIndex, UNSIGNED16 usScope,

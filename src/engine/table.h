@@ -36,6 +36,8 @@ public:
                                     OpenMode mode = OpenMode::Read,
                                     LockingMode locking = LockingMode::Compatible);
 
+    const std::string& path() const noexcept { return path_; }
+
     std::uint16_t field_count() const noexcept;
     const drivers::DbfField& field_descriptor(std::uint16_t idx) const;
     std::int32_t field_index(const std::string& name) const noexcept;
@@ -97,6 +99,7 @@ public:
     Order*             order() noexcept { return order_ ? &*order_ : nullptr; }
     const Order*       order() const noexcept { return order_ ? &*order_ : nullptr; }
     util::Result<bool> seek_key(const std::string& key, bool soft);
+    bool last_seek_found() const noexcept { return last_seek_found_; }
     util::Result<void> set_scope(bool top, const std::string& key);
     util::Result<void> clear_scope(bool top);
     util::Result<void> clear_scopes();
@@ -133,6 +136,8 @@ private:
     State                                         state_  = State::Bof;
     std::uint32_t                                 recno_  = 0;
     std::vector<std::uint8_t>                     record_buf_;
+    std::string                                   path_;
+    bool                                          last_seek_found_ = false;
 };
 
 } // namespace openads::engine
