@@ -79,6 +79,7 @@ endif()
 # ----------------------------------------------------------------------
 add_library(openads_ace SHARED
     abi/ace_exports.cpp
+    abi/ace_stubs.cpp
     abi/charset.cpp
     abi/last_error.cpp
 )
