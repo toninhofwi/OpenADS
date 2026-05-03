@@ -18,13 +18,14 @@ README "Validation" goal of byte-level compatibility.
 | 10 | NTX erase ignores recno when recno=0 | **Confirmed-as-spec**. Matches Harbour's `NTX_IGNORE_REC_NUM = 0x0UL` convention (passing recno=0 means "any recno with this key"). |
 | 11 | NTX soft seek past end | **Confirmed-as-correct**. The seek loop already descends the trailing right child when `i >= kc` on a non-leaf path; soft fallback only trips when reaching a leaf, which lands on the last key with `AfterKey`. |
 | 12 | Descending / unique flag round-trip untested | **Fixed** (`bb75c22`). |
+| 4  | NTX multi-level `next` / `prev` correctness | **Fixed** (`aaf8f52`, M3.8). Cache-based in-order traversal + leaf-split fix (separator promoted, not duplicated). |
 
-Items 2 (CDX compound structure tag) and 4 (NTX multi-level `next`/`prev` rework that visits internal-node keys) remain open. Both require architectural rebuilds rather than localised fixes:
+Item 2 (CDX compound structure tag) remains open and lands as **M3.9**.
 
-- **#2** needs writing the compound structure tag B+tree at page 0 (with the FoxPro on-disk layout: structure tag root → leaves whose entries map tag-name strings to per-tag CDXTAGHEADER pages). The current single-tag flat layout in `CdxIndex::create` would need to be replaced with a two-tag layout, plus open() learning to walk the structure tag.
-- **#4** needs refactoring the NTX cursor stack to track post-emit phase per internal frame so `next()` can emit separator keys after returning from a left subtree, then descend the right subtree — instead of treating internal frames the same way as leaves. A simpler alternative is to switch to a cache-based traversal: on open, walk the entire tree depth-first and store `(recno, key)` pairs in a vector; `next` / `prev` / `seek_key` then operate on the vector. The cache approach trades memory for code simplicity but breaks no existing single-level tests.
+- **#2** needs writing the compound structure tag B+tree at page 0 (FoxPro on-disk layout: structure tag root → leaves whose entries map tag-name strings to per-tag CDXTAGHEADER pages). The current single-tag flat layout in `CdxIndex::create` would need to be replaced, plus `open()` learning to walk the structure tag. Recipe: page 0 = structure tag CDXTAGHEADER, page 1 = its leaf with one entry `(tag_name[key_len], 0[4], sub_header_page[4])` (internal-node-style entries, NOT compact-encoded), page 2 = sub-tag CDXTAGHEADER, page 3+ = sub-tag's compact-leaf B+tree.
+- **#4 (closed)** was solved via a cache-based traversal: `ensure_cache_()` walks the tree depth-first into a flat `std::vector<CachedKey>`; `seek_first` / `seek_last` / `seek_key` / `next` / `prev` operate on the vector by index. Write paths (`insert` / `erase`) keep stack-based descent via `seek_key_for_write_` and mark `cache_dirty_ = true`. A separate split-bug fix (`Entry separator = all[mid]; right_half = [mid+1, end)`) prevents the separator from appearing twice during multi-level walks.
 
-Both items will land as **M3.8** when scheduled. Until then, multi-level NTX trees produce correct seek_key results (single-page traversal works) but `next()` / `prev()` over a multi-level NTX may revisit or skip keys. CDX files are always single-tag flat (non-FoxPro) and cannot be read by FoxPro tools.
+CDX files are still single-tag flat (non-FoxPro) and cannot be read by FoxPro tools until M3.9 lands.
 
 Items 8, 9, 13, 14, 15, 16, 17 are minor / hygiene and tracked below.
 
