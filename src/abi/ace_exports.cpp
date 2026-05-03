@@ -473,9 +473,18 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         return fail(r.error());
     }
     std::string tag_name = idx->name();
+
+    // Drop any prior bindings for this table — set_order destroys the
+    // previous order, which would leave older handles dangling.
+    auto& m = index_bindings();
+    for (auto it = m.begin(); it != m.end(); ) {
+        if (it->second.table == t) it = m.erase(it);
+        else                       ++it;
+    }
+
     t->set_order(std::move(idx));
     ADSHANDLE h = next_index_handle();
-    index_bindings()[h] = IndexBinding{t, tag_name};
+    m[h] = IndexBinding{t, tag_name};
     *phIndex = h;
     return ok();
 }
@@ -536,10 +545,13 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
             std::move(created).value());
     }
 
-    // Populate from existing records in primary order.
+    // Populate from existing live records in primary order. Deleted
+    // records are skipped so AdsSeek over the new index never returns
+    // phantom recnos.
     auto rec_count = t->record_count();
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto rr = t->goto_record(r); !rr) return fail(rr.error());
+        if (t->is_deleted()) continue;
         auto v = t->read_field(static_cast<std::uint16_t>(fidx));
         if (!v) return fail(v.error());
         std::string padded = v.value().as_string;
@@ -549,9 +561,14 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
     }
     if (auto fl = idx->flush(); !fl) return fail(fl.error());
 
+    auto& m = index_bindings();
+    for (auto it = m.begin(); it != m.end(); ) {
+        if (it->second.table == t) it = m.erase(it);
+        else                       ++it;
+    }
     t->set_order(std::move(idx));
     ADSHANDLE h = next_index_handle();
-    index_bindings()[h] = IndexBinding{t, tag};
+    m[h] = IndexBinding{t, tag};
     *phIndex = h;
     return ok();
 }
