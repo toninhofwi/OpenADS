@@ -7,7 +7,8 @@ namespace openads::engine {
 
 namespace {
 
-constexpr std::uint32_t WAL_MAGIC = 0x004C4157u; // 'WAL\0' LE
+constexpr std::uint32_t WAL_MAGIC      = 0x004C4157u; // 'WAL\0' LE
+constexpr std::size_t   WAL_HEADER_LEN = 24;          // magic..lsn inclusive
 
 void write_u16_le(std::uint8_t* p, std::uint16_t v) {
     p[0] = static_cast<std::uint8_t>( v       & 0xFFu);
@@ -57,7 +58,6 @@ util::Result<void> TxLog::open(const std::string& path) {
     path_ = path;
     auto fres = platform::File::open(path, platform::OpenMode::ReadWrite);
     if (!fres) {
-        // Try create.
         auto cre = platform::File::open(path, platform::OpenMode::CreateRW);
         if (!cre) return cre.error();
         file_ = std::move(cre).value();
@@ -67,26 +67,46 @@ util::Result<void> TxLog::open(const std::string& path) {
     auto sz = file_.size();
     if (!sz) return sz.error();
     write_offset_ = sz.value();
+
+    // Resume LSN counter from the highest LSN already on disk so newly
+    // appended records can never collide with surviving ones.
+    next_lsn_.store(1);
+    last_synced_lsn_ = 0;
+    if (write_offset_ > 0) {
+        auto recs = read_all();
+        if (recs) {
+            std::uint64_t hi = 0;
+            for (auto& r : recs.value()) if (r.lsn > hi) hi = r.lsn;
+            next_lsn_.store(hi + 1);
+            last_synced_lsn_ = hi;   // already on disk
+        }
+    }
     return {};
 }
 
-util::Result<void>
+util::Result<std::uint64_t>
 TxLog::append_record_(TxRecordType type, std::uint64_t tx_id,
                       const std::vector<std::uint8_t>& payload) {
     if (payload.size() > 0xFFFFu) {
         return util::Error{5000, 0, "tx log payload too large", ""};
     }
-    std::vector<std::uint8_t> rec(16 + payload.size() + 4, 0);
+
+    std::lock_guard<std::mutex> lk(append_mu_);
+    std::uint64_t lsn = next_lsn_.fetch_add(1);
+
+    std::vector<std::uint8_t> rec(WAL_HEADER_LEN + payload.size() + 4, 0);
     write_u32_le(rec.data() + 0, WAL_MAGIC);
     rec[4] = static_cast<std::uint8_t>(type);
     rec[5] = 0;
     write_u16_le(rec.data() + 6, static_cast<std::uint16_t>(payload.size()));
-    write_u64_le(rec.data() + 8, tx_id);
+    write_u64_le(rec.data() + 8,  tx_id);
+    write_u64_le(rec.data() + 16, lsn);
     if (!payload.empty()) {
-        std::memcpy(rec.data() + 16, payload.data(), payload.size());
+        std::memcpy(rec.data() + WAL_HEADER_LEN,
+                    payload.data(), payload.size());
     }
-    std::uint32_t crc = crc32c(rec.data(), 16 + payload.size());
-    write_u32_le(rec.data() + 16 + payload.size(), crc);
+    std::uint32_t crc = crc32c(rec.data(), WAL_HEADER_LEN + payload.size());
+    write_u32_le(rec.data() + WAL_HEADER_LEN + payload.size(), crc);
 
     auto wrote = file_.write_at(write_offset_, rec.data(), rec.size());
     if (!wrote) return wrote.error();
@@ -94,19 +114,19 @@ TxLog::append_record_(TxRecordType type, std::uint64_t tx_id,
         return util::Error{5000, 0, "short write on tx log", ""};
     }
     write_offset_ += rec.size();
-    return {};
+    return lsn;
 }
 
-util::Result<void> TxLog::append_begin(std::uint64_t tx_id) {
+util::Result<std::uint64_t> TxLog::append_begin_async(std::uint64_t tx_id) {
     return append_record_(TxRecordType::Begin, tx_id, {});
 }
 
-util::Result<void>
-TxLog::append_update(std::uint64_t tx_id,
-                     const std::string& table_path,
-                     std::uint32_t recno,
-                     const std::vector<std::uint8_t>& before,
-                     const std::vector<std::uint8_t>& after) {
+util::Result<std::uint64_t>
+TxLog::append_update_async(std::uint64_t tx_id,
+                           const std::string& table_path,
+                           std::uint32_t recno,
+                           const std::vector<std::uint8_t>& before,
+                           const std::vector<std::uint8_t>& after) {
     std::size_t plen = 2 + table_path.size() + 4 + 2 + before.size()
                        + 2 + after.size();
     std::vector<std::uint8_t> payload(plen);
@@ -124,20 +144,67 @@ TxLog::append_update(std::uint64_t tx_id,
     return append_record_(TxRecordType::Update, tx_id, payload);
 }
 
-util::Result<void> TxLog::append_commit(std::uint64_t tx_id) {
-    auto r = append_record_(TxRecordType::Commit, tx_id, {});
+util::Result<std::uint64_t> TxLog::append_commit_async(std::uint64_t tx_id) {
+    return append_record_(TxRecordType::Commit, tx_id, {});
+}
+
+util::Result<std::uint64_t> TxLog::append_abort_async(std::uint64_t tx_id) {
+    return append_record_(TxRecordType::Abort, tx_id, {});
+}
+
+util::Result<void> TxLog::append_begin(std::uint64_t tx_id) {
+    auto r = append_begin_async(tx_id);
     if (!r) return r.error();
-    return file_.sync();
+    return {};
+}
+
+util::Result<void>
+TxLog::append_update(std::uint64_t tx_id,
+                     const std::string& table_path,
+                     std::uint32_t recno,
+                     const std::vector<std::uint8_t>& before,
+                     const std::vector<std::uint8_t>& after) {
+    auto r = append_update_async(tx_id, table_path, recno, before, after);
+    if (!r) return r.error();
+    return {};
+}
+
+util::Result<void> TxLog::append_commit(std::uint64_t tx_id) {
+    auto r = append_commit_async(tx_id);
+    if (!r) return r.error();
+    return sync_to(r.value());
 }
 
 util::Result<void> TxLog::append_abort(std::uint64_t tx_id) {
-    auto r = append_record_(TxRecordType::Abort, tx_id, {});
+    auto r = append_abort_async(tx_id);
     if (!r) return r.error();
-    return file_.sync();
+    return sync_to(r.value());
+}
+
+util::Result<void> TxLog::sync_to(std::uint64_t lsn) {
+    // Fast-path: already durable.
+    if (last_synced_lsn_ >= lsn) return {};
+
+    std::lock_guard<std::mutex> lk(sync_mu_);
+    if (last_synced_lsn_ >= lsn) return {};   // racing winner already synced
+
+    // High-water mark BEFORE the fsync. Any record with an LSN <= hwm
+    // is fully written by the time we issue the sync (append_mu_ has
+    // released after each completed write_at).
+    std::uint64_t hwm = next_lsn_.load();
+    auto r = file_.sync();
+    if (!r) return r.error();
+    last_synced_lsn_ = hwm > 0 ? hwm - 1 : 0;
+    return {};
 }
 
 util::Result<void> TxLog::sync() {
-    return file_.sync();
+    std::lock_guard<std::mutex> lk(sync_mu_);
+    std::uint64_t hwm = next_lsn_.load();
+    auto r = file_.sync();
+    if (!r) return r.error();
+    last_synced_lsn_ = hwm > 0 ? hwm - 1 : 0;
+    return {};
 }
 
 util::Result<std::vector<TxRecord>> TxLog::read_all() {
@@ -150,22 +217,26 @@ util::Result<std::vector<TxRecord>> TxLog::read_all() {
     std::size_t got_n = got.value();
 
     std::size_t pos = 0;
-    while (pos + 20 <= got_n) {
+    while (pos + WAL_HEADER_LEN + 4 <= got_n) {
         if (read_u32_le(buf.data() + pos) != WAL_MAGIC) break;
         std::uint8_t  type_byte = buf[pos + 4];
         std::uint16_t plen      = read_u16_le(buf.data() + pos + 6);
         std::uint64_t tx_id     = read_u64_le(buf.data() + pos + 8);
-        std::size_t rec_size = 16 + plen + 4;
+        std::uint64_t lsn       = read_u64_le(buf.data() + pos + 16);
+        std::size_t rec_size = WAL_HEADER_LEN + plen + 4;
         if (pos + rec_size > got_n) break;
-        std::uint32_t stored_crc = read_u32_le(buf.data() + pos + 16 + plen);
-        std::uint32_t calc_crc   = crc32c(buf.data() + pos, 16 + plen);
+        std::uint32_t stored_crc =
+            read_u32_le(buf.data() + pos + WAL_HEADER_LEN + plen);
+        std::uint32_t calc_crc =
+            crc32c(buf.data() + pos, WAL_HEADER_LEN + plen);
         if (stored_crc != calc_crc) break;
 
         TxRecord r;
         r.type  = static_cast<TxRecordType>(type_byte);
         r.tx_id = tx_id;
+        r.lsn   = lsn;
         if (r.type == TxRecordType::Update && plen >= 10) {
-            const std::uint8_t* p = buf.data() + pos + 16;
+            const std::uint8_t* p = buf.data() + pos + WAL_HEADER_LEN;
             std::uint16_t pl = read_u16_le(p + 0);
             r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
             std::size_t off = 2 + pl;
@@ -183,12 +254,13 @@ util::Result<std::vector<TxRecord>> TxLog::read_all() {
 }
 
 util::Result<void> TxLog::truncate() {
-    // Re-open with CreateRW to truncate.
     file_ = platform::File{};
     auto cre = platform::File::open(path_, platform::OpenMode::CreateRW);
     if (!cre) return cre.error();
     file_ = std::move(cre).value();
     write_offset_ = 0;
+    next_lsn_.store(1);
+    last_synced_lsn_ = 0;
     return {};
 }
 
