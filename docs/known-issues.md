@@ -6,7 +6,7 @@ round-trip *their own* output but cannot interoperate with `.cdx` /
 `.ntx` files produced by other tools, which contradicts the
 README "Validation" goal of byte-level compatibility.
 
-## Status — M3.6 / M3.7 partial
+## Status — M3.6 / M3.7
 
 | # | Issue | Status |
 |---|-------|--------|
@@ -15,9 +15,16 @@ README "Validation" goal of byte-level compatibility.
 | 5 | NTX `insert` returns AE_FUNCTION_NOT_AVAILABLE on second page | **Fixed for single-level** (`6ab97c4`). Root-leaf overflow now creates a branch root with two leaves. Multi-level recursion still pending. |
 | 6 | AdsOpenIndex lifecycle race | **Fixed** (`efe8d22`). |
 | 7 | AdsCreateIndex indexes deleted records | **Fixed** (`efe8d22`). |
+| 10 | NTX erase ignores recno when recno=0 | **Confirmed-as-spec**. Matches Harbour's `NTX_IGNORE_REC_NUM = 0x0UL` convention (passing recno=0 means "any recno with this key"). |
+| 11 | NTX soft seek past end | **Confirmed-as-correct**. The seek loop already descends the trailing right child when `i >= kc` on a non-leaf path; soft fallback only trips when reaching a leaf, which lands on the last key with `AfterKey`. |
 | 12 | Descending / unique flag round-trip untested | **Fixed** (`bb75c22`). |
 
-Items 2 (CDX compound structure tag), 4 (NTX multi-level `next`/`prev` rework that visits internal-node keys), 8, 9, 10, 11, 13 remain open and are tracked below.
+Items 2 (CDX compound structure tag) and 4 (NTX multi-level `next`/`prev` rework that visits internal-node keys) remain open. Both require architectural rebuilds rather than localised fixes:
+
+- **#2** needs writing the compound structure tag B+tree at page 0 (with the FoxPro on-disk layout: structure tag root → leaves whose entries map tag-name strings to per-tag CDXTAGHEADER pages). The current single-tag flat layout in `CdxIndex::create` would need to be replaced with a two-tag layout, plus open() learning to walk the structure tag.
+- **#4** needs refactoring the NTX cursor stack to track post-emit phase per internal frame so `next()` can emit separator keys after returning from a left subtree, then descend the right subtree — instead of treating internal frames the same way as leaves.
+
+Items 8, 9, 13, 14, 15, 16, 17 are minor / hygiene and tracked below.
 
 ## Critical (compat-breaking)
 
