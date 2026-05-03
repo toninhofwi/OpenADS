@@ -10,6 +10,9 @@
 #include "drivers/dbf_common.h"
 #include "drivers/index_trait.h"
 #include "drivers/ntx/ntx_index.h"
+#include "drivers/cdx/cdx_index.h"
+
+#include <algorithm>
 
 #include <cstring>
 #include <memory>
@@ -408,6 +411,8 @@ UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable) {
 
 // --- M3 index / scope / seek -----------------------------------------------
 
+extern "C++" {
+
 namespace {
 
 // Index handles: a single "logical" handle wraps the table-bound order
@@ -431,7 +436,30 @@ Table* table_for_index(ADSHANDLE hIndex) {
     return it->second.table;
 }
 
+bool path_ends_with_ci(const std::string& s, const char* suffix) {
+    auto n = std::strlen(suffix);
+    if (s.size() < n) return false;
+    for (std::size_t i = 0; i < n; ++i) {
+        char a = static_cast<char>(std::tolower(
+            static_cast<unsigned char>(s[s.size() - n + i])));
+        char b = static_cast<char>(std::tolower(
+            static_cast<unsigned char>(suffix[i])));
+        if (a != b) return false;
+    }
+    return true;
+}
+
+std::unique_ptr<openads::drivers::IIndex>
+make_index_for(const std::string& path) {
+    if (path_ends_with_ci(path, ".cdx")) {
+        return std::make_unique<openads::drivers::cdx::CdxIndex>();
+    }
+    return std::make_unique<openads::drivers::ntx::NtxIndex>();
+}
+
 } // namespace
+
+} // extern "C++"
 
 UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                         ADSHANDLE* phIndex) {
@@ -440,7 +468,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
     }
     auto path = openads::abi::to_internal(pucName, 0);
-    auto idx = std::make_unique<openads::drivers::ntx::NtxIndex>();
+    auto idx = make_index_for(path);
     if (auto r = idx->open(path, openads::drivers::IndexOpenMode::Shared); !r) {
         return fail(r.error());
     }
@@ -493,12 +521,20 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
     }
     std::uint16_t klen = t->field_descriptor(static_cast<std::uint16_t>(fidx)).length;
 
-    auto created = openads::drivers::ntx::NtxIndex::create(
-        file, tag, expr, klen, false, false);
-    if (!created) return fail(created.error());
-
-    auto idx = std::make_unique<openads::drivers::ntx::NtxIndex>(
-        std::move(created).value());
+    std::unique_ptr<openads::drivers::IIndex> idx;
+    if (path_ends_with_ci(file, ".cdx")) {
+        auto created = openads::drivers::cdx::CdxIndex::create(
+            file, tag, expr, klen, false, false);
+        if (!created) return fail(created.error());
+        idx = std::make_unique<openads::drivers::cdx::CdxIndex>(
+            std::move(created).value());
+    } else {
+        auto created = openads::drivers::ntx::NtxIndex::create(
+            file, tag, expr, klen, false, false);
+        if (!created) return fail(created.error());
+        idx = std::make_unique<openads::drivers::ntx::NtxIndex>(
+            std::move(created).value());
+    }
 
     // Populate from existing records in primary order.
     auto rec_count = t->record_count();
