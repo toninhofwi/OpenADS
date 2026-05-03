@@ -47,4 +47,49 @@ util::Result<DbfHeader> parse_dbf_header(const std::uint8_t* data,
     return h;
 }
 
+namespace {
+
+DbfFieldType classify_field(char raw) {
+    switch (raw) {
+        case 'C': return DbfFieldType::Character;
+        case 'N': return DbfFieldType::Numeric;
+        case 'F': return DbfFieldType::Float;
+        case 'D': return DbfFieldType::Date;
+        case 'T': return DbfFieldType::DateTime;
+        case 'L': return DbfFieldType::Logical;
+        case 'M': return DbfFieldType::Memo;
+        case 'I': return DbfFieldType::Integer;
+        case 'Y': return DbfFieldType::Currency;
+        case 'B': return DbfFieldType::Double;
+        default:  return DbfFieldType::Unknown;
+    }
+}
+
+} // namespace
+
+util::Result<std::vector<DbfField>>
+parse_dbf_fields(const std::uint8_t* data, std::size_t size) {
+    std::vector<DbfField> out;
+    std::uint16_t offset = 1; // skip leading deletion byte
+
+    std::size_t pos = 0;
+    while (pos + 32 <= size) {
+        if (data[pos] == 0x0D) break;
+        DbfField f;
+        const char* raw_name = reinterpret_cast<const char*>(data + pos);
+        std::size_t name_len = 0;
+        while (name_len < 11 && raw_name[name_len] != '\0') ++name_len;
+        f.name.assign(raw_name, name_len);
+        f.raw_type      = static_cast<char>(data[pos + 11]);
+        f.type          = classify_field(f.raw_type);
+        f.length        = data[pos + 16];
+        f.decimals      = data[pos + 17];
+        f.record_offset = offset;
+        offset = static_cast<std::uint16_t>(offset + f.length);
+        out.push_back(std::move(f));
+        pos += 32;
+    }
+    return out;
+}
+
 } // namespace openads::drivers

@@ -19,6 +19,7 @@ option(OPENADS_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 
 if(MSVC)
     add_compile_options(/W4 /permissive-)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     if(OPENADS_WARNINGS_AS_ERRORS)
         add_compile_options(/WX)
     endif()

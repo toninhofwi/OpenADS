@@ -29,4 +29,30 @@ struct DbfHeader {
 util::Result<DbfHeader> parse_dbf_header(const std::uint8_t* data,
                                          std::size_t size);
 
+enum class DbfFieldType {
+    Character,
+    Numeric,
+    Float,
+    Date,
+    DateTime,
+    Logical,
+    Memo,
+    Integer,    // VFP I (4-byte int)
+    Currency,   // VFP Y
+    Double,     // VFP B
+    Unknown
+};
+
+struct DbfField {
+    std::string   name;
+    DbfFieldType  type          = DbfFieldType::Unknown;
+    char          raw_type      = '\0';
+    std::uint8_t  length        = 0;
+    std::uint8_t  decimals      = 0;
+    std::uint16_t record_offset = 0; // includes the leading deletion byte
+};
+
+util::Result<std::vector<DbfField>>
+parse_dbf_fields(const std::uint8_t* data, std::size_t size);
+
 } // namespace openads::drivers
