@@ -1,8 +1,11 @@
 #include "session/connection.h"
 
+#include "drivers/dbt/dbt_memo.h"
+#include "drivers/fpt/fpt_memo.h"
 #include "platform/path.h"
 
 #include <filesystem>
+#include <memory>
 #include <utility>
 
 namespace openads::session {
@@ -30,6 +33,44 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     if (!t) return t.error();
 
     auto holder = std::make_unique<engine::Table>(std::move(t).value());
+
+    // Auto-attach a memo store if the table has M-fields and a sibling
+    // memo file exists. CDX/VFP tables look for .fpt; NTX (Clipper)
+    // looks for .dbt.
+    bool has_memo_field = false;
+    for (std::uint16_t i = 0; i < holder->field_count(); ++i) {
+        if (holder->field_descriptor(i).type ==
+            openads::drivers::DbfFieldType::Memo) {
+            has_memo_field = true;
+            break;
+        }
+    }
+    if (has_memo_field) {
+        fs::path stem = fs::path(resolved);
+        auto memo_open_mode =
+            (mode == engine::OpenMode::Read) ? openads::drivers::MemoOpenMode::ReadOnly
+                                             : openads::drivers::MemoOpenMode::Shared;
+        if (type == engine::TableType::Ntx) {
+            stem.replace_extension(".dbt");
+            std::error_code ec;
+            if (fs::exists(stem, ec)) {
+                auto m = std::make_unique<openads::drivers::dbt::DbtMemo>();
+                if (m->open(stem.string(), memo_open_mode)) {
+                    holder->attach_memo(std::move(m));
+                }
+            }
+        } else {
+            stem.replace_extension(".fpt");
+            std::error_code ec;
+            if (fs::exists(stem, ec)) {
+                auto m = std::make_unique<openads::drivers::fpt::FptMemo>();
+                if (m->open(stem.string(), memo_open_mode)) {
+                    holder->attach_memo(std::move(m));
+                }
+            }
+        }
+    }
+
     Handle h = next_table_handle_++;
     tables_.emplace(h, std::move(holder));
     return h;
