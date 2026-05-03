@@ -20,25 +20,34 @@ public:
 
     bool eof() const { return pos_ >= s_.size(); }
 
-    bool match_keyword(const char* kw) {
-        skip_ws();
+    bool peek_keyword(const char* kw) const {
         std::size_t len = 0;
         while (kw[len] != '\0') ++len;
-        if (pos_ + len > s_.size()) return false;
+        std::size_t p = pos_;
+        while (p < s_.size() && std::isspace(
+                static_cast<unsigned char>(s_[p]))) ++p;
+        if (p + len > s_.size()) return false;
         for (std::size_t i = 0; i < len; ++i) {
             char a = static_cast<char>(std::tolower(
-                static_cast<unsigned char>(s_[pos_ + i])));
+                static_cast<unsigned char>(s_[p + i])));
             char b = static_cast<char>(std::tolower(
                 static_cast<unsigned char>(kw[i])));
             if (a != b) return false;
         }
-        // Make sure the next char (if any) is not a word character.
-        if (pos_ + len < s_.size()) {
-            char c = s_[pos_ + len];
+        if (p + len < s_.size()) {
+            char c = s_[p + len];
             if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
                 return false;
             }
         }
+        return true;
+    }
+
+    bool match_keyword(const char* kw) {
+        if (!peek_keyword(kw)) return false;
+        skip_ws();
+        std::size_t len = 0;
+        while (kw[len] != '\0') ++len;
         pos_ += len;
         return true;
     }
@@ -65,6 +74,39 @@ public:
         return out;
     }
 
+    std::string read_identifier() {
+        skip_ws();
+        std::string out;
+        while (pos_ < s_.size()) {
+            char c = s_[pos_];
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+                out.push_back(c);
+                ++pos_;
+            } else {
+                break;
+            }
+        }
+        return out;
+    }
+
+    util::Result<std::string> read_string_literal() {
+        skip_ws();
+        if (pos_ >= s_.size() || s_[pos_] != '\'') {
+            return util::Error{7200, 0, "expected string literal", ""};
+        }
+        ++pos_;
+        std::string out;
+        while (pos_ < s_.size() && s_[pos_] != '\'') {
+            out.push_back(s_[pos_]);
+            ++pos_;
+        }
+        if (pos_ >= s_.size()) {
+            return util::Error{7200, 0, "unterminated string literal", ""};
+        }
+        ++pos_;   // consume closing quote
+        return out;
+    }
+
 private:
     const std::string& s_;
     std::size_t        pos_ = 0;
@@ -79,7 +121,7 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     }
     if (!c.match_char('*')) {
         return util::Error{7200, 0,
-                           "M7.1 only supports SELECT * (projection lists pending)",
+                           "M7.x only supports SELECT * (projection lists pending)",
                            sql};
     }
     if (!c.match_keyword("FROM")) {
@@ -90,6 +132,24 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     if (stmt.table.empty()) {
         return util::Error{7200, 0, "expected table name", sql};
     }
+
+    // Optional single-equality WHERE.
+    if (c.match_keyword("WHERE")) {
+        WhereEq w;
+        w.column = c.read_identifier();
+        if (w.column.empty()) {
+            return util::Error{7200, 0, "expected column name after WHERE", sql};
+        }
+        if (!c.match_char('=')) {
+            return util::Error{7200, 0,
+                "M7.x WHERE supports only `column = '<literal>'`", sql};
+        }
+        auto lit = c.read_string_literal();
+        if (!lit) return lit.error();
+        w.literal = std::move(lit).value();
+        stmt.where = std::move(w);
+    }
+
     // Optional trailing semicolon.
     c.match_char(';');
     return stmt;

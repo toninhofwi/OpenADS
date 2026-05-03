@@ -2,18 +2,26 @@
 
 #include "util/result.h"
 
+#include <optional>
 #include <string>
 
 namespace openads::sql {
 
-// Minimal SQL parser. Phase 1 covers `SELECT * FROM <table_name>`
-// only — no WHERE, no projection list, no joins. The result of parsing
-// is the bare table name (relative path or DD alias). Subsequent
-// milestones (M7.x) extend the grammar to projection lists, WHERE
-// clauses, ORDER BY, joins, aggregates, and subqueries.
+// SELECT * FROM <table> [WHERE <col> = '<literal>']
+//
+// Phase scope: SELECT *, single optional WHERE with one equality
+// comparison between a column name and a string literal. Multi-clause
+// WHERE, AND/OR, ORDER BY, projection lists, joins, subqueries, and
+// aggregates land in subsequent milestones.
+
+struct WhereEq {
+    std::string column;
+    std::string literal;   // raw string content, unquoted
+};
 
 struct SelectStmt {
-    std::string table;
+    std::string             table;
+    std::optional<WhereEq>  where;
 };
 
 util::Result<SelectStmt> parse_select(const std::string& sql);

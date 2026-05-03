@@ -32,3 +32,32 @@ TEST_CASE("parse_select reports missing FROM") {
     CHECK_FALSE(r.has_value());
     CHECK(r.error().code == 7200);
 }
+
+TEST_CASE("parse_select recognises a single-equality WHERE clause") {
+    auto r = parse_select("SELECT * FROM data.dbf WHERE TAG = 'BAR'");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "data.dbf");
+    REQUIRE(r.value().where.has_value());
+    CHECK(r.value().where->column  == "TAG");
+    CHECK(r.value().where->literal == "BAR");
+}
+
+TEST_CASE("parse_select WHERE accepts case-insensitive keyword and tight whitespace") {
+    auto r = parse_select("select * from x where  Name='Anna'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where.has_value());
+    CHECK(r.value().where->column  == "Name");
+    CHECK(r.value().where->literal == "Anna");
+}
+
+TEST_CASE("parse_select WHERE rejects non-equality operators") {
+    auto r = parse_select("SELECT * FROM x WHERE TAG > 'A'");
+    CHECK_FALSE(r.has_value());
+    CHECK(r.error().code == 7200);
+}
+
+TEST_CASE("parse_select WHERE rejects unterminated string literal") {
+    auto r = parse_select("SELECT * FROM x WHERE TAG = 'oops");
+    CHECK_FALSE(r.has_value());
+    CHECK(r.error().code == 7200);
+}
