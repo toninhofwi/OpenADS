@@ -22,6 +22,11 @@ add_executable(openads_unit_tests
     unit/session_connection_test.cpp
     unit/abi_smoke_test.cpp
     unit/abi_write_smoke_test.cpp
+    unit/ntx_index_test.cpp
+    unit/cdx_index_test.cpp
+    unit/engine_order_test.cpp
+    unit/engine_scope_test.cpp
+    unit/abi_index_smoke_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

@@ -11,9 +11,12 @@ add_library(openads_core STATIC
     engine/table.cpp
     engine/cursor.cpp
     engine/lock_mgr.cpp
+    engine/order.cpp
     drivers/dbf_common.cpp
     drivers/cdx/cdx_driver.cpp
+    drivers/cdx/cdx_index.cpp
     drivers/ntx/ntx_driver.cpp
+    drivers/ntx/ntx_index.cpp
 )
 
 if(WIN32)
