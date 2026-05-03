@@ -974,7 +974,7 @@ Phase 1 is broken into nine independently shippable milestones (`M0`–`M8`). Ea
 | Milestone | Plan | Status |
 |-----------|------|--------|
 | **M0 — Skeleton** | [`2026-05-03-openads-m0-skeleton.md`](docs/superpowers/plans/2026-05-03-openads-m0-skeleton.md) | **Done.** CMake project, L5 platform layer (file / lock / mmap / path / time / thread), `util/Result<T>` / `Span<T>` / `Log`, doctest harness (27 cases / 77 assertions), GitHub Actions matrix (Windows / Linux / macOS). |
-| **M1 — DBF read (CDX)** | TBD | Read-only path: `Connection`, `Table`, `Cursor` for DBF + CDX-typed table. `AdsConnect60` / `AdsOpenTable` / `AdsGotoTop` / `AdsSkip` / `AdsGetField`. |
+| **M1 — DBF read (CDX)** | [`2026-05-03-openads-m1-dbf-read.md`](docs/superpowers/plans/2026-05-03-openads-m1-dbf-read.md) | **Done.** Read-only DBF (`ADS_CDX` typed) via `AdsConnect60` / `AdsOpenTable` / `AdsGotoTop` / `AdsSkip` / `AdsGetField` and friends. No memo (M4), no index (M3), no write (M2). |
 | **M2 — DBF write + LockMgr** | TBD | Append / update / delete, `LockMgr` Compatible mode, NTX driver. Single-process integrity tests. |
 | **M3 — Indexes** | TBD | CDX read / write, NTX read / write, ADI scaffolding, seek / scope / AOF basics. |
 | **M4 — ADT + memo + VFP + AES** | TBD | ADT driver with extended types (autoinc, GUID, modtime, timestamp, NULL), `.adm` / `.fpt` / `.dbt` memo, VFP driver, AES-128 / 256 encryption. |
