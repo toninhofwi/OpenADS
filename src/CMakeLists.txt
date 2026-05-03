@@ -35,6 +35,7 @@ add_library(openads_core STATIC
     drivers/ntx/ntx_driver.cpp
     drivers/ntx/ntx_index.cpp
     drivers/dbt/dbt_memo.cpp
+    drivers/fpt/fpt_memo.cpp
 )
 
 if(WIN32)
