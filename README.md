@@ -987,10 +987,10 @@ Phase 1 is broken into nine independently shippable milestones (`M0`–`M8`). Ea
 
 ### Snapshot
 
-- **132 doctest cases / 1801 assertions passing** on Windows / MSVC 2022 Release.
+- **135 doctest cases / 1820 assertions passing** on Windows / MSVC 2022 Release.
 - **~80 ACE entry points wired** (read / write / lock / index / scope / memo / encryption / autoinc / transaction / savepoint / data dictionary / SQL).
 - **Persistent WAL with crash recovery** is byte-identical for OpenADS-produced files.
-- **Live tags:** `m0-done`, `m1-done`, `m2-done`, `m3-done`, `m3.5-done`, `m3.6-partial`, `m3.7-partial`, `m3.7-closed`, `m3.8-partial`, `m3.9-partial`, `m3.10-partial`, `m4-partial`, `m5-partial`, `m5.1-partial`, `m5.2-partial`, `m5.3-partial`, `m5.4-partial`, `m6-partial`, `m7.1-partial`, `m7.2-partial`, `m7.3-partial`, `m7.4-partial`, `m7.5-partial`, `m8.0-partial`.
+- **Live tags:** `m0-done`, `m1-done`, `m2-done`, `m3-done`, `m3.5-done`, `m3.6-partial`, `m3.7-partial`, `m3.7-closed`, `m3.8-partial`, `m3.9-partial`, `m3.10-partial`, `m4-partial`, `m5-partial`, `m5.1-partial`, `m5.2-partial`, `m5.3-partial`, `m5.4-partial`, `m5.5-partial`, `m6-partial`, `m7.1-partial`, `m7.2-partial`, `m7.3-partial`, `m7.4-partial`, `m7.5-partial`, `m8.0-partial`.
 - **Drop-in DLL:** `ace64.dll` (Win x64) and `ace32.dll` (Win x86) build from the `openads_ace` SHARED target, exporting the 80 `Ads*` entry points required by Harbour `contrib/rddads`.
 
 ### Working on a milestone

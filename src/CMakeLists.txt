@@ -31,6 +31,7 @@ add_library(openads_core STATIC
     engine/aes.cpp
     engine/tx.cpp
     engine/tx_log.cpp
+    engine/lsn_map.cpp
     engine/data_dict.cpp
     sql/parser.cpp
     drivers/dbf_common.cpp

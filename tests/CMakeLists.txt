@@ -40,6 +40,7 @@ add_executable(openads_unit_tests
     unit/abi_dd_test.cpp
     unit/sql_parser_test.cpp
     unit/abi_sql_smoke_test.cpp
+    unit/lsn_map_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

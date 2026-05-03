@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/data_dict.h"
+#include "engine/lsn_map.h"
 #include "engine/table.h"
 #include "engine/tx.h"
 #include "engine/tx_log.h"
@@ -60,6 +61,7 @@ private:
     Handle                                                     next_table_handle_ = 1;
 
     engine::TxLog                                              tx_log_;
+    engine::LsnMap                                             lsn_map_;
     engine::Tx                                                 tx_;
     std::uint64_t                                              next_tx_id_ = 1;
 

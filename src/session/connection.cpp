@@ -51,6 +51,9 @@ util::Result<Connection> Connection::open(const std::string& data_dir) {
     auto lr = c.tx_log_.open(log_path.string());
     if (!lr) return lr.error();
 
+    fs::path map_path = fs::path(actual_dir) / "openads.lsnmap";
+    if (auto mr = c.lsn_map_.open(map_path.string()); !mr) return mr.error();
+
     if (auto rr = c.recover_orphan_tx_(); !rr) return rr.error();
     return c;
 }
@@ -271,6 +274,13 @@ util::Result<void> Connection::recover_orphan_tx_() {
         }
     }
     for (const engine::TxRecord* up : orphan_updates) {
+        // Skip records that a previous (interrupted) recovery pass has
+        // already applied. lsn_map_ tracks the highest LSN applied per
+        // (table_path, recno); any record whose LSN is <= the stored
+        // value is idempotent and can be skipped.
+        if (lsn_map_.get(up->update.table_path, up->update.recno) >= up->lsn) {
+            continue;
+        }
         engine::Table* t = open_for(up->update.table_path);
         if (!t || !t->driver()) continue;
         if (!up->update.before.empty()) {
@@ -278,6 +288,7 @@ util::Result<void> Connection::recover_orphan_tx_() {
                 up->update.recno,
                 up->update.before.data(),
                 up->update.before.size());
+            lsn_map_.put(up->update.table_path, up->update.recno, up->lsn);
         }
     }
     // Append ABORT for each orphan tx so the log is well-formed.
@@ -287,9 +298,19 @@ util::Result<void> Connection::recover_orphan_tx_() {
     }
     for (auto id : orphan_ids) (void)tx_log_.append_abort(id);
 
-    // Flush any open tables and truncate the log.
+    // Flush any open tables, persist the lsn_map, then truncate the
+    // log. If the process crashes between the lsn_map flush and the
+    // log truncate, the next recovery pass will see the same orphan
+    // records, look up their LSN in the lsn_map, and skip the redo —
+    // making the recovery path crash-safe across multiple iterations.
     for (auto& [_, t] : opened) (void)t->flush();
+    (void)lsn_map_.flush();
     (void)tx_log_.truncate();
+    // Once the log is empty, the lsn_map's contents are no longer
+    // needed for correctness; drop them so the sidecar does not grow
+    // unbounded across the connection's lifetime.
+    lsn_map_.clear();
+    (void)lsn_map_.flush();
     return {};
 }
 
