@@ -967,6 +967,36 @@ GitHub Actions:
 
 Phase 2 (post-1.0): TCP server reusing L2-L5, wire-protocol design, replication, AIS / HTTP gateways. Out of scope for this document.
 
+## Next steps
+
+Phase 1 is broken into nine independently shippable milestones (`M0`–`M8`). Each milestone gets its own implementation plan under `docs/superpowers/plans/`, written in TDD bite-sized form so any contributor can pick it up.
+
+| Milestone | Plan | Status |
+|-----------|------|--------|
+| **M0 — Skeleton** | [`2026-05-03-openads-m0-skeleton.md`](docs/superpowers/plans/2026-05-03-openads-m0-skeleton.md) | Plan ready, awaiting execution. CMake project, L5 platform layer (file / lock / mmap / path / time / thread), `util/Result<T>` / `Span<T>` / `Log`, doctest harness, GitHub Actions matrix (Windows / Linux / macOS). |
+| **M1 — DBF read (CDX)** | TBD | Read-only path: `Connection`, `Table`, `Cursor` for DBF + CDX-typed table. `AdsConnect60` / `AdsOpenTable` / `AdsGotoTop` / `AdsSkip` / `AdsGetField`. |
+| **M2 — DBF write + LockMgr** | TBD | Append / update / delete, `LockMgr` Compatible mode, NTX driver. Single-process integrity tests. |
+| **M3 — Indexes** | TBD | CDX read / write, NTX read / write, ADI scaffolding, seek / scope / AOF basics. |
+| **M4 — ADT + memo + VFP + AES** | TBD | ADT driver with extended types (autoinc, GUID, modtime, timestamp, NULL), `.adm` / `.fpt` / `.dbt` memo, VFP driver, AES-128 / 256 encryption. |
+| **M5 — TPS / WAL** | TBD | ARIES-lite write-ahead log, savepoints, multi-table atomicity, group commit, three-phase recovery, Compatible-mode `.lsnmap` overlay. |
+| **M6 — Data Dictionary** | TBD | `.add` reader / writer, users / groups / RI / views / procs metadata, `AdsConnect60` against a DD. |
+| **M7 — SQL engine** | TBD | Lexer / parser / resolver / planner / optimizer / executor, xBase UDFs, AEP host (stored procs as plugins), triggers. |
+| **M8 — Conformance + 0.1.0** | TBD | Full Harbour `tests/datad.prg` and `tests/manage.prg` green, byte-compat job green, multi-process scenario green, first tagged release. |
+
+### Working on a milestone
+
+1. Brainstorm the milestone briefly against the spec above to surface anything that changed since the original design was written.
+2. Write its implementation plan into `docs/superpowers/plans/YYYY-MM-DD-openads-mN-<topic>.md` using the same TDD bite-sized template as M0.
+3. Execute the plan task by task. Each task is `red → green → commit` and lands one focused change.
+4. When the milestone is done, mark it green in the table above, push, and tag the head commit `mN-done` for traceability.
+
+### Immediate next action
+
+Execute `M0` using the saved plan. Two execution paths:
+
+- **Subagent-driven (recommended).** Dispatch a fresh subagent per task with two-stage review between tasks. See `superpowers:subagent-driven-development`.
+- **Inline.** Walk the plan in the current session with checkpoints. See `superpowers:executing-plans`.
+
 ## License
 
 MIT.
