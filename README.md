@@ -198,20 +198,21 @@ on OpenADS without recompiling Harbour.
 
 #### SQL
 
-- `SELECT * FROM <table> [WHERE <pred> [AND <pred>]*]` where each
-  `<pred>` is either an infix comparison `<col> op '<lit>'` (six
-  operators: `=`, `!=` / `<>`, `<`, `>`, `<=`, `>=`) or
+- `SELECT * FROM <table> [WHERE <expr>]` where `<expr>` is a full
+  boolean tree built from `AND` / `OR` / `NOT` / parens (M10.3) over
+  leaves that are either an infix comparison `<col> op <lit>` (six
+  operators: `=`, `!=` / `<>`, `<`, `>`, `<=`, `>=`; literal can be
+  a string `'…'` or a numeric `42` / `3.14`) or
   `CONTAINS(<col>, '<query>')` against a prebuilt `.fts` file. The
-  parser lowers each WHERE term into a row-predicate closure used
-  by `AdsExecuteSQLDirect`; CONTAINS captures a precomputed
-  recno-set so the FTS lookup runs once per query, not per row.
-  Projection lists, `OR` / `NOT` / parens, joins, aggregates,
-  subqueries, `ORDER BY`, and `INSERT` / `UPDATE` / `DELETE` are
-  scheduled for 0.3.x.
+  parser lowers the AST into a row-predicate closure used by
+  `AdsExecuteSQLDirect`; CONTAINS captures a precomputed recno-set
+  so the FTS lookup runs once per query, not per row. Projection
+  lists, joins, aggregates, subqueries, `ORDER BY`, and `INSERT` /
+  `UPDATE` / `DELETE` arrive in later 0.3.x milestones.
 
 #### Tests
 
-- **214 doctest cases / 3865 assertions** passing on Windows / MSVC
+- **227 doctest cases / 3955 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -298,31 +299,38 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
   the value but doesn't change the layout. Variable page sizes will
   land alongside the proprietary ADI driver in 0.3.x.
 
-### 0.3.x — proprietary formats + advanced SQL (PLANNED)
+### 0.3.x — proprietary formats + advanced SQL (IN PROGRESS)
 
-OpenADS will only adopt these formats once a clean-room compatibility
-specification is available — written from publicly observable
-behaviour and from the Harbour `contrib/rddads` source, not from
-disassembly of SAP-owned binaries or from any material whose use is
-restricted by the Advantage SDK / ACE EULA.
+OpenADS will only adopt the proprietary formats once a clean-room
+compatibility specification is available — written from publicly
+observable behaviour and from the Harbour `contrib/rddads` source,
+not from disassembly of SAP-owned binaries or from any material
+whose use is restricted by the Advantage SDK / ACE EULA.
+
+| Tag | Milestone |
+|-----|-----------|
+| `m10.1-done` | Real OpenADS-native DD persistence — replaces M9.25 silent-success no-ops with round-trip storage in the v1 text format (USER / MEMBER / LINK / INDEX / RI / DBPROP / USERPROP rows); `Connection::open(<.add>)` callers now see CRUD writes survive across reopens. |
+| `m10.2-done` | VFP `I` (4-byte int32) / `Y` (8-byte currency, money * 10000) / `B` (8-byte IEEE-754 double) field decode + encode round-trip. |
+| `m10.3-done` | SQL `WHERE` — full boolean expression tree (`OR` / `NOT` / parens) on top of the M9.21 `CONTAINS` predicate; numeric literals (`AGE >= 18`) and string literals coexist. |
+
+#### Still planned for 0.3.x
 
 - **ADT** (proprietary table format) — depends on a clean-room
   specification; no implementation today.
-- **VFP** Visual FoxPro tables — same DBF skeleton, different
-  field-type opcodes + memo layout.
+- **VFP** memo + autoinc + NULL-bitmap extensions — basic field
+  types are real (M10.2); the `0x32` autoinc / null-flag header byte
+  + V (varchar) / Q (varbinary) types are next.
 - **ADM** memo format — pairs with ADT, same gating as ADT.
 - **ADI** index format — proprietary B+tree variant; same gating.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **Full Advantage SQL dialect** — joins, aggregates, subqueries,
-  `ORDER BY`, projection lists, `OR` / `NOT` / parens, `INSERT` /
-  `UPDATE` / `DELETE` / `CREATE TABLE` / `CREATE INDEX`.
+- **More SQL** — projection lists, `ORDER BY`, joins, aggregates,
+  subqueries, `INSERT` / `UPDATE` / `DELETE` / `CREATE TABLE` /
+  `CREATE INDEX`. M10.3 already lands `OR` / `NOT` / parens +
+  numeric literals.
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
-- **Real Data-Dictionary semantics** — users / groups / permissions,
-  RI rules, views, links, validations, defaults (the `.add` parser
-  resolves aliases today; the rest is `AE_FUNCTION_NOT_AVAILABLE`).
 
 ### 1.0.x — TCP server (Phase 2)
 
