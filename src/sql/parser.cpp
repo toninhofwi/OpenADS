@@ -311,6 +311,23 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         stmt.where = std::move(root).value();
     }
 
+    // Optional ORDER BY — single column ascending or descending (M10.6).
+    if (c.match_keyword("ORDER")) {
+        if (!c.match_keyword("BY")) {
+            return util::Error{7200, 0,
+                "expected BY after ORDER", sql};
+        }
+        OrderBy ob;
+        ob.column = c.read_identifier();
+        if (ob.column.empty()) {
+            return util::Error{7200, 0,
+                "expected column name in ORDER BY", sql};
+        }
+        if      (c.match_keyword("DESC")) ob.descending = true;
+        else if (c.match_keyword("ASC"))  ob.descending = false;
+        stmt.order_by = std::move(ob);
+    }
+
     c.match_char(';');
     return stmt;
 }

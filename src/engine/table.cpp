@@ -148,7 +148,17 @@ bool Table::key_in_bottom_scope_(const std::string& key) const {
     return key <= *order_->scope().bottom;
 }
 
+void Table::set_recno_sequence(std::vector<std::uint32_t> seq) {
+    recno_sequence_ = std::move(seq);
+    sequence_idx_   = -1;
+}
+
 util::Result<void> Table::goto_top() {
+    if (!recno_sequence_.empty()) {
+        sequence_idx_ = 0;
+        std::uint32_t r = recno_sequence_.front();
+        return load_record_(r);
+    }
     if (order_ && order_->index()) {
         auto* idx = order_->index();
         util::Result<drivers::SeekOutcome> r = drivers::SeekOutcome{};
@@ -182,6 +192,10 @@ util::Result<void> Table::goto_top() {
 }
 
 util::Result<void> Table::goto_bottom() {
+    if (!recno_sequence_.empty()) {
+        sequence_idx_ = static_cast<std::int64_t>(recno_sequence_.size() - 1);
+        return load_record_(recno_sequence_.back());
+    }
     if (order_ && order_->index()) {
         auto* idx = order_->index();
         util::Result<drivers::SeekOutcome> r = idx->seek_last();
@@ -215,6 +229,24 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
 }
 
 util::Result<void> Table::skip(std::int32_t delta) {
+    if (!recno_sequence_.empty()) {
+        if (delta == 0) return {};
+        std::int64_t idx = sequence_idx_;
+        if (state_ == State::Bof) idx = -1;
+        if (state_ == State::Eof)
+            idx = static_cast<std::int64_t>(recno_sequence_.size());
+        idx += delta;
+        if (idx < 0) {
+            state_ = State::Bof; recno_ = 0; sequence_idx_ = -1; return {};
+        }
+        if (idx >= static_cast<std::int64_t>(recno_sequence_.size())) {
+            state_ = State::Eof; recno_ = 0;
+            sequence_idx_ = static_cast<std::int64_t>(recno_sequence_.size());
+            return {};
+        }
+        sequence_idx_ = idx;
+        return load_record_(recno_sequence_[static_cast<std::size_t>(idx)]);
+    }
     if (order_ && order_->index()) {
         auto* idx = order_->index();
         if (delta == 0) return {};

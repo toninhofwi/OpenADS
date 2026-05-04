@@ -3618,6 +3618,75 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         tbl->set_filter(std::move(compiled).value());
     }
 
+    // M10.6: ORDER BY <col> [ASC|DESC]. Materialize matching recnos
+    // through the WHERE filter (or every live row when none), sort
+    // them by the column's value, and install the sequence as the
+    // cursor's traversal order.
+    if (parsed.value().order_by) {
+        const auto& ob = *parsed.value().order_by;
+        std::int32_t fidx = tbl->field_index(ob.column);
+        if (fidx < 0) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, ob.column.c_str());
+        }
+        std::uint16_t key = static_cast<std::uint16_t>(fidx);
+
+        std::vector<std::uint32_t> matched;
+        std::uint32_t rcount = tbl->record_count();
+        for (std::uint32_t r = 1; r <= rcount; ++r) {
+            if (auto g = tbl->goto_record(r); !g) continue;
+            if (tbl->is_deleted()) continue;
+            if (!tbl->passes_filter()) continue;
+            matched.push_back(r);
+        }
+
+        // Sort by the field's typed value. The column type drives
+        // numeric vs string compare so VFP I / Y / B sort properly.
+        const auto& fdesc = tbl->field_descriptor(key);
+        bool numeric_sort =
+            fdesc.type == openads::drivers::DbfFieldType::Numeric ||
+            fdesc.type == openads::drivers::DbfFieldType::Float   ||
+            fdesc.type == openads::drivers::DbfFieldType::Integer ||
+            fdesc.type == openads::drivers::DbfFieldType::Currency||
+            fdesc.type == openads::drivers::DbfFieldType::Double;
+
+        struct KV {
+            std::uint32_t recno;
+            std::string   s;
+            double        d;
+        };
+        std::vector<KV> rows;
+        rows.reserve(matched.size());
+        for (auto r : matched) {
+            (void)tbl->goto_record(r);
+            auto v = tbl->read_field(key);
+            KV kv;
+            kv.recno = r;
+            if (v) {
+                kv.s = v.value().as_string;
+                kv.d = v.value().as_double;
+            }
+            rows.push_back(std::move(kv));
+        }
+        std::stable_sort(rows.begin(), rows.end(),
+            [&](const KV& a, const KV& b) {
+                bool less = numeric_sort
+                    ? (a.d < b.d)
+                    : (a.s <  b.s);
+                bool equal = numeric_sort
+                    ? (a.d == b.d)
+                    : (a.s == b.s);
+                if (equal) return false;
+                return ob.descending ? !less : less;
+            });
+        std::vector<std::uint32_t> seq;
+        seq.reserve(rows.size());
+        for (auto& kv : rows) seq.push_back(kv.recno);
+        // ORDER BY supersedes the row filter — the materialised list
+        // already excludes WHERE-rejected rows.
+        tbl->clear_filter();
+        tbl->set_recno_sequence(std::move(seq));
+    }
+
     ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);
     *phCursor = gh;
     return ok();

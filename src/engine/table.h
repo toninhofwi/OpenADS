@@ -115,6 +115,19 @@ public:
     // exposing the LockMgr internals.
     std::vector<std::uint32_t> held_record_locks() const;
 
+    // Recno-sequence cursor (M10.6). When non-empty, goto_top /
+    // goto_bottom / skip walk this list of recnos in order instead of
+    // the natural append order or any active index. Used by SQL
+    // ORDER BY to pre-sort matching rows. clear_recno_sequence()
+    // restores the natural order.
+    void set_recno_sequence(std::vector<std::uint32_t> seq);
+    void clear_recno_sequence() noexcept {
+        recno_sequence_.clear(); sequence_idx_ = -1;
+    }
+    bool has_recno_sequence() const noexcept {
+        return !recno_sequence_.empty();
+    }
+
     // Memo surface (M4).
     void               attach_memo(std::unique_ptr<drivers::IMemoStore> memo);
     drivers::IMemoStore* memo() noexcept { return memo_.get(); }
@@ -125,6 +138,9 @@ public:
     void set_filter(RowPredicate p)   { filter_ = std::move(p); }
     void clear_filter()                { filter_ = nullptr; }
     bool has_filter() const noexcept   { return static_cast<bool>(filter_); }
+    bool passes_filter() {
+        return !filter_ || filter_(*this);
+    }
 
     // Transaction binding (M5). When a Connection has an active Tx,
     // it points each open Table at it via attach_tx so Table writes
@@ -215,6 +231,10 @@ private:
     std::vector<std::uint8_t>                     record_buf_;
     std::string                                   path_;
     bool                                          last_seek_found_ = false;
+
+    // M10.6 recno-sequence cursor — empty means "natural order".
+    std::vector<std::uint32_t>                    recno_sequence_;
+    std::int64_t                                  sequence_idx_ = -1;
 };
 
 } // namespace openads::engine

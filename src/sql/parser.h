@@ -37,10 +37,17 @@ struct WhereExpr {
     std::unique_ptr<WhereExpr> child;           // Not
 };
 
+struct OrderBy {
+    std::string column;
+    bool        descending = false;
+};
+
 struct SelectStmt {
     std::string                table;
     // Optional WHERE — tree form. nullptr means "no filter".
     std::unique_ptr<WhereExpr> where;
+    // Optional ORDER BY — single column ascending or descending (M10.6).
+    std::optional<OrderBy>     order_by;
 };
 
 util::Result<SelectStmt> parse_select(const std::string& sql);
