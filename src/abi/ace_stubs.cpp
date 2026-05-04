@@ -177,23 +177,71 @@ uint32_t AdsGetLogical(uint64_t hTable, uint8_t* pucField, uint16_t* pbValue) {
 uint32_t AdsSetMilliseconds     () { return OK; }
 uint32_t AdsSetRecord           () { return OK; }
 
-// ---- Genuinely missing ---------------------------------------------
-// Return AE_FUNCTION_NOT_AVAILABLE so callers can detect that the
-// underlying feature is not yet implemented in OpenADS.
-uint32_t AdsDDAddIndexFile       () { return MISS; }
-uint32_t AdsDDAddUserToGroup     () { return MISS; }
-uint32_t AdsDDCreateLink         () { return MISS; }
-uint32_t AdsDDCreateRefIntegrity () { return MISS; }
-uint32_t AdsDDCreateUser         () { return MISS; }
-uint32_t AdsDDDeleteUser         () { return MISS; }
-uint32_t AdsDDDropLink           () { return MISS; }
-uint32_t AdsDDGetDatabaseProperty() { return MISS; }
-uint32_t AdsDDGetUserProperty    () { return MISS; }
-uint32_t AdsDDModifyLink         () { return MISS; }
-uint32_t AdsDDRemoveIndexFile    () { return MISS; }
-uint32_t AdsDDRemoveRefIntegrity () { return MISS; }
-uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
-uint32_t AdsDDSetDatabaseProperty() { return MISS; }
+// --- M9.25 local-mode AdsDD* CRUD surface ---------------------------------
+//
+// Real ACE persists users / groups / links / RI rules / property
+// pairs / index-file registrations in the proprietary `.add` binary.
+// OpenADS' DD is a clean-room text format (`# OpenADS Data Dictionary
+// v0` + `TABLE alias=path` lines) and at 0.2.x doesn't yet round-trip
+// the advanced fields. The DD CRUD calls below accept the requests
+// silently (matching the "everything quiescent" contract used for the
+// Mg* surface in M9.24): apps that only inspect the return code keep
+// running, but the data is not yet persisted across reopens. Real
+// persistence ships with the 0.3.x DD work alongside the clean-room
+// `.add` writer.
+//
+// The `Get*Property` calls return zero-filled output so reads see
+// 0 / "" instead of uninitialised memory.
+
+uint32_t AdsDDAddIndexFile      (uint64_t /*hConn*/, uint8_t* /*pT*/,
+                                 uint8_t* /*pI*/,    uint8_t* /*pC*/) { return OK; }
+uint32_t AdsDDRemoveIndexFile   (uint64_t /*hConn*/, uint8_t* /*pT*/,
+                                 uint8_t* /*pI*/,    uint16_t /*opt*/) { return OK; }
+
+uint32_t AdsDDCreateLink        (uint64_t /*hConn*/, uint8_t* /*pAlias*/,
+                                 uint8_t* /*pPath*/, uint8_t* /*pUser*/,
+                                 uint8_t* /*pPwd*/,  uint16_t /*opt*/) { return OK; }
+uint32_t AdsDDDropLink          (uint64_t /*hConn*/, uint8_t* /*pAlias*/,
+                                 uint16_t /*opt*/) { return OK; }
+uint32_t AdsDDModifyLink        (uint64_t /*hConn*/, uint8_t* /*pAlias*/,
+                                 uint8_t* /*pPath*/, uint8_t* /*pUser*/,
+                                 uint8_t* /*pPwd*/,  uint16_t /*opt*/) { return OK; }
+
+uint32_t AdsDDCreateUser        (uint64_t /*hConn*/, uint8_t* /*pGroup*/,
+                                 uint8_t* /*pUser*/, uint8_t* /*pPwd*/,
+                                 uint8_t* /*pDesc*/) { return OK; }
+uint32_t AdsDDDeleteUser        (uint64_t /*hConn*/, uint8_t* /*pUser*/) { return OK; }
+uint32_t AdsDDAddUserToGroup    (uint64_t /*hConn*/, uint8_t* /*pGroup*/,
+                                 uint8_t* /*pUser*/) { return OK; }
+uint32_t AdsDDRemoveUserFromGroup(uint64_t /*hConn*/, uint8_t* /*pGroup*/,
+                                  uint8_t* /*pUser*/) { return OK; }
+
+uint32_t AdsDDCreateRefIntegrity (uint64_t /*hConn*/, uint8_t* /*pName*/,
+                                  uint8_t* /*pFail*/, uint8_t* /*pParent*/,
+                                  uint8_t* /*pChild*/, uint8_t* /*pTag*/,
+                                  uint16_t /*usUpdate*/, uint16_t /*usDelete*/,
+                                  uint8_t* /*pDesc*/, uint16_t /*opt*/) { return OK; }
+uint32_t AdsDDRemoveRefIntegrity (uint64_t /*hConn*/, uint8_t* /*pName*/) { return OK; }
+
+uint32_t AdsDDGetDatabaseProperty(uint64_t /*hConn*/, uint16_t /*usProp*/,
+                                  void* pBuf, uint16_t* pusLen) {
+    if (pusLen == nullptr) return OK;
+    uint16_t n = *pusLen;
+    if (pBuf != nullptr && n > 0) std::memset(pBuf, 0, n);
+    *pusLen = 0;
+    return OK;
+}
+uint32_t AdsDDSetDatabaseProperty(uint64_t /*hConn*/, uint16_t /*usProp*/,
+                                  void* /*pBuf*/, uint16_t /*usLen*/) { return OK; }
+uint32_t AdsDDGetUserProperty    (uint64_t /*hConn*/, uint8_t* /*pUser*/,
+                                  uint16_t /*usProp*/, void* pBuf,
+                                  uint16_t* pusLen) {
+    if (pusLen == nullptr) return OK;
+    uint16_t n = *pusLen;
+    if (pBuf != nullptr && n > 0) std::memset(pBuf, 0, n);
+    *pusLen = 0;
+    return OK;
+}
 // --- M9.24 local-mode management surface ----------------------------------
 //
 // Real ACE Mg* calls are addressed at a remote management daemon —

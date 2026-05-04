@@ -57,7 +57,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (25 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (26 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -145,15 +145,18 @@ Done.
 
 #### ABI
 
-- **226 `Ads*` exports** — every entry point Harbour
+- **231 `Ads*` exports** — every entry point Harbour
   `c:\harbour\lib\win\msvc64\rddads.lib` references is resolvable
-  through OpenADS' DLL. Real implementations for ≈ 100 of them; the
-  remaining ones split between **silent-success no-ops** (Cache* /
-  Set* / Refresh* / Customize* — Harbour-side preferences with no
-  effect on local-mode storage) and **`AE_FUNCTION_NOT_AVAILABLE`
-  hard-fail** (server management `Mg*`, advanced Data-Dictionary
-  CRUD, binary blob set/get, full-text search, ...). The split is
-  documented inline in `src/abi/ace_stubs.cpp`.
+  through OpenADS' DLL. Real implementations for ~ 130 of them; the
+  remainder split between **local-mode silent-success** (the `AdsMg*`
+  server-management surface, the `AdsDD*` advanced-DD CRUD surface,
+  and the `Cache*` / `Set*` / `Refresh*` / `Customize*` Harbour-side
+  preferences — all return `AE_SUCCESS` and either zero-fill the
+  caller's struct or report empty / quiescent state, so apps that
+  only inspect the return code keep running) and a single residual
+  **`AE_FUNCTION_NOT_AVAILABLE` hard-fail** (`AdsRestructureTable` —
+  schema mutation, deferred). The split is documented inline in
+  `src/abi/ace_stubs.cpp`.
 - **6 legacy CRT shims** — `_dclass`, `_dsign`, `_wfsopen`, `_getch`,
   `_kbhit`, `_eof` re-exported from `ace64.dll` so apps built against
   Harbour's prebuilt MSVC2013-era libs link without rebuilding
@@ -168,7 +171,7 @@ Done.
 
 #### Tests
 
-- **208 doctest cases / 3752 assertions** passing on Windows / MSVC
+- **211 doctest cases / 3831 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -236,7 +239,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.21-done`     | FTS search side — `AdsFTSSearch(hConn, pucFile, pucQuery, paRecnos, *pulCount)` loads the `.fts` file, tokenises the query, intersects per-token recno lists (AND semantics), and writes the hit list into `paRecnos` with truncation reporting. SQL gains a `CONTAINS(<col>, '<query>')` predicate that lowers to a precomputed recno set captured in the row predicate, so the FTS lookup runs once per query instead of per row. |
 | `m9.22-done`     | UTF-8 codepoint-aware index-expression evaluator — `UPPER`, `LOWER`, `SUBSTR` walk codepoints instead of bytes. ASCII + Latin-1 supplement (incl. `ÿ↔Ÿ`) case map cleanly; codepoints outside that range pass through. `INDEX ON UPPER(name)` over a UTF-8 column now produces stable keys for non-ASCII rows. Bare-field indexes still byte-identical (existing CDX / NTX files round-trip unchanged). |
 | `m9.23-done`     | Misc MISS fillers — real `AdsGetLongLong`, `AdsSetFieldRaw`, `AdsVerifySQL`, `AdsFailedTransactionRecovery`, `AdsGetAllLocks`, `AdsSkipUnique`. |
-| **`m9.24-done`** | **Local-mode `AdsMg*` surface** (15 calls). `AdsMgConnect` returns a synthetic mgmt handle; `AdsMgGetServerType` reports unknown (0); the four struct-shaped queries (`InstallInfo` / `ActivityInfo` / `CommStats` / `ConfigInfo` / `WorkerThreadActivity`) zero-fill the caller's `(struct*, *pusSize)` buffer; the five list-shaped queries (`UserNames` / `Locks` / `LockOwner` / `OpenTables` / `OpenIndexes`) report empty count; `AdsMgKillUser` and `AdsMgResetCommStats` no-op. Apps that probe the management surface in local mode see "everything quiescent" instead of `AE_FUNCTION_NOT_AVAILABLE`. |
+| `m9.24-done`     | Local-mode `AdsMg*` surface (15 calls). Synthetic mgmt handle, struct-shaped queries zero-fill caller buffers, list-shaped queries report empty count; apps see "everything quiescent" instead of `AE_FUNCTION_NOT_AVAILABLE`. |
+| **`m9.25-done`** | **Local-mode `AdsDD*` CRUD surface** (14 calls). `AdsDDAddIndexFile` / `RemoveIndexFile` / `CreateLink` / `DropLink` / `ModifyLink` / `CreateUser` / `DeleteUser` / `AddUserToGroup` / `RemoveUserFromGroup` / `CreateRefIntegrity` / `RemoveRefIntegrity` accept silently and return AE_SUCCESS; `GetDatabaseProperty` / `GetUserProperty` zero-fill the caller buffer + report length 0; `SetDatabaseProperty` accepts silently. Reduces the AE_FUNCTION_NOT_AVAILABLE list to a single entry: `AdsRestructureTable` (schema mutation). 0.3.x will replace these no-ops with real persistence in the OpenADS DD format. |
 
 #### What's left for 0.2.0
 
