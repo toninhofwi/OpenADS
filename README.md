@@ -217,7 +217,7 @@ on OpenADS without recompiling Harbour.
 
 #### Tests
 
-- **257 doctest cases / 4260 assertions** passing on Windows / MSVC
+- **260 doctest cases / 4278 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -328,6 +328,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.12-done` | `AdsRestructureTable` CHANGE-fields — same-type length / decimals overrides for existing columns. Type conversion still surfaces `AE_FUNCTION_NOT_AVAILABLE` (clean-room policy). |
 | `m10.13-done` | SQL `INNER JOIN <b> ON <l_col> = <r_col>` — parser. |
 | `m10.14-done` | SQL `INNER JOIN` executor — hash on right column, materialise merged rows into temp DBF cursor; right-side fields prefixed `R_`. Combos with WHERE / ORDER BY / aggregates over the joined cursor land in a follow-up. |
+| `m10.15-done` | SQL `<col> IN (…)` — literal list `IN ('a', 'b', …)` and subquery `IN (SELECT col FROM t)`. Matching set captured at compile time so per-row check is O(1). |
 
 #### Still planned for 0.3.x
 
@@ -341,12 +342,13 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **More SQL** — subqueries, INNER JOIN combined with WHERE /
-  ORDER BY / aggregates in a single statement, OUTER joins. Earlier
-  0.3.x milestones already land boolean WHERE (M10.3), `INSERT`
-  (M10.5), `ORDER BY` (M10.6), `UPDATE` / `DELETE` (M10.7),
-  projection lists (M10.8), DDL `CREATE TABLE` / `CREATE INDEX`
-  (M10.9), aggregates (M10.10), and INNER JOIN (M10.13 / M10.14).
+- **More SQL** — INNER JOIN combined with WHERE / ORDER BY /
+  aggregates in a single statement, OUTER joins, EXISTS / scalar
+  subqueries. Earlier 0.3.x milestones already land boolean WHERE
+  (M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6), `UPDATE` /
+  `DELETE` (M10.7), projection lists (M10.8), DDL `CREATE TABLE` /
+  `CREATE INDEX` (M10.9), aggregates (M10.10), INNER JOIN
+  (M10.13 / M10.14), and `IN` literal lists / subqueries (M10.15).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
