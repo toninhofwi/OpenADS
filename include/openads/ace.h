@@ -89,6 +89,9 @@ UNSIGNED32 AdsCreateIndex61 (ADSHANDLE  hTable, UNSIGNED8* pucFileName,
 UNSIGNED32 AdsExtractKey    (ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                               UNSIGNED16* pusLen);
 
+UNSIGNED32 AdsAddCustomKey   (ADSHANDLE hIndex);
+UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex);
+
 UNSIGNED32 AdsCreateTable   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED8* pucAlias,
                               UNSIGNED16 usTableType, UNSIGNED16 usCharType,

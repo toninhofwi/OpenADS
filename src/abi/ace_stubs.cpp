@@ -180,7 +180,6 @@ uint32_t AdsSetRecord           () { return OK; }
 // ---- Genuinely missing ---------------------------------------------
 // Return AE_FUNCTION_NOT_AVAILABLE so callers can detect that the
 // underlying feature is not yet implemented in OpenADS.
-uint32_t AdsAddCustomKey         () { return MISS; }
 uint32_t AdsDDAddIndexFile       () { return MISS; }
 uint32_t AdsDDAddUserToGroup     () { return MISS; }
 uint32_t AdsDDCreateLink         () { return MISS; }
@@ -195,7 +194,6 @@ uint32_t AdsDDRemoveIndexFile    () { return MISS; }
 uint32_t AdsDDRemoveRefIntegrity () { return MISS; }
 uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
 uint32_t AdsDDSetDatabaseProperty() { return MISS; }
-uint32_t AdsDeleteCustomKey      () { return MISS; }
 uint32_t AdsFailedTransactionRecovery() { return MISS; }
 uint32_t AdsGetAllLocks          () { return MISS; }
 uint32_t AdsGetLongLong          () { return MISS; }

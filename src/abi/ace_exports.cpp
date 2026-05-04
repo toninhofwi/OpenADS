@@ -1755,6 +1755,79 @@ UNSIGNED32 AdsDeleteIndex(ADSHANDLE hIndex) {
     return AdsCloseIndex(hIndex);
 }
 
+// --- M9.20 custom-key indexes ---------------------------------------------
+//
+// rddads' DBOI_KEYADD / DBOI_KEYDELETE branches call AdsAddCustomKey
+// / AdsDeleteCustomKey with just an index handle and expect the call
+// to operate on the **current record**. Real ACE evaluates the
+// index's expression against the positioned row and inserts (or
+// erases) the resulting (key, recno) entry — the "custom" wording
+// comes from the surrounding `ADS_CUSTOM` flag on the index, which
+// disables the engine's auto-sync so apps drive the index manually
+// through these two entry points.
+//
+// OpenADS today doesn't separately track the `ADS_CUSTOM` flag, so
+// these calls always evaluate + insert/erase. Apps that opt into
+// custom mode get correct behaviour because they're the ones
+// explicitly invoking these functions; expression-driven apps stay
+// out of the call site.
+
+namespace {
+
+openads::drivers::IIndex* iindex_for_binding(IndexBinding& b) {
+    if (b.parked) return b.parked.get();
+    if (auto* o = b.table ? b.table->order() : nullptr; o) {
+        return const_cast<openads::engine::Order*>(o)->index();
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    auto& m = index_bindings();
+    auto it = m.find(hIndex);
+    if (it == m.end()) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown index handle");
+    }
+    Table* t = it->second.table;
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto* idx = iindex_for_binding(it->second);
+    if (!idx) return fail(openads::AE_INTERNAL_ERROR, "no IIndex for binding");
+
+    std::uint16_t klen = idx->key_length();
+    if (klen == 0) klen = 32;
+    auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
+    if (!k) return fail(k.error());
+    auto r = idx->insert(t->recno(), k.value());
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    auto& m = index_bindings();
+    auto it = m.find(hIndex);
+    if (it == m.end()) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown index handle");
+    }
+    Table* t = it->second.table;
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto* idx = iindex_for_binding(it->second);
+    if (!idx) return fail(openads::AE_INTERNAL_ERROR, "no IIndex for binding");
+
+    std::uint16_t klen = idx->key_length();
+    if (klen == 0) klen = 32;
+    auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
+    if (!k) return fail(k.error());
+    auto r = idx->erase(t->recno(), k.value());
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 // --- M9.19 Full-text search ------------------------------------------------
 //
 // Creates an OpenADS-native `.fts` inverted-index file alongside the

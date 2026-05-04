@@ -57,7 +57,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (20 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (21 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -168,7 +168,7 @@ Done.
 
 #### Tests
 
-- **182 doctest cases / 3499 assertions** passing on Windows / MSVC
+- **185 doctest cases / 3511 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -231,7 +231,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.16-done`     | Chunked `AdsSetBinary` — per-`(table, field)` accumulator lets rddads deliver an oversized `ADS_BINARY` / `ADS_IMAGE` payload across several calls (`ulOffset != 0`, `ulBytes < ulTotalBytes`); the field only lands in the memo store once every byte arrives. Mid-write chunks that would run past the announced total fail; pending state is dropped at table teardown. |
 | `m9.17-done`     | Unicode `*W` variants — `AdsSetStringW` / `AdsGetStringW` / `AdsGetFieldW`. UTF-16LE ↔ UTF-8 transcoding at the ABI boundary; field names accept both UTF-16 NUL-terminated strings and `ADSFIELD(n)`-style numeric indices (low-pointer encoded). Engine continues to store byte sequences without a fixed codepage assumption. |
 | `m9.18-done`     | Lock retry / cycle policy — `AdsSetLockCycle` / `AdsGetLockCycle` / `AdsSetLockRetryCount` / `AdsGetLockRetryCount` (ms between attempts + retry count, defaults 100 ms / 10 retries). `AdsLockTable` / `AdsLockRecord` switched to non-blocking byte-range acquires (`LockMgr::try_lock_*` / `LockFileEx LOCKFILE_FAIL_IMMEDIATELY` / `fcntl F_SETLK`) and re-attempt up to the configured budget before reporting `AE_LOCKED`. |
-| **`m9.19-done`** | **`AdsCreateFTSIndex`** — clean-room OpenADS-native `.fts` inverted-index file (UTF-8 text: `# OpenADS FTS v0` header + sorted `<token>\t<recno1>,<recno2>,...` rows). Tokeniser respects `ulMinWordLen` / `ulMaxWordLen`, custom delimiter / noise-word arrays, plus a default ASCII delimiter set and an English stop-word seed. Search-side functions remain a follow-up milestone. |
+| `m9.19-done`     | `AdsCreateFTSIndex` — clean-room OpenADS-native `.fts` inverted-index file (UTF-8 text: `# OpenADS FTS v0` header + sorted `<token>\t<recno1>,<recno2>,...` rows). Tokeniser respects `ulMinWordLen` / `ulMaxWordLen`, custom delimiter / noise-word arrays, plus a default ASCII delimiter set and an English stop-word seed. Search-side functions remain a follow-up milestone. |
+| **`m9.20-done`** | **`AdsAddCustomKey` / `AdsDeleteCustomKey`** — manual-mode (key, recno) injection on the current record. Each call evaluates the index's expression against the positioned row and routes through the existing `IIndex::insert` / `IIndex::erase` paths, matching rddads' `DBOI_KEYADD` / `DBOI_KEYDELETE` call sites. |
 
 #### What's left for 0.2.0
 
@@ -241,9 +242,6 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 - **FTS search-side ABI** — M9.19 lands `AdsCreateFTSIndex`; query-time
   token lookup (e.g. an `AdsFTSSearch` entry point) and the SQL
   `CONTAINS(...)` predicate are the next layer.
-- **`AdsAddCustomKey` / `AdsDeleteCustomKey`** — custom-keyed index
-  entries (apps that pre-compute keys outside the engine and inject
-  them by recno). `AdsExtractKey` is already real (M9.6).
 - **UTF-16-aware index-expression evaluator** — `engine/index_expr.cpp`
   is currently byte-oriented; once it learns UTF-16, an `INDEX ON
   UPPER(name)` tag will normalise wide-character keys correctly.
