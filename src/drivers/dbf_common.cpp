@@ -90,6 +90,17 @@ parse_dbf_fields(const std::uint8_t* data, std::size_t size) {
         f.length        = data[pos + 16];
         f.decimals      = data[pos + 17];
         f.record_offset = offset;
+        // VFP autoinc descriptor bytes (M10.11). Non-VFP DBFs have
+        // these slots zeroed so the read is harmless.
+        std::uint8_t flags = data[pos + 18];
+        f.autoinc      = (flags & 0x0Cu) != 0;   // VFP marks autoinc
+                                                 // with bits 2+3 set
+        f.autoinc_next =  static_cast<std::uint32_t>(data[pos + 19])        |
+                         (static_cast<std::uint32_t>(data[pos + 20]) <<  8) |
+                         (static_cast<std::uint32_t>(data[pos + 21]) << 16) |
+                         (static_cast<std::uint32_t>(data[pos + 22]) << 24);
+        f.autoinc_step = data[pos + 23];
+        if (f.autoinc_step == 0) f.autoinc_step = 1;
         offset = static_cast<std::uint16_t>(offset + f.length);
         out.push_back(std::move(f));
         pos += 32;

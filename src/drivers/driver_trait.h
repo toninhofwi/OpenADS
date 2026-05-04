@@ -48,6 +48,17 @@ public:
     // header count, so subsequent reads see an empty table. Drivers
     // override to also reset their internal record-cache state.
     virtual util::Result<void> zap() = 0;
+
+    // VFP autoinc bump (M10.11). Returns the value to use for the
+    // pending append (the field's current `autoinc_next`), advances
+    // the in-memory counter by `autoinc_step`, and persists the new
+    // value back to the field-descriptor block on disk. Default
+    // implementation rejects with AE_FUNCTION_NOT_AVAILABLE for
+    // drivers that don't yet wire up the persistent counter.
+    virtual util::Result<std::uint32_t>
+        bump_autoinc(std::uint16_t /*field_index*/) {
+        return util::Error{5004, 0, "autoinc not supported", ""};
+    }
 };
 
 } // namespace openads::drivers

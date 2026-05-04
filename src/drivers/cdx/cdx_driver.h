@@ -29,6 +29,9 @@ public:
     util::Result<void> flush() override;
     util::Result<void> zap()   override;
 
+    util::Result<std::uint32_t>
+        bump_autoinc(std::uint16_t field_index) override;
+
 private:
     util::Result<void> rewrite_header_();
 

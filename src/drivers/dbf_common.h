@@ -50,6 +50,13 @@ struct DbfField {
     std::uint8_t  length        = 0;
     std::uint8_t  decimals      = 0;
     std::uint16_t record_offset = 0; // includes the leading deletion byte
+    // VFP autoinc (M10.11). `autoinc` is true when the field-descriptor's
+    // flags byte at offset 18 has bit 0 set; `autoinc_next` mirrors the
+    // 4-byte LE counter at offset 19 + 22, and `autoinc_step` is the
+    // single-byte step at offset 23.
+    bool          autoinc       = false;
+    std::uint32_t autoinc_next  = 0;
+    std::uint8_t  autoinc_step  = 1;
 };
 
 util::Result<std::vector<DbfField>>

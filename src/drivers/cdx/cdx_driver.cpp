@@ -170,4 +170,35 @@ util::Result<void> CdxDriver::zap() {
     return file_.sync();
 }
 
+util::Result<std::uint32_t>
+CdxDriver::bump_autoinc(std::uint16_t field_index) {
+    if (field_index >= fields_.size()) {
+        return util::Error{5063, 0, "field index out of range", ""};
+    }
+    auto& f = fields_[field_index];
+    if (!f.autoinc) {
+        return util::Error{5063, 0, "field is not autoinc", f.name};
+    }
+    std::uint32_t curr = f.autoinc_next;
+    std::uint32_t next = curr +
+        static_cast<std::uint32_t>(f.autoinc_step ? f.autoinc_step : 1);
+    f.autoinc_next = next;
+
+    // Field-descriptor block starts at file offset 32; this field's
+    // descriptor lives at 32 + 32*field_index; the autoinc-next bytes
+    // sit at offset 19 within the descriptor.
+    std::uint64_t off = 32u +
+                        static_cast<std::uint64_t>(field_index) * 32u +
+                        19u;
+    std::uint8_t buf[4] = {
+        static_cast<std::uint8_t>( next        & 0xFFu),
+        static_cast<std::uint8_t>((next >>  8) & 0xFFu),
+        static_cast<std::uint8_t>((next >> 16) & 0xFFu),
+        static_cast<std::uint8_t>((next >> 24) & 0xFFu),
+    };
+    auto w = file_.write_at(off, buf, sizeof(buf));
+    if (!w) return w.error();
+    return curr;
+}
+
 } // namespace openads::drivers::cdx
