@@ -12,9 +12,11 @@ namespace openads::engine {
 //
 //   TABLE <alias>=<relative_path>
 //
-// The original ADS `.add` binary format is proprietary and is tracked
-// as a research milestone; until that is reverse-engineered the
-// OpenADS DD format only round-trips with itself.
+// The original ADS `.add` binary format is proprietary and is not
+// implemented here; OpenADS uses its own clean-room text format and
+// only round-trips with itself. A future milestone may add a
+// compatible binary writer when a clean-room specification is
+// available.
 
 class DataDict {
 public:

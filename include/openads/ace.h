@@ -258,10 +258,9 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 // Values empirically verified (M8.4) against the prebuilt
 // `c:\harbour\lib\win\msvc64\rddads.lib` by sweeping `AdsGetFieldType`'s
 // return through 0..40 and observing what Clipper field type the
-// `adsOpen` switch routes each value to. The probe shows that whichever
-// SAP/Sybase ACE.h Harbour was built against does not match the
-// commonly-cited "ADS_STRING = 1, ADS_LOGICAL = 4" layout — the values
-// below are what rddads.lib actually decodes.
+// `adsOpen` switch routes each value to. These are the numeric
+// values rddads.lib decodes; OpenADS publishes the same constants so
+// applications built against rddads see the contract they expect.
 //
 //   value | rddads dbFieldInfo.uiType -> Clipper FieldType()
 //   ------+--------------------------------------------------
