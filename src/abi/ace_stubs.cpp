@@ -194,21 +194,103 @@ uint32_t AdsDDRemoveIndexFile    () { return MISS; }
 uint32_t AdsDDRemoveRefIntegrity () { return MISS; }
 uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
 uint32_t AdsDDSetDatabaseProperty() { return MISS; }
-uint32_t AdsMgConnect            () { return MISS; }
-uint32_t AdsMgDisconnect         () { return MISS; }
-uint32_t AdsMgGetActivityInfo    () { return MISS; }
-uint32_t AdsMgGetCommStats       () { return MISS; }
-uint32_t AdsMgGetConfigInfo      () { return MISS; }
-uint32_t AdsMgGetInstallInfo     () { return MISS; }
-uint32_t AdsMgGetLockOwner       () { return MISS; }
-uint32_t AdsMgGetLocks           () { return MISS; }
-uint32_t AdsMgGetOpenIndexes     () { return MISS; }
-uint32_t AdsMgGetOpenTables      () { return MISS; }
-uint32_t AdsMgGetServerType      () { return MISS; }
-uint32_t AdsMgGetUserNames       () { return MISS; }
-uint32_t AdsMgGetWorkerThreadActivity() { return MISS; }
-uint32_t AdsMgKillUser           () { return MISS; }
-uint32_t AdsMgResetCommStats     () { return MISS; }
+// --- M9.24 local-mode management surface ----------------------------------
+//
+// Real ACE Mg* calls are addressed at a remote management daemon —
+// they query the server's activity log, list connected users, kill
+// orphan sessions, etc. OpenADS today is local-mode only, so there
+// is no remote daemon to consult; the implementation reports
+// "everything is empty / quiescent" instead of hard-failing with
+// AE_FUNCTION_NOT_AVAILABLE so apps that only probe the management
+// surface for diagnostics keep running.
+//
+// Output buffers passed by the caller are zero-filled for `*pusSize`
+// bytes so reads of any struct field return 0 / "" instead of
+// uninitialised stack memory. Apps that act on the data (e.g.
+// pretty-print "registered owner") see the empty defaults; apps that
+// only ever check the return code see AE_SUCCESS and proceed.
+
+uint32_t AdsMgConnect(uint8_t* /*pucServer*/, uint8_t* /*pucUser*/,
+                      uint8_t* /*pucPwd*/, uint64_t* phMgmt) {
+    if (phMgmt != nullptr) *phMgmt = 1;   // synthetic local-mode handle
+    return OK;
+}
+uint32_t AdsMgDisconnect(uint64_t /*hMgmt*/) { return OK; }
+
+uint32_t AdsMgGetServerType(uint64_t /*hMgmt*/, uint16_t* pusType) {
+    if (pusType != nullptr) *pusType = 0;
+    return OK;
+}
+
+// Zero-fill helper for the struct-shaped Mg* outputs. The caller
+// passes a stack struct + an in/out size; we trust the in size and
+// memset that many bytes through the pointer.
+static void zero_fill(void* p, uint16_t* pusSize) {
+    if (pusSize == nullptr) return;
+    uint16_t n = *pusSize;
+    if (p != nullptr && n > 0) std::memset(p, 0, n);
+    // Out-size keeps the original capacity; a real ACE may bump it
+    // when the struct grew across versions, but zero is a safe lower
+    // bound that won't trip rddads' "newer client lib" trace branch.
+}
+
+uint32_t AdsMgGetInstallInfo(uint64_t /*hMgmt*/, void* pStruct,
+                             uint16_t* pusSize) {
+    zero_fill(pStruct, pusSize);
+    return OK;
+}
+uint32_t AdsMgGetActivityInfo(uint64_t /*hMgmt*/, void* pStruct,
+                              uint16_t* pusSize) {
+    zero_fill(pStruct, pusSize);
+    return OK;
+}
+uint32_t AdsMgGetCommStats(uint64_t /*hMgmt*/, void* pStruct,
+                           uint16_t* pusSize) {
+    zero_fill(pStruct, pusSize);
+    return OK;
+}
+uint32_t AdsMgGetConfigInfo(uint64_t /*hMgmt*/, void* pStruct,
+                            uint16_t* pusSize) {
+    zero_fill(pStruct, pusSize);
+    return OK;
+}
+uint32_t AdsMgGetWorkerThreadActivity(uint64_t /*hMgmt*/, void* pStruct,
+                                      uint16_t* pusSize) {
+    zero_fill(pStruct, pusSize);
+    return OK;
+}
+
+// "Get list" Mg* calls — count goes to 0, the list buffer untouched
+// (caller keeps whatever it pre-filled).
+uint32_t AdsMgGetUserNames(uint64_t /*hMgmt*/, void* /*pBuf*/,
+                           uint16_t* pusCount) {
+    if (pusCount != nullptr) *pusCount = 0;
+    return OK;
+}
+uint32_t AdsMgGetLocks(uint64_t /*hMgmt*/, void* /*pBuf*/,
+                       uint16_t* pusCount) {
+    if (pusCount != nullptr) *pusCount = 0;
+    return OK;
+}
+uint32_t AdsMgGetLockOwner(uint64_t /*hMgmt*/, void* /*pBuf*/,
+                           uint16_t* pusLen) {
+    if (pusLen != nullptr) *pusLen = 0;
+    return OK;
+}
+uint32_t AdsMgGetOpenTables(uint64_t /*hMgmt*/, void* /*pBuf*/,
+                            uint16_t* pusCount) {
+    if (pusCount != nullptr) *pusCount = 0;
+    return OK;
+}
+uint32_t AdsMgGetOpenIndexes(uint64_t /*hMgmt*/, void* /*pBuf*/,
+                             uint16_t* pusCount) {
+    if (pusCount != nullptr) *pusCount = 0;
+    return OK;
+}
+
+uint32_t AdsMgKillUser(uint64_t /*hMgmt*/, uint8_t* /*pucUser*/,
+                       uint16_t /*usOption*/) { return OK; }
+uint32_t AdsMgResetCommStats(uint64_t /*hMgmt*/) { return OK; }
 uint32_t AdsRestructureTable     () { return MISS; }
 
 }  // extern "C"

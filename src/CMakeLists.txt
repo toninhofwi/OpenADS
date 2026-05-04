@@ -20,6 +20,7 @@ add_library(openads_core STATIC
     platform/time.cpp
     platform/thread.cpp
     abi/ace_exports.cpp
+    abi/ace_stubs.cpp
     abi/last_error.cpp
     abi/charset.cpp
     session/handle_registry.cpp
@@ -80,10 +81,6 @@ endif()
 # ace32.dll / ace64.dll without recompiling consuming applications.
 # ----------------------------------------------------------------------
 add_library(openads_ace SHARED
-    abi/ace_exports.cpp
-    abi/ace_stubs.cpp
-    abi/charset.cpp
-    abi/last_error.cpp
     abi/legacy_crt_shims.cpp
 )
 
