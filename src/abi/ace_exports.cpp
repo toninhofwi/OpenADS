@@ -1534,12 +1534,28 @@ UNSIGNED32 AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
     return ok();
 }
 
-UNSIGNED32 AdsPackTable(ADSHANDLE /*hTable*/) {
+UNSIGNED32 AdsPackTable(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->pack();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsZapTable(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->zap();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsPackTable_DEFERRED(ADSHANDLE /*hTable*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                 "AdsPackTable lands in M4 alongside memo store");
 }
 
-UNSIGNED32 AdsZapTable(ADSHANDLE /*hTable*/) {
+UNSIGNED32 AdsZapTable_DEFERRED(ADSHANDLE /*hTable*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                 "AdsZapTable lands in M4 alongside memo store");
 }

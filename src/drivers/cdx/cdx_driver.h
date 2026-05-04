@@ -27,6 +27,7 @@ public:
         append_record_raw(const std::uint8_t* buf, std::size_t n) override;
 
     util::Result<void> flush() override;
+    util::Result<void> zap()   override;
 
 private:
     util::Result<void> rewrite_header_();

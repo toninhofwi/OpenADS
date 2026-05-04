@@ -37,6 +37,7 @@ public:
     { return inner_.append_record_raw(buf, n); }
 
     util::Result<void> flush() override { return inner_.flush(); }
+    util::Result<void> zap()   override { return inner_.zap();   }
 
 private:
     cdx::CdxDriver inner_;

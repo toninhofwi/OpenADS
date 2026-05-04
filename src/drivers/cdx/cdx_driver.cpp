@@ -156,4 +156,18 @@ util::Result<void> CdxDriver::flush() {
     return file_.sync();
 }
 
+util::Result<void> CdxDriver::zap() {
+    if (mode_ == DriverOpenMode::ReadOnly) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    rec_count_ = 0;
+    if (auto r = rewrite_header_(); !r) return r.error();
+    // Place an EOF marker right after the field-descriptor block;
+    // the records area on disk may still contain stale bytes but DBF
+    // readers respect the header reccount.
+    std::uint8_t eof = 0x1A;
+    if (auto w = file_.write_at(hdr_len_, &eof, 1); !w) return w.error();
+    return file_.sync();
+}
+
 } // namespace openads::drivers::cdx

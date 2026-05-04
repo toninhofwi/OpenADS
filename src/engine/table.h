@@ -66,6 +66,16 @@ public:
     bool               is_deleted() const noexcept;
     util::Result<void> flush();
 
+    // Drop every record. Header rec count -> 0 and every bound index
+    // (active order plus parked extras) is walked to erase its
+    // entries. Indexes left empty but structurally intact.
+    util::Result<void> zap();
+
+    // Physically remove deleted records: copy live rows downward,
+    // truncate header reccount to live count, and rebuild every
+    // bound index so its entries point at the new recnos.
+    util::Result<void> pack();
+
     // Locking surface.
     util::Result<void> lock_record_excl(std::uint32_t recno);
     util::Result<void> unlock_record    (std::uint32_t recno);

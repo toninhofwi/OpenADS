@@ -397,6 +397,94 @@ bool Table::is_deleted() const noexcept {
     return drivers::record_is_deleted(record_buf_.data(), record_buf_.size());
 }
 
+util::Result<void> Table::zap() {
+    if (mode_ == OpenMode::Read) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (driver_ == nullptr) {
+        return util::Error{5000, 0, "no driver", ""};
+    }
+    // Walk every bound index and erase its entries before truncating
+    // the DBF; otherwise stale (recno, key) pairs remain.
+    auto erase_all = [&](drivers::IIndex* idx) -> util::Result<void> {
+        if (idx == nullptr) return {};
+        std::vector<std::pair<std::uint32_t, std::string>> entries;
+        auto seek = idx->seek_first();
+        while (seek && seek.value().positioned) {
+            entries.emplace_back(seek.value().recno, idx->current_key());
+            seek = idx->next();
+        }
+        for (auto& [rec, key] : entries) {
+            (void)idx->erase(rec, key);
+        }
+        if (auto fl = idx->flush(); !fl) return fl.error();
+        return {};
+    };
+    if (order_ && order_->index()) {
+        if (auto r = erase_all(order_->index()); !r) return r.error();
+    }
+    for (auto* x : extra_index_views_) {
+        if (auto r = erase_all(x); !r) return r.error();
+    }
+    if (auto r = driver_->zap(); !r) return r.error();
+    state_ = State::Bof;
+    recno_ = 0;
+    record_buf_.assign(driver_->record_length(), 0);
+    return {};
+}
+
+util::Result<void> Table::pack() {
+    if (mode_ == OpenMode::Read) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (driver_ == nullptr) {
+        return util::Error{5000, 0, "no driver", ""};
+    }
+    // 1) Copy live records down. Iterate from recno 1; track destination.
+    std::uint32_t dst = 0;
+    std::uint32_t total = driver_->record_count();
+    for (std::uint32_t src = 1; src <= total; ++src) {
+        if (auto g = goto_record(src); !g) return g.error();
+        if (is_deleted()) continue;
+        ++dst;
+        if (dst != src) {
+            if (auto w = driver_->write_record_raw(dst, record_buf_.data(),
+                                                   record_buf_.size()); !w) {
+                return w.error();
+            }
+        }
+    }
+    // 2) Truncate to dst by zapping then re-walking surviving records
+    //    that were already copied: simplest is to issue a zap (which
+    //    also wipes index entries) and re-append the survivors.
+    std::vector<std::vector<std::uint8_t>> survivors;
+    survivors.reserve(dst);
+    for (std::uint32_t i = 1; i <= dst; ++i) {
+        auto rec = driver_->read_record_raw(i);
+        if (!rec) return rec.error();
+        survivors.push_back(std::move(rec).value());
+    }
+    if (auto r = zap(); !r) return r.error();
+    for (auto& buf : survivors) {
+        auto a = driver_->append_record_raw(buf.data(), buf.size());
+        if (!a) return a.error();
+        recno_ = a.value();
+        record_buf_ = buf;
+        state_ = State::Positioned;
+        // Re-insert into every active+extra index using the live key.
+        auto snap = snapshot_index_keys_();
+        std::vector<std::pair<drivers::IIndex*, std::string>> empty_snap;
+        // Reuse sync_all_indexes_ with empty prev keys so it just
+        // inserts the new (recno, key).
+        (void)snap;
+        if (auto r = sync_all_indexes_(empty_snap); !r) return r.error();
+    }
+    state_ = State::Bof;
+    recno_ = 0;
+    record_buf_.assign(driver_->record_length(), 0);
+    return {};
+}
+
 util::Result<void> Table::flush() {
     if (auto r = driver_->flush(); !r) return r.error();
     if (order_ && order_->index()) {

@@ -116,9 +116,9 @@ TEST_CASE("ABI index smoke: create NTX, seek, walk in order, scope") {
     REQUIRE(AdsClearScope(hIndex, ADS_TOP) == 0);
     REQUIRE(AdsClearScope(hIndex, ADS_BOTTOM) == 0);
 
-    // Pack/Zap stubs: must return AE_FUNCTION_NOT_AVAILABLE (5004).
-    CHECK(AdsPackTable(hTable) == openads::AE_FUNCTION_NOT_AVAILABLE);
-    CHECK(AdsZapTable (hTable) == openads::AE_FUNCTION_NOT_AVAILABLE);
+    // Pack/Zap (M9.8 real impls): must succeed.
+    CHECK(AdsPackTable(hTable) == 0);
+    CHECK(AdsZapTable (hTable) == 0);
 
     // AOF stubs: success and ADS_OPTIMIZED_NONE.
     UNSIGNED8 cond[8] = "true";

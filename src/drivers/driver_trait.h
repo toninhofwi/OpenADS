@@ -40,6 +40,14 @@ public:
         append_record_raw(const std::uint8_t* buf, std::size_t n) = 0;
 
     virtual util::Result<void> flush() = 0;
+
+    // Drop every record. Header record count goes to zero, the EOF
+    // marker is written right after the field-descriptor block, and
+    // the driver's in-memory rec count is reset. The records area on
+    // disk may still contain stale bytes — DBF readers respect the
+    // header count, so subsequent reads see an empty table. Drivers
+    // override to also reset their internal record-cache state.
+    virtual util::Result<void> zap() = 0;
 };
 
 } // namespace openads::drivers
