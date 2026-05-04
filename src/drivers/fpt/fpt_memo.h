@@ -17,8 +17,14 @@ public:
     util::Result<std::string>
         read(std::uint32_t block_no) override;
 
+    util::Result<MemoBlockType>
+        read_type(std::uint32_t block_no) override;
+
     util::Result<std::uint32_t>
         write(const std::string& payload) override;
+
+    util::Result<std::uint32_t>
+        write_typed(const std::string& payload, MemoBlockType type) override;
 
     util::Result<void> free_block(std::uint32_t block_no) override;
     util::Result<void> flush() override;

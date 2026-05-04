@@ -376,6 +376,64 @@ util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
     return sync_all_indexes_(snap);
 }
 
+util::Result<void>
+Table::set_field_binary(std::uint16_t idx, const std::string& payload,
+                        drivers::MemoBlockType type) {
+    if (state_ != State::Positioned) {
+        return util::Error{5000, 0, "no record positioned", ""};
+    }
+    if (idx >= driver_->fields().size()) {
+        return util::Error{5063, 0, "field index out of range", ""};
+    }
+    const auto& f = driver_->fields().at(idx);
+    if (f.type != drivers::DbfFieldType::Memo) {
+        return util::Error{5063, 0, "field is not a memo column", ""};
+    }
+    if (!memo_) {
+        return util::Error{5004, 0, "memo store not attached", ""};
+    }
+    auto snap = snapshot_index_keys_();
+    auto wm = memo_->write_typed(payload, type);
+    if (!wm) return wm.error();
+    char buf[16];
+    int n = std::snprintf(buf, sizeof(buf), "%*u",
+                          static_cast<int>(f.length),
+                          static_cast<unsigned>(wm.value()));
+    if (n < 0 || static_cast<std::size_t>(n) > f.length) {
+        return util::Error{5000, 0, "memo block number overflows field", ""};
+    }
+    std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
+    if (auto wb = writeback_record_(); !wb) return wb.error();
+    return sync_all_indexes_(snap);
+}
+
+util::Result<drivers::MemoBlockType>
+Table::field_memo_type(std::uint16_t idx) {
+    if (state_ != State::Positioned) {
+        return util::Error{5000, 0, "no record positioned", ""};
+    }
+    if (idx >= driver_->fields().size()) {
+        return util::Error{5063, 0, "field index out of range", ""};
+    }
+    const auto& f = driver_->fields().at(idx);
+    if (f.type != drivers::DbfFieldType::Memo || !memo_) {
+        return drivers::MemoBlockType::Text;
+    }
+    std::string raw(reinterpret_cast<const char*>(record_buf_.data() +
+                                                  f.record_offset),
+                    f.length);
+    while (!raw.empty() && raw.front() == ' ') raw.erase(raw.begin());
+    while (!raw.empty() && raw.back()  == ' ') raw.pop_back();
+    if (raw.empty()) return drivers::MemoBlockType::Text;
+    std::uint32_t block_no = 0;
+    for (char c : raw) {
+        if (c < '0' || c > '9') return drivers::MemoBlockType::Text;
+        block_no = block_no * 10 + static_cast<std::uint32_t>(c - '0');
+    }
+    if (block_no == 0) return drivers::MemoBlockType::Text;
+    return memo_->read_type(block_no);
+}
+
 util::Result<void> Table::mark_deleted() {
     if (state_ != State::Positioned) {
         return util::Error{5000, 0, "no record positioned", ""};

@@ -61,6 +61,21 @@ public:
                                  const std::string& value);
     util::Result<void> set_field(std::uint16_t field_index, double value);
     util::Result<void> set_field(std::uint16_t field_index, bool value);
+
+    // Memo write with an explicit FPT block-type tag (M9.13). Mirrors
+    // set_field(idx, std::string) but routes through the memo store's
+    // write_typed so the on-disk block carries the binary/picture flag
+    // instead of the default Text marker.
+    util::Result<void>
+        set_field_binary(std::uint16_t                field_index,
+                         const std::string&           payload,
+                         drivers::MemoBlockType       type);
+
+    // Look up the FPT block-type tag for a memo field at the current
+    // record. Returns Text if the field is empty or the memo store
+    // doesn't track types (e.g. DBT).
+    util::Result<drivers::MemoBlockType>
+        field_memo_type(std::uint16_t field_index);
     util::Result<void> mark_deleted();
     util::Result<void> recall_deleted();
     bool               is_deleted() const noexcept;

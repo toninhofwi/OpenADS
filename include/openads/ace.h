@@ -172,6 +172,16 @@ UNSIGNED32 AdsBinaryToFile     (ADSHANDLE hTable, UNSIGNED8* pucField,
                                  UNSIGNED8* pucPath);
 UNSIGNED32 AdsFileToBinary     (ADSHANDLE hTable, UNSIGNED8* pucField,
                                  UNSIGNED16 usType, UNSIGNED8* pucPath);
+UNSIGNED32 AdsGetBinaryLength  (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED32* pulLength);
+UNSIGNED32 AdsGetBinary        (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED32 ulOffset, UNSIGNED8* pucBuf,
+                                 UNSIGNED32* pulLen);
+UNSIGNED32 AdsSetBinary        (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED16 usBinaryType,
+                                 UNSIGNED32 ulTotalBytes,
+                                 UNSIGNED32 ulOffset,
+                                 UNSIGNED8* pucBuf, UNSIGNED32 ulBytes);
 UNSIGNED32 AdsGetLastAutoinc   (ADSHANDLE hTable, UNSIGNED32* pulValue);
 
 UNSIGNED32 AdsEnableEncryption (ADSHANDLE hConnect, UNSIGNED8* pucPassword);

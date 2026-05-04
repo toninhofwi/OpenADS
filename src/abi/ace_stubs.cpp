@@ -204,8 +204,6 @@ uint32_t AdsDDSetDatabaseProperty() { return MISS; }
 uint32_t AdsDeleteCustomKey      () { return MISS; }
 uint32_t AdsFailedTransactionRecovery() { return MISS; }
 uint32_t AdsGetAllLocks          () { return MISS; }
-uint32_t AdsGetBinary            () { return MISS; }
-uint32_t AdsGetBinaryLength      () { return MISS; }
 uint32_t AdsGetFieldW            () { return MISS; }
 uint32_t AdsGetLongLong          () { return MISS; }
 uint32_t AdsGetStringW           () { return MISS; }
@@ -225,7 +223,6 @@ uint32_t AdsMgGetWorkerThreadActivity() { return MISS; }
 uint32_t AdsMgKillUser           () { return MISS; }
 uint32_t AdsMgResetCommStats     () { return MISS; }
 uint32_t AdsRestructureTable     () { return MISS; }
-uint32_t AdsSetBinary            () { return MISS; }
 uint32_t AdsSetFieldRaw          () { return MISS; }
 uint32_t AdsSetStringW           () { return MISS; }
 uint32_t AdsSkipUnique           () { return MISS; }

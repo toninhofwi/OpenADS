@@ -868,13 +868,27 @@ UNSIGNED32 AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* /*pucField*/,
+UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pusType) {
     Table* t = get_table(hTable);
     if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    // Always report ADS_STRING — OpenADS' memo store is plain text;
-    // binary memos land when an FPT block carries a binary type tag.
-    *pusType = static_cast<UNSIGNED16>(ADS_STRING);
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto r = t->field_memo_type(idx);
+    if (!r) return fail(r.error());
+    switch (r.value()) {
+        case openads::drivers::MemoBlockType::Text:
+            *pusType = static_cast<UNSIGNED16>(ADS_STRING);
+            break;
+        case openads::drivers::MemoBlockType::Picture:
+            *pusType = static_cast<UNSIGNED16>(ADS_IMAGE);
+            break;
+        case openads::drivers::MemoBlockType::Object:
+            *pusType = static_cast<UNSIGNED16>(ADS_BINARY);
+            break;
+    }
     return ok();
 }
 
@@ -1748,6 +1762,91 @@ UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
     std::int32_t idx = t->field_index(name);
     if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
     auto r = t->set_field(static_cast<std::uint16_t>(idx), payload);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+// --- M9.13 binary memo (ADS_BINARY / ADS_IMAGE) ----------------------------
+//
+// rddads' adsGetValue / adsPutValue branch for ADS_BINARY+ADS_IMAGE
+// fields call this trio instead of AdsGetString/AdsSetString so the
+// payload is treated as raw bytes (length-prefixed, no NUL trimming,
+// embedded zeros preserved). The engine stores the bytes through the
+// existing memo store with an explicit FPT block-type tag, and reads
+// back the field as bytes plus an offset window so the caller can do
+// chunked reads through a small fixed-size buffer.
+
+UNSIGNED32 AdsGetBinaryLength(ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED32* pulLength) {
+    Table* t = get_table(hTable);
+    if (!t || pulLength == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    *pulLength = static_cast<UNSIGNED32>(v.value().as_string.size());
+    return ok();
+}
+
+UNSIGNED32 AdsGetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
+                        UNSIGNED32 ulOffset, UNSIGNED8* pucBuf,
+                        UNSIGNED32* pulLen) {
+    Table* t = get_table(hTable);
+    if (!t || pulLen == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    const std::string& s = v.value().as_string;
+    UNSIGNED32 cap = *pulLen;
+    UNSIGNED32 n = 0;
+    if (ulOffset < s.size()) {
+        UNSIGNED32 remaining = static_cast<UNSIGNED32>(s.size() - ulOffset);
+        n = cap < remaining ? cap : remaining;
+        if (pucBuf != nullptr && n > 0) {
+            std::memcpy(pucBuf, s.data() + ulOffset, n);
+        }
+    }
+    *pulLen = n;
+    return ok();
+}
+
+UNSIGNED32 AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
+                        UNSIGNED16 usBinaryType,
+                        UNSIGNED32 ulTotalBytes, UNSIGNED32 ulOffset,
+                        UNSIGNED8* pucBuf, UNSIGNED32 ulBytes) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (ulOffset != 0 || ulBytes != ulTotalBytes) {
+        // Chunked writes (offset != 0 or partial buffer) need a per-
+        // (table, field) accumulator. The 99% case rddads emits is a
+        // single shot with offset=0 and ulBytes==ulTotalBytes.
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "chunked AdsSetBinary not yet supported");
+    }
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    std::string payload;
+    if (pucBuf != nullptr && ulBytes > 0) {
+        payload.assign(reinterpret_cast<const char*>(pucBuf), ulBytes);
+    }
+    auto type = openads::drivers::MemoBlockType::Object;
+    if (usBinaryType == ADS_IMAGE) {
+        type = openads::drivers::MemoBlockType::Picture;
+    } else if (usBinaryType == ADS_STRING || usBinaryType == ADS_MEMO) {
+        type = openads::drivers::MemoBlockType::Text;
+    }
+    auto r = t->set_field_binary(idx, payload, type);
     if (!r) return fail(r.error());
     return ok();
 }

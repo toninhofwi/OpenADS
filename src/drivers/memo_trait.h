@@ -11,6 +11,16 @@ namespace openads::drivers {
 
 enum class MemoOpenMode { ReadOnly, Shared, Exclusive };
 
+// FPT block type tag, written into the 4-byte block header. The wire
+// values match the FoxPro FPT layout (0 = picture/binary, 1 = text);
+// the `Object` variant carries the same shape as a text block but
+// flags a raw-binary payload that should NOT be sniffed as text.
+enum class MemoBlockType : std::uint32_t {
+    Picture = 0,
+    Text    = 1,
+    Object  = 2
+};
+
 // A MemoStore owns the secondary memo file (.dbt / .fpt / .adm).
 // Drivers bind to one when the table opens; M-type fields decode their
 // 10-byte ASCII block-number references into content via this interface.
@@ -25,9 +35,24 @@ public:
     virtual util::Result<std::string>
         read(std::uint32_t block_no) = 0;
 
+    // Read just the block's type tag (byte-stream is unchanged).
+    // Default is Text; FPT-backed stores override to inspect the
+    // actual on-disk header byte.
+    virtual util::Result<MemoBlockType>
+        read_type(std::uint32_t /*block_no*/) {
+        return MemoBlockType::Text;
+    }
+
     // Allocate and write a memo. Returns the assigned block number.
     virtual util::Result<std::uint32_t>
         write(const std::string& payload) = 0;
+
+    // Allocate + write a memo with an explicit type tag. Default
+    // delegates to write() (which always emits Text); FPT overrides.
+    virtual util::Result<std::uint32_t>
+        write_typed(const std::string& payload, MemoBlockType /*type*/) {
+        return write(payload);
+    }
 
     // Mark a memo's blocks as free.
     virtual util::Result<void> free_block(std::uint32_t block_no) = 0;

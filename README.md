@@ -6,7 +6,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (13 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (14 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -79,9 +79,12 @@ Done.
   modified rows.
 - **AES-128 / AES-256 ECB** — vendored tiny-AES-c (Unlicense),
   validated against FIPS-197 + NIST SP 800-38A.
-- **Memo (DBT / FPT)** — read + write round-trip; `Connection::open_table`
-  auto-attaches the right memo store based on the DBF signature
-  (`0x03` → no memo, `0x30` → CDX with FPT memo).
+- **Memo (DBT / FPT)** — read + write round-trip;
+  `Connection::open_table` auto-attaches the right memo store based on
+  the DBF signature (`0x03` → no memo, `0x30` → CDX with FPT memo).
+  FPT blocks carry an explicit type tag (Text / Picture / Object), so
+  the same field can hold either text memos or `ADS_BINARY` /
+  `ADS_IMAGE` payloads with embedded NULs.
 - **Data Dictionary** — `.add` alias resolution; `Connection::open(<.add>)`
   resolves member tables on every `AdsOpenTable`.
 - **Locking** — OS byte-range locks with the same ranges as the
@@ -112,7 +115,7 @@ Done.
 
 #### Tests
 
-- **160 doctest cases / 3238 assertions** passing on Windows / MSVC
+- **164 doctest cases / 3297 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -168,7 +171,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.9-done`      | `AdsReindex` — rebuild every bound index from current records |
 | `m9.10-done`     | NTX multi-level B+tree split (closes M3.7 limit) |
 | `m9.11-done`     | `AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable` |
-| **`m9.12-done`** | **`AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose`** (`*` / `?` glob, case-insensitive, returns `AE_NO_FILE_FOUND` when exhausted) |
+| `m9.12-done`     | `AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose` (`*` / `?` glob, case-insensitive, returns `AE_NO_FILE_FOUND` when exhausted) |
+| **`m9.13-done`** | **`AdsGetBinaryLength` / `AdsGetBinary` / `AdsSetBinary`** + real `AdsGetMemoDataType` (FPT block-type tag round-trip; `ADS_BINARY` → `Object`, `ADS_IMAGE` → `Picture`, text → `Text`; offset-based chunked reads) |
 
 #### What's left for 0.2.0
 
@@ -180,10 +184,11 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 - **`AdsAddCustomKey` / `AdsDeleteCustomKey`** — custom-keyed index
   entries (apps that pre-compute keys outside the engine and inject
   them by recno). `AdsExtractKey` is already real (M9.6).
-- **`AdsGetBinary` / `AdsSetBinary` / `AdsGetBinaryLength`** —
-  explicit binary memo / blob payloads. The smoke fixtures use plain
-  text memos today; binary memos write `type=2` (binary) in the FPT
-  block header.
+- **`AdsSetBinary` chunked writes** — current impl only accepts
+  single-shot writes (`ulOffset == 0` and `ulBytes == ulTotalBytes`).
+  Chunked rddads paths (offset != 0 or partial buffer) need a per-
+  (table, field) accumulator; today they return
+  `AE_FUNCTION_NOT_AVAILABLE`.
 - **`*W` Unicode variants** (`AdsGetFieldW`, `AdsSetStringW`,
   `AdsGetStringW`) — UTF-16 surface. Pairs with making the index-
   expression evaluator (`engine/index_expr.cpp`) UTF-16 aware.

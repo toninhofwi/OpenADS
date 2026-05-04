@@ -84,6 +84,11 @@ FptMemo::read(std::uint32_t block_no) {
 
 util::Result<std::uint32_t>
 FptMemo::write(const std::string& payload) {
+    return write_typed(payload, MemoBlockType::Text);
+}
+
+util::Result<std::uint32_t>
+FptMemo::write_typed(const std::string& payload, MemoBlockType type) {
     if (mode_ == MemoOpenMode::ReadOnly) {
         return util::Error{5000, 0, "FPT opened read-only", ""};
     }
@@ -91,7 +96,7 @@ FptMemo::write(const std::string& payload) {
     std::size_t needed = 8 + payload.size();
     std::size_t blocks = (needed + block_size_ - 1) / block_size_;
     std::vector<std::uint8_t> buf(blocks * block_size_, 0);
-    write_u32_be(buf.data(),     1);  // type 1 = text
+    write_u32_be(buf.data(),     static_cast<std::uint32_t>(type));
     write_u32_be(buf.data() + 4, static_cast<std::uint32_t>(payload.size()));
     if (!payload.empty()) {
         std::memcpy(buf.data() + 8, payload.data(), payload.size());
@@ -105,6 +110,25 @@ FptMemo::write(const std::string& payload) {
     next_avail_ = static_cast<std::uint32_t>(start + blocks);
     if (auto r = rewrite_header_(); !r) return r.error();
     return start;
+}
+
+util::Result<MemoBlockType>
+FptMemo::read_type(std::uint32_t block_no) {
+    if (block_no == 0) return MemoBlockType::Text;
+    std::uint64_t off = static_cast<std::uint64_t>(block_no) * block_size_;
+    std::uint8_t entry[8]{};
+    auto got = file_.read_at(off, entry, sizeof(entry));
+    if (!got) return got.error();
+    if (got.value() < sizeof(entry)) {
+        return util::Error{5103, 0, "FPT memo header truncated", ""};
+    }
+    std::uint32_t raw = read_u32_be(entry);
+    switch (raw) {
+        case 0:  return MemoBlockType::Picture;
+        case 1:  return MemoBlockType::Text;
+        case 2:  return MemoBlockType::Object;
+        default: return MemoBlockType::Text;
+    }
 }
 
 util::Result<void> FptMemo::free_block(std::uint32_t /*block_no*/) {
