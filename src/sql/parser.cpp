@@ -337,6 +337,86 @@ bool sql_is_insert(const std::string& sql) {
     return c.match_keyword("INSERT");
 }
 
+bool sql_is_update(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("UPDATE");
+}
+
+bool sql_is_delete(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("DELETE");
+}
+
+util::Result<UpdateStmt> parse_update(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("UPDATE")) {
+        return util::Error{7200, 0, "expected UPDATE", sql};
+    }
+    UpdateStmt stmt;
+    stmt.table = c.read_identifier_or_filename();
+    if (stmt.table.empty()) {
+        return util::Error{7200, 0, "expected table name", sql};
+    }
+    if (!c.match_keyword("SET")) {
+        return util::Error{7200, 0, "expected SET", sql};
+    }
+    for (;;) {
+        UpdateAssign a;
+        a.column = c.read_identifier();
+        if (a.column.empty()) {
+            return util::Error{7200, 0,
+                "expected column name in SET clause", sql};
+        }
+        if (!c.match_char('=')) {
+            return util::Error{7200, 0,
+                "expected '=' after column name", sql};
+        }
+        if (c.peek_char('\'')) {
+            auto s = c.read_string_literal();
+            if (!s) return s.error();
+            a.value.is_numeric = false;
+            a.value.text       = std::move(s).value();
+        } else {
+            auto n = c.read_numeric_literal();
+            if (!n) return n.error();
+            a.value.is_numeric = true;
+            a.value.number     = n.value();
+        }
+        stmt.assignments.push_back(std::move(a));
+        if (c.match_char(',')) continue;
+        break;
+    }
+    if (c.match_keyword("WHERE")) {
+        auto root = parse_or_expr(c, sql);
+        if (!root) return root.error();
+        stmt.where = std::move(root).value();
+    }
+    c.match_char(';');
+    return stmt;
+}
+
+util::Result<DeleteStmt> parse_delete(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("DELETE")) {
+        return util::Error{7200, 0, "expected DELETE", sql};
+    }
+    if (!c.match_keyword("FROM")) {
+        return util::Error{7200, 0, "expected FROM after DELETE", sql};
+    }
+    DeleteStmt stmt;
+    stmt.table = c.read_identifier_or_filename();
+    if (stmt.table.empty()) {
+        return util::Error{7200, 0, "expected table name", sql};
+    }
+    if (c.match_keyword("WHERE")) {
+        auto root = parse_or_expr(c, sql);
+        if (!root) return root.error();
+        stmt.where = std::move(root).value();
+    }
+    c.match_char(';');
+    return stmt;
+}
+
 util::Result<InsertStmt> parse_insert(const std::string& sql) {
     Cursor c(sql);
     if (!c.match_keyword("INSERT")) {

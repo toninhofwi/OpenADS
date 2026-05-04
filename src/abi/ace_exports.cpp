@@ -3458,8 +3458,244 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);
 
-    // M10.5: dispatch on the leading keyword. INSERT writes a row +
-    // returns no cursor (phCursor → 0); SELECT keeps the M9.21 path.
+    // M10.5/M10.7: dispatch on the leading keyword. INSERT / UPDATE /
+    // DELETE write rows and return no cursor (phCursor → 0); SELECT
+    // keeps the M9.21 path.
+    if (openads::sql::sql_is_update(sql)) {
+        auto upd = openads::sql::parse_update(sql);
+        if (!upd) return fail(upd.error());
+        auto th = c->open_table(upd.value().table,
+                                openads::engine::TableType::Cdx,
+                                openads::engine::OpenMode::Shared);
+        if (!th) return fail(th.error());
+        openads::engine::Table* tbl = c->lookup_table(th.value());
+        if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        // Pre-resolve assignments so a typo surfaces before any write.
+        struct Assn {
+            std::uint16_t                   field_index;
+            openads::sql::InsertLiteral     value;
+        };
+        std::vector<Assn> assns;
+        assns.reserve(upd.value().assignments.size());
+        for (const auto& a : upd.value().assignments) {
+            std::int32_t fidx = tbl->field_index(a.column);
+            if (fidx < 0) {
+                return fail(openads::AE_COLUMN_NOT_FOUND, a.column.c_str());
+            }
+            assns.push_back({static_cast<std::uint16_t>(fidx), a.value});
+        }
+        // Walk every live record, run optional WHERE via the same
+        // engine filter machinery, and apply the assignments inline.
+        if (upd.value().where) {
+            // Leverage the same compile path as SELECT — but inline
+            // a smaller version that walks the AST recursively. Reuse
+            // is fine: same structure, no SQL features missing.
+            // (Helper extraction is deferred until UPDATE picks up
+            // CONTAINS or AND/OR — for now the closures below fully
+            // cover the tree.)
+            using Pred = std::function<bool(openads::engine::Table&)>;
+            std::function<openads::util::Result<Pred>(
+                const openads::sql::WhereExpr&)> compile;
+            compile = [&](const openads::sql::WhereExpr& node)
+                      -> openads::util::Result<Pred> {
+                using Kind = openads::sql::WhereExpr::Kind;
+                if (node.kind == Kind::And) {
+                    std::vector<Pred> ks;
+                    for (auto& cn : node.children) {
+                        auto r = compile(*cn);
+                        if (!r) return r.error();
+                        ks.push_back(std::move(r).value());
+                    }
+                    return Pred{[ks = std::move(ks)](openads::engine::Table& t) {
+                        for (auto& k : ks) if (!k(t)) return false;
+                        return true;
+                    }};
+                }
+                if (node.kind == Kind::Or) {
+                    std::vector<Pred> ks;
+                    for (auto& cn : node.children) {
+                        auto r = compile(*cn);
+                        if (!r) return r.error();
+                        ks.push_back(std::move(r).value());
+                    }
+                    return Pred{[ks = std::move(ks)](openads::engine::Table& t) {
+                        for (auto& k : ks) if (k(t)) return true;
+                        return false;
+                    }};
+                }
+                if (node.kind == Kind::Not) {
+                    auto inner = compile(*node.child);
+                    if (!inner) return inner.error();
+                    return Pred{[p = std::move(inner).value()]
+                                (openads::engine::Table& t){return !p(t);}};
+                }
+                const auto& w = node.cmp;
+                std::int32_t fidx = tbl->field_index(w.column);
+                if (fidx < 0) {
+                    return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        w.column.c_str(), ""};
+                }
+                std::uint16_t fi = static_cast<std::uint16_t>(fidx);
+                openads::sql::WhereOp op = w.op;
+                std::string lit = w.literal;
+                bool is_num     = w.is_numeric;
+                double num      = w.number;
+                return Pred{[fi, op, lit, is_num, num]
+                            (openads::engine::Table& t) {
+                    auto v = t.read_field(fi);
+                    if (!v) return false;
+                    int cmp = 0;
+                    if (is_num) {
+                        double d = v.value().as_double;
+                        if      (d < num) cmp = -1;
+                        else if (d > num) cmp =  1;
+                    } else {
+                        cmp = v.value().as_string.compare(lit);
+                    }
+                    switch (op) {
+                        case openads::sql::WhereOp::Eq: return cmp == 0;
+                        case openads::sql::WhereOp::Ne: return cmp != 0;
+                        case openads::sql::WhereOp::Lt: return cmp <  0;
+                        case openads::sql::WhereOp::Gt: return cmp >  0;
+                        case openads::sql::WhereOp::Le: return cmp <= 0;
+                        case openads::sql::WhereOp::Ge: return cmp >= 0;
+                        case openads::sql::WhereOp::Contains: return false;
+                    }
+                    return false;
+                }};
+            };
+            auto compiled = compile(*upd.value().where);
+            if (!compiled) return fail(compiled.error());
+            tbl->set_filter(std::move(compiled).value());
+        }
+        std::uint32_t rcount = tbl->record_count();
+        for (std::uint32_t r = 1; r <= rcount; ++r) {
+            if (auto g = tbl->goto_record(r); !g) continue;
+            if (tbl->is_deleted()) continue;
+            if (!tbl->passes_filter()) continue;
+            for (const auto& a : assns) {
+                if (a.value.is_numeric) {
+                    auto wr = tbl->set_field(a.field_index, a.value.number);
+                    if (!wr) return fail(wr.error());
+                } else {
+                    auto wr = tbl->set_field(a.field_index, a.value.text);
+                    if (!wr) return fail(wr.error());
+                }
+            }
+        }
+        if (auto fl = tbl->flush(); !fl) return fail(fl.error());
+        tbl->clear_filter();
+        c->close_table(th.value());
+        *phCursor = 0;
+        return ok();
+    }
+
+    if (openads::sql::sql_is_delete(sql)) {
+        auto del = openads::sql::parse_delete(sql);
+        if (!del) return fail(del.error());
+        auto th = c->open_table(del.value().table,
+                                openads::engine::TableType::Cdx,
+                                openads::engine::OpenMode::Shared);
+        if (!th) return fail(th.error());
+        openads::engine::Table* tbl = c->lookup_table(th.value());
+        if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        // Reuse the WHERE filter machinery for SELECT: it's already
+        // wired and the predicate semantics match exactly.
+        if (del.value().where) {
+            // The compile lambda from the SELECT branch lives below;
+            // copy a minimal bool-tree walker inline so DELETE isn't
+            // forced to call into SELECT's path.
+            using Pred = std::function<bool(openads::engine::Table&)>;
+            std::function<openads::util::Result<Pred>(
+                const openads::sql::WhereExpr&)> compile;
+            compile = [&](const openads::sql::WhereExpr& node)
+                      -> openads::util::Result<Pred> {
+                using Kind = openads::sql::WhereExpr::Kind;
+                if (node.kind == Kind::And) {
+                    std::vector<Pred> ks;
+                    for (auto& cn : node.children) {
+                        auto r = compile(*cn);
+                        if (!r) return r.error();
+                        ks.push_back(std::move(r).value());
+                    }
+                    return Pred{[ks = std::move(ks)](openads::engine::Table& t) {
+                        for (auto& k : ks) if (!k(t)) return false;
+                        return true;
+                    }};
+                }
+                if (node.kind == Kind::Or) {
+                    std::vector<Pred> ks;
+                    for (auto& cn : node.children) {
+                        auto r = compile(*cn);
+                        if (!r) return r.error();
+                        ks.push_back(std::move(r).value());
+                    }
+                    return Pred{[ks = std::move(ks)](openads::engine::Table& t) {
+                        for (auto& k : ks) if (k(t)) return true;
+                        return false;
+                    }};
+                }
+                if (node.kind == Kind::Not) {
+                    auto inner = compile(*node.child);
+                    if (!inner) return inner.error();
+                    return Pred{[p = std::move(inner).value()]
+                                (openads::engine::Table& t){return !p(t);}};
+                }
+                const auto& w = node.cmp;
+                std::int32_t fidx = tbl->field_index(w.column);
+                if (fidx < 0) {
+                    return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        w.column.c_str(), ""};
+                }
+                std::uint16_t fi = static_cast<std::uint16_t>(fidx);
+                openads::sql::WhereOp op = w.op;
+                std::string lit = w.literal;
+                bool is_num     = w.is_numeric;
+                double num      = w.number;
+                return Pred{[fi, op, lit, is_num, num]
+                            (openads::engine::Table& t) {
+                    auto v = t.read_field(fi);
+                    if (!v) return false;
+                    int cmp = 0;
+                    if (is_num) {
+                        double d = v.value().as_double;
+                        if      (d < num) cmp = -1;
+                        else if (d > num) cmp =  1;
+                    } else {
+                        cmp = v.value().as_string.compare(lit);
+                    }
+                    switch (op) {
+                        case openads::sql::WhereOp::Eq: return cmp == 0;
+                        case openads::sql::WhereOp::Ne: return cmp != 0;
+                        case openads::sql::WhereOp::Lt: return cmp <  0;
+                        case openads::sql::WhereOp::Gt: return cmp >  0;
+                        case openads::sql::WhereOp::Le: return cmp <= 0;
+                        case openads::sql::WhereOp::Ge: return cmp >= 0;
+                        case openads::sql::WhereOp::Contains: return false;
+                    }
+                    return false;
+                }};
+            };
+            auto compiled = compile(*del.value().where);
+            if (!compiled) return fail(compiled.error());
+            tbl->set_filter(std::move(compiled).value());
+        }
+        std::uint32_t rcount = tbl->record_count();
+        for (std::uint32_t r = 1; r <= rcount; ++r) {
+            if (auto g = tbl->goto_record(r); !g) continue;
+            if (tbl->is_deleted()) continue;
+            if (!tbl->passes_filter()) continue;
+            (void)tbl->mark_deleted();
+        }
+        if (auto fl = tbl->flush(); !fl) return fail(fl.error());
+        tbl->clear_filter();
+        c->close_table(th.value());
+        *phCursor = 0;
+        return ok();
+    }
+
     if (openads::sql::sql_is_insert(sql)) {
         auto ins = openads::sql::parse_insert(sql);
         if (!ins) return fail(ins.error());

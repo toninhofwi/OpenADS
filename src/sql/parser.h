@@ -67,8 +67,31 @@ struct InsertStmt {
 
 util::Result<InsertStmt> parse_insert(const std::string& sql);
 
-// Returns true when `sql`'s first non-whitespace keyword is INSERT.
-// Used by AdsExecuteSQLDirect to pick the right parser.
+// M10.7 — `UPDATE <table> SET <col>=<lit>, … [WHERE <expr>]`.
+struct UpdateAssign {
+    std::string   column;
+    InsertLiteral value;
+};
+
+struct UpdateStmt {
+    std::string                  table;
+    std::vector<UpdateAssign>    assignments;
+    std::unique_ptr<WhereExpr>   where;
+};
+
+util::Result<UpdateStmt> parse_update(const std::string& sql);
+
+// M10.7 — `DELETE FROM <table> [WHERE <expr>]`.
+struct DeleteStmt {
+    std::string                  table;
+    std::unique_ptr<WhereExpr>   where;
+};
+
+util::Result<DeleteStmt> parse_delete(const std::string& sql);
+
+// Leading-keyword peeks (used by AdsExecuteSQLDirect to dispatch).
 bool sql_is_insert(const std::string& sql);
+bool sql_is_update(const std::string& sql);
+bool sql_is_delete(const std::string& sql);
 
 } // namespace openads::sql
