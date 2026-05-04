@@ -123,12 +123,10 @@ TEST_CASE("M9.26 AdsRestructureTable adds a new field, preserves old data") {
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("M9.26 AdsRestructureTable still rejects CHANGE field lists") {
-    // CHANGE-fields semantics (rename / retype existing columns) need
-    // a clean-room ADS spec we don't have; M10.4 ships ADD + DELETE
-    // only. The DELETE-fields path is now real (covered by an M10.4
-    // test below).
-    auto dir = fs::temp_directory_path() / "openads_m9_26_reject";
+TEST_CASE("M10.12 AdsRestructureTable rejects CHANGE type conversion") {
+    // CHANGE supports same-type len/decimals changes; type conversion
+    // (e.g. C → N) still surfaces AE_FUNCTION_NOT_AVAILABLE.
+    auto dir = fs::temp_directory_path() / "openads_m10_12_reject_type";
     std::error_code ec;
     fs::remove_all(dir, ec);
     stage_dbf(dir);
@@ -141,13 +139,54 @@ TEST_CASE("M9.26 AdsRestructureTable still rejects CHANGE field lists") {
 
     UNSIGNED8 leaf[16]  = "data";
     UNSIGNED8 empty[1]  = {0};
-    UNSIGNED8 chg[32]   = "TAG,Character,10";
+    UNSIGNED8 chg[32]   = "TAG,Numeric,10";   // was Character(5)
 
     UNSIGNED32 rc = AdsRestructureTable(hConn, leaf, nullptr,
                                         ADS_CDX, 0, 0, 0,
                                         empty, empty, chg);
     CHECK(rc == openads::AE_FUNCTION_NOT_AVAILABLE);
 
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.12 AdsRestructureTable CHANGE same-type length grows the column") {
+    auto dir = fs::temp_directory_path() / "openads_m10_12_grow";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_dbf(dir);   // single C(5) "TAG" field, records "ALPHA","BETA "
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 leaf[16] = "data";
+    UNSIGNED8 empty[1] = {0};
+    UNSIGNED8 chg[32]  = "TAG,Character,10";
+
+    REQUIRE(AdsRestructureTable(hConn, leaf, nullptr,
+                                ADS_CDX, 0, 0, 0,
+                                empty, empty, chg) == 0);
+
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    UNSIGNED32 fl = 0;
+    UNSIGNED8 fld[16] = "TAG";
+    REQUIRE(AdsGetFieldLength(hTable, fld, &fl) == 0);
+    CHECK(fl == 10);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, fld, buf, &cap, 0) == 0);
+    auto v = std::string(reinterpret_cast<const char*>(buf), cap);
+    while (!v.empty() && v.back() == ' ') v.pop_back();
+    CHECK(v == "ALPHA");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }

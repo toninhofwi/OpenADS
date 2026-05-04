@@ -552,19 +552,20 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
     auto chg = pucChangeFields ? openads::abi::to_internal(pucChangeFields, 0)
                                : std::string();
 
-    // CHANGE (rename / retype / re-length existing fields) requires
-    // either silent type coercion semantics or a clean-room ADS spec
-    // we don't have. ADD + DELETE cover the common evolution cases;
-    // CHANGE stays deferred until a future milestone.
-    if (!chg.empty()) {
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsRestructureTable: CHANGE-fields path deferred "
-                    "(ADD + DELETE are supported)");
-    }
-
     auto add = pucAddFields ? openads::abi::to_internal(pucAddFields, 0)
                             : std::string();
     auto add_fields = parse_rddads_field_defs(add);
+
+    // CHANGE list (M10.12): same shape as ADD (NAME,Type,Len,Dec;…).
+    // Each entry replaces the same-named existing field's length /
+    // decimals. The Type must match the existing field — type
+    // conversion (rename / retype) needs a clean-room ADS spec and
+    // stays deferred. Apps that need it can issue DELETE + ADD.
+    auto change_fields = parse_rddads_field_defs(chg);
+    std::unordered_map<std::string, FieldOut> change_map;
+    for (auto& cf : change_fields) {
+        change_map[cf.name] = cf;
+    }
 
     // DELETE list is a `;`-separated list of bare field names —
     // unlike pucAddFields the entries carry no type / len info.
@@ -591,7 +592,7 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
         }
     }
 
-    if (add_fields.empty() && del_set.empty()) {
+    if (add_fields.empty() && del_set.empty() && change_fields.empty()) {
         return ok();   // nothing to do
     }
 
@@ -617,13 +618,16 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
         auto& t = opened.value();
 
         // Per-field copy plan: keep the source order, drop fields that
-        // appear in the DELETE list, then append the ADD list. Each
-        // surviving field tracks where to copy from in the old record
-        // (or no source for newly-added columns).
+        // appear in the DELETE list, apply the CHANGE list's
+        // length/decimals overrides for matching surviving fields,
+        // then append the ADD list. Each surviving field tracks where
+        // to copy from in the old record (or no source for newly-added
+        // columns).
         struct PerField {
             FieldOut       descriptor;
-            bool           from_old   = false;
-            std::uint16_t  old_offset = 0;
+            bool           from_old      = false;
+            std::uint16_t  old_offset    = 0;
+            std::uint8_t   old_length    = 0;
         };
         std::vector<PerField> plan;
         for (std::uint16_t i = 0; i < t.field_count(); ++i) {
@@ -636,6 +640,19 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
             p.descriptor.dec    = src.decimals;
             p.from_old   = true;
             p.old_offset = src.record_offset;
+            p.old_length = src.length;
+
+            auto cit = change_map.find(src.name);
+            if (cit != change_map.end()) {
+                if (cit->second.type != src.raw_type) {
+                    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                                "AdsRestructureTable: CHANGE type "
+                                "conversion deferred — name + type "
+                                "must match the existing column");
+                }
+                p.descriptor.length = cit->second.length;
+                p.descriptor.dec    = cit->second.dec;
+            }
             plan.push_back(std::move(p));
         }
         for (auto& nf : add_fields) {
@@ -702,12 +719,19 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
             new_buf[0] = old_buf.empty() ? ' ' : old_buf[0];
             std::uint16_t out_off = 1;
             for (auto& p : plan) {
-                if (p.from_old &&
-                    old_buf.size() >= static_cast<std::size_t>(p.old_offset) +
-                                       static_cast<std::size_t>(p.descriptor.length)) {
-                    std::memcpy(new_buf.data() + out_off,
-                                old_buf.data() + p.old_offset,
-                                p.descriptor.length);
+                if (p.from_old) {
+                    std::uint8_t copy_len =
+                        std::min<std::uint8_t>(p.old_length,
+                                               p.descriptor.length);
+                    if (old_buf.size() >=
+                        static_cast<std::size_t>(p.old_offset) +
+                        static_cast<std::size_t>(copy_len)) {
+                        std::memcpy(new_buf.data() + out_off,
+                                    old_buf.data() + p.old_offset,
+                                    copy_len);
+                    }
+                    // Tail bytes (when new length > old length) stay
+                    // as the blank-pad already in new_buf.
                 }
                 out_off = static_cast<std::uint16_t>(
                     out_off + p.descriptor.length);
