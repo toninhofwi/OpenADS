@@ -339,6 +339,5 @@ uint32_t AdsMgGetOpenIndexes(uint64_t /*hMgmt*/, void* /*pBuf*/,
 uint32_t AdsMgKillUser(uint64_t /*hMgmt*/, uint8_t* /*pucUser*/,
                        uint16_t /*usOption*/) { return OK; }
 uint32_t AdsMgResetCommStats(uint64_t /*hMgmt*/) { return OK; }
-uint32_t AdsRestructureTable     () { return MISS; }
 
 }  // extern "C"

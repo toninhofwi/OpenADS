@@ -57,7 +57,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (26 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (27 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -148,15 +148,18 @@ Done.
 - **231 `Ads*` exports** — every entry point Harbour
   `c:\harbour\lib\win\msvc64\rddads.lib` references is resolvable
   through OpenADS' DLL. Real implementations for ~ 130 of them; the
-  remainder split between **local-mode silent-success** (the `AdsMg*`
+  remainder are **local-mode silent-success** (the `AdsMg*`
   server-management surface, the `AdsDD*` advanced-DD CRUD surface,
   and the `Cache*` / `Set*` / `Refresh*` / `Customize*` Harbour-side
   preferences — all return `AE_SUCCESS` and either zero-fill the
   caller's struct or report empty / quiescent state, so apps that
-  only inspect the return code keep running) and a single residual
-  **`AE_FUNCTION_NOT_AVAILABLE` hard-fail** (`AdsRestructureTable` —
-  schema mutation, deferred). The split is documented inline in
-  `src/abi/ace_stubs.cpp`.
+  only inspect the return code keep running). **No exports
+  hard-fail with `AE_FUNCTION_NOT_AVAILABLE` at the function level
+  any more.** Specific ADD-only branches (e.g.
+  `AdsRestructureTable`'s `pucDeleteFields` / `pucChangeFields`
+  arguments) still surface that error code at the argument level
+  with a clear comment pointing at the 0.3.x deferral. The split
+  is documented inline in `src/abi/ace_stubs.cpp`.
 - **6 legacy CRT shims** — `_dclass`, `_dsign`, `_wfsopen`, `_getch`,
   `_kbhit`, `_eof` re-exported from `ace64.dll` so apps built against
   Harbour's prebuilt MSVC2013-era libs link without rebuilding
@@ -171,7 +174,7 @@ Done.
 
 #### Tests
 
-- **211 doctest cases / 3831 assertions** passing on Windows / MSVC
+- **214 doctest cases / 3865 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -240,7 +243,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.22-done`     | UTF-8 codepoint-aware index-expression evaluator — `UPPER`, `LOWER`, `SUBSTR` walk codepoints instead of bytes. ASCII + Latin-1 supplement (incl. `ÿ↔Ÿ`) case map cleanly; codepoints outside that range pass through. `INDEX ON UPPER(name)` over a UTF-8 column now produces stable keys for non-ASCII rows. Bare-field indexes still byte-identical (existing CDX / NTX files round-trip unchanged). |
 | `m9.23-done`     | Misc MISS fillers — real `AdsGetLongLong`, `AdsSetFieldRaw`, `AdsVerifySQL`, `AdsFailedTransactionRecovery`, `AdsGetAllLocks`, `AdsSkipUnique`. |
 | `m9.24-done`     | Local-mode `AdsMg*` surface (15 calls). Synthetic mgmt handle, struct-shaped queries zero-fill caller buffers, list-shaped queries report empty count; apps see "everything quiescent" instead of `AE_FUNCTION_NOT_AVAILABLE`. |
-| **`m9.25-done`** | **Local-mode `AdsDD*` CRUD surface** (14 calls). `AdsDDAddIndexFile` / `RemoveIndexFile` / `CreateLink` / `DropLink` / `ModifyLink` / `CreateUser` / `DeleteUser` / `AddUserToGroup` / `RemoveUserFromGroup` / `CreateRefIntegrity` / `RemoveRefIntegrity` accept silently and return AE_SUCCESS; `GetDatabaseProperty` / `GetUserProperty` zero-fill the caller buffer + report length 0; `SetDatabaseProperty` accepts silently. Reduces the AE_FUNCTION_NOT_AVAILABLE list to a single entry: `AdsRestructureTable` (schema mutation). 0.3.x will replace these no-ops with real persistence in the OpenADS DD format. |
+| `m9.25-done`     | Local-mode `AdsDD*` CRUD surface (14 calls). All 14 accept silently / zero-fill. 0.3.x will replace these no-ops with real persistence in the OpenADS DD format. |
+| **`m9.26-done`** | **`AdsRestructureTable` (ADD-fields path)** — rewrites the DBF with the original schema + `pucAddFields` appended, copies every record's old-field bytes verbatim and blank-pads the new fields. Atomic-ish replace via `<table>.dbf.restructure.tmp` + rename. `pucDeleteFields` / `pucChangeFields` (column drop / rename / type-change) return `AE_FUNCTION_NOT_AVAILABLE` and arrive with VFP / ADT structural extensions in 0.3.x. **The MISS list is now empty — every Harbour-reachable `Ads*` export resolves to a real impl, a local-mode silent-success, or a documented 0.3.x deferral.** |
 
 #### What's left for 0.2.0
 

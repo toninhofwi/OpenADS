@@ -115,6 +115,13 @@ UNSIGNED32 AdsCreateTable   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED16 usMemoBlockSize,
                               UNSIGNED8* pucFields,
                               ADSHANDLE* phTable);
+UNSIGNED32 AdsRestructureTable(ADSHANDLE  hConnect, UNSIGNED8* pucTableName,
+                              UNSIGNED8* pucAlias,
+                              UNSIGNED16 usFileType, UNSIGNED16 usCharType,
+                              UNSIGNED16 usLockType, UNSIGNED16 usCheckRights,
+                              UNSIGNED8* pucAddFields,
+                              UNSIGNED8* pucDeleteFields,
+                              UNSIGNED8* pucChangeFields);
 UNSIGNED32 AdsSkip          (ADSHANDLE hTable, SIGNED32 lRows);
 UNSIGNED32 AdsAtEOF         (ADSHANDLE hTable, UNSIGNED16* pbAtEnd);
 UNSIGNED32 AdsAtBOF         (ADSHANDLE hTable, UNSIGNED16* pbAtBegin);

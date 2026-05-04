@@ -332,6 +332,56 @@ std::string trim(std::string s) {
     return s;
 }
 
+// rddads `NAME,Type,Len,Dec;…` parser. Empty `defs` returns an empty
+// vector. Used by AdsCreateTable (M9.5) and AdsRestructureTable (M9.26).
+struct FieldOut {
+    std::string  name;
+    char         type   = 'C';
+    std::uint8_t length = 0;
+    std::uint8_t dec    = 0;
+};
+
+std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs) {
+    std::vector<FieldOut> fields;
+    std::string buf;
+    auto flush = [&] {
+        if (buf.empty()) return;
+        std::vector<std::string> parts;
+        std::string p;
+        for (char c2 : buf) {
+            if (c2 == ',') { parts.push_back(trim(p)); p.clear(); }
+            else p.push_back(c2);
+        }
+        parts.push_back(trim(p));
+        if (parts.size() >= 2) {
+            DbfTypeSpec ts = dbf_type_for(parts[1]);
+            FieldOut f;
+            f.name = parts[0];
+            if (f.name.size() > 10) f.name.resize(10);
+            f.type = ts.type;
+            f.length = ts.length;
+            f.dec    = ts.dec;
+            if (parts.size() >= 3) {
+                int n = std::atoi(parts[2].c_str());
+                if (n > 0 && n < 256) f.length = static_cast<std::uint8_t>(n);
+            }
+            if (parts.size() >= 4) {
+                int d = std::atoi(parts[3].c_str());
+                if (d >= 0 && d < 256) f.dec = static_cast<std::uint8_t>(d);
+            }
+            if (f.length == 0) f.length = 10;
+            fields.push_back(std::move(f));
+        }
+        buf.clear();
+    };
+    for (std::size_t i = 0; i <= defs.size(); ++i) {
+        char ch = (i < defs.size()) ? defs[i] : ';';
+        if (ch == ';') flush();
+        else           buf.push_back(ch);
+    }
+    return fields;
+}
+
 } // namespace
 } // extern "C++"
 
@@ -362,51 +412,7 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
     fs::path full = fs::path(c->data_dir()) / rel;
     if (!full.has_extension()) full.replace_extension(".dbf");
 
-    // Parse `NAME,Type,Len,Dec;NAME,Type,...` into per-field structs.
-    struct FieldOut {
-        std::string  name;
-        char         type;
-        std::uint8_t length;
-        std::uint8_t dec;
-    };
-    std::vector<FieldOut> fields;
-    std::string buf;
-    for (std::size_t i = 0; i <= defs.size(); ++i) {
-        char ch = (i < defs.size()) ? defs[i] : ';';
-        if (ch == ';') {
-            if (!buf.empty()) {
-                std::vector<std::string> parts;
-                std::string p;
-                for (char c2 : buf) {
-                    if (c2 == ',') { parts.push_back(trim(p)); p.clear(); }
-                    else p.push_back(c2);
-                }
-                parts.push_back(trim(p));
-                if (parts.size() >= 2) {
-                    DbfTypeSpec ts = dbf_type_for(parts[1]);
-                    FieldOut f;
-                    f.name = parts[0];
-                    if (f.name.size() > 10) f.name.resize(10);
-                    f.type = ts.type;
-                    f.length = ts.length;
-                    f.dec    = ts.dec;
-                    if (parts.size() >= 3) {
-                        int n = std::atoi(parts[2].c_str());
-                        if (n > 0 && n < 256) f.length = static_cast<std::uint8_t>(n);
-                    }
-                    if (parts.size() >= 4) {
-                        int d = std::atoi(parts[3].c_str());
-                        if (d >= 0 && d < 256) f.dec = static_cast<std::uint8_t>(d);
-                    }
-                    if (f.length == 0) f.length = 10;     // sensible default
-                    fields.push_back(std::move(f));
-                }
-                buf.clear();
-            }
-        } else {
-            buf.push_back(ch);
-        }
-    }
+    auto fields = parse_rddads_field_defs(defs);
     if (fields.empty()) {
         return fail(openads::AE_INTERNAL_ERROR, "no fields");
     }
@@ -465,6 +471,172 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
                         ADS_CDX,    // table type
                         0, 0, 0, 1, // char/lock/checkrights/mode
                         phTable);
+}
+
+// --- M9.26 AdsRestructureTable (ADD-only) ----------------------------------
+//
+// Real ACE rebuilds the DBF with three field-def strings — add,
+// delete, and change. The most common rddads call site only feeds
+// the "add" list (`pucDeleteFields` / `pucChangeFields` empty), which
+// is what 0.2.x supports. Non-empty delete / change lists return
+// AE_FUNCTION_NOT_AVAILABLE until the 0.3.x VFP / ADT structural
+// extensions land.
+//
+// Indexes are NOT auto-rebuilt (real ACE handles that internally).
+// Apps that depend on a bound index after a restructure should
+// follow up with AdsReindex; the on-disk record format changed, so
+// stale entries point at the wrong recnos.
+
+UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
+                               UNSIGNED8*  pucTableName,
+                               UNSIGNED8*  /*pucAlias*/,
+                               UNSIGNED16  /*usFileType*/,
+                               UNSIGNED16  /*usCharType*/,
+                               UNSIGNED16  /*usLockType*/,
+                               UNSIGNED16  /*usCheckRights*/,
+                               UNSIGNED8*  pucAddFields,
+                               UNSIGNED8*  pucDeleteFields,
+                               UNSIGNED8*  pucChangeFields) {
+    if (pucTableName == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsRestructureTable: null table name");
+    }
+    auto& s = state();
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (c == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    auto del = pucDeleteFields ? openads::abi::to_internal(pucDeleteFields, 0)
+                               : std::string();
+    auto chg = pucChangeFields ? openads::abi::to_internal(pucChangeFields, 0)
+                               : std::string();
+    if (!del.empty() || !chg.empty()) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsRestructureTable: only ADD-fields path supported "
+                    "in 0.2.x; DELETE / CHANGE arrive with VFP / ADT in 0.3.x");
+    }
+    auto add = pucAddFields ? openads::abi::to_internal(pucAddFields, 0)
+                            : std::string();
+    auto add_fields = parse_rddads_field_defs(add);
+    if (add_fields.empty()) {
+        // No-op: nothing to add.
+        return ok();
+    }
+
+    auto rel = openads::abi::to_internal(pucTableName, 0);
+    namespace fs = std::filesystem;
+    fs::path full = fs::path(c->data_dir()) / rel;
+    if (!full.has_extension()) full.replace_extension(".dbf");
+
+    fs::path tmp = full;
+    tmp += ".restructure.tmp";
+    {
+        std::error_code ec;
+        fs::remove(tmp, ec);
+    }
+
+    // Read the source schema + record bytes inside an inner scope so
+    // the engine's File handle on `full` is closed before the rename.
+    {
+        auto opened = openads::engine::Table::open(
+            full.string(), openads::engine::TableType::Cdx,
+            openads::engine::OpenMode::Read);
+        if (!opened) return fail(opened.error());
+        auto& t = opened.value();
+
+        // Combined schema = original fields + new fields. Reject
+        // duplicate names so the merged record buffer stays
+        // unambiguous.
+        std::vector<FieldOut> merged;
+        for (std::uint16_t i = 0; i < t.field_count(); ++i) {
+            const auto& src = t.field_descriptor(i);
+            FieldOut f;
+            f.name   = src.name;
+            f.type   = src.raw_type;
+            f.length = src.length;
+            f.dec    = src.decimals;
+            merged.push_back(std::move(f));
+        }
+        for (auto& nf : add_fields) {
+            for (auto& existing : merged) {
+                if (existing.name == nf.name) {
+                    return fail(openads::AE_INTERNAL_ERROR,
+                                "AdsRestructureTable: duplicate field name");
+                }
+            }
+            merged.push_back(nf);
+        }
+
+        std::uint16_t header_len = static_cast<std::uint16_t>(
+            32 + 32 * merged.size() + 1);
+        std::uint32_t rec_len = 1;
+        for (auto& f : merged) rec_len += f.length;
+        if (rec_len > 0xFFFF) {
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "AdsRestructureTable: record exceeds 64 KiB");
+        }
+
+        std::vector<std::uint8_t> hdr(32, 0);
+        hdr[0]  = 0x03;
+        std::uint32_t rcount = t.record_count();
+        hdr[4]  = static_cast<std::uint8_t>( rcount        & 0xFFu);
+        hdr[5]  = static_cast<std::uint8_t>((rcount >> 8)  & 0xFFu);
+        hdr[6]  = static_cast<std::uint8_t>((rcount >> 16) & 0xFFu);
+        hdr[7]  = static_cast<std::uint8_t>((rcount >> 24) & 0xFFu);
+        hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
+        hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+        hdr[10] = static_cast<std::uint8_t>(rec_len & 0xFFu);
+        hdr[11] = static_cast<std::uint8_t>((rec_len >> 8) & 0xFFu);
+
+        std::vector<std::uint8_t> file_bytes = hdr;
+        for (auto& f : merged) {
+            std::vector<std::uint8_t> fd(32, 0);
+            std::size_t n = std::min<std::size_t>(f.name.size(), 10);
+            std::memcpy(fd.data(), f.name.data(), n);
+            fd[11] = static_cast<std::uint8_t>(f.type);
+            fd[16] = f.length;
+            fd[17] = f.dec;
+            file_bytes.insert(file_bytes.end(), fd.begin(), fd.end());
+        }
+        file_bytes.push_back(0x0D);
+
+        std::uint16_t old_rec_len = t.driver()->record_length();
+        for (std::uint32_t r = 1; r <= rcount; ++r) {
+            auto rec = t.driver()->read_record_raw(r);
+            if (!rec) return fail(rec.error());
+            std::vector<std::uint8_t> old_buf = std::move(rec).value();
+
+            std::vector<std::uint8_t> new_buf(rec_len, ' ');
+            new_buf[0] = old_buf.empty() ? ' ' : old_buf[0];
+            if (old_rec_len > 1 && old_buf.size() >= old_rec_len) {
+                std::memcpy(new_buf.data() + 1,
+                            old_buf.data() + 1,
+                            old_rec_len - 1);
+            }
+            file_bytes.insert(file_bytes.end(),
+                              new_buf.begin(), new_buf.end());
+        }
+        file_bytes.push_back(0x1A);
+
+        std::ofstream out(tmp, std::ios::binary);
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsRestructureTable: tmp open failed");
+        out.write(reinterpret_cast<const char*>(file_bytes.data()),
+                  static_cast<std::streamsize>(file_bytes.size()));
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsRestructureTable: tmp write failed");
+    }   // engine handle on `full` closes here
+
+    {
+        std::error_code ec;
+        fs::remove(full, ec);
+        fs::rename(tmp, full, ec);
+        if (ec) {
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "AdsRestructureTable: rename failed");
+        }
+    }
+    return ok();
 }
 
 UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
