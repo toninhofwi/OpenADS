@@ -217,7 +217,7 @@ on OpenADS without recompiling Harbour.
 
 #### Tests
 
-- **249 doctest cases / 4181 assertions** passing on Windows / MSVC
+- **257 doctest cases / 4260 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -322,7 +322,12 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.6-done` | SQL `ORDER BY <col> [ASC|DESC]` — materialises matching recnos via the WHERE filter, sorts by the column's typed value (numeric vs string driven by field type), installs the result as the cursor's traversal sequence. |
 | `m10.7-done` | SQL `UPDATE <t> SET col=lit, … [WHERE …]` + `DELETE FROM <t> [WHERE …]` — bulk row mutation through AdsExecuteSQLDirect. DELETE follows Clipper convention (rows marked, not removed; AdsPackTable evicts later). |
 | `m10.8-done` | SQL projection lists — `SELECT col1, col2 FROM …`; cursor reports only the projected columns (in the listed order) via AdsGetNumFields / AdsGetFieldName / AdsGetFieldType / AdsGetFieldLength / AdsGetFieldDecimals / ADSFIELD(n). |
-| `m10.9-done` | SQL DDL — `CREATE TABLE <name> (<col> <Type> [(<len>[,<dec>])], …)` + `CREATE INDEX <tag> ON <table> (<expr>) [DESCENDING] [UNIQUE]`. Both lower into the engine's existing AdsCreateTable / AdsCreateIndex61 entry points. |
+| `m10.9-done`  | SQL DDL — `CREATE TABLE <name> (<col> <Type> [(<len>[,<dec>])], …)` + `CREATE INDEX <tag> ON <table> (<expr>) [DESCENDING] [UNIQUE]`. Both lower into the engine's existing AdsCreateTable / AdsCreateIndex61 entry points. |
+| `m10.10-done` | SQL aggregates — `COUNT(*) / COUNT(col) / SUM / AVG / MIN / MAX(col)`. The cursor is a synthetic 1-row temp DBF (one C(30) column per aggregate). |
+| `m10.11-done` | VFP autoinc fields — descriptor offsets 18 (flags) / 19-22 (counter LE) / 23 (step). `AppendRecord` pre-fills the field with the current counter and persists `next = counter + step` back to disk. Counter survives close + reopen. |
+| `m10.12-done` | `AdsRestructureTable` CHANGE-fields — same-type length / decimals overrides for existing columns. Type conversion still surfaces `AE_FUNCTION_NOT_AVAILABLE` (clean-room policy). |
+| `m10.13-done` | SQL `INNER JOIN <b> ON <l_col> = <r_col>` — parser. |
+| `m10.14-done` | SQL `INNER JOIN` executor — hash on right column, materialise merged rows into temp DBF cursor; right-side fields prefixed `R_`. Combos with WHERE / ORDER BY / aggregates over the joined cursor land in a follow-up. |
 
 #### Still planned for 0.3.x
 
@@ -336,10 +341,12 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **More SQL** — joins, aggregates, subqueries. Earlier 0.3.x
-  milestones already land boolean WHERE (M10.3), `INSERT` (M10.5),
-  `ORDER BY` (M10.6), `UPDATE` / `DELETE` (M10.7), projection lists
-  (M10.8), and DDL — `CREATE TABLE` / `CREATE INDEX` (M10.9).
+- **More SQL** — subqueries, INNER JOIN combined with WHERE /
+  ORDER BY / aggregates in a single statement, OUTER joins. Earlier
+  0.3.x milestones already land boolean WHERE (M10.3), `INSERT`
+  (M10.5), `ORDER BY` (M10.6), `UPDATE` / `DELETE` (M10.7),
+  projection lists (M10.8), DDL `CREATE TABLE` / `CREATE INDEX`
+  (M10.9), aggregates (M10.10), and INNER JOIN (M10.13 / M10.14).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
