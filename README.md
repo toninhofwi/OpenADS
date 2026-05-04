@@ -6,16 +6,19 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** — drop-in replacement validated end-to-end.
+**0.1.0** released. **0.2.0 in progress** (12 milestones merged on
+top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
 `contrib/rddads` static library, opens a DBF, walks records, runs
 `dbSeek`, **swaps focus across multiple CDX tags**, **runs ARIES
 transactions** with rollback semantics, **reads and writes memo
-fields**, and reopens to verify durability — every call lands on
-OpenADS' `ace64.dll` with no Harbour rebuild. See
+fields**, **creates tables / indexes dynamically**, **packs and
+zaps tables**, **reindexes from a compound key expression**, and
+reopens to verify durability — every call lands on OpenADS'
+`ace64.dll` with no Harbour rebuild. See
 `tests/harbour_smoke/README.md` for the captured output of every
-M8.0–M8.11 milestone.
+M8.x / M9.x milestone.
 
 ```
 $ smoke.exe
@@ -26,46 +29,191 @@ Schema:
   2 AGE    N len= 3 dec=0
   3 ACTIVE L len= 1 dec=0
   4 BORN   D len= 8 dec=0
-Walk in NAME order: ALPHA, BETA, GAMMA
-Append + write back...
-Reopen & dbSeek 'DELTA': Found=T NAME=[DELTA] AGE=99 ACTIVE=F BORN=20260101
+  5 NOTES  M len=10 dec=0
+Walk via UPPER_NAME (compound key)
+Append "delta"  →  recno 4
+Reopen + Seek 'DELTA' (upper) : Found=T RecNo=4 NAME=[delta]
 Done.
 ```
 
-### What works in 0.1.0
+### What works today (0.2.0-dev)
 
-- **DBF read/write** — Character / Numeric / Logical / Date columns,
-  positional + by-name field access, APPEND BLANK, per-field
-  assignment, deletion flag, durable flush.
-- **CDX index** — compound layout (multi-tag-per-file, see M3.10),
-  B+tree leaf splits, branch descent, dbSeek (exact + soft), index
-  walk, auto-sync on dbAppend / FIELD-> := value.
-- **NTX index** — multi-level next/prev via cache-based traversal,
-  leaf-split fix.
-- **WAL recovery** — group commit, per-record LSN, idempotent
-  recovery via `openads.lsnmap` sidecar.
-- **AES-128 / AES-256 ECB** — FIPS-197 vectors pass.
-- **Memo (DBT / FPT)** — read + write round-trip.
-- **Data Dictionary** — `.add` alias resolution.
-- **Minimal SQL** — `SELECT * FROM ... [WHERE col op 'lit' ...]`.
-- **226 `Ads*` exports** — every entry point Harbour `rddads.lib`
-  references resolves cleanly through the OpenADS DLL.
+#### Engine
+
+- **DBF read/write** — C / N / L / D / M columns, positional and
+  by-name field access, `APPEND BLANK`, per-field assignment,
+  deletion flag, durable flush, dynamic table creation
+  (`AdsCreateTable` parses rddads' `NAME,Type,Len,Dec;…` field-def
+  syntax).
+- **DBF maintenance** — `AdsZapTable` empties a DBF + clears every
+  bound index in lockstep; `AdsPackTable` compacts deleted records
+  out of the DBF (Clipper semantics: leaves indexes stale, caller
+  follows up with `AdsReindex`); `AdsReindex` rebuilds every bound
+  index from the current records using each tag's expression.
+- **CDX index** — full FoxPro compound layout (file header at offset
+  0 holding the structure tag, sub-tag headers, per-tag B+tree),
+  multi-tag-per-file API (`add_tag` / `open_named` / `list_tags`),
+  Harbour-equivalent compact-leaf bit-pack (`bBits` derived from key
+  length, mirroring `hb_cdxPageLeafInitSpace`), B+tree leaf splits
+  with separator promotion, branch descent (BE child pointers),
+  `dbSeek` exact + soft, `dbGoTop` / `dbSkip` walks, auto-sync on
+  every mutation across **all** bound tags (active + parked extras),
+  dynamic creation via `AdsCreateIndex61`.
+- **NTX index** — Clipper layout, multi-level B+tree split (M9.10
+  closed the M3.7 single-level limitation), cache-based in-order
+  traversal for `next` / `prev` over multi-level trees, dynamic
+  creation via `AdsCreateIndex61`.
+- **Compound key expressions** — `UPPER(field)`, `LOWER(field)`,
+  `LTRIM` / `RTRIM` / `ALLTRIM`, `STR(n)` / `STR(n,len)` /
+  `STR(n,len,dec)`, `DTOS(date)`, `SUBSTR(s,start[,len])`,
+  string concatenation with `+`. The evaluator runs at index sync
+  time, so an `INDEX ON UPPER(NAME)` tag normalises every key as
+  the app writes records.
+- **WAL recovery** — append-only log with CRC-32C records,
+  group-commit primitive (`sync_to(lsn)`), per-record LSN, idempotent
+  recovery via the `openads.lsnmap` sidecar.
+- **Transactions (TPS)** — `AdsBeginTransaction` / `AdsCommitTransaction`
+  / `AdsRollbackTransaction`, in-memory ordered op log + named
+  savepoints, multi-table commit, rollback marks appended records as
+  deleted (Clipper convention) and writes back before-images for
+  modified rows.
+- **AES-128 / AES-256 ECB** — vendored tiny-AES-c (Unlicense),
+  validated against FIPS-197 + NIST SP 800-38A.
+- **Memo (DBT / FPT)** — read + write round-trip; `Connection::open_table`
+  auto-attaches the right memo store based on the DBF signature
+  (`0x03` → no memo, `0x30` → CDX with FPT memo).
+- **Data Dictionary** — `.add` alias resolution; `Connection::open(<.add>)`
+  resolves member tables on every `AdsOpenTable`.
+- **Locking** — OS byte-range locks with the same ranges as the
+  original ACE so installs can coexist during migration.
+
+#### ABI
+
+- **226 `Ads*` exports** — every entry point Harbour
+  `c:\harbour\lib\win\msvc64\rddads.lib` references is resolvable
+  through OpenADS' DLL. Real implementations for ≈ 100 of them; the
+  remaining ones split between **silent-success no-ops** (Cache* /
+  Set* / Refresh* / Customize* — Harbour-side preferences with no
+  effect on local-mode storage) and **`AE_FUNCTION_NOT_AVAILABLE`
+  hard-fail** (server management `Mg*`, advanced Data-Dictionary
+  CRUD, `Find*` table iterators, binary blob set/get, full-text
+  search, ...). The split is documented inline in
+  `src/abi/ace_stubs.cpp`.
 - **6 legacy CRT shims** — `_dclass`, `_dsign`, `_wfsopen`, `_getch`,
-  `_kbhit`, `_eof` exported from `ace64.dll` so apps built against
+  `_kbhit`, `_eof` re-exported from `ace64.dll` so apps built against
   Harbour's prebuilt MSVC2013-era libs link without rebuilding
   Harbour itself.
 
-### What's deferred to 0.2.0
+#### SQL
 
-- Compound CDX key expressions (`UPPER(NAME)`, concatenations) in
-  `Table::compute_index_key_` — only bare field names are supported
-  today.
-- Real implementations for the remaining ~120 `Ads*` stubs (most of
-  the cache / managment / Find-table family).
-- Linux / macOS / BSD builds (the engine is portable; only the
-  Harbour smoke is Windows-anchored today).
-- Full Advantage SQL dialect, AEP host, ADT / VFP / ADI formats,
-  remote TCP server.
+- Minimal `SELECT * FROM <table> [WHERE col op 'lit' [AND ...]]` —
+  six comparison operators, multi-clause `WHERE` joined by implicit
+  `AND`, compiled to a `Table::RowPredicate` closure used by
+  `AdsExecuteSQLDirect`.
+
+#### Tests
+
+- **153 doctest cases / 3186 assertions** passing on Windows / MSVC
+  Release.
+- **Harbour smoke** harness producing a runnable `smoke.exe` that
+  drives the full read + write + index + multi-tag + transaction +
+  memo + compound-expression path through `rddads.lib` and OpenADS'
+  `ace64.dll`.
+
+## Roadmap
+
+OpenADS ships in three rough phases. Each row links to the milestone
+tag that lands the work; partial milestones become `done` once their
+follow-ups merge.
+
+### 0.1.x — drop-in for the Harbour read/write path (DONE)
+
+Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
+`tests/harbour_smoke/smoke.prg`.
+
+| Tag | Milestone |
+|-----|-----------|
+| `m0-done`        | Project scaffolding, build, doctest harness |
+| `m1-done`        | ABI handle registry + minimal C entry points |
+| `m2-done`        | DBF reader (header / fields / records) |
+| `m3-done`        | CDX + NTX index drivers (M3 baseline) |
+| `m3.5-done`      | CDX leaf bit-pack matches FoxPro on disk |
+| `m3.6..3.10`     | Reviewer-flagged compat fixes; CDX compound layout; CDX multi-tag API; NTX cache traversal |
+| `m4-partial`     | DBF write path + memo (DBT / FPT) + AES-128/256 |
+| `m5..5.5`        | WAL with savepoints, group commit, idempotent recovery via `openads.lsnmap` |
+| `m6-partial`     | Data Dictionary `.add` alias resolution |
+| `m7.x-partial`   | Minimal SQL (`SELECT * FROM ... [WHERE ...]`) |
+| `m8.0..8.2`      | DLL build (`ace64.dll`/`ace32.dll`); rddads link validation; first end-to-end smoke (`AdsVersion`) |
+| `m8.3`           | Harbour walks a real DBF |
+| `m8.4`           | ACE field-type constants verified empirically |
+| `m8.5`           | Multi-field DBF (C/N/L/D) end-to-end |
+| `m8.6`           | `dbSeek` through CDX |
+| `m8.7..8.8`      | Write path (`dbAppend` + `FIELD-> :=`); active index auto-sync |
+| `m8.9`           | Multi-tag CDX with `OrdSetFocus` |
+| `m8.10`          | Transactions: `Begin/Commit/Rollback` |
+| `m8.11`          | Memo M-fields (FPT) round-trip |
+| **`0.1.0`**      | **Final 0.1.0 release** |
+
+### 0.2.x — broaden the ABI surface, polish the engine (IN PROGRESS)
+
+| Tag | Milestone |
+|-----|-----------|
+| `m9.1-done`      | Compound CDX expressions evaluator (`UPPER`, `STR`, concat, ...) |
+| `m9.2-done`      | Stub batch reorganised into real / no-op / missing |
+| `m9.3-done`      | Compound expressions validated end-to-end via Harbour |
+| `m9.4-done`      | `AdsGotoRecord` + table/file metadata real impls |
+| `m9.5-done`      | `AdsCreateTable` (rddads field-def parser → DBF on disk) |
+| `m9.6-done`      | `AdsRefreshRecord` + `AdsExtractKey` |
+| `m9.7-done`      | `AdsCreateIndex61` with compound-expression support |
+| `m9.8-done`      | `AdsZapTable` + `AdsPackTable` |
+| `m9.9-done`      | `AdsReindex` — rebuild every bound index from current records |
+| **`m9.10-done`** | **NTX multi-level B+tree split (closes M3.7 limit)** |
+
+#### What's left for 0.2.0
+
+- **Linux / macOS / BSD builds.** The engine is portable C++17; only
+  the Harbour smoke harness is Windows-anchored today (it links
+  against `c:\harbour\…`). CI matrix + Linux Harbour install needed.
+- **`AdsConvertTable` / `AdsCopyTable` / `AdsCopyTableContents`** —
+  table-level bulk operations.
+- **`AdsCreateFTSIndex`** — full-text search index.
+- **`AdsAddCustomKey` / `AdsDeleteCustomKey` / `AdsExtractKey` for
+  custom indexes.**
+- **`Find*Table` family** — server-style table directory iteration.
+- **`AdsGetBinary` / `AdsSetBinary`** — explicit binary memo
+  payloads (the smoke fixtures use plain text today).
+- **`*W` Unicode variants** (`AdsGetFieldW`, `AdsSetStringW`, ...)
+  — pair with M9.x compound-expression UTF-16 awareness.
+- **NTX multi-tag binding** — currently each NTX file is one tag;
+  the multi-tag refactor only landed for CDX in M3.10.
+
+### 0.3.x — proprietary formats + advanced SQL (PLANNED)
+
+- **ADT** (Advantage proprietary table format) — research-bound,
+  no Harbour reference; needs RE work against ADS-shipped fixtures.
+- **VFP** Visual FoxPro tables — same DBF skeleton, different
+  field-type opcodes + memo layout.
+- **ADM** memo format — pairs with ADT.
+- **ADI** index format — proprietary B+tree variant.
+- **Real ADS encryption** — record-level cipher; AES primitive is
+  ready (M4) but the on-record byte boundary needs RE.
+- **Full Advantage SQL dialect** — joins, aggregates, subqueries,
+  `ORDER BY`, projection lists, `OR` / `NOT` / parens, `INSERT` /
+  `UPDATE` / `DELETE` / `CREATE TABLE` / `CREATE INDEX`.
+- **AEP host** — load + run external stored procedures via the
+  Advantage Extended Procedures hosting protocol.
+- **Real Data-Dictionary semantics** — users / groups / permissions,
+  RI rules, views, links, validations, defaults (the `.add` parser
+  resolves aliases today; the rest is `AE_FUNCTION_NOT_AVAILABLE`).
+
+### 1.0.x — TCP server (Phase 2)
+
+- Server reuses the same engine; clients speak the original ACE
+  remote protocol so a single `ace64.dll` build can act as either a
+  local DLL or a TCP client to a remote OpenADS server.
+- Network framing + auth + connection multiplexing.
+- Compatibility-test matrix against real Advantage 11.x + 12.x
+  installations.
 
 ## Phase 1 scope
 
