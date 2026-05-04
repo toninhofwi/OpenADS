@@ -28,13 +28,24 @@ struct WhereCmp {
     double      number     = 0.0;
 };
 
+// Forward declaration so WhereExpr::In can hold a sub-SelectStmt.
+struct SelectStmt;
+
+// M10.15 — `<col> IN (<lit>, <lit>, …)` or `<col> IN (<sub-SELECT>)`.
+struct InClause {
+    std::string                  column;
+    std::vector<std::string>     literals;        // compile-time list
+    std::unique_ptr<SelectStmt>  subquery;        // optional nested SELECT
+};
+
 struct WhereExpr {
     // Tagged tree node.
-    enum class Kind { Cmp, And, Or, Not };
+    enum class Kind { Cmp, And, Or, Not, In };
     Kind                       kind = Kind::Cmp;
     WhereCmp                   cmp;             // Kind::Cmp
     std::vector<std::unique_ptr<WhereExpr>> children; // And/Or
     std::unique_ptr<WhereExpr> child;           // Not
+    InClause                   in_clause;       // Kind::In
 };
 
 struct OrderBy {

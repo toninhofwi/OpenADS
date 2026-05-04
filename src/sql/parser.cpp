@@ -205,6 +205,59 @@ parse_cmp(Cursor& c, const std::string& sql) {
             "expected column name in WHERE clause", sql};
     }
     c.skip_ws();
+
+    // M10.15: `<col> IN (<lit>, <lit>, …)` or `<col> IN (<sub-SELECT>)`.
+    if (c.match_keyword("IN")) {
+        if (!c.match_char('(')) {
+            return util::Error{7200, 0,
+                "expected '(' after IN", sql};
+        }
+        node->kind = WhereExpr::Kind::In;
+        node->in_clause.column = node->cmp.column;
+        node->cmp = {};   // unused for In
+        if (c.match_keyword("SELECT")) {
+            // Re-parse the nested SELECT — capture text up to the
+            // matching ')'. consume_char (no whitespace skip) is the
+            // only reader so the inner buffer keeps every space and
+            // tab byte the inner parser will need.
+            std::string inner = "SELECT ";
+            int depth = 1;
+            while (depth > 0) {
+                if (c.eof()) {
+                    return util::Error{7200, 0,
+                        "unterminated IN subquery", sql};
+                }
+                char ch = c.consume_char();
+                if (ch == '(') { ++depth; inner.push_back('('); continue; }
+                if (ch == ')') {
+                    --depth;
+                    if (depth == 0) break;
+                    inner.push_back(')');
+                    continue;
+                }
+                inner.push_back(ch);
+            }
+            auto sub = parse_select(inner);
+            if (!sub) return sub.error();
+            node->in_clause.subquery =
+                std::make_unique<SelectStmt>(std::move(sub).value());
+        } else {
+            // Literal list.
+            for (;;) {
+                auto lit = c.read_string_literal();
+                if (!lit) return lit.error();
+                node->in_clause.literals.push_back(std::move(lit).value());
+                if (c.match_char(',')) continue;
+                break;
+            }
+            if (!c.match_char(')')) {
+                return util::Error{7200, 0,
+                    "expected ')' to close IN list", sql};
+            }
+        }
+        return node;
+    }
+
     if      (c.match_seq("<=")) node->cmp.op = WhereOp::Le;
     else if (c.match_seq(">=")) node->cmp.op = WhereOp::Ge;
     else if (c.match_seq("<>")) node->cmp.op = WhereOp::Ne;
@@ -547,7 +600,8 @@ parse_create_index(const std::string& sql) {
     }
     // Read everything up to the matching ')' as the expression. The
     // existing engine evaluator handles compound expressions like
-    // UPPER(name) so identifiers + parens nest correctly.
+    // UPPER(name) so identifiers + parens nest correctly. consume_char
+    // skips no whitespace so the inner buffer keeps every byte.
     std::string expr;
     int depth = 1;
     while (depth > 0) {
@@ -555,17 +609,15 @@ parse_create_index(const std::string& sql) {
             return util::Error{7200, 0,
                 "unterminated CREATE INDEX expression", sql};
         }
-        if (c.match_char('(')) { ++depth; expr.push_back('('); continue; }
-        if (c.match_char(')')) {
+        char ch = c.consume_char();
+        if (ch == '(') { ++depth; expr.push_back('('); continue; }
+        if (ch == ')') {
             --depth;
             if (depth == 0) break;
             expr.push_back(')');
             continue;
         }
-        // Append the next character verbatim.
-        // (Cursor doesn't expose a "consume one char" method; reuse
-        // skip_ws then read whatever it lands on.)
-        expr.push_back(c.consume_char());
+        expr.push_back(ch);
     }
     while (!expr.empty() &&
            std::isspace(static_cast<unsigned char>(expr.front()))) {

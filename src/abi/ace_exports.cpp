@@ -4342,8 +4342,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             using Kind = openads::sql::WhereExpr::Kind;
             if (node.kind == Kind::And) {
                 std::vector<Pred> kids;
-                for (auto& c : node.children) {
-                    auto r = compile(*c);
+                for (auto& cn : node.children) {
+                    auto r = compile(*cn);
                     if (!r) return r.error();
                     kids.push_back(std::move(r).value());
                 }
@@ -4354,8 +4354,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             if (node.kind == Kind::Or) {
                 std::vector<Pred> kids;
-                for (auto& c : node.children) {
-                    auto r = compile(*c);
+                for (auto& cn : node.children) {
+                    auto r = compile(*cn);
                     if (!r) return r.error();
                     kids.push_back(std::move(r).value());
                 }
@@ -4369,6 +4369,77 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 if (!inner) return inner.error();
                 return Pred{[p = std::move(inner).value()]
                             (openads::engine::Table& t) { return !p(t); }};
+            }
+            if (node.kind == Kind::In) {
+                // M10.15: materialise the IN set at compile time. For
+                // a literal list, just lift the strings in. For a
+                // subquery, walk its source table inline (no nested
+                // ABI dispatch — keeps the lock_guard intact).
+                std::int32_t fidx = tbl->field_index(node.in_clause.column);
+                if (fidx < 0) {
+                    return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        node.in_clause.column.c_str(), ""};
+                }
+                std::uint16_t fi = static_cast<std::uint16_t>(fidx);
+                auto trim_trailing = [](std::string s) {
+                    while (!s.empty() && s.back() == ' ') s.pop_back();
+                    return s;
+                };
+                auto set = std::make_shared<std::unordered_set<std::string>>();
+                for (auto& lit : node.in_clause.literals) set->insert(lit);
+                if (node.in_clause.subquery) {
+                    const auto& sq = *node.in_clause.subquery;
+                    auto sh = c->open_table(sq.table,
+                                            openads::engine::TableType::Cdx,
+                                            openads::engine::OpenMode::Read);
+                    if (!sh) return sh.error();
+                    openads::engine::Table* stbl = c->lookup_table(sh.value());
+                    if (stbl == nullptr) {
+                        return openads::util::Error{
+                            openads::AE_INTERNAL_ERROR, 0,
+                            "subquery post-open", ""};
+                    }
+                    if (sq.projection.empty() && sq.aggregates.empty()) {
+                        return openads::util::Error{
+                            openads::AE_PARSE_ERROR, 0,
+                            "IN subquery must project a single column", ""};
+                    }
+                    if (!sq.aggregates.empty() ||
+                        sq.projection.size() != 1) {
+                        c->close_table(sh.value());
+                        return openads::util::Error{
+                            openads::AE_PARSE_ERROR, 0,
+                            "IN subquery must project exactly one column", ""};
+                    }
+                    std::int32_t scol = stbl->field_index(sq.projection[0]);
+                    if (scol < 0) {
+                        c->close_table(sh.value());
+                        return openads::util::Error{
+                            openads::AE_COLUMN_NOT_FOUND, 0,
+                            sq.projection[0].c_str(), ""};
+                    }
+                    std::uint32_t srcount = stbl->record_count();
+                    for (std::uint32_t r = 1; r <= srcount; ++r) {
+                        if (auto g = stbl->goto_record(r); !g) continue;
+                        if (stbl->is_deleted()) continue;
+                        // No nested WHERE filter for now — apps that
+                        // need it can wrap with an outer SELECT in
+                        // a future milestone.
+                        auto v = stbl->read_field(
+                            static_cast<std::uint16_t>(scol));
+                        if (!v) continue;
+                        set->insert(trim_trailing(v.value().as_string));
+                    }
+                    c->close_table(sh.value());
+                }
+                return Pred{[fi, set, trim_trailing]
+                            (openads::engine::Table& t) {
+                    auto v = t.read_field(fi);
+                    if (!v) return false;
+                    return set->find(trim_trailing(v.value().as_string)) !=
+                           set->end();
+                }};
             }
             // Cmp leaf.
             const auto& w = node.cmp;
