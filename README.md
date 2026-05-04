@@ -31,6 +31,29 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
   by an AI assistant (Anthropic Claude) under direct human
   supervision; every milestone is reviewed, tested, and committed
   by a human maintainer.
+- **Purpose — non-commercial preservation.** OpenADS is a
+  community-driven open-source project pursued **without economic
+  benefit to its maintainers**. Its only goal is to provide a
+  compatibility path for legacy applications affected by SAP's
+  discontinuation of Advantage Database Server, so the existing
+  Harbour / Clipper code base that depends on the ACE entry points
+  can keep running. The project does not sell, license, sublicense,
+  or otherwise monetise the software; redistribution is permitted
+  by the Apache License 2.0 (see [`LICENSE`](LICENSE)) but the
+  upstream maintainers receive no fee for the work.
+- **No warranty, no support contract.** OpenADS is provided **AS
+  IS**, without warranty of any kind, express or implied (see the
+  Apache License 2.0 §7 and §8). There is no service-level
+  agreement, no commercial support channel, and no representation
+  of fitness for any particular purpose.
+- **Downstream responsibility.** Users who deploy OpenADS as a
+  drop-in replacement for the Advantage Client Engine remain solely
+  responsible for ensuring that **their own** use of related
+  third-party tooling (Harbour, Clipper, original Advantage
+  installations, application code, fixtures) complies with whatever
+  licenses, EULAs, or service agreements apply to those components.
+  The project ships no SAP-owned binary and asserts no permission
+  on behalf of any third-party rightsholder.
 
 ## Status
 
