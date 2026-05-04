@@ -198,21 +198,26 @@ on OpenADS without recompiling Harbour.
 
 #### SQL
 
-- `SELECT * FROM <table> [WHERE <expr>]` where `<expr>` is a full
-  boolean tree built from `AND` / `OR` / `NOT` / parens (M10.3) over
-  leaves that are either an infix comparison `<col> op <lit>` (six
-  operators: `=`, `!=` / `<>`, `<`, `>`, `<=`, `>=`; literal can be
-  a string `'…'` or a numeric `42` / `3.14`) or
-  `CONTAINS(<col>, '<query>')` against a prebuilt `.fts` file. The
-  parser lowers the AST into a row-predicate closure used by
-  `AdsExecuteSQLDirect`; CONTAINS captures a precomputed recno-set
-  so the FTS lookup runs once per query, not per row. Projection
-  lists, joins, aggregates, subqueries, `ORDER BY`, and `INSERT` /
-  `UPDATE` / `DELETE` arrive in later 0.3.x milestones.
+- **DML.** `INSERT INTO <t> (cols) VALUES (lits)` (M10.5),
+  `UPDATE <t> SET col=lit, … [WHERE …]` (M10.7), and
+  `DELETE FROM <t> [WHERE …]` (M10.7) all flow through
+  `AdsExecuteSQLDirect`; the dispatcher peeks at the leading
+  keyword and routes to the right path.
+- **SELECT.** `SELECT * FROM <table> [WHERE <expr>] [ORDER BY <col>
+  [ASC|DESC]]` where `<expr>` is a full boolean tree built from
+  `AND` / `OR` / `NOT` / parens (M10.3) over leaves that are either
+  an infix comparison `<col> op <lit>` (six operators: `=`, `!=` /
+  `<>`, `<`, `>`, `<=`, `>=`; literal can be a string `'…'` or a
+  numeric `42` / `3.14`) or `CONTAINS(<col>, '<query>')` against a
+  prebuilt `.fts` file. ORDER BY (M10.6) materialises matching
+  recnos and sorts by the column's typed value. CONTAINS captures
+  a precomputed recno-set so the FTS lookup runs once per query,
+  not per row. Projection lists, joins, aggregates, subqueries,
+  `CREATE TABLE` / `CREATE INDEX` arrive in later 0.3.x milestones.
 
 #### Tests
 
-- **227 doctest cases / 3955 assertions** passing on Windows / MSVC
+- **241 doctest cases / 4106 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -312,6 +317,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.1-done` | Real OpenADS-native DD persistence — replaces M9.25 silent-success no-ops with round-trip storage in the v1 text format (USER / MEMBER / LINK / INDEX / RI / DBPROP / USERPROP rows); `Connection::open(<.add>)` callers now see CRUD writes survive across reopens. |
 | `m10.2-done` | VFP `I` (4-byte int32) / `Y` (8-byte currency, money * 10000) / `B` (8-byte IEEE-754 double) field decode + encode round-trip. |
 | `m10.3-done` | SQL `WHERE` — full boolean expression tree (`OR` / `NOT` / parens) on top of the M9.21 `CONTAINS` predicate; numeric literals (`AGE >= 18`) and string literals coexist. |
+| `m10.4-done` | `AdsRestructureTable` DELETE-fields path + real `AdsSetIndexDirection` (active order walks reverse on demand). The function-level Ads* surface is now MISS-free; CHANGE-fields still deferred. |
+| `m10.5-done` | SQL `INSERT INTO <t> (cols) VALUES (lits)` — string + numeric literals; AdsExecuteSQLDirect dispatches by leading keyword. |
+| `m10.6-done` | SQL `ORDER BY <col> [ASC|DESC]` — materialises matching recnos via the WHERE filter, sorts by the column's typed value (numeric vs string driven by field type), installs the result as the cursor's traversal sequence. |
+| `m10.7-done` | SQL `UPDATE <t> SET col=lit, … [WHERE …]` + `DELETE FROM <t> [WHERE …]` — bulk row mutation through AdsExecuteSQLDirect. DELETE follows Clipper convention (rows marked, not removed; AdsPackTable evicts later). |
 
 #### Still planned for 0.3.x
 
@@ -325,10 +334,11 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **More SQL** — projection lists, `ORDER BY`, joins, aggregates,
-  subqueries, `INSERT` / `UPDATE` / `DELETE` / `CREATE TABLE` /
-  `CREATE INDEX`. M10.3 already lands `OR` / `NOT` / parens +
-  numeric literals.
+- **More SQL** — projection lists (`SELECT col1, col2`), joins,
+  aggregates, subqueries, `CREATE TABLE` / `CREATE INDEX`. The
+  earlier 0.3.x milestones already land boolean WHERE (`OR` /
+  `NOT` / parens, M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6), and
+  `UPDATE` / `DELETE` (M10.7).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
