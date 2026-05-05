@@ -3965,10 +3965,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         };
 
         // INNER / LEFT walk left + lookup right. RIGHT swaps that —
-        // walk right + lookup left. The merged schema's column order
-        // (left fields first, then right with `R_` prefix) stays
-        // identical regardless of join direction so the cursor
-        // exposes the same shape to apps.
+        // walk right + lookup left. FULL walks left first (emitting
+        // matched + LEFT-style fillers) and then walks right to emit
+        // only the unmatched right rows with a blank left filler.
+        // The merged schema's column order (left fields first, then
+        // right with `R_` prefix) stays identical regardless of join
+        // direction so the cursor exposes the same shape to apps.
         bool walk_right = j.is_right;
 
         std::unordered_map<std::string, std::vector<std::uint32_t>> probe_map;
@@ -4088,9 +4090,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 }
             }
         } else {
-            // INNER / LEFT — walk left rows, look up the RIGHT hash.
-            // Unmatched left rows surface with blank right fields when
-            // is_left, dropped otherwise.
+            // INNER / LEFT / FULL — walk left rows, look up the RIGHT
+            // hash. Unmatched left rows surface with blank right
+            // fields when is_left or is_full; dropped otherwise.
+            std::unordered_set<std::uint32_t> matched_right;
             std::uint32_t lrc = ltbl->record_count();
             for (std::uint32_t l = 1; l <= lrc; ++l) {
                 if (auto g = ltbl->goto_record(l); !g) continue;
@@ -4103,7 +4106,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 if (!lraw) continue;
                 const auto& lbuf = lraw.value();
                 if (rit == rmap.end()) {
-                    if (j.is_left) {
+                    if (j.is_left || j.is_full) {
                         emit_merged(lbuf.data(), lbuf.size(), nullptr, 0);
                     }
                     continue;
@@ -4114,6 +4117,20 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     const auto& rbuf = rraw.value();
                     emit_merged(lbuf.data(), lbuf.size(),
                                 rbuf.data(), rbuf.size());
+                    if (j.is_full) matched_right.insert(rr);
+                }
+            }
+            // FULL OUTER: emit unmatched right rows with blank left.
+            if (j.is_full) {
+                std::uint32_t rrc = rtbl->record_count();
+                for (std::uint32_t r = 1; r <= rrc; ++r) {
+                    if (matched_right.find(r) != matched_right.end()) continue;
+                    if (auto g = rtbl->goto_record(r); !g) continue;
+                    if (rtbl->is_deleted()) continue;
+                    auto rraw = rtbl->driver()->read_record_raw(r);
+                    if (!rraw) continue;
+                    const auto& rbuf = rraw.value();
+                    emit_merged(nullptr, 0, rbuf.data(), rbuf.size());
                 }
             }
         }

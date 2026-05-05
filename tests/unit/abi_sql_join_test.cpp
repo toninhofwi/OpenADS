@@ -114,6 +114,44 @@ TEST_CASE("M10.14 INNER JOIN materialises matched rows") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.22 FULL OUTER JOIN — union of LEFT + RIGHT") {
+    auto dir = fs::temp_directory_path() / "openads_m10_22_full";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"O01", "C001"},
+         {"O02", "ZZZZ"}});           // unmatched left
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"},
+         {"C999", "Ghost"}});         // unmatched right
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[200] =
+        "SELECT * FROM ord.dbf FULL OUTER JOIN cus.dbf ON CUST = CUST";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 3);   // matched O01+Alice, unmatched O02 (left),
+                       // unmatched Ghost (right)
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.21 RIGHT OUTER JOIN keeps right rows without a match") {
     auto dir = fs::temp_directory_path() / "openads_m10_21_right";
     std::error_code ec;
