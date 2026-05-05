@@ -164,3 +164,107 @@ TEST_CASE("M10.10 mixing plain columns + aggregates rejected") {
         "SELECT NAME, COUNT(*) FROM data");
     CHECK_FALSE(r.has_value());
 }
+
+namespace {
+fs::path stage_grp_dbf(const fs::path& dir) {
+    fs::create_directories(dir);
+    auto p = dir / "data.dbf";
+    fs::remove(p);
+    std::vector<std::uint8_t> file;
+    auto push = [&](const void* d, std::size_t n) {
+        const auto* b = static_cast<const std::uint8_t*>(d);
+        file.insert(file.end(), b, b + n);
+    };
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0]  = 0x03;
+    hdr[4]  = 5;                                     // 5 rows
+    hdr[8]  = 32 + 32 * 2 + 1;                       // 2 columns
+    hdr[10] = 1 + 4 + 4;                             // CITY C(4) + AMT N(4)
+    push(hdr.data(), hdr.size());
+    auto fld = [&](const char* nm, char ty, std::uint8_t L){
+        std::array<std::uint8_t, 32> fd{};
+        std::strncpy(reinterpret_cast<char*>(fd.data()), nm, 11);
+        fd[11] = static_cast<std::uint8_t>(ty); fd[16] = L;
+        push(fd.data(), fd.size());
+    };
+    fld("CITY", 'C', 4);
+    fld("AMT",  'N', 4);
+    file.push_back(0x0D);
+    auto rec = [&](const char* city, const char* amt) {
+        file.push_back(' ');
+        for (int i = 0; i < 4; ++i)
+            file.push_back(i < (int)std::strlen(city)
+                           ? static_cast<std::uint8_t>(city[i]) : ' ');
+        for (int i = 0; i < 4; ++i)
+            file.push_back(i < (int)std::strlen(amt)
+                           ? static_cast<std::uint8_t>(amt[i]) : ' ');
+    };
+    rec("NYC ", "  10");
+    rec("NYC ", "  20");
+    rec("LON ", "  30");
+    rec("LON ", "  40");
+    rec("PAR ", "   5");
+    file.push_back(0x1A);
+    std::ofstream(p, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+    return p;
+}
+}
+
+TEST_CASE("M10.25 GROUP BY single column + COUNT/SUM") {
+    auto dir = fs::temp_directory_path() / "openads_m10_25_grp";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_grp_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[200] =
+        "SELECT COUNT(*), SUM(AMT) FROM data.dbf GROUP BY CITY";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 3);                                 // NYC / LON / PAR
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.25 GROUP BY + HAVING filters groups") {
+    auto dir = fs::temp_directory_path() / "openads_m10_25_having";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_grp_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // PAR has 1 row, so HAVING COUNT(*) > 1 drops it.
+    UNSIGNED8 sql[260] =
+        "SELECT COUNT(*) FROM data.dbf GROUP BY CITY HAVING COUNT(*) > 1";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 2);                                 // NYC + LON
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}

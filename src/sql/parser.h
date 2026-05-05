@@ -73,6 +73,14 @@ struct Aggregate {
     std::string   column;   // empty for CountStar
 };
 
+// M10.25 — `HAVING <agg>(<col_or_*>) <op> <number>` (single comparison
+// for now; references an aggregate slot in the projection).
+struct HavingClause {
+    Aggregate agg;
+    WhereOp   op  = WhereOp::Eq;
+    double    num = 0.0;
+};
+
 // M10.13 — `INNER JOIN <table> ON <left_col> = <right_col>`.
 struct JoinClause {
     std::string  table;
@@ -97,6 +105,9 @@ struct SelectStmt {
     std::unique_ptr<WhereExpr> where;
     // Optional ORDER BY — single column ascending or descending (M10.6).
     std::optional<OrderBy>     order_by;
+    // M10.25 — GROUP BY columns + optional HAVING.
+    std::vector<std::string>      group_by;
+    std::optional<HavingClause>   having;
 };
 
 util::Result<SelectStmt> parse_select(const std::string& sql);

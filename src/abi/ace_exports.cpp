@@ -4542,6 +4542,271 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             filter = std::move(compiled).value();
         }
 
+        // M10.25 — `GROUP BY <col>[, <col>...] [HAVING <agg> op num]`.
+        // Walk matching rows, hash by group-key tuple, accumulate per
+        // group, then emit one row per group (passing HAVING) into a
+        // multi-row temp DBF cursor. Schema: original group-by
+        // columns (preserving type + length) followed by COL1..COLn
+        // C(30) cells for each aggregate.
+        if (!parsed.value().group_by.empty()) {
+            struct GBCol {
+                std::uint16_t field_index;
+                std::uint8_t  length;
+                std::string   name;
+                std::uint8_t  raw_type;
+            };
+            std::vector<GBCol> gbs;
+            gbs.reserve(parsed.value().group_by.size());
+            for (auto& gname : parsed.value().group_by) {
+                std::int32_t fi = tbl->field_index(gname);
+                if (fi < 0) {
+                    c->close_table(th.value());
+                    return fail(openads::AE_COLUMN_NOT_FOUND, gname.c_str());
+                }
+                const auto& fd = tbl->field_descriptor(
+                    static_cast<std::uint16_t>(fi));
+                GBCol gc;
+                gc.field_index = static_cast<std::uint16_t>(fi);
+                gc.length      = fd.length;
+                gc.name        = gname;
+                gc.raw_type    = static_cast<std::uint8_t>(fd.raw_type);
+                gbs.push_back(std::move(gc));
+            }
+
+            std::int32_t having_slot = -1;
+            if (parsed.value().having) {
+                const auto& ha = parsed.value().having->agg;
+                for (std::size_t i = 0; i < slots.size(); ++i) {
+                    if (slots[i].def.kind == ha.kind &&
+                        slots[i].def.column == ha.column) {
+                        having_slot = static_cast<std::int32_t>(i);
+                        break;
+                    }
+                }
+                if (having_slot < 0 &&
+                    ha.kind == openads::sql::AggregateKind::CountStar) {
+                    for (std::size_t i = 0; i < slots.size(); ++i) {
+                        if (slots[i].def.kind ==
+                            openads::sql::AggregateKind::CountStar) {
+                            having_slot = static_cast<std::int32_t>(i);
+                            break;
+                        }
+                    }
+                }
+                if (having_slot < 0) {
+                    c->close_table(th.value());
+                    return fail(openads::AE_PARSE_ERROR,
+                        "HAVING aggregate must match one in projection");
+                }
+            }
+
+            struct GroupAcc {
+                std::vector<std::string>   key_parts;
+                std::vector<double>        sum;
+                std::vector<double>        minv;
+                std::vector<double>        maxv;
+                std::vector<std::uint64_t> count;
+                std::uint64_t              row_count = 0;
+            };
+            std::unordered_map<std::string, GroupAcc> groups;
+            std::vector<std::string> insertion_order;
+            std::uint32_t rcount = tbl->record_count();
+            for (std::uint32_t r = 1; r <= rcount; ++r) {
+                if (auto g = tbl->goto_record(r); !g) continue;
+                if (tbl->is_deleted()) continue;
+                if (filter && !filter(*tbl)) continue;
+                std::string key;
+                std::vector<std::string> parts;
+                parts.reserve(gbs.size());
+                for (auto& g : gbs) {
+                    auto v = tbl->read_field(g.field_index);
+                    std::string raw = v ? v.value().as_string : std::string();
+                    if (raw.size() < g.length) raw.append(g.length - raw.size(), ' ');
+                    else if (raw.size() > g.length) raw.resize(g.length);
+                    parts.push_back(raw);
+                    key.append(raw);
+                    key.push_back('\x1f');
+                }
+                auto git = groups.find(key);
+                if (git == groups.end()) {
+                    GroupAcc acc;
+                    acc.key_parts = std::move(parts);
+                    acc.sum.assign(slots.size(), 0.0);
+                    acc.minv.assign(slots.size(),
+                        std::numeric_limits<double>::infinity());
+                    acc.maxv.assign(slots.size(),
+                        -std::numeric_limits<double>::infinity());
+                    acc.count.assign(slots.size(), 0);
+                    git = groups.emplace(key, std::move(acc)).first;
+                    insertion_order.push_back(key);
+                }
+                auto& acc = git->second;
+                ++acc.row_count;
+                for (std::size_t i = 0; i < slots.size(); ++i) {
+                    if (slots[i].def.kind ==
+                        openads::sql::AggregateKind::CountStar) {
+                        ++acc.count[i];
+                        continue;
+                    }
+                    auto v = tbl->read_field(
+                        static_cast<std::uint16_t>(slots[i].field_index));
+                    if (!v) continue;
+                    double d = v.value().as_double;
+                    ++acc.count[i];
+                    acc.sum[i] += d;
+                    if (d < acc.minv[i]) acc.minv[i] = d;
+                    if (d > acc.maxv[i]) acc.maxv[i] = d;
+                }
+            }
+            c->close_table(th.value());
+
+            auto agg_at = [&](const GroupAcc& acc, std::size_t si) -> double {
+                using K = openads::sql::AggregateKind;
+                switch (slots[si].def.kind) {
+                    case K::CountStar: return static_cast<double>(acc.row_count);
+                    case K::Count:     return static_cast<double>(acc.count[si]);
+                    case K::Sum:       return acc.sum[si];
+                    case K::Avg:
+                        return acc.count[si]
+                            ? acc.sum[si] / static_cast<double>(acc.count[si])
+                            : 0.0;
+                    case K::Min:
+                        return acc.count[si] ? acc.minv[si] : 0.0;
+                    case K::Max:
+                        return acc.count[si] ? acc.maxv[si] : 0.0;
+                }
+                return 0.0;
+            };
+
+            namespace fs = std::filesystem;
+            char namebuf3[64];
+            std::snprintf(namebuf3, sizeof(namebuf3), "_grp_%llx.dbf",
+                          static_cast<unsigned long long>(
+                              openads::platform::monotonic_nanos()));
+            fs::path grp_dbf = fs::path(c->data_dir()) / namebuf3;
+            std::vector<std::uint8_t> file;
+            std::array<std::uint8_t, 32> hdr{};
+            hdr[0] = 0x03;
+            std::uint16_t header_len = static_cast<std::uint16_t>(
+                32 + 32 * (gbs.size() + slots.size()) + 1);
+            std::uint32_t rec_len = 1;
+            for (auto& g : gbs) rec_len += g.length;
+            rec_len += 30u * static_cast<std::uint32_t>(slots.size());
+            hdr[8]  = static_cast<std::uint8_t>( header_len       & 0xFFu);
+            hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+            hdr[10] = static_cast<std::uint8_t>( rec_len          & 0xFFu);
+            hdr[11] = static_cast<std::uint8_t>((rec_len    >> 8) & 0xFFu);
+            file.insert(file.end(), hdr.begin(), hdr.end());
+
+            for (auto& g : gbs) {
+                std::array<std::uint8_t, 32> fd{};
+                std::strncpy(reinterpret_cast<char*>(fd.data()),
+                             g.name.c_str(), 11);
+                fd[11] = g.raw_type ? g.raw_type : 'C';
+                fd[16] = g.length;
+                file.insert(file.end(), fd.begin(), fd.end());
+            }
+            for (std::size_t i = 0; i < slots.size(); ++i) {
+                std::array<std::uint8_t, 32> fd{};
+                char fn[16];
+                std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
+                std::strncpy(reinterpret_cast<char*>(fd.data()), fn, 11);
+                fd[11] = 'C'; fd[16] = 30;
+                file.insert(file.end(), fd.begin(), fd.end());
+            }
+            file.push_back(0x0D);
+
+            std::uint32_t emitted = 0;
+            for (auto& key : insertion_order) {
+                auto& acc = groups[key];
+                if (having_slot >= 0) {
+                    double v = agg_at(acc,
+                        static_cast<std::size_t>(having_slot));
+                    double n = parsed.value().having->num;
+                    bool keep = false;
+                    switch (parsed.value().having->op) {
+                        case openads::sql::WhereOp::Eq: keep = v == n; break;
+                        case openads::sql::WhereOp::Ne: keep = v != n; break;
+                        case openads::sql::WhereOp::Lt: keep = v <  n; break;
+                        case openads::sql::WhereOp::Gt: keep = v >  n; break;
+                        case openads::sql::WhereOp::Le: keep = v <= n; break;
+                        case openads::sql::WhereOp::Ge: keep = v >= n; break;
+                        default: keep = false;
+                    }
+                    if (!keep) continue;
+                }
+                file.push_back(' ');
+                for (std::size_t i = 0; i < gbs.size(); ++i) {
+                    const std::string& kp = acc.key_parts[i];
+                    for (std::uint8_t b = 0; b < gbs[i].length; ++b) {
+                        file.push_back(b < kp.size()
+                            ? static_cast<std::uint8_t>(kp[b]) : ' ');
+                    }
+                }
+                for (std::size_t i = 0; i < slots.size(); ++i) {
+                    char buf[32] = {0};
+                    using K = openads::sql::AggregateKind;
+                    switch (slots[i].def.kind) {
+                        case K::CountStar:
+                            std::snprintf(buf, sizeof(buf), "%llu",
+                                static_cast<unsigned long long>(acc.row_count));
+                            break;
+                        case K::Count:
+                            std::snprintf(buf, sizeof(buf), "%llu",
+                                static_cast<unsigned long long>(acc.count[i]));
+                            break;
+                        case K::Sum:
+                            std::snprintf(buf, sizeof(buf), "%.6f", acc.sum[i]);
+                            break;
+                        case K::Avg:
+                            std::snprintf(buf, sizeof(buf), "%.6f",
+                                acc.count[i]
+                                    ? acc.sum[i] /
+                                        static_cast<double>(acc.count[i])
+                                    : 0.0);
+                            break;
+                        case K::Min:
+                            if (acc.count[i] == 0) std::strcpy(buf, "0");
+                            else std::snprintf(buf, sizeof(buf), "%.6f",
+                                               acc.minv[i]);
+                            break;
+                        case K::Max:
+                            if (acc.count[i] == 0) std::strcpy(buf, "0");
+                            else std::snprintf(buf, sizeof(buf), "%.6f",
+                                               acc.maxv[i]);
+                            break;
+                    }
+                    std::array<std::uint8_t, 30> cell{};
+                    std::memset(cell.data(), ' ', cell.size());
+                    std::size_t n = std::min<std::size_t>(std::strlen(buf), 30);
+                    std::memcpy(cell.data(), buf, n);
+                    file.insert(file.end(), cell.begin(), cell.end());
+                }
+                ++emitted;
+            }
+            file.push_back(0x1A);
+            file[4] = static_cast<std::uint8_t>( emitted        & 0xFFu);
+            file[5] = static_cast<std::uint8_t>((emitted >>  8) & 0xFFu);
+            file[6] = static_cast<std::uint8_t>((emitted >> 16) & 0xFFu);
+            file[7] = static_cast<std::uint8_t>((emitted >> 24) & 0xFFu);
+            {
+                std::ofstream out(grp_dbf, std::ios::binary);
+                if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                      "group-by temp DBF: open for write failed");
+                out.write(reinterpret_cast<const char*>(file.data()),
+                          static_cast<std::streamsize>(file.size()));
+            }
+            std::string rel3 = grp_dbf.filename().string();
+            auto gth = c->open_table(rel3, openads::engine::TableType::Cdx,
+                                     openads::engine::OpenMode::Read);
+            if (!gth) return fail(gth.error());
+            openads::engine::Table* gtbl = c->lookup_table(gth.value());
+            if (!gtbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+            ADSHANDLE gh = s.registry.register_object(HandleKind::Table, gtbl);
+            *phCursor = gh;
+            return ok();
+        }
+
         // Walk matching rows, accumulate per slot.
         std::vector<double> sum(slots.size(), 0.0);
         std::vector<double> minv(slots.size(),

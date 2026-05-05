@@ -584,6 +584,78 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         stmt.where = std::move(root).value();
     }
 
+    // M10.25 — GROUP BY <col>[, <col>...] [HAVING <agg> <op> <num>].
+    // Sits between WHERE and ORDER BY in the SQL grammar.
+    if (c.match_keyword("GROUP")) {
+        if (!c.match_keyword("BY")) {
+            return util::Error{7200, 0, "expected BY after GROUP", sql};
+        }
+        for (;;) {
+            std::string col = c.read_identifier();
+            if (col.empty()) {
+                return util::Error{7200, 0,
+                    "expected column name in GROUP BY", sql};
+            }
+            stmt.group_by.push_back(std::move(col));
+            if (!c.match_char(',')) break;
+        }
+    }
+    if (c.match_keyword("HAVING")) {
+        std::string head = c.read_identifier();
+        std::string upper;
+        upper.reserve(head.size());
+        for (char ch : head) {
+            upper.push_back(static_cast<char>(std::toupper(
+                static_cast<unsigned char>(ch))));
+        }
+        if (upper != "COUNT" && upper != "SUM" && upper != "AVG" &&
+            upper != "MIN"   && upper != "MAX") {
+            return util::Error{7200, 0,
+                "HAVING expects an aggregate call (COUNT/SUM/AVG/MIN/MAX)", sql};
+        }
+        if (!c.match_char('(')) {
+            return util::Error{7200, 0,
+                "expected '(' after aggregate name in HAVING", sql};
+        }
+        HavingClause hc;
+        if (upper == "COUNT") hc.agg.kind = AggregateKind::Count;
+        if (upper == "SUM")   hc.agg.kind = AggregateKind::Sum;
+        if (upper == "AVG")   hc.agg.kind = AggregateKind::Avg;
+        if (upper == "MIN")   hc.agg.kind = AggregateKind::Min;
+        if (upper == "MAX")   hc.agg.kind = AggregateKind::Max;
+        if (c.match_char('*')) {
+            if (upper != "COUNT") {
+                return util::Error{7200, 0,
+                    "* argument only valid for COUNT", sql};
+            }
+            hc.agg.kind = AggregateKind::CountStar;
+        } else {
+            std::string col = c.read_identifier();
+            if (col.empty()) {
+                return util::Error{7200, 0,
+                    "expected column name inside HAVING aggregate", sql};
+            }
+            hc.agg.column = std::move(col);
+        }
+        if (!c.match_char(')')) {
+            return util::Error{7200, 0,
+                "expected ')' to close HAVING aggregate", sql};
+        }
+        if      (c.match_seq("<=")) hc.op = WhereOp::Le;
+        else if (c.match_seq(">=")) hc.op = WhereOp::Ge;
+        else if (c.match_seq("<>")) hc.op = WhereOp::Ne;
+        else if (c.match_seq("!=")) hc.op = WhereOp::Ne;
+        else if (c.match_char('=')) hc.op = WhereOp::Eq;
+        else if (c.match_char('<')) hc.op = WhereOp::Lt;
+        else if (c.match_char('>')) hc.op = WhereOp::Gt;
+        else return util::Error{7200, 0,
+            "expected =, !=, <>, <, >, <= or >= after HAVING aggregate", sql};
+        auto n = c.read_numeric_literal();
+        if (!n) return n.error();
+        hc.num = n.value();
+        stmt.having = std::move(hc);
+    }
+
     // Optional ORDER BY — single column ascending or descending (M10.6).
     if (c.match_keyword("ORDER")) {
         if (!c.match_keyword("BY")) {
