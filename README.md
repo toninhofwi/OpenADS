@@ -340,6 +340,13 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.24-done` | SQL correlated EXISTS subquery — `EXISTS (SELECT … FROM b WHERE b.x = a.y)` re-evaluates per outer row; outer-column refs in the subquery WHERE bind to the live outer cursor. |
 | `m10.25-done` | SQL `GROUP BY <col>[, <col>…] [HAVING <agg> op num]` — multi-row aggregate cursor (one row per group), preserves source column type byte + length, HAVING filters on a projection-aligned aggregate slot. |
 | `m10.26-done` | SQL `UNION` / `UNION ALL` — N-way merge of `SELECT * FROM t [WHERE ...]` members; first member's schema drives the merged cursor; UNION dedups by raw record bytes, UNION ALL keeps duplicates. |
+| `m10.27-done` | SQL UNION + member projection — UNION members may now carry a projection list (`SELECT col1, col2 FROM t`); first member's projection drives the merged DBF schema (preserving raw_type / length / decimals) and subsequent members align positionally. |
+| `m10.28-done` | SQL UNION + ORDER BY — last UNION member may carry an `ORDER BY` clause; the sort applies to the merged result. Numeric vs lex compare follows the merged column type. |
+| `m10.29-done` | SQL correlated scalar subquery — `<col> op (SELECT <col_or_agg> FROM b WHERE b.x = a.y)` re-evaluates per outer row, binding outer columns into the inner WHERE (M10.24 binding pattern reused). |
+| `m10.30-done` | SQL HAVING tree — boolean AND / OR / NOT / parens over aggregate comparisons; e.g. `HAVING COUNT(*) > 1 AND SUM(amt) > 50`. |
+| `m10.31-done` | SQL `DISTINCT` — `SELECT DISTINCT [cols\|*] FROM ...` dedups by projected columns; first occurrence wins, applied post-WHERE / post-ORDER-BY. |
+| `m10.32-done` | SQL `LIMIT N [OFFSET M]` — slices the post-clause traversal sequence (skip M, take N). |
+| `m10.33-done` | SQL `BETWEEN` / `LIKE` — `<col> BETWEEN <lit1> AND <lit2>` (inclusive, numeric or lexicographic) and `<col> LIKE '<pattern>'` with SQL `%` (any sequence) and `_` (single char) wildcards. |
 
 #### Still planned for 0.3.x
 
@@ -353,19 +360,22 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **More SQL** — UNION + JOIN / aggregates in the same statement,
-  correlated scalar/IN subqueries, ORDER BY across UNION
-  members, multi-comparison HAVING. The shipped 0.3.x SQL surface
-  covers boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY`
-  (M10.6), `UPDATE` / `DELETE` (M10.7), projection lists (M10.8),
-  DDL `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates
-  (M10.10), INNER JOIN (M10.13 / M10.14), IN literal / subquery
-  (M10.15), LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar
-  subquery (M10.18), aggregate scalar subquery (M10.19),
-  JOIN+WHERE / ORDER BY combos (M10.20), RIGHT OUTER JOIN
-  (M10.21), FULL OUTER JOIN (M10.22), JOIN + aggregate combo
-  (M10.23), correlated EXISTS (M10.24), GROUP BY + HAVING
-  (M10.25), and UNION / UNION ALL (M10.26).
+- **More SQL** — UNION + JOIN / aggregates inside members,
+  correlated IN subquery, ORDER BY across DISTINCT, GROUP BY
+  inside JOIN combo. The shipped 0.3.x SQL surface covers
+  boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6),
+  `UPDATE` / `DELETE` (M10.7), projection lists (M10.8), DDL
+  `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates (M10.10),
+  INNER JOIN (M10.13 / M10.14), IN literal / subquery (M10.15),
+  LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar subquery
+  (M10.18), aggregate scalar subquery (M10.19), JOIN+WHERE /
+  ORDER BY combos (M10.20), RIGHT OUTER JOIN (M10.21), FULL
+  OUTER JOIN (M10.22), JOIN + aggregate combo (M10.23),
+  correlated EXISTS (M10.24), GROUP BY + HAVING (M10.25),
+  UNION / UNION ALL (M10.26), UNION + projection (M10.27),
+  UNION + ORDER BY (M10.28), correlated scalar subquery
+  (M10.29), HAVING tree (M10.30), DISTINCT (M10.31),
+  LIMIT/OFFSET (M10.32), BETWEEN/LIKE (M10.33).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
