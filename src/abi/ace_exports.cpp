@@ -3964,16 +3964,41 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             return s;
         };
 
-        // Build hash on right_column.
-        std::unordered_map<std::string, std::vector<std::uint32_t>> rmap;
-        std::uint32_t rrc = rtbl->record_count();
-        for (std::uint32_t r = 1; r <= rrc; ++r) {
-            if (auto g = rtbl->goto_record(r); !g) continue;
-            if (rtbl->is_deleted()) continue;
-            auto v = rtbl->read_field(static_cast<std::uint16_t>(rcol));
-            if (!v) continue;
-            rmap[trim_trailing(v.value().as_string)].push_back(r);
+        // INNER / LEFT walk left + lookup right. RIGHT swaps that —
+        // walk right + lookup left. The merged schema's column order
+        // (left fields first, then right with `R_` prefix) stays
+        // identical regardless of join direction so the cursor
+        // exposes the same shape to apps.
+        bool walk_right = j.is_right;
+
+        std::unordered_map<std::string, std::vector<std::uint32_t>> probe_map;
+        if (walk_right) {
+            // Hash the LEFT column (we'll walk the right side and
+            // look up each right row's join value in this map).
+            std::uint32_t lrc_for_hash = ltbl->record_count();
+            for (std::uint32_t r = 1; r <= lrc_for_hash; ++r) {
+                if (auto g = ltbl->goto_record(r); !g) continue;
+                if (ltbl->is_deleted()) continue;
+                auto v = ltbl->read_field(
+                    static_cast<std::uint16_t>(lcol));
+                if (!v) continue;
+                probe_map[trim_trailing(v.value().as_string)].push_back(r);
+            }
+        } else {
+            // Default: hash the RIGHT column (M10.14 + M10.16 path).
+            std::uint32_t rrc = rtbl->record_count();
+            for (std::uint32_t r = 1; r <= rrc; ++r) {
+                if (auto g = rtbl->goto_record(r); !g) continue;
+                if (rtbl->is_deleted()) continue;
+                auto v = rtbl->read_field(
+                    static_cast<std::uint16_t>(rcol));
+                if (!v) continue;
+                probe_map[trim_trailing(v.value().as_string)].push_back(r);
+            }
         }
+        // Keep the legacy name `rmap` working — the executor below
+        // walks one side and probes the other through this map.
+        auto& rmap = probe_map;
 
         // Build merged schema.
         std::vector<openads::drivers::DbfField> merged;
@@ -4018,47 +4043,78 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         }
         file.push_back(0x0D);
 
-        // Walk left, build merged rows for matched right recnos.
-        // For LEFT OUTER joins, emit a single row with blank right
-        // fields when no right match exists (M10.16).
-        std::uint32_t lrc = ltbl->record_count();
+        // Helper: emit one merged record with explicit left/right
+        // byte slices. Either side may be null — outer-join fillers
+        // pass nullptr for the side that has no match.
         std::uint32_t emitted = 0;
-        for (std::uint32_t l = 1; l <= lrc; ++l) {
-            if (auto g = ltbl->goto_record(l); !g) continue;
-            if (ltbl->is_deleted()) continue;
-            auto lv = ltbl->read_field(static_cast<std::uint16_t>(lcol));
-            if (!lv) continue;
-            auto rit = rmap.find(trim_trailing(lv.value().as_string));
-            auto lraw = ltbl->driver()->read_record_raw(l);
-            if (!lraw) continue;
-            const auto& lbuf = lraw.value();
-
-            auto emit_with_right = [&](const std::uint8_t* rbytes,
-                                       std::size_t rsize) {
-                std::vector<std::uint8_t> mrec(merged_rec, ' ');
-                mrec[0] = lbuf.empty() ? ' ' : lbuf[0];
-                if (lrec > 1 && lbuf.size() >= lrec) {
-                    std::memcpy(mrec.data() + 1, lbuf.data() + 1, lrec - 1);
-                }
-                if (rbytes != nullptr && rrec > 1 && rsize >= rrec) {
-                    std::memcpy(mrec.data() + lrec,
-                                rbytes + 1, rrec - 1);
-                }
-                file.insert(file.end(), mrec.begin(), mrec.end());
-                ++emitted;
-            };
-
-            if (rit == rmap.end()) {
-                if (j.is_left) {
-                    emit_with_right(nullptr, 0);
-                }
-                continue;
+        auto emit_merged = [&](const std::uint8_t* lbytes, std::size_t lsize,
+                               const std::uint8_t* rbytes, std::size_t rsize) {
+            std::vector<std::uint8_t> mrec(merged_rec, ' ');
+            mrec[0] = (lbytes != nullptr && lsize > 0) ? lbytes[0] : ' ';
+            if (lbytes != nullptr && lrec > 1 && lsize >= lrec) {
+                std::memcpy(mrec.data() + 1, lbytes + 1, lrec - 1);
             }
-            for (std::uint32_t rr : rit->second) {
-                auto rraw = rtbl->driver()->read_record_raw(rr);
+            if (rbytes != nullptr && rrec > 1 && rsize >= rrec) {
+                std::memcpy(mrec.data() + lrec, rbytes + 1, rrec - 1);
+            }
+            file.insert(file.end(), mrec.begin(), mrec.end());
+            ++emitted;
+        };
+
+        if (walk_right) {
+            // RIGHT OUTER — walk right rows, look up the LEFT hash.
+            // Unmatched right rows surface with blank left fields.
+            std::uint32_t rrc = rtbl->record_count();
+            for (std::uint32_t r = 1; r <= rrc; ++r) {
+                if (auto g = rtbl->goto_record(r); !g) continue;
+                if (rtbl->is_deleted()) continue;
+                auto rv = rtbl->read_field(
+                    static_cast<std::uint16_t>(rcol));
+                if (!rv) continue;
+                auto lit = rmap.find(trim_trailing(rv.value().as_string));
+                auto rraw = rtbl->driver()->read_record_raw(r);
                 if (!rraw) continue;
                 const auto& rbuf = rraw.value();
-                emit_with_right(rbuf.data(), rbuf.size());
+                if (lit == rmap.end()) {
+                    emit_merged(nullptr, 0, rbuf.data(), rbuf.size());
+                    continue;
+                }
+                for (std::uint32_t ll : lit->second) {
+                    auto lraw = ltbl->driver()->read_record_raw(ll);
+                    if (!lraw) continue;
+                    const auto& lbuf = lraw.value();
+                    emit_merged(lbuf.data(), lbuf.size(),
+                                rbuf.data(), rbuf.size());
+                }
+            }
+        } else {
+            // INNER / LEFT — walk left rows, look up the RIGHT hash.
+            // Unmatched left rows surface with blank right fields when
+            // is_left, dropped otherwise.
+            std::uint32_t lrc = ltbl->record_count();
+            for (std::uint32_t l = 1; l <= lrc; ++l) {
+                if (auto g = ltbl->goto_record(l); !g) continue;
+                if (ltbl->is_deleted()) continue;
+                auto lv = ltbl->read_field(
+                    static_cast<std::uint16_t>(lcol));
+                if (!lv) continue;
+                auto rit = rmap.find(trim_trailing(lv.value().as_string));
+                auto lraw = ltbl->driver()->read_record_raw(l);
+                if (!lraw) continue;
+                const auto& lbuf = lraw.value();
+                if (rit == rmap.end()) {
+                    if (j.is_left) {
+                        emit_merged(lbuf.data(), lbuf.size(), nullptr, 0);
+                    }
+                    continue;
+                }
+                for (std::uint32_t rr : rit->second) {
+                    auto rraw = rtbl->driver()->read_record_raw(rr);
+                    if (!rraw) continue;
+                    const auto& rbuf = rraw.value();
+                    emit_merged(lbuf.data(), lbuf.size(),
+                                rbuf.data(), rbuf.size());
+                }
             }
         }
         file.push_back(0x1A);

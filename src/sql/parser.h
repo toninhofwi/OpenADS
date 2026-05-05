@@ -72,7 +72,8 @@ struct JoinClause {
     std::string  table;
     std::string  left_column;
     std::string  right_column;
-    bool         is_left = false;   // M10.16 — true for LEFT OUTER JOIN
+    bool         is_left  = false;  // M10.16 — true for LEFT OUTER JOIN
+    bool         is_right = false;  // M10.21 — true for RIGHT OUTER JOIN
 };
 
 struct SelectStmt {

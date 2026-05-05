@@ -491,7 +491,8 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected FROM", sql};
     }
     stmt.table = c.read_identifier_or_filename();
-    bool is_left_join = false;
+    bool is_left_join  = false;
+    bool is_right_join = false;
     bool saw_join_keyword = false;
     if (c.match_keyword("LEFT")) {
         c.match_keyword("OUTER");   // optional
@@ -499,6 +500,13 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
             return util::Error{7200, 0, "expected JOIN after LEFT", sql};
         }
         is_left_join = true;
+        saw_join_keyword = true;
+    } else if (c.match_keyword("RIGHT")) {
+        c.match_keyword("OUTER");   // optional
+        if (!c.match_keyword("JOIN")) {
+            return util::Error{7200, 0, "expected JOIN after RIGHT", sql};
+        }
+        is_right_join = true;
         saw_join_keyword = true;
     } else if (c.match_keyword("INNER")) {
         if (!c.match_keyword("JOIN")) {
@@ -511,7 +519,8 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     }
     if (saw_join_keyword) {
         JoinClause j;
-        j.is_left = is_left_join;
+        j.is_left  = is_left_join;
+        j.is_right = is_right_join;
         j.table = c.read_identifier_or_filename();
         if (j.table.empty()) {
             return util::Error{7200, 0,
