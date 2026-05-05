@@ -18,7 +18,11 @@ namespace openads::sql {
 // joins, aggregates, subqueries, ORDER BY, INSERT / UPDATE / DELETE
 // land in subsequent milestones.
 
-enum class WhereOp { Eq, Ne, Lt, Gt, Le, Ge, Contains, Between, Like };
+enum class WhereOp {
+    Eq, Ne, Lt, Gt, Le, Ge,
+    Contains, Between, Like,
+    IsNull, IsNotNull        // M10.44
+};
 
 // Forward declaration so WhereCmp + InClause + WhereExpr can hold
 // optional sub-SelectStmts without seeing the full struct yet.
@@ -122,6 +126,17 @@ struct ScalarFnCall {
     std::string              alias;      // optional column alias
 };
 
+// M10.47 — window function in a projection slot. First cut: only
+// `ROW_NUMBER() OVER ()` — assigns the 1-based position of the row
+// in the materialised result. PARTITION BY / ORDER BY inside the
+// OVER are accepted by the parser but ignored at execution.
+enum class WindowFnKind { RowNumber };
+
+struct WindowFnCall {
+    WindowFnKind  kind = WindowFnKind::RowNumber;
+    std::string   alias;
+};
+
 // M10.40 — binary arithmetic on numeric columns / literals in a
 // projection slot. Result materialised as C(30).
 enum class ArithOp { Add, Sub, Mul, Div };
@@ -189,6 +204,8 @@ struct SelectStmt {
     std::vector<ScalarFnCall>  fn_items;
     // M10.40 — arithmetic expressions referenced via `$ARITH_<n>`.
     std::vector<ArithExpr>     arith_items;
+    // M10.47 — window functions referenced via `$WIN_<n>`.
+    std::vector<WindowFnCall>  window_items;
     // Aggregate calls in the projection (M10.10). Mutually exclusive
     // with `projection` — apps either select columns or aggregate.
     std::vector<Aggregate>     aggregates;

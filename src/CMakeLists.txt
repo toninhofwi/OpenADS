@@ -44,6 +44,7 @@ add_library(openads_core STATIC
     drivers/ntx/ntx_index.cpp
     drivers/dbt/dbt_memo.cpp
     drivers/fpt/fpt_memo.cpp
+    network/wire.cpp
 )
 
 if(WIN32)

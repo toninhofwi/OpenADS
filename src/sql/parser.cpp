@@ -260,6 +260,19 @@ parse_cmp(Cursor& c, const std::string& sql) {
         return node;
     }
 
+    // M10.44 — `<col> IS [NOT] NULL`. No RHS. For DBFs without an
+    // explicit NULL bitmap (M11.6), the executor treats all-spaces
+    // string cells as NULL.
+    if (c.match_keyword("IS")) {
+        bool not_null = c.match_keyword("NOT");
+        if (!c.match_keyword("NULL")) {
+            return util::Error{7200, 0,
+                "expected NULL after IS [NOT]", sql};
+        }
+        node->cmp.op = not_null ? WhereOp::IsNotNull : WhereOp::IsNull;
+        return node;
+    }
+
     // M10.33 — `<col> BETWEEN <lit> AND <lit>` and `<col> LIKE '<pattern>'`.
     if (c.match_keyword("BETWEEN")) {
         node->cmp.op = WhereOp::Between;
@@ -666,6 +679,49 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
             bool is_agg_call = (upper == "COUNT" || upper == "SUM" ||
                                 upper == "AVG"   || upper == "MIN" ||
                                 upper == "MAX") && c.peek_char('(');
+
+            // M10.47 — `ROW_NUMBER() OVER (...)` window function.
+            if (upper == "ROW_NUMBER" && c.peek_char('(')) {
+                if (aggregate_mode) {
+                    return util::Error{7200, 0,
+                        "mixing window fn + aggregates in SELECT not supported",
+                        sql};
+                }
+                c.match_char('(');
+                if (!c.match_char(')')) {
+                    return util::Error{7200, 0,
+                        "expected ')' after ROW_NUMBER", sql};
+                }
+                if (c.match_keyword("OVER")) {
+                    if (!c.match_char('(')) {
+                        return util::Error{7200, 0,
+                            "expected '(' after OVER", sql};
+                    }
+                    int depth = 1;
+                    while (depth > 0) {
+                        if (c.eof()) {
+                            return util::Error{7200, 0,
+                                "unterminated OVER clause", sql};
+                        }
+                        char ch = c.consume_char();
+                        if (ch == '(') ++depth;
+                        else if (ch == ')') --depth;
+                    }
+                }
+                WindowFnCall wf;
+                wf.kind = WindowFnKind::RowNumber;
+                if (c.match_keyword("AS")) {
+                    wf.alias = c.read_identifier();
+                }
+                std::size_t wi = stmt.window_items.size();
+                stmt.window_items.push_back(std::move(wf));
+                char placeholder[32];
+                std::snprintf(placeholder, sizeof(placeholder),
+                              "$WIN_%zu", wi);
+                stmt.projection.push_back(placeholder);
+                if (c.match_char(',')) continue;
+                break;
+            }
 
             // M10.39 / M10.43 / M10.45 — scalar function call.
             // Single-arg: UPPER/LOWER/LEN/TRIM/LTRIM/RTRIM(col).

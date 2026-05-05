@@ -6807,6 +6807,20 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     while (!sv.empty() && sv.back() == ' ') sv.pop_back();
                     return sql_like_match(sv, term.literal);
                 }
+                if (term.op == openads::sql::WhereOp::IsNull ||
+                    term.op == openads::sql::WhereOp::IsNotNull) {
+                    // M10.44 / M11.6 — prefer the VFP NULL bitmap
+                    // when the field is nullable; otherwise treat
+                    // an all-blanks character cell as NULL.
+                    bool null_ish = t.is_field_null(term.field_index);
+                    if (!null_ish) {
+                        auto sv = v.value().as_string;
+                        while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                        null_ish = sv.empty();
+                    }
+                    return term.op == openads::sql::WhereOp::IsNull
+                        ? null_ish : !null_ish;
+                }
                 int cmp = 0;
                 if (term.is_numeric) {
                     double d = v.value().as_double;
@@ -7005,7 +7019,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     bool has_synth = false;
     for (auto& p : parsed.value().projection) {
         if (starts_with(p, "$CASE_") || starts_with(p, "$FN_") ||
-            starts_with(p, "$ARITH_")) {
+            starts_with(p, "$ARITH_") || starts_with(p, "$WIN_")) {
             has_synth = true; break;
         }
     }
@@ -7020,6 +7034,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             std::int32_t arith_idx = -1;
             std::int32_t arith_lhs_field = -1;
             std::int32_t arith_rhs_field = -1;
+            std::int32_t win_idx   = -1;
         };
         std::vector<OutCol> outs;
         outs.reserve(parsed.value().projection.size());
@@ -7080,6 +7095,18 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                : (fc.kind == K::DateDiff) ? 12
                                : 64;
                 }
+            } else if (starts_with(p, "$WIN_")) {
+                std::size_t idx = std::stoul(p.substr(5));
+                o.win_idx = static_cast<std::int32_t>(idx);
+                const auto& wf = parsed.value().window_items[idx];
+                if (!wf.alias.empty()) o.name = wf.alias;
+                else {
+                    char nm[16];
+                    std::snprintf(nm, sizeof(nm), "RN%zu", idx + 1);
+                    o.name = nm;
+                }
+                o.raw_type = 'C';
+                o.length   = 10;
             } else if (starts_with(p, "$ARITH_")) {
                 std::size_t idx = std::stoul(p.substr(7));
                 o.arith_idx = static_cast<std::int32_t>(idx);
@@ -7453,6 +7480,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             break;
                         }
                     }
+                } else if (o.win_idx >= 0) {
+                    from_synth = true;
+                    char buf[16];
+                    std::snprintf(buf, sizeof(buf), "%u",
+                                  static_cast<unsigned>(emitted + 1));
+                    val = buf;
                 } else if (o.arith_idx >= 0) {
                     from_synth = true;
                     const auto& ae = parsed.value().arith_items[o.arith_idx];

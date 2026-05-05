@@ -821,4 +821,21 @@ std::optional<std::string> Table::get_scope(bool top) const {
     return top ? order_->scope().top : order_->scope().bottom;
 }
 
+bool Table::is_field_null(std::uint16_t field_idx) {
+    // M11.6 — peek the table-wide _NullFlags column for this row,
+    // test the bit assigned to `field_idx` during schema parse.
+    if (state_ != State::Positioned) return false;
+    const auto& fields = driver_->fields();
+    if (field_idx >= fields.size()) return false;
+    if (!fields[field_idx].nullable) return false;
+    std::int32_t nf_idx = field_index("_NullFlags");
+    if (nf_idx < 0) return false;
+    const auto& nf = fields[static_cast<std::size_t>(nf_idx)];
+    std::uint16_t bit = fields[field_idx].null_bit;
+    std::size_t byte_off = nf.record_offset +
+                           static_cast<std::size_t>(bit / 8);
+    if (byte_off >= record_buf_.size()) return false;
+    return (record_buf_[byte_off] & (1u << (bit & 7u))) != 0;
+}
+
 } // namespace openads::engine

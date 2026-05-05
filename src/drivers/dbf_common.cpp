@@ -99,6 +99,11 @@ parse_dbf_fields(const std::uint8_t* data, std::size_t size) {
         std::uint8_t flags = data[pos + 18];
         f.autoinc      = (flags & 0x0Cu) != 0;   // VFP marks autoinc
                                                  // with bits 2+3 set
+        // M11.6 — VFP NULL flag = bit 1 (0x02) of the flags byte.
+        // Each nullable field gets a position in the table-wide
+        // _NullFlags field; the position is assigned in declaration
+        // order during parse_dbf_fields.
+        f.nullable = (flags & 0x02u) != 0;
         f.autoinc_next =  static_cast<std::uint32_t>(data[pos + 19])        |
                          (static_cast<std::uint32_t>(data[pos + 20]) <<  8) |
                          (static_cast<std::uint32_t>(data[pos + 21]) << 16) |
@@ -108,6 +113,13 @@ parse_dbf_fields(const std::uint8_t* data, std::size_t size) {
         offset = static_cast<std::uint16_t>(offset + f.length);
         out.push_back(std::move(f));
         pos += 32;
+    }
+    // M11.6 — assign null-bit positions to every nullable field in
+    // declaration order. Apps that touch _NullFlags directly read
+    // these bits via `Table::is_field_null`.
+    std::uint16_t nb = 0;
+    for (auto& fd : out) {
+        if (fd.nullable) fd.null_bit = nb++;
     }
     return out;
 }

@@ -62,6 +62,12 @@ struct DbfField {
     bool          autoinc       = false;
     std::uint32_t autoinc_next  = 0;
     std::uint8_t  autoinc_step  = 1;
+    // M11.6 — VFP NULL bitmap. `nullable` mirrors flags-byte bit 1
+    // on the field descriptor; nullable fields claim a bit in the
+    // table-scope `_NullFlags` system field, indexed by the field's
+    // ordinal among nullable fields. `null_bit` is that ordinal.
+    bool          nullable      = false;
+    std::uint16_t null_bit      = 0;
 };
 
 util::Result<std::vector<DbfField>>

@@ -42,6 +42,12 @@ public:
     const drivers::DbfField& field_descriptor(std::uint16_t idx) const;
     std::int32_t field_index(const std::string& name) const noexcept;
 
+    // M11.6 — VFP NULL bitmap query. Returns true when `field_idx`
+    // is a nullable column AND the current row's `_NullFlags` bit
+    // for that column is set. Returns false for non-nullable
+    // columns or when the table doesn't carry a _NullFlags field.
+    bool is_field_null(std::uint16_t field_idx);
+
     std::uint32_t record_count() const noexcept;
     std::uint32_t recno() const noexcept { return recno_; }
     bool eof() const noexcept { return state_ == State::Eof; }
