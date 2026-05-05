@@ -92,6 +92,7 @@ add_executable(openads_unit_tests
     unit/network_wire_test.cpp
     unit/abi_collation_codepage_test.cpp
     unit/network_socket_test.cpp
+    unit/network_server_test.cpp
 )
 
 # M11.4 — side DLL with stored procedures used by abi_aep_test.
