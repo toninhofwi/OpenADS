@@ -353,15 +353,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m11.1-done`  | VFP V (Varchar) + Q (Varbinary) field types — decode trims trailing NUL pad to recover the meaningful prefix; encode NUL-pads the unused tail so reads recover the original length. |
 | `m11.3-done`  | TPS — `AdsReleaseSavepoint` drops a savepoint marker without rolling back; nested `AdsBeginTransaction` / `AdsCommitTransaction` increment / decrement depth (only the outermost commit flushes); inner ROLLBACK still aborts every nesting level. |
 | `m10.38-done` | SQL `CASE WHEN <cond> THEN <lit> [WHEN ...] [ELSE <lit>] END [AS alias]` in projection — first matching branch wins; result lands in a C(30) cell of the materialised result cursor. Conditions may use Cmp / AND / OR / NOT / BETWEEN / LIKE. |
+| `m10.36-done` | SQL UNION + complex members — UNION members may now carry JOIN, GROUP BY, aggregates, CASE, DISTINCT, LIMIT. Dispatcher recurses into AdsExecuteSQLDirect per member (state mutex is recursive); each member's cursor schema drives merge alignment via `cursor_projections`. |
 
 #### Still planned for 0.3.x
 
-- **M10.36 UNION + JOIN/aggregate inside members** — current
-  UNION executor short-circuits members with joins / aggregates
-  / GROUP BY because that path needs the full SELECT-execute
-  pipeline extracted into a reusable helper (the dispatcher in
-  `AdsExecuteSQLDirect` is ~6 000 lines of inline branches).
-  Tracked for the next milestone batch.
 - **M11.2 Real ADS record-level encryption** — gated by an
   undocumented byte boundary inside the proprietary ADS record
   format. The AES-256 primitive is in tree (`openads_aes_impl`),
