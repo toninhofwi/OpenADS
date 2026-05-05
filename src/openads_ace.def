@@ -82,6 +82,9 @@ EXPORTS
     AdsCreateSavepoint
     AdsReleaseSavepoint
     AdsSetEncryptionPassword
+    AdsSetCollation
+    AdsConvertOemToAnsi
+    AdsConvertAnsiToOem
     AdsRollbackTransaction80
     AdsDDCreate
     AdsDDAddTable

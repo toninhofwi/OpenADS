@@ -109,6 +109,12 @@ public:
         encryption_key() const noexcept { return encryption_key_; }
     bool owns_table_ptr(const engine::Table* t) const;
 
+    // M11.7 — string-compare collation. `Binary` (default) compares
+    // raw bytes; `NoCase` lowercases ASCII A-Z before compare.
+    enum class Collation { Binary, NoCase };
+    void       set_collation(Collation c) noexcept { collation_ = c; }
+    Collation  collation() const noexcept { return collation_; }
+
 private:
     util::Result<void> recover_orphan_tx_();
 
@@ -136,6 +142,9 @@ private:
     // M11.2 — encryption key derived from the connection password.
     std::array<std::uint8_t, 32>                               encryption_key_{};
     bool                                                       encryption_key_set_ = false;
+    // M11.7 — string compare collation (default = byte-exact).
+    Collation                                                  collation_ =
+        Collation::Binary;
 
 public:
     ~Connection();

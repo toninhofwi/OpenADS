@@ -4,6 +4,7 @@
 #include "abi/charset.h"
 #include "abi/last_error.h"
 
+#include "engine/codepage.h"
 #include "engine/fts.h"
 #include "engine/index_expr.h"
 #include "engine/table.h"
@@ -3358,6 +3359,65 @@ UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
 // transparently decrypt on read / encrypt on write using AES-256-CTR
 // keyed off the (zero-padded) password bytes. OpenADS-only format —
 // not byte-compatible with SAP ADS encrypted .adt files.
+// M11.8 — OEM (CP437) ↔ ANSI (UTF-8 in this build) conversion
+// helpers. `pucBuf` is read until a NUL byte. Output is written
+// in place into the same buffer (caller must size for worst case
+// — UTF-8 may grow up to 3x); `pulLen` carries the input length
+// in and the output length out.
+UNSIGNED32 AdsConvertOemToAnsi(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
+    if (pucBuf == nullptr || pulLen == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    auto utf8 = openads::engine::cp437_to_utf8(
+        pucBuf, static_cast<std::size_t>(*pulLen));
+    std::size_t out_len = utf8.size();
+    std::memcpy(pucBuf, utf8.data(), out_len);
+    if (out_len < *pulLen) pucBuf[out_len] = '\0';
+    *pulLen = static_cast<UNSIGNED32>(out_len);
+    return ok();
+}
+
+UNSIGNED32 AdsConvertAnsiToOem(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
+    if (pucBuf == nullptr || pulLen == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    auto cp = openads::engine::utf8_to_cp437(
+        reinterpret_cast<const char*>(pucBuf),
+        static_cast<std::size_t>(*pulLen));
+    std::size_t out_len = cp.size();
+    std::memcpy(pucBuf, cp.data(), out_len);
+    if (out_len < *pulLen) pucBuf[out_len] = '\0';
+    *pulLen = static_cast<UNSIGNED32>(out_len);
+    return ok();
+}
+
+// M11.7 — set the connection's string-compare collation. Names:
+// `binary` (default) or `nocase`. Affects equality / range
+// comparisons for Character columns in SQL WHERE.
+UNSIGNED32 AdsSetCollation(ADSHANDLE hConnect, UNSIGNED8* pucName) {
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(
+        hConnect, HandleKind::Connection);
+    if (!c || pucName == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    auto name = openads::abi::to_internal(pucName, 0);
+    std::string upper;
+    upper.reserve(name.size());
+    for (char ch : name) upper.push_back(static_cast<char>(
+        std::toupper(static_cast<unsigned char>(ch))));
+    if (upper == "BINARY") {
+        c->set_collation(Connection::Collation::Binary);
+    } else if (upper == "NOCASE") {
+        c->set_collation(Connection::Collation::NoCase);
+    } else {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "unknown collation name (expected BINARY / NOCASE)");
+    }
+    return ok();
+}
+
 UNSIGNED32 AdsSetEncryptionPassword(ADSHANDLE hConnect,
                                     UNSIGNED8* pucPassword) {
     auto& s = state();
@@ -6097,6 +6157,16 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             // M10.33 — BETWEEN upper bound.
             std::string                         literal2;
             double                              number2 = 0.0;
+            // M11.7 — case-insensitive ASCII compare when set.
+            bool                                nocase = false;
+        };
+        bool conn_nocase =
+            (c->collation() == Connection::Collation::NoCase);
+        auto to_lower_ascii = [](std::string s) {
+            for (auto& ch : s) {
+                if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch + 32);
+            }
+            return s;
         };
 
         // Compile the AST into a Predicate functor.
@@ -6436,6 +6506,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             term.number      = w.number;
             term.literal2    = w.literal2;
             term.number2     = w.number2;
+            // M11.7 — stamp collation onto the term when the
+            // connection is in nocase mode and the cmp involves
+            // string operands.
+            if (conn_nocase && !w.is_numeric) {
+                term.nocase   = true;
+                term.literal  = to_lower_ascii(term.literal);
+                term.literal2 = to_lower_ascii(term.literal2);
+            }
             if (w.subquery) {
                 // M10.29 — correlated scalar subquery. If the
                 // subquery's WHERE references an outer column, we
@@ -6793,17 +6871,25 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 }
                 auto v = t.read_field(term.field_index);
                 if (!v) return false;
+                auto maybe_lower = [&](std::string s) {
+                    if (!term.nocase) return s;
+                    for (auto& ch : s) {
+                        if (ch >= 'A' && ch <= 'Z')
+                            ch = static_cast<char>(ch + 32);
+                    }
+                    return s;
+                };
                 if (term.op == openads::sql::WhereOp::Between) {
                     if (term.is_numeric) {
                         double d = v.value().as_double;
                         return d >= term.number && d <= term.number2;
                     }
-                    auto& sv = v.value().as_string;
+                    auto sv = maybe_lower(v.value().as_string);
                     return sv.compare(term.literal)  >= 0 &&
                            sv.compare(term.literal2) <= 0;
                 }
                 if (term.op == openads::sql::WhereOp::Like) {
-                    auto sv = v.value().as_string;
+                    auto sv = maybe_lower(v.value().as_string);
                     while (!sv.empty() && sv.back() == ' ') sv.pop_back();
                     return sql_like_match(sv, term.literal);
                 }
@@ -6827,7 +6913,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     if      (d < term.number) cmp = -1;
                     else if (d > term.number) cmp =  1;
                 } else {
-                    cmp = v.value().as_string.compare(term.literal);
+                    cmp = maybe_lower(v.value().as_string).compare(term.literal);
                 }
                 switch (term.op) {
                     case openads::sql::WhereOp::Eq: return cmp == 0;

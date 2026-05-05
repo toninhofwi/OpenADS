@@ -267,6 +267,9 @@ UNSIGNED32 AdsInTransaction      (ADSHANDLE hConnect, UNSIGNED16* pbInTx);
 UNSIGNED32 AdsCreateSavepoint    (ADSHANDLE hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsReleaseSavepoint   (ADSHANDLE hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsSetEncryptionPassword(ADSHANDLE hConnect, UNSIGNED8* pucPassword);
+UNSIGNED32 AdsSetCollation       (ADSHANDLE hConnect, UNSIGNED8* pucName);
+UNSIGNED32 AdsConvertOemToAnsi   (UNSIGNED8* pucBuf, UNSIGNED32* pulLen);
+UNSIGNED32 AdsConvertAnsiToOem   (UNSIGNED8* pucBuf, UNSIGNED32* pulLen);
 UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint);
 
 UNSIGNED32 AdsFindFirstTable     (ADSHANDLE   hConnect,
