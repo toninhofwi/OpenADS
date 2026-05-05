@@ -4022,34 +4022,72 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             auto& s = state();
             std::lock_guard<std::mutex> lk(s.mu);
 
-            auto first_p = openads::sql::parse_select(uparts[0].sql_text);
-            if (!first_p) return fail(first_p.error());
-            auto member_ok = [](const openads::sql::SelectStmt& st) {
+            // M10.27 — accept member projection lists (each member
+            // must produce the same number of columns; first member's
+            // projected columns drive the merged schema).
+            // M10.28 — accept ORDER BY only on the LAST member; the
+            // sort applies to the merged result.
+            auto member_ok = [](const openads::sql::SelectStmt& st,
+                                bool is_last) {
                 return !st.inner_join && st.aggregates.empty() &&
-                       st.group_by.empty() && st.projection.empty() &&
-                       !st.order_by;
+                       st.group_by.empty() && (is_last || !st.order_by);
             };
-            if (!member_ok(first_p.value())) {
-                return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "UNION members must be `SELECT * FROM t [WHERE ...]`");
-            }
-            auto fh = c->open_table(first_p.value().table,
-                                    openads::engine::TableType::Cdx,
-                                    openads::engine::OpenMode::Read);
-            if (!fh) return fail(fh.error());
-            openads::engine::Table* ftbl = c->lookup_table(fh.value());
-            if (!ftbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
 
-            std::uint16_t nfields = ftbl->field_count();
-            std::uint32_t rec_len = 1;
+            std::vector<openads::sql::SelectStmt> stmts;
+            stmts.reserve(uparts.size());
+            for (std::size_t i = 0; i < uparts.size(); ++i) {
+                auto p = openads::sql::parse_select(uparts[i].sql_text);
+                if (!p) return fail(p.error());
+                bool is_last = (i == uparts.size() - 1);
+                if (!member_ok(p.value(), is_last)) {
+                    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                        "UNION members must be `SELECT [DISTINCT] [cols|*] "
+                        "FROM t [WHERE ...]` (last may carry ORDER BY)");
+                }
+                stmts.push_back(std::move(p).value());
+            }
+
+            // Capture last-member ORDER BY for the merged sort.
+            std::optional<openads::sql::OrderBy> final_order = stmts.back().order_by;
+
+            // Build merged schema from the first member: full source
+            // schema for SELECT *, or one merged column per projected
+            // name (preserving raw_type / length / decimals).
             std::vector<openads::drivers::DbfField> schema;
-            schema.reserve(nfields);
-            for (std::uint16_t i = 0; i < nfields; ++i) {
-                const auto& fd = ftbl->field_descriptor(i);
-                schema.push_back(fd);
-                rec_len += fd.length;
+            {
+                auto fh0 = c->open_table(stmts[0].table,
+                                         openads::engine::TableType::Cdx,
+                                         openads::engine::OpenMode::Read);
+                if (!fh0) return fail(fh0.error());
+                openads::engine::Table* fttbl = c->lookup_table(fh0.value());
+                if (!fttbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+                if (stmts[0].projection.empty()) {
+                    std::uint16_t nf = fttbl->field_count();
+                    schema.reserve(nf);
+                    for (std::uint16_t i = 0; i < nf; ++i) {
+                        schema.push_back(fttbl->field_descriptor(i));
+                    }
+                } else {
+                    schema.reserve(stmts[0].projection.size());
+                    for (auto& cn : stmts[0].projection) {
+                        std::int32_t fi = fttbl->field_index(cn);
+                        if (fi < 0) {
+                            c->close_table(fh0.value());
+                            return fail(openads::AE_COLUMN_NOT_FOUND,
+                                        cn.c_str());
+                        }
+                        schema.push_back(fttbl->field_descriptor(
+                            static_cast<std::uint16_t>(fi)));
+                    }
+                }
+                c->close_table(fh0.value());
             }
 
+            std::uint16_t nfields = static_cast<std::uint16_t>(schema.size());
+            std::uint32_t rec_len = 1;
+            for (auto& fd : schema) rec_len += fd.length;
+
+            // Pre-build merged DBF header.
             std::vector<std::uint8_t> file;
             std::array<std::uint8_t, 32> hdr{};
             hdr[0] = 0x03;
@@ -4078,12 +4116,45 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             for (std::size_t i = 1; i < uparts.size(); ++i)
                 if (!uparts[i].all) any_distinct = true;
             std::unordered_set<std::string> seen;
-            std::uint32_t emitted = 0;
+
+            // Rows accumulate in-memory so an optional final ORDER BY
+            // can sort them before the file is materialised.
+            std::vector<std::vector<std::uint8_t>> rows;
 
             auto walk_member = [&](openads::engine::Table* mtbl,
                                    const openads::sql::SelectStmt& stm)
                 -> openads::util::Result<std::monostate>
             {
+                // Resolve each merged-schema column to a source field
+                // index. For SELECT * members, match by name; for
+                // projection members, the projection list aligns
+                // 1:1 with the merged schema (must be same length).
+                std::vector<std::int32_t> col_src(schema.size(), -1);
+                if (stm.projection.empty()) {
+                    for (std::size_t i = 0; i < schema.size(); ++i) {
+                        col_src[i] = mtbl->field_index(schema[i].name);
+                        if (col_src[i] < 0) {
+                            return openads::util::Error{
+                                openads::AE_COLUMN_NOT_FOUND, 0,
+                                schema[i].name.c_str(), ""};
+                        }
+                    }
+                } else {
+                    if (stm.projection.size() != schema.size()) {
+                        return openads::util::Error{
+                            openads::AE_PARSE_ERROR, 0,
+                            "UNION member projection column count differs", ""};
+                    }
+                    for (std::size_t i = 0; i < schema.size(); ++i) {
+                        col_src[i] = mtbl->field_index(stm.projection[i]);
+                        if (col_src[i] < 0) {
+                            return openads::util::Error{
+                                openads::AE_COLUMN_NOT_FOUND, 0,
+                                stm.projection[i].c_str(), ""};
+                        }
+                    }
+                }
+
                 std::function<bool(openads::engine::Table&)> filt;
                 if (stm.where) {
                     using Pred = std::function<bool(openads::engine::Table&)>;
@@ -4130,12 +4201,29 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         std::uint16_t f = static_cast<std::uint16_t>(fi);
                         openads::sql::WhereOp op = w.op;
                         std::string lit = w.literal;
+                        std::string lit2 = w.literal2;
                         bool is_num = w.is_numeric;
                         double num  = w.number;
-                        return Pred{[f, op, lit, is_num, num]
+                        double num2 = w.number2;
+                        return Pred{[f, op, lit, lit2, is_num, num, num2]
                                     (openads::engine::Table& t) {
                             auto v = t.read_field(f);
                             if (!v) return false;
+                            if (op == openads::sql::WhereOp::Between) {
+                                if (is_num) {
+                                    double d = v.value().as_double;
+                                    return d >= num && d <= num2;
+                                }
+                                auto& sv = v.value().as_string;
+                                return sv.compare(lit)  >= 0 &&
+                                       sv.compare(lit2) <= 0;
+                            }
+                            if (op == openads::sql::WhereOp::Like) {
+                                auto sv = v.value().as_string;
+                                while (!sv.empty() && sv.back() == ' ')
+                                    sv.pop_back();
+                                return sql_like_match(sv, lit);
+                            }
                             int cmp = 0;
                             if (is_num) {
                                 double d = v.value().as_double;
@@ -4164,45 +4252,97 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     if (auto g = mtbl->goto_record(r); !g) continue;
                     if (mtbl->is_deleted()) continue;
                     if (filt && !filt(*mtbl)) continue;
-                    auto raw = mtbl->driver()->read_record_raw(r);
-                    if (!raw) continue;
-                    auto& bytes = raw.value();
-                    if (bytes.size() != rec_len) continue;
-                    std::string key(
-                        reinterpret_cast<const char*>(bytes.data()),
-                        bytes.size());
-                    if (any_distinct) {
-                        if (!seen.insert(key).second) continue;
+                    // Pack a merged record by reading each schema
+                    // column's value from the source.
+                    std::vector<std::uint8_t> rec(rec_len);
+                    rec[0] = ' ';
+                    std::size_t off = 1;
+                    for (std::size_t i = 0; i < schema.size(); ++i) {
+                        auto v = mtbl->read_field(
+                            static_cast<std::uint16_t>(col_src[i]));
+                        std::string s = v ? v.value().as_string : std::string();
+                        std::uint8_t L = schema[i].length;
+                        for (std::uint8_t k = 0; k < L; ++k) {
+                            rec[off + k] = (k < s.size())
+                                ? static_cast<std::uint8_t>(s[k]) : ' ';
+                        }
+                        off += L;
                     }
-                    file.insert(file.end(), bytes.begin(), bytes.end());
-                    ++emitted;
+                    if (any_distinct) {
+                        std::string key(reinterpret_cast<const char*>(rec.data()),
+                                        rec.size());
+                        if (!seen.insert(std::move(key)).second) continue;
+                    }
+                    rows.push_back(std::move(rec));
                 }
                 return std::monostate{};
             };
 
-            auto wm = walk_member(ftbl, first_p.value());
-            c->close_table(fh.value());
-            if (!wm) return fail(wm.error());
-
-            for (std::size_t i = 1; i < uparts.size(); ++i) {
-                auto p = openads::sql::parse_select(uparts[i].sql_text);
-                if (!p) return fail(p.error());
-                if (!member_ok(p.value())) {
-                    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                        "UNION members must be `SELECT * FROM t [WHERE ...]`");
-                }
-                auto h = c->open_table(p.value().table,
+            for (std::size_t i = 0; i < stmts.size(); ++i) {
+                auto h = c->open_table(stmts[i].table,
                                        openads::engine::TableType::Cdx,
                                        openads::engine::OpenMode::Read);
                 if (!h) return fail(h.error());
                 openads::engine::Table* mt = c->lookup_table(h.value());
                 if (!mt) return fail(openads::AE_INTERNAL_ERROR, "post-open");
-                auto wmi = walk_member(mt, p.value());
+                auto wmi = walk_member(mt, stmts[i]);
                 c->close_table(h.value());
                 if (!wmi) return fail(wmi.error());
             }
 
+            // M10.28 — apply ORDER BY (from last member) to merged rows.
+            if (final_order) {
+                std::int32_t fi = -1;
+                std::uint16_t off = 1;
+                std::uint16_t flen = 0;
+                bool numeric = false;
+                for (std::size_t i = 0; i < schema.size(); ++i) {
+                    if (schema[i].name == final_order->column) {
+                        fi   = static_cast<std::int32_t>(i);
+                        flen = schema[i].length;
+                        numeric =
+                            schema[i].type == openads::drivers::DbfFieldType::Numeric ||
+                            schema[i].type == openads::drivers::DbfFieldType::Float   ||
+                            schema[i].type == openads::drivers::DbfFieldType::Integer ||
+                            schema[i].type == openads::drivers::DbfFieldType::Currency||
+                            schema[i].type == openads::drivers::DbfFieldType::Double;
+                        break;
+                    }
+                    off += schema[i].length;
+                }
+                if (fi < 0) {
+                    return fail(openads::AE_COLUMN_NOT_FOUND,
+                                final_order->column.c_str());
+                }
+                bool desc = final_order->descending;
+                std::stable_sort(rows.begin(), rows.end(),
+                    [&](const std::vector<std::uint8_t>& a,
+                        const std::vector<std::uint8_t>& b) {
+                        std::string ka(
+                            reinterpret_cast<const char*>(a.data() + off), flen);
+                        std::string kb(
+                            reinterpret_cast<const char*>(b.data() + off), flen);
+                        bool less;
+                        if (numeric) {
+                            double da = std::strtod(ka.c_str(), nullptr);
+                            double db = std::strtod(kb.c_str(), nullptr);
+                            if (da == db) return false;
+                            less = da < db;
+                        } else {
+                            if (ka == kb) return false;
+                            less = ka < kb;
+                        }
+                        return desc ? !less : less;
+                    });
+            }
+
+            // Materialise rows into the file buffer.
+            for (auto& rec : rows) {
+                file.insert(file.end(), rec.begin(), rec.end());
+            }
+
             file.push_back(0x1A);
+            std::uint32_t emitted = static_cast<std::uint32_t>(rows.size());
             file[4] = static_cast<std::uint8_t>( emitted        & 0xFFu);
             file[5] = static_cast<std::uint8_t>((emitted >>  8) & 0xFFu);
             file[6] = static_cast<std::uint8_t>((emitted >> 16) & 0xFFu);
