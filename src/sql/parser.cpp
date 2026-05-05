@@ -1108,6 +1108,32 @@ parse_create_table(const std::string& sql) {
     if (stmt.table.empty()) {
         return util::Error{7200, 0, "expected table name", sql};
     }
+    // M10.42 — `CREATE TABLE t AS SELECT ...`. The schema is taken
+    // from the inner SELECT's result cursor at execution time.
+    if (c.match_keyword("AS")) {
+        if (!c.peek_keyword("SELECT")) {
+            return util::Error{7200, 0,
+                "expected SELECT after CREATE TABLE ... AS", sql};
+        }
+        std::string upper_sql;
+        upper_sql.reserve(sql.size());
+        for (char ch : sql) upper_sql.push_back(static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch))));
+        std::size_t sel = upper_sql.find("SELECT");
+        if (sel == std::string::npos) {
+            return util::Error{7200, 0,
+                "CREATE TABLE ... AS — could not locate inner SELECT",
+                sql};
+        }
+        stmt.select_sql = sql.substr(sel);
+        while (!stmt.select_sql.empty() &&
+               (stmt.select_sql.back() == ';' ||
+                std::isspace(static_cast<unsigned char>(
+                    stmt.select_sql.back())))) {
+            stmt.select_sql.pop_back();
+        }
+        return stmt;
+    }
     if (!c.match_char('(')) {
         return util::Error{7200, 0,
             "expected '(' to open column list", sql};
@@ -1320,8 +1346,38 @@ util::Result<InsertStmt> parse_insert(const std::string& sql) {
             "expected ')' to close INSERT column list", sql};
     }
 
+    // M10.41 — `INSERT INTO t (cols) SELECT ...`. Capture the inner
+    // SELECT text and let the executor recurse into the SQL pipeline
+    // to materialise it.
+    if (c.peek_keyword("SELECT")) {
+        // Rebuild the SELECT substring from `sql`. We can locate it
+        // via a case-insensitive scan starting at the cursor's
+        // current position by searching for "SELECT" forward in the
+        // input.
+        std::string upper_sql;
+        upper_sql.reserve(sql.size());
+        for (char ch : sql) upper_sql.push_back(static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch))));
+        std::size_t after_close_paren = sql.find(')', 0);
+        std::size_t sel = upper_sql.find("SELECT", after_close_paren);
+        if (sel == std::string::npos) {
+            return util::Error{7200, 0,
+                "INSERT INTO ... SELECT — could not locate inner SELECT",
+                sql};
+        }
+        stmt.select_sql = sql.substr(sel);
+        // Strip trailing ';' if any.
+        while (!stmt.select_sql.empty() &&
+               (stmt.select_sql.back() == ';' ||
+                std::isspace(static_cast<unsigned char>(
+                    stmt.select_sql.back())))) {
+            stmt.select_sql.pop_back();
+        }
+        return stmt;
+    }
+
     if (!c.match_keyword("VALUES")) {
-        return util::Error{7200, 0, "expected VALUES", sql};
+        return util::Error{7200, 0, "expected VALUES or SELECT", sql};
     }
     if (!c.match_char('(')) {
         return util::Error{7200, 0,

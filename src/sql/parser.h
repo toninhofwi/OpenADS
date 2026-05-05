@@ -202,6 +202,10 @@ struct InsertStmt {
     std::string                  table;
     std::vector<std::string>     columns;
     std::vector<InsertLiteral>   values;
+    // M10.41 — `INSERT INTO t (cols) SELECT ...`. When set, `values`
+    // is empty and the executor runs the inner SELECT for each
+    // result row.
+    std::string                  select_sql;
 };
 
 util::Result<InsertStmt> parse_insert(const std::string& sql);
@@ -239,6 +243,10 @@ struct CreateTableColumn {
 struct CreateTableStmt {
     std::string                       table;
     std::vector<CreateTableColumn>    columns;
+    // M10.42 — `CREATE TABLE t AS SELECT ...`. When set, columns is
+    // empty and the executor materialises the inner cursor, copies
+    // its schema into a new DBF, then walks rows into it.
+    std::string                       select_sql;
 };
 
 util::Result<CreateTableStmt> parse_create_table(const std::string& sql);

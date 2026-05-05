@@ -3658,6 +3658,152 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         auto& s = state();
         auto ct = openads::sql::parse_create_table(sql);
         if (!ct) return fail(ct.error());
+
+        // M10.42 — CREATE TABLE t AS SELECT ...: recursively run the
+        // inner SELECT, build the new table's schema from the result
+        // cursor's projected fields, then walk + insert each row.
+        if (!ct.value().select_sql.empty()) {
+            std::vector<UNSIGNED8> selbuf(ct.value().select_sql.size() + 1);
+            std::memcpy(selbuf.data(),
+                        ct.value().select_sql.c_str(),
+                        ct.value().select_sql.size() + 1);
+            ADSHANDLE srcCur = 0;
+            UNSIGNED32 rrc =
+                AdsExecuteSQLDirect(hStatement, selbuf.data(), &srcCur);
+            if (rrc != 0) return rrc;
+            std::lock_guard<std::recursive_mutex> lk2(s.mu);
+            openads::engine::Table* src =
+                s.registry.lookup<openads::engine::Table>(
+                    srcCur, HandleKind::Table);
+            if (!src) {
+                return fail(openads::AE_INTERNAL_ERROR,
+                            "CTAS inner cursor lookup");
+            }
+            // Build schema from inner cursor (projection-aware).
+            const auto* proj = projection_for(srcCur);
+            std::vector<openads::drivers::DbfField> schema;
+            if (proj) {
+                for (auto idx : *proj) schema.push_back(src->field_descriptor(idx));
+            } else {
+                std::uint16_t nf = src->field_count();
+                for (std::uint16_t k = 0; k < nf; ++k) {
+                    schema.push_back(src->field_descriptor(k));
+                }
+            }
+            // Build NAME,Type,Len,Dec;… from schema.
+            auto type_name = [](char raw) -> const char* {
+                switch (raw) {
+                    case 'C': return "Character";
+                    case 'N': return "Numeric";
+                    case 'D': return "Date";
+                    case 'L': return "Logical";
+                    case 'M': return "Memo";
+                    case 'F': return "Float";
+                    case 'I': return "Integer";
+                    case 'Y': return "Currency";
+                    case 'B': return "Double";
+                    case 'V': return "Varchar";
+                    case 'Q': return "Varbinary";
+                }
+                return "Character";
+            };
+            std::string defs;
+            for (auto& fd : schema) {
+                if (!defs.empty()) defs.push_back(';');
+                defs += fd.name;
+                defs.push_back(',');
+                defs += type_name(static_cast<char>(fd.raw_type));
+                if (fd.length > 0) {
+                    defs.push_back(',');
+                    defs += std::to_string(fd.length);
+                }
+                if (fd.decimals > 0) {
+                    defs.push_back(',');
+                    defs += std::to_string(fd.decimals);
+                }
+            }
+            std::vector<UNSIGNED8> name_buf(ct.value().table.size() + 1, 0);
+            std::memcpy(name_buf.data(), ct.value().table.data(),
+                        ct.value().table.size());
+            std::vector<UNSIGNED8> def_buf(defs.size() + 1, 0);
+            std::memcpy(def_buf.data(), defs.data(), defs.size());
+            ADSHANDLE conn_h = 0;
+            s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+                if (k != HandleKind::Connection) return;
+                if (static_cast<Connection*>(p) == c) conn_h = h;
+            });
+            if (conn_h == 0) {
+                AdsCloseTable(srcCur);
+                return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+            }
+            ADSHANDLE hTable = 0;
+            UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
+                                           ADS_CDX, 0, 0, 0, 0,
+                                           def_buf.data(), &hTable);
+            if (rc != openads::AE_SUCCESS) {
+                AdsCloseTable(srcCur);
+                return rc;
+            }
+            openads::engine::Table* tgt =
+                s.registry.lookup<openads::engine::Table>(
+                    hTable, HandleKind::Table);
+            if (!tgt) {
+                AdsCloseTable(srcCur);
+                AdsCloseTable(hTable);
+                return fail(openads::AE_INTERNAL_ERROR, "CTAS post-create");
+            }
+            // Walk source rows.
+            std::vector<std::uint32_t> recnos;
+            if (src->has_recno_sequence()) {
+                recnos = src->recno_sequence();
+            } else {
+                std::uint32_t rcount = src->record_count();
+                for (std::uint32_t r = 1; r <= rcount; ++r) {
+                    if (auto g = src->goto_record(r); !g) continue;
+                    if (src->is_deleted()) continue;
+                    if (!src->passes_filter()) continue;
+                    recnos.push_back(r);
+                }
+            }
+            // Pre-resolve src column → tgt column by name match.
+            std::vector<std::uint16_t> src_cols(schema.size());
+            std::vector<std::uint16_t> tgt_cols(schema.size());
+            for (std::size_t i = 0; i < schema.size(); ++i) {
+                src_cols[i] = proj ? (*proj)[i] : static_cast<std::uint16_t>(i);
+                std::int32_t fi = tgt->field_index(schema[i].name);
+                if (fi < 0) {
+                    AdsCloseTable(srcCur);
+                    AdsCloseTable(hTable);
+                    return fail(openads::AE_INTERNAL_ERROR,
+                                "CTAS target field missing");
+                }
+                tgt_cols[i] = static_cast<std::uint16_t>(fi);
+            }
+            for (std::uint32_t r : recnos) {
+                if (auto g = src->goto_record(r); !g) continue;
+                if (auto ar = tgt->append_record(); !ar) {
+                    AdsCloseTable(srcCur);
+                    AdsCloseTable(hTable);
+                    return fail(ar.error());
+                }
+                for (std::size_t i = 0; i < schema.size(); ++i) {
+                    auto v = src->read_field(src_cols[i]);
+                    std::string sv = v ? v.value().as_string : std::string();
+                    auto wr = tgt->set_field(tgt_cols[i], sv);
+                    if (!wr) {
+                        AdsCloseTable(srcCur);
+                        AdsCloseTable(hTable);
+                        return fail(wr.error());
+                    }
+                }
+            }
+            (void)tgt->flush();
+            AdsCloseTable(srcCur);
+            AdsCloseTable(hTable);
+            *phCursor = 0;
+            return ok();
+        }
+
         // Build the rddads `NAME,Type,Len,Dec;…` field-def string and
         // route through AdsCreateTable so M9.5's parser owns the
         // schema-write logic.
@@ -4081,6 +4227,103 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (!th) return fail(th.error());
         openads::engine::Table* tbl = c->lookup_table(th.value());
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+
+        // M10.41 — INSERT INTO t (cols) SELECT ...: recursively
+        // execute the inner SELECT, walk its cursor, append one
+        // target row per source row mapping the inner cursor's
+        // projected columns to `ins.columns` positionally.
+        if (!ins.value().select_sql.empty()) {
+            std::vector<UNSIGNED8> selbuf(ins.value().select_sql.size() + 1);
+            std::memcpy(selbuf.data(),
+                        ins.value().select_sql.c_str(),
+                        ins.value().select_sql.size() + 1);
+            ADSHANDLE srcCur = 0;
+            UNSIGNED32 rrc =
+                AdsExecuteSQLDirect(hStatement, selbuf.data(), &srcCur);
+            if (rrc != 0) {
+                c->close_table(th.value());
+                return rrc;
+            }
+            auto& s2 = state();
+            std::lock_guard<std::recursive_mutex> lk2(s2.mu);
+            openads::engine::Table* src =
+                s2.registry.lookup<openads::engine::Table>(
+                    srcCur, HandleKind::Table);
+            if (!src) {
+                c->close_table(th.value());
+                return fail(openads::AE_INTERNAL_ERROR,
+                            "INSERT...SELECT inner cursor lookup");
+            }
+            // Resolve inner cursor's projected column indices.
+            const auto* proj = projection_for(srcCur);
+            std::vector<std::uint16_t> src_cols;
+            if (proj) {
+                src_cols = *proj;
+            } else {
+                std::uint16_t nf = src->field_count();
+                src_cols.reserve(nf);
+                for (std::uint16_t k = 0; k < nf; ++k) src_cols.push_back(k);
+            }
+            if (src_cols.size() != ins.value().columns.size()) {
+                AdsCloseTable(srcCur);
+                c->close_table(th.value());
+                return fail(openads::AE_PARSE_ERROR,
+                    "INSERT INTO ... SELECT: column count mismatch");
+            }
+            // Pre-resolve target column indices.
+            std::vector<std::uint16_t> tgt_cols;
+            tgt_cols.reserve(ins.value().columns.size());
+            for (const auto& cn : ins.value().columns) {
+                std::int32_t fi = tbl->field_index(cn);
+                if (fi < 0) {
+                    AdsCloseTable(srcCur);
+                    c->close_table(th.value());
+                    return fail(openads::AE_COLUMN_NOT_FOUND, cn.c_str());
+                }
+                tgt_cols.push_back(static_cast<std::uint16_t>(fi));
+            }
+            // Walk source rows.
+            std::vector<std::uint32_t> recnos;
+            if (src->has_recno_sequence()) {
+                recnos = src->recno_sequence();
+            } else {
+                std::uint32_t rcount = src->record_count();
+                for (std::uint32_t r = 1; r <= rcount; ++r) {
+                    if (auto g = src->goto_record(r); !g) continue;
+                    if (src->is_deleted()) continue;
+                    if (!src->passes_filter()) continue;
+                    recnos.push_back(r);
+                }
+            }
+            for (std::uint32_t r : recnos) {
+                if (auto g = src->goto_record(r); !g) continue;
+                if (auto ar = tbl->append_record(); !ar) {
+                    AdsCloseTable(srcCur);
+                    c->close_table(th.value());
+                    return fail(ar.error());
+                }
+                for (std::size_t i = 0; i < src_cols.size(); ++i) {
+                    auto v = src->read_field(src_cols[i]);
+                    std::string sv = v ? v.value().as_string : std::string();
+                    auto wr = tbl->set_field(tgt_cols[i], sv);
+                    if (!wr) {
+                        AdsCloseTable(srcCur);
+                        c->close_table(th.value());
+                        return fail(wr.error());
+                    }
+                }
+            }
+            if (auto fl = tbl->flush(); !fl) {
+                AdsCloseTable(srcCur);
+                c->close_table(th.value());
+                return fail(fl.error());
+            }
+            AdsCloseTable(srcCur);
+            c->close_table(th.value());
+            *phCursor = 0;
+            return ok();
+        }
+
         if (auto r = tbl->append_record(); !r) return fail(r.error());
         for (std::size_t i = 0; i < ins.value().columns.size(); ++i) {
             std::int32_t fidx =
