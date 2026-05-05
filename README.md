@@ -365,6 +365,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.40-done` | SQL arithmetic in projection — `<col> {+,-,*,/} <num_or_col>` evaluated as doubles, formatted with `%g` into a C(30) cell. |
 | `m10.41-done` | SQL `INSERT INTO t (cols) SELECT ...` — inner SELECT may use any engine clause; rows copy positionally into the target via the existing append path. |
 | `m10.42-done` | SQL `CREATE TABLE t AS SELECT ...` — derives the new table's schema from the inner cursor's projection, creates the DBF, bulk-copies rows. |
+| `m10.43-done` | SQL multi-arg scalar fns — `SUBSTR(col, start, [len])`, `CONCAT(a, b, ...)`, `REPLACE(col, old, new)`. Each arg may be column / string / numeric literal. |
+| `m10.45-done` | SQL date arithmetic on YYYYMMDD strings — `DATEDIFF(a, b)` (days), `DATEADD(col, n)` (returns YYYYMMDD). |
+| `m10.46-done` | SQL derived tables — `FROM (SELECT ...) [AS alias]`. Inner SELECT runs through the recursive dispatcher; outer WHERE / ORDER BY / projection apply on top of its cursor. |
+| `m10.48-done` | SQL Common Table Expression — `WITH name AS (SELECT ...) SELECT ... FROM name`. Rewritten in parse_select to a derived-table form by inline-substituting `name` with `(<inner>)`. |
 
 #### Still planned for 0.3.x
 
