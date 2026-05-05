@@ -379,6 +379,9 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.50-done` | SQL `RANK()` / `DENSE_RANK()` — join ROW_NUMBER in the window family; RANK skips on ties, DENSE_RANK doesn't. Tie detection via the ORDER BY key. |
 | `m10.51-done` | SQL qualified column refs — `<alias>.<col>` in WHERE / projection / JOIN ON; read_identifier consumes the suffix and resolves the bare column name. |
 | `m10.52-done` | SQL multi-row `INSERT INTO t (cols) VALUES (...), (...), ...` — appends one record per tuple. |
+| `m10.53-done` | SQL `NULLIF(a,b)` / `COALESCE(a,b,...)` / `IFNULL(expr,default)` — null-handling helpers in projection (empty string = NULL by convention). |
+| `m10.54-done` | SQL aggregate `<agg>(...) FILTER (WHERE <expr>)` — per-slot row filter; CountStar with FILTER uses the filtered count, others always do. |
+| `m12.2-done`  | Phase 2 TCP socket layer — `network/socket.{h,_win32.cpp,_posix.cpp}`. listen / accept / connect / send / recv / close + ephemeral-port binding. Win32 links ws2_32. |
 
 #### Still planned for 0.3.x
 
