@@ -336,6 +336,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.20-done` | SQL JOIN combined with WHERE / ORDER BY in a single statement. Outer clauses compile against the merged cursor's schema (left names verbatim, right names `R_<orig>`). |
 | `m10.21-done` | SQL `RIGHT [OUTER] JOIN` — every right row survives, blank left when no match. Hash built on LEFT column; merged cursor schema stays direction-agnostic. |
 | `m10.22-done` | SQL `FULL [OUTER] JOIN` — union of LEFT + RIGHT semantics; left walk emits matched + LEFT-style fillers and tracks which right recnos were matched, then a follow-up scan emits unmatched right rows with a blank left filler. |
+| `m10.23-done` | SQL JOIN + aggregate combo — `COUNT/SUM/AVG/MIN/MAX` over the merged JOIN cursor; aggregate walk runs after the M10.20 outer WHERE, materialises a 1-row temp DBF with C(30) per aggregate. |
+| `m10.24-done` | SQL correlated EXISTS subquery — `EXISTS (SELECT … FROM b WHERE b.x = a.y)` re-evaluates per outer row; outer-column refs in the subquery WHERE bind to the live outer cursor. |
+| `m10.25-done` | SQL `GROUP BY <col>[, <col>…] [HAVING <agg> op num]` — multi-row aggregate cursor (one row per group), preserves source column type byte + length, HAVING filters on a projection-aligned aggregate slot. |
+| `m10.26-done` | SQL `UNION` / `UNION ALL` — N-way merge of `SELECT * FROM t [WHERE ...]` members; first member's schema drives the merged cursor; UNION dedups by raw record bytes, UNION ALL keeps duplicates. |
 
 #### Still planned for 0.3.x
 
@@ -349,16 +353,19 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **More SQL** — JOIN + aggregate combo in a single statement,
-  correlated subqueries. The shipped 0.3.x SQL surface covers
-  boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6),
-  `UPDATE` / `DELETE` (M10.7), projection lists (M10.8), DDL
-  `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates (M10.10),
-  INNER JOIN (M10.13 / M10.14), IN literal / subquery (M10.15),
-  LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar subquery
-  (M10.18), aggregate scalar subquery (M10.19), JOIN+WHERE /
-  ORDER BY combos (M10.20), RIGHT OUTER JOIN (M10.21), and
-  FULL OUTER JOIN (M10.22).
+- **More SQL** — UNION + JOIN / aggregates in the same statement,
+  correlated scalar/IN subqueries, ORDER BY across UNION
+  members, multi-comparison HAVING. The shipped 0.3.x SQL surface
+  covers boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY`
+  (M10.6), `UPDATE` / `DELETE` (M10.7), projection lists (M10.8),
+  DDL `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates
+  (M10.10), INNER JOIN (M10.13 / M10.14), IN literal / subquery
+  (M10.15), LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar
+  subquery (M10.18), aggregate scalar subquery (M10.19),
+  JOIN+WHERE / ORDER BY combos (M10.20), RIGHT OUTER JOIN
+  (M10.21), FULL OUTER JOIN (M10.22), JOIN + aggregate combo
+  (M10.23), correlated EXISTS (M10.24), GROUP BY + HAVING
+  (M10.25), and UNION / UNION ALL (M10.26).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
