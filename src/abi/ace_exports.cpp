@@ -3919,12 +3919,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     if (parsed.value().inner_join) {
         // M10.14 materialises the join into a temp DBF cursor; M10.20
         // additionally compiles the outer WHERE / ORDER BY against
-        // that cursor's merged schema. Aggregate combos still defer.
-        if (!parsed.value().aggregates.empty()) {
-            return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                        "JOIN + aggregate in same query deferred");
-        }
-
+        // that cursor's merged schema; M10.23 runs aggregates over
+        // that merged cursor when the projection is `agg(...)` instead
+        // of a column list.
         const auto& j = *parsed.value().inner_join;
         auto& s = state();
         std::lock_guard<std::mutex> lk(s.mu);
@@ -4291,6 +4288,141 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             ctbl->clear_filter();
             ctbl->set_recno_sequence(std::move(seq));
+        }
+
+        // M10.23 — JOIN + aggregate. Walk the merged cursor (already
+        // filtered by the outer WHERE) and replace it with a 1-row
+        // aggregate temp DBF before registering the user-visible
+        // handle.
+        if (!parsed.value().aggregates.empty()) {
+            struct AggSlot {
+                openads::sql::Aggregate def;
+                std::int32_t            field_index = -1;
+            };
+            std::vector<AggSlot> slots;
+            slots.reserve(parsed.value().aggregates.size());
+            for (auto& a : parsed.value().aggregates) {
+                AggSlot slot;
+                slot.def = a;
+                if (a.kind != openads::sql::AggregateKind::CountStar) {
+                    slot.field_index = ctbl->field_index(a.column);
+                    if (slot.field_index < 0) {
+                        c->close_table(cth.value());
+                        return fail(openads::AE_COLUMN_NOT_FOUND, a.column.c_str());
+                    }
+                }
+                slots.push_back(std::move(slot));
+            }
+
+            std::vector<double> sum(slots.size(), 0.0);
+            std::vector<double> minv(slots.size(),
+                std::numeric_limits<double>::infinity());
+            std::vector<double> maxv(slots.size(),
+                -std::numeric_limits<double>::infinity());
+            std::vector<std::uint64_t> count(slots.size(), 0);
+            std::uint64_t row_count = 0;
+            std::uint32_t crc2 = ctbl->record_count();
+            for (std::uint32_t r = 1; r <= crc2; ++r) {
+                if (auto g = ctbl->goto_record(r); !g) continue;
+                if (ctbl->is_deleted()) continue;
+                if (!ctbl->passes_filter()) continue;
+                ++row_count;
+                for (std::size_t i = 0; i < slots.size(); ++i) {
+                    if (slots[i].def.kind == openads::sql::AggregateKind::CountStar) {
+                        ++count[i]; continue;
+                    }
+                    auto v = ctbl->read_field(
+                        static_cast<std::uint16_t>(slots[i].field_index));
+                    if (!v) continue;
+                    double d = v.value().as_double;
+                    ++count[i];
+                    sum[i] += d;
+                    if (d < minv[i]) minv[i] = d;
+                    if (d > maxv[i]) maxv[i] = d;
+                }
+            }
+            c->close_table(cth.value());
+
+            namespace fs = std::filesystem;
+            char namebuf2[64];
+            std::snprintf(namebuf2, sizeof(namebuf2), "_jagg_%llx.dbf",
+                          static_cast<unsigned long long>(
+                              openads::platform::monotonic_nanos()));
+            fs::path agg_dbf = fs::path(c->data_dir()) / namebuf2;
+            std::vector<std::uint8_t> agg_file;
+            std::array<std::uint8_t, 32> agg_hdr{};
+            agg_hdr[0] = 0x03;
+            agg_hdr[4] = 1;
+            std::uint16_t agg_hlen = static_cast<std::uint16_t>(
+                32 + 32 * slots.size() + 1);
+            std::uint16_t agg_rlen = static_cast<std::uint16_t>(
+                1 + 30 * slots.size());
+            agg_hdr[8]  = static_cast<std::uint8_t>( agg_hlen       & 0xFFu);
+            agg_hdr[9]  = static_cast<std::uint8_t>((agg_hlen >> 8) & 0xFFu);
+            agg_hdr[10] = static_cast<std::uint8_t>( agg_rlen       & 0xFFu);
+            agg_hdr[11] = static_cast<std::uint8_t>((agg_rlen >> 8) & 0xFFu);
+            agg_file.insert(agg_file.end(), agg_hdr.begin(), agg_hdr.end());
+            for (std::size_t i = 0; i < slots.size(); ++i) {
+                std::array<std::uint8_t, 32> fd{};
+                char fn[16];
+                std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
+                std::strncpy(reinterpret_cast<char*>(fd.data()), fn, 11);
+                fd[11] = 'C'; fd[16] = 30;
+                agg_file.insert(agg_file.end(), fd.begin(), fd.end());
+            }
+            agg_file.push_back(0x0D);
+            agg_file.push_back(' ');
+            for (std::size_t i = 0; i < slots.size(); ++i) {
+                char buf[32] = {0};
+                switch (slots[i].def.kind) {
+                    case openads::sql::AggregateKind::CountStar:
+                    case openads::sql::AggregateKind::Count:
+                        std::snprintf(buf, sizeof(buf), "%llu",
+                            static_cast<unsigned long long>(
+                                slots[i].def.kind ==
+                                openads::sql::AggregateKind::CountStar
+                                    ? row_count : count[i]));
+                        break;
+                    case openads::sql::AggregateKind::Sum:
+                        std::snprintf(buf, sizeof(buf), "%.6f", sum[i]);
+                        break;
+                    case openads::sql::AggregateKind::Avg:
+                        std::snprintf(buf, sizeof(buf), "%.6f",
+                            count[i] ? sum[i] / static_cast<double>(count[i])
+                                     : 0.0);
+                        break;
+                    case openads::sql::AggregateKind::Min:
+                        if (count[i] == 0) std::strcpy(buf, "0");
+                        else std::snprintf(buf, sizeof(buf), "%.6f", minv[i]);
+                        break;
+                    case openads::sql::AggregateKind::Max:
+                        if (count[i] == 0) std::strcpy(buf, "0");
+                        else std::snprintf(buf, sizeof(buf), "%.6f", maxv[i]);
+                        break;
+                }
+                std::array<std::uint8_t, 30> cell{};
+                std::memset(cell.data(), ' ', cell.size());
+                std::size_t n = std::min<std::size_t>(std::strlen(buf), 30);
+                std::memcpy(cell.data(), buf, n);
+                agg_file.insert(agg_file.end(), cell.begin(), cell.end());
+            }
+            agg_file.push_back(0x1A);
+            {
+                std::ofstream out(agg_dbf, std::ios::binary);
+                if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                      "join+agg temp DBF: open for write failed");
+                out.write(reinterpret_cast<const char*>(agg_file.data()),
+                          static_cast<std::streamsize>(agg_file.size()));
+            }
+            std::string rel2 = agg_dbf.filename().string();
+            auto ath = c->open_table(rel2, openads::engine::TableType::Cdx,
+                                     openads::engine::OpenMode::Read);
+            if (!ath) return fail(ath.error());
+            openads::engine::Table* atbl = c->lookup_table(ath.value());
+            if (!atbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+            ADSHANDLE gh = s.registry.register_object(HandleKind::Table, atbl);
+            *phCursor = gh;
+            return ok();
         }
 
         ADSHANDLE gh = s.registry.register_object(HandleKind::Table, ctbl);
