@@ -783,21 +783,26 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         stmt.having.reset(root.value().release());
     }
 
-    // Optional ORDER BY — single column ascending or descending (M10.6).
+    // M10.6 / M10.37 — ORDER BY <col> [ASC|DESC] [, <col> ...].
     if (c.match_keyword("ORDER")) {
         if (!c.match_keyword("BY")) {
             return util::Error{7200, 0,
                 "expected BY after ORDER", sql};
         }
-        OrderBy ob;
-        ob.column = c.read_identifier();
-        if (ob.column.empty()) {
-            return util::Error{7200, 0,
-                "expected column name in ORDER BY", sql};
+        bool first = true;
+        for (;;) {
+            OrderBy ob;
+            ob.column = c.read_identifier();
+            if (ob.column.empty()) {
+                return util::Error{7200, 0,
+                    "expected column name in ORDER BY", sql};
+            }
+            if      (c.match_keyword("DESC")) ob.descending = true;
+            else if (c.match_keyword("ASC"))  ob.descending = false;
+            if (first) { stmt.order_by = std::move(ob); first = false; }
+            else        stmt.order_by_extra.push_back(std::move(ob));
+            if (!c.match_char(',')) break;
         }
-        if      (c.match_keyword("DESC")) ob.descending = true;
-        else if (c.match_keyword("ASC"))  ob.descending = false;
-        stmt.order_by = std::move(ob);
     }
 
     // M10.32 — `LIMIT N [OFFSET M]`. Sits at the tail of the SELECT.

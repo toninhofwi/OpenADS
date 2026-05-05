@@ -4704,48 +4704,82 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             ctbl->set_filter(std::move(compiled).value());
         }
         if (parsed.value().order_by) {
-            const auto& ob = *parsed.value().order_by;
-            std::int32_t fi = ctbl->field_index(ob.column);
-            if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
-                                    ob.column.c_str());
-            std::uint16_t key = static_cast<std::uint16_t>(fi);
-            const auto& fdesc = ctbl->field_descriptor(key);
-            bool numeric_sort =
-                fdesc.type == openads::drivers::DbfFieldType::Numeric ||
-                fdesc.type == openads::drivers::DbfFieldType::Float   ||
-                fdesc.type == openads::drivers::DbfFieldType::Integer ||
-                fdesc.type == openads::drivers::DbfFieldType::Currency||
-                fdesc.type == openads::drivers::DbfFieldType::Double;
-            std::vector<std::pair<std::uint32_t, std::string>> ent_str;
-            std::vector<std::pair<std::uint32_t, double>>      ent_num;
+            // M10.37 — multi-column ORDER BY against the joined cursor.
+            struct SortKey {
+                std::uint16_t field_index;
+                bool          descending;
+                bool          numeric;
+            };
+            std::vector<SortKey> sks;
+            auto add_sk = [&](const openads::sql::OrderBy& ob)
+                -> openads::util::Result<std::monostate>
+            {
+                std::int32_t fi = ctbl->field_index(ob.column);
+                if (fi < 0) return openads::util::Error{
+                    openads::AE_COLUMN_NOT_FOUND, 0,
+                    ob.column.c_str(), ""};
+                const auto& fd = ctbl->field_descriptor(
+                    static_cast<std::uint16_t>(fi));
+                SortKey k;
+                k.field_index = static_cast<std::uint16_t>(fi);
+                k.descending  = ob.descending;
+                k.numeric =
+                    fd.type == openads::drivers::DbfFieldType::Numeric ||
+                    fd.type == openads::drivers::DbfFieldType::Float   ||
+                    fd.type == openads::drivers::DbfFieldType::Integer ||
+                    fd.type == openads::drivers::DbfFieldType::Currency||
+                    fd.type == openads::drivers::DbfFieldType::Double;
+                sks.push_back(k);
+                return std::monostate{};
+            };
+            if (auto r = add_sk(*parsed.value().order_by); !r)
+                return fail(r.error());
+            for (auto& obx : parsed.value().order_by_extra) {
+                if (auto r = add_sk(obx); !r) return fail(r.error());
+            }
+            struct Row {
+                std::uint32_t            recno;
+                std::vector<std::string> s;
+                std::vector<double>      d;
+            };
+            std::vector<Row> rows;
             std::uint32_t crc = ctbl->record_count();
             for (std::uint32_t r = 1; r <= crc; ++r) {
                 if (auto g = ctbl->goto_record(r); !g) continue;
                 if (ctbl->is_deleted()) continue;
                 if (!ctbl->passes_filter()) continue;
-                auto v = ctbl->read_field(key);
-                if (!v) continue;
-                if (numeric_sort) ent_num.push_back({r, v.value().as_double});
-                else              ent_str.push_back({r, v.value().as_string});
+                Row row;
+                row.recno = r;
+                row.s.resize(sks.size());
+                row.d.resize(sks.size());
+                for (std::size_t i = 0; i < sks.size(); ++i) {
+                    auto v = ctbl->read_field(sks[i].field_index);
+                    if (v) {
+                        row.s[i] = v.value().as_string;
+                        row.d[i] = v.value().as_double;
+                    }
+                }
+                rows.push_back(std::move(row));
             }
+            std::stable_sort(rows.begin(), rows.end(),
+                [&](const Row& a, const Row& b) {
+                    for (std::size_t i = 0; i < sks.size(); ++i) {
+                        bool less, equal;
+                        if (sks[i].numeric) {
+                            less  = a.d[i] <  b.d[i];
+                            equal = a.d[i] == b.d[i];
+                        } else {
+                            less  = a.s[i] <  b.s[i];
+                            equal = a.s[i] == b.s[i];
+                        }
+                        if (equal) continue;
+                        return sks[i].descending ? !less : less;
+                    }
+                    return false;
+                });
             std::vector<std::uint32_t> seq;
-            if (numeric_sort) {
-                std::stable_sort(ent_num.begin(), ent_num.end(),
-                    [&](auto& a, auto& b) {
-                        return ob.descending ? a.second > b.second
-                                             : a.second < b.second;
-                    });
-                seq.reserve(ent_num.size());
-                for (auto& p : ent_num) seq.push_back(p.first);
-            } else {
-                std::stable_sort(ent_str.begin(), ent_str.end(),
-                    [&](auto& a, auto& b) {
-                        return ob.descending ? a.second > b.second
-                                             : a.second < b.second;
-                    });
-                seq.reserve(ent_str.size());
-                for (auto& p : ent_str) seq.push_back(p.first);
-            }
+            seq.reserve(rows.size());
+            for (auto& row : rows) seq.push_back(row.recno);
             ctbl->clear_filter();
             ctbl->set_recno_sequence(std::move(seq));
         }
@@ -6062,12 +6096,42 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     // them by the column's value, and install the sequence as the
     // cursor's traversal order.
     if (parsed.value().order_by) {
-        const auto& ob = *parsed.value().order_by;
-        std::int32_t fidx = tbl->field_index(ob.column);
-        if (fidx < 0) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, ob.column.c_str());
+        // M10.6 / M10.37 — ORDER BY one column, with cascading
+        // additional columns for ties (M10.37).
+        struct SortKey {
+            std::uint16_t field_index;
+            bool          descending;
+            bool          numeric;
+        };
+        std::vector<SortKey> sks;
+        auto add_sort_key = [&](const openads::sql::OrderBy& ob)
+            -> openads::util::Result<std::monostate>
+        {
+            std::int32_t fidx = tbl->field_index(ob.column);
+            if (fidx < 0) {
+                return openads::util::Error{
+                    openads::AE_COLUMN_NOT_FOUND, 0,
+                    ob.column.c_str(), ""};
+            }
+            const auto& fd = tbl->field_descriptor(
+                static_cast<std::uint16_t>(fidx));
+            SortKey k;
+            k.field_index = static_cast<std::uint16_t>(fidx);
+            k.descending  = ob.descending;
+            k.numeric =
+                fd.type == openads::drivers::DbfFieldType::Numeric ||
+                fd.type == openads::drivers::DbfFieldType::Float   ||
+                fd.type == openads::drivers::DbfFieldType::Integer ||
+                fd.type == openads::drivers::DbfFieldType::Currency||
+                fd.type == openads::drivers::DbfFieldType::Double;
+            sks.push_back(k);
+            return std::monostate{};
+        };
+        if (auto r = add_sort_key(*parsed.value().order_by); !r)
+            return fail(r.error());
+        for (auto& ob : parsed.value().order_by_extra) {
+            if (auto r = add_sort_key(ob); !r) return fail(r.error());
         }
-        std::uint16_t key = static_cast<std::uint16_t>(fidx);
 
         std::vector<std::uint32_t> matched;
         std::uint32_t rcount = tbl->record_count();
@@ -6078,50 +6142,47 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             matched.push_back(r);
         }
 
-        // Sort by the field's typed value. The column type drives
-        // numeric vs string compare so VFP I / Y / B sort properly.
-        const auto& fdesc = tbl->field_descriptor(key);
-        bool numeric_sort =
-            fdesc.type == openads::drivers::DbfFieldType::Numeric ||
-            fdesc.type == openads::drivers::DbfFieldType::Float   ||
-            fdesc.type == openads::drivers::DbfFieldType::Integer ||
-            fdesc.type == openads::drivers::DbfFieldType::Currency||
-            fdesc.type == openads::drivers::DbfFieldType::Double;
-
-        struct KV {
-            std::uint32_t recno;
-            std::string   s;
-            double        d;
+        struct Row {
+            std::uint32_t              recno;
+            std::vector<std::string>   s;
+            std::vector<double>        d;
         };
-        std::vector<KV> rows;
+        std::vector<Row> rows;
         rows.reserve(matched.size());
         for (auto r : matched) {
             (void)tbl->goto_record(r);
-            auto v = tbl->read_field(key);
-            KV kv;
-            kv.recno = r;
-            if (v) {
-                kv.s = v.value().as_string;
-                kv.d = v.value().as_double;
+            Row row;
+            row.recno = r;
+            row.s.resize(sks.size());
+            row.d.resize(sks.size());
+            for (std::size_t i = 0; i < sks.size(); ++i) {
+                auto v = tbl->read_field(sks[i].field_index);
+                if (v) {
+                    row.s[i] = v.value().as_string;
+                    row.d[i] = v.value().as_double;
+                }
             }
-            rows.push_back(std::move(kv));
+            rows.push_back(std::move(row));
         }
         std::stable_sort(rows.begin(), rows.end(),
-            [&](const KV& a, const KV& b) {
-                bool less = numeric_sort
-                    ? (a.d < b.d)
-                    : (a.s <  b.s);
-                bool equal = numeric_sort
-                    ? (a.d == b.d)
-                    : (a.s == b.s);
-                if (equal) return false;
-                return ob.descending ? !less : less;
+            [&](const Row& a, const Row& b) {
+                for (std::size_t i = 0; i < sks.size(); ++i) {
+                    bool less, equal;
+                    if (sks[i].numeric) {
+                        less  = a.d[i] <  b.d[i];
+                        equal = a.d[i] == b.d[i];
+                    } else {
+                        less  = a.s[i] <  b.s[i];
+                        equal = a.s[i] == b.s[i];
+                    }
+                    if (equal) continue;
+                    return sks[i].descending ? !less : less;
+                }
+                return false;
             });
         std::vector<std::uint32_t> seq;
         seq.reserve(rows.size());
-        for (auto& kv : rows) seq.push_back(kv.recno);
-        // ORDER BY supersedes the row filter — the materialised list
-        // already excludes WHERE-rejected rows.
+        for (auto& row : rows) seq.push_back(row.recno);
         tbl->clear_filter();
         tbl->set_recno_sequence(std::move(seq));
     }

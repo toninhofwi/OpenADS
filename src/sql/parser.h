@@ -120,8 +120,11 @@ struct SelectStmt {
     std::optional<JoinClause>  inner_join;
     // Optional WHERE — tree form. nullptr means "no filter".
     std::unique_ptr<WhereExpr> where;
-    // Optional ORDER BY — single column ascending or descending (M10.6).
+    // ORDER BY — first column (M10.6 single, M10.37 multi-column).
+    // Additional columns land in `order_by_extra`; `order_by` set
+    // means at least one ORDER BY column is in effect.
     std::optional<OrderBy>     order_by;
+    std::vector<OrderBy>       order_by_extra;
     // M10.25 — GROUP BY columns + optional HAVING (M10.30 tree).
     std::vector<std::string>      group_by;
     std::unique_ptr<HavingExpr>   having;
