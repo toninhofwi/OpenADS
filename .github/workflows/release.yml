@@ -1,0 +1,142 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag to package (e.g. v1.0.0-rc1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            arch: x64
+            preset: msvc-x64
+            artifact_ext: zip
+          - os: ubuntu-24.04
+            arch: x64
+            preset: ninja-clang
+            artifact_ext: tar.gz
+          - os: macos-14
+            arch: arm64
+            preset: default
+            artifact_ext: tar.gz
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          T="${{ inputs.tag }}"
+          if [ -z "$T" ]; then T="${GITHUB_REF#refs/tags/}"; fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+          echo "version=${T#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Ninja (Linux / macOS)
+        if: runner.os != 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ${{ matrix.preset }} \
+                -DOPENADS_WITH_TLS=ON \
+                -DOPENADS_WITH_HTTP=ON
+
+      - name: Build
+        run: cmake --build build/${{ matrix.preset }} --config Release
+
+      - name: Test
+        run: ctest --test-dir build/${{ matrix.preset }}
+                   --output-on-failure -C Release
+
+      - name: Stage release files (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          STAGE="openads-${{ steps.tag.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'macos' }}-${{ matrix.arch }}"
+          mkdir -p "$STAGE"
+          BUILD="build/${{ matrix.preset }}"
+          # Engine drop-in
+          cp "$BUILD"/src/libace64.* "$STAGE/" 2>/dev/null || true
+          # Server + bench CLIs
+          cp "$BUILD"/tools/serverd/openads_serverd "$STAGE/"
+          cp "$BUILD"/tools/bench/openads_bench   "$STAGE/"
+          cp LICENSE NOTICE README.md             "$STAGE/"
+          tar czvf "$STAGE.tar.gz" "$STAGE"
+          ls -la "$STAGE.tar.gz"
+          echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Stage release files (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = "openads-${{ steps.tag.outputs.version }}-windows-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          $build = "build/${{ matrix.preset }}"
+          # Engine drop-in
+          Copy-Item "$build/src/Release/ace64.dll"          "$stage/"
+          Copy-Item "$build/src/Release/ace64.lib"          "$stage/" -ErrorAction SilentlyContinue
+          # Server + bench CLIs
+          Copy-Item "$build/tools/serverd/Release/openads_serverd.exe" "$stage/"
+          Copy-Item "$build/tools/bench/Release/openads_bench.exe"     "$stage/"
+          Copy-Item LICENSE,NOTICE,README.md                $stage/
+          Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -Force
+          Get-Item "$stage.zip"
+          "ASSET=$stage.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact (workflow run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openads-${{ runner.os }}-${{ matrix.arch }}
+          path: ${{ env.ASSET }}
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          T="${{ inputs.tag }}"
+          if [ -z "$T" ]; then T="${GITHUB_REF#refs/tags/}"; fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p out
+          find dist -type f \( -name "*.zip" -o -name "*.tar.gz" \) \
+            -exec cp {} out/ \;
+          ls -la out
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: out/*
