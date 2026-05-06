@@ -880,6 +880,11 @@ UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 }
 
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->goto_record(rt->id, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_record(ulRecord);
@@ -1304,6 +1309,11 @@ UNSIGNED32 AdsGetServerTime(ADSHANDLE  /*hConnect*/,
 }
 
 UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->append_blank(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->append_record();
@@ -1312,6 +1322,11 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->flush_table(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->flush();
@@ -1320,6 +1335,11 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->delete_record(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->mark_deleted();
@@ -1328,6 +1348,11 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->recall_record(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->recall_deleted();
@@ -1344,6 +1369,17 @@ UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
 
 UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucValue, UNSIGNED32 ulLen) {
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0) {
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        }
+        auto r = rt->conn->set_field(rt->id, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;

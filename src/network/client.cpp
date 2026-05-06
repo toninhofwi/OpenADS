@@ -181,4 +181,91 @@ util::Result<bool> RemoteConnection::at_eof(std::uint32_t id) {
     return rep.value().payload[0] != 0;
 }
 
+util::Result<void> RemoteConnection::append_blank(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::AppendBlank;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::AppendBlankAck) {
+        return util::Error{5000, 0, "AppendBlank: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::set_field(std::uint32_t id,
+                                                const std::string& field_name,
+                                                const std::string& value) {
+    if (field_name.size() > 0xFFFFu) {
+        return util::Error{5000, 0,
+            "SetField: field name too long", field_name};
+    }
+    Frame req;
+    req.opcode = Opcode::SetField;
+    write_u32_le(id, req.payload);
+    auto nlen = static_cast<std::uint16_t>(field_name.size());
+    req.payload.push_back(static_cast<std::uint8_t>( nlen        & 0xFFu));
+    req.payload.push_back(static_cast<std::uint8_t>((nlen >>  8) & 0xFFu));
+    req.payload.insert(req.payload.end(),
+                       field_name.begin(), field_name.end());
+    req.payload.insert(req.payload.end(), value.begin(), value.end());
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SetFieldAck) {
+        return util::Error{5000, 0, "SetField: server error",
+                           field_name};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::delete_record(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::DeleteRecord;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::DeleteRecordAck) {
+        return util::Error{5000, 0, "DeleteRecord: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::recall_record(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::RecallRecord;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::RecallRecordAck) {
+        return util::Error{5000, 0, "RecallRecord: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::goto_record(std::uint32_t id,
+                                                  std::uint32_t recno) {
+    Frame req;
+    req.opcode = Opcode::GotoRecord;
+    write_u32_le(id, req.payload);
+    write_u32_le(recno, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GotoRecordAck) {
+        return util::Error{5000, 0, "GotoRecord: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::flush_table(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::FlushTable;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::FlushTableAck) {
+        return util::Error{5000, 0, "FlushTable: server error", ""};
+    }
+    return {};
+}
+
 } // namespace openads::network

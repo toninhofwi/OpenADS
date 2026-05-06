@@ -33,6 +33,16 @@ public:
                                            const std::string& field_name);
     util::Result<std::uint32_t> record_count(std::uint32_t id);
     util::Result<bool>          at_eof(std::uint32_t id);
+    // M12.6 — remote write surface.
+    util::Result<void>          append_blank(std::uint32_t id);
+    util::Result<void>          set_field(std::uint32_t id,
+                                          const std::string& field_name,
+                                          const std::string& value);
+    util::Result<void>          delete_record(std::uint32_t id);
+    util::Result<void>          recall_record(std::uint32_t id);
+    util::Result<void>          goto_record(std::uint32_t id,
+                                            std::uint32_t recno);
+    util::Result<void>          flush_table(std::uint32_t id);
 
 private:
     util::Result<Frame> request(const Frame& f);

@@ -288,6 +288,107 @@ void Server::session_loop(Socket s) {
                 reply.payload.push_back(tbl->eof() ? 1 : 0);
                 break;
             }
+            // M12.6 — remote write surface.
+            case Opcode::AppendBlank: {
+                if (f.payload.size() < 4) { reply = err("AppendBlank: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("AppendBlank: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("AppendBlank: lookup failed"); break; }
+                auto r = tbl->append_record();
+                if (!r) { reply = err("AppendBlank: append_record failed"); break; }
+                reply.opcode = Opcode::AppendBlankAck;
+                break;
+            }
+            case Opcode::SetField: {
+                // payload: [u32 tid][u16 name_len][name bytes][value bytes...]
+                if (f.payload.size() < 6) { reply = err("SetField: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint16_t nlen = static_cast<std::uint16_t>(
+                    static_cast<std::uint16_t>(f.payload[4]) |
+                    (static_cast<std::uint16_t>(f.payload[5]) << 8));
+                if (f.payload.size() < 6u + nlen) {
+                    reply = err("SetField: truncated"); break;
+                }
+                std::string fname(reinterpret_cast<const char*>(
+                                      f.payload.data() + 6),
+                                  nlen);
+                std::string val(reinterpret_cast<const char*>(
+                                    f.payload.data() + 6 + nlen),
+                                f.payload.size() - 6 - nlen);
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("SetField: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("SetField: lookup failed"); break; }
+                std::int32_t fi = tbl->field_index(fname);
+                if (fi < 0) { reply = err("SetField: column not found"); break; }
+                auto r = tbl->set_field(static_cast<std::uint16_t>(fi), val);
+                if (!r) { reply = err("SetField: write failed"); break; }
+                reply.opcode = Opcode::SetFieldAck;
+                break;
+            }
+            case Opcode::DeleteRecord: {
+                if (f.payload.size() < 4) { reply = err("DeleteRecord: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("DeleteRecord: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("DeleteRecord: lookup failed"); break; }
+                auto r = tbl->mark_deleted();
+                if (!r) { reply = err("DeleteRecord: mark_deleted failed"); break; }
+                reply.opcode = Opcode::DeleteRecordAck;
+                break;
+            }
+            case Opcode::RecallRecord: {
+                if (f.payload.size() < 4) { reply = err("RecallRecord: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("RecallRecord: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("RecallRecord: lookup failed"); break; }
+                auto r = tbl->recall_deleted();
+                if (!r) { reply = err("RecallRecord: recall_deleted failed"); break; }
+                reply.opcode = Opcode::RecallRecordAck;
+                break;
+            }
+            case Opcode::GotoRecord: {
+                if (f.payload.size() < 8) { reply = err("GotoRecord: bad payload"); break; }
+                std::uint32_t id    = read_u32_le(f.payload.data());
+                std::uint32_t recno = read_u32_le(f.payload.data() + 4);
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GotoRecord: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GotoRecord: lookup failed"); break; }
+                auto r = tbl->goto_record(recno);
+                if (!r) { reply = err("GotoRecord: failed"); break; }
+                reply.opcode = Opcode::GotoRecordAck;
+                break;
+            }
+            case Opcode::FlushTable: {
+                if (f.payload.size() < 4) { reply = err("FlushTable: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("FlushTable: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("FlushTable: lookup failed"); break; }
+                auto r = tbl->flush();
+                if (!r) { reply = err("FlushTable: flush failed"); break; }
+                reply.opcode = Opcode::FlushTableAck;
+                break;
+            }
             default: {
                 reply = err("unsupported opcode");
                 break;

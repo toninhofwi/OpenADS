@@ -46,6 +46,19 @@ enum class Opcode : std::uint8_t {
     GetRecordCountAck  = 0x47,
     AtEOF              = 0x48,
     AtEOFAck           = 0x49,
+    // M12.6 — remote write surface.
+    AppendBlank        = 0x50,
+    AppendBlankAck     = 0x51,
+    SetField           = 0x52,
+    SetFieldAck        = 0x53,
+    DeleteRecord       = 0x54,
+    DeleteRecordAck    = 0x55,
+    RecallRecord       = 0x56,
+    RecallRecordAck    = 0x57,
+    GotoRecord         = 0x58,
+    GotoRecordAck      = 0x59,
+    FlushTable         = 0x5A,
+    FlushTableAck      = 0x5B,
     Error              = 0xFF,
 };
 
