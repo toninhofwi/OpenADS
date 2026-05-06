@@ -77,18 +77,18 @@ fs::path stage_bench_dbf(const fs::path& dir, std::uint32_t rows) {
     for (std::uint32_t r = 1; r <= rows; ++r) {
         file.push_back(' ');
         std::snprintf(buf, sizeof(buf), "%8u", r);
-        for (int i = 0; i < 8; ++i) file.push_back(buf[i]);
-        std::array<char, 4> tag{};
+        for (int i = 0; i < 8; ++i) file.push_back(static_cast<std::uint8_t>(buf[i]));
+        std::array<std::uint8_t, 4> tag{};
         for (int i = 0; i < 4; ++i) {
-            tag[i] = static_cast<char>('A' + ((r + i) % 26));
+            tag[i] = static_cast<std::uint8_t>('A' + ((r + static_cast<std::uint32_t>(i)) % 26));
         }
         for (int i = 0; i < 4; ++i)
-            file.push_back(static_cast<std::uint8_t>(tag[i]));
+            file.push_back(tag[i]);
         seed = seed * 1664525u + 1013904223u;
-        double amt = (seed >> 8) % 100000;
+        double amt = static_cast<double>((seed >> 8) % 100000u);
         amt /= 100.0;
         std::snprintf(buf, sizeof(buf), "%8.2f", amt);
-        for (int i = 0; i < 8; ++i) file.push_back(buf[i]);
+        for (int i = 0; i < 8; ++i) file.push_back(static_cast<std::uint8_t>(buf[i]));
     }
     file.push_back(0x1A);
     std::ofstream(p, std::ios::binary).write(
