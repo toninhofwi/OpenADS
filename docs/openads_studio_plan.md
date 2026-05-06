@@ -1,39 +1,36 @@
 # OpenADS Studio — design plan
 
-OpenADS-equivalent of the legacy graphical front-end ADS shipped
-under the name "Advantage Data Architect" (also referred to as
-"ARC"). The original was a Windows / Linux / macOS desktop tool for
-designing tables, browsing data, running SQL, and managing schema
-inside an Advantage-style data dictionary.
+OpenADS Studio is a graphical desktop tool for working with
+OpenADS databases. It connects to a data directory through the
+public OpenADS ABI (`ace64.dll` / `libace.so` / `libace.dylib`)
+and lets the user browse tables, design schema, and run SQL
+queries against either a local data folder or a remote
+`tcp://` / `tls://` server.
 
 ## Legal posture (must read first)
 
-OpenADS Studio is a clean-room reimplementation of the *generic
-features common to every database GUI* (table browser, SQL editor,
-schema designer). It is built solely from publicly observable
-behaviour and from feature lists that appear in third-party
-publications, **not** from disassembling the original SAP-owned
-binary, copying its UI artwork, or reading any material covered
-by the Advantage SDK / ACE EULA.
+OpenADS Studio is a clean-room reimplementation of generic
+database-GUI features (table browser, SQL editor, schema
+designer). It is built solely from publicly observable behaviour
+and from the existing OpenADS public ABI; it does **not**
+disassemble or reimplement any third-party binary.
 
 Hard rules:
 
-- The product **must not** be called "Advantage Data Architect" or
-  "ARC". Working name: **OpenADS Studio**. Final brand to be
-  picked by the project maintainer; any name that doesn't conflict
-  with SAP-held marks is fine.
-- No screenshots, icons, glyphs, or layout templates may be copied
-  from the SAP product.
-- No code may be written by reading the original tool's binary or
-  decompiling it. Reverse-engineering UI from screenshots is also
-  out of scope.
+- The product is **OpenADS Studio**. Final brand to be picked by
+  the project maintainer; any name that doesn't conflict with
+  third-party trademarks is fine.
+- No screenshots, icons, glyphs, or layout templates may be
+  copied from any other product.
+- No code may be written by reading another tool's binary or
+  decompiling it.
 - Generic database-tool features (SQL editor with syntax
   highlighting, table grid, "right-click → New Index") are
   industry-standard idioms that every database GUI ships
   (DBeaver, DataGrip, Postico, MySQL Workbench…). Implementing
-  those from first principles is not an SAP-derivative work.
+  those from first principles is fine.
 
-## Scope (v0.1 of OpenADS Studio)
+## Scope (Studio v0.1)
 
 | Feature | Notes |
 |---------|-------|
@@ -47,10 +44,9 @@ Hard rules:
 | Find / Replace inside SQL editor | Standard text-editor feature. |
 | Export results to CSV | Walks the cursor returned by `AdsExecuteSQLDirect`. |
 
-Out of scope for v0.1 (planned later):
+Out of scope for Studio v0.1 (planned later):
 
-- Form designer (the original tool's most product-specific feature;
-  needs careful clean-room scoping).
+- Form designer.
 - Visual query builder (graphical join layout).
 - SQL debugger (step-through stored procedures).
 - Live multi-user lock viewer.
@@ -61,8 +57,7 @@ Out of scope for v0.1 (planned later):
 
 - **Dear ImGui** (MIT) — vendored single header + .cpp into
   `third_party/imgui/`. Backends: SDL2 + OpenGL 3 (cross-platform,
-  no native GUI runtime needed). Used by many DB / profiling tools
-  (Tracy, RemoteryProfiler, etc).
+  no native GUI runtime needed).
 
   **Why**: matches the project's vendor-deps philosophy, single-
   binary deployment, MIT-compatible with Apache 2.0, no Qt LGPL
@@ -111,7 +106,7 @@ Out of scope for v0.1 (planned later):
 
 Studio dynamically links `ace64.dll` (or the local-mode static
 library on POSIX); every database operation is one or more
-`Ads*` calls. The studio is **just another caller of the public
+`Ads*` calls. The Studio is **just another caller of the public
 ABI** — it does not reach into the engine internals, so it
 benefits from the same drop-in-replacement guarantee real
 Harbour apps already enjoy.
@@ -134,7 +129,7 @@ Harbour apps already enjoy.
 
 | Risk | Mitigation |
 |------|-----------|
-| Trademark / trade-dress confusion with SAP product | Distinct name; no copied UI assets; no reverse-engineering. |
+| Trademark / trade-dress confusion with any third-party product | Distinct name; no copied UI assets; no reverse-engineering. |
 | LGPL contamination from Qt | Use Dear ImGui (MIT) instead. |
 | User confusion about which engine is being driven | About-box clearly states "OpenADS engine vX.Y.Z" and the loaded `ace64.dll` build provenance. |
 | Distribution of vendored mbedtls | Apache 2.0 + clearly attributed in `third_party/mbedtls/LICENSE` + `NOTICE`. |
@@ -168,7 +163,7 @@ top of OpenADS without recompiling. A separate Studio gives:
   specific bugs (path separators, code page surprises) faster
   than headless CI.
 
-The Studio is **not** a goal of OpenADS 1.0; it is a separate
+Studio is **not** a goal of OpenADS 1.0; it is a separate
 follow-on product that consumes OpenADS 1.0 through its public
 ABI. The first Studio release would target **OpenADS 1.0.x** as
 the engine version.
