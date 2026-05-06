@@ -101,7 +101,10 @@ TEST_CASE("M12.3 server unknown opcode returns Error frame") {
     auto reply = read_frame(cs);
     REQUIRE(reply.has_value());
     CHECK(reply.value().opcode == Opcode::Error);
-    std::string s(reply.value().payload.begin(),
+    // M12.10 — Error payload now starts with [u32 ace_code]; skip 4
+    // bytes to recover the textual message.
+    REQUIRE(reply.value().payload.size() >= 4);
+    std::string s(reply.value().payload.begin() + 4,
                   reply.value().payload.end());
     CHECK(s == "unsupported opcode");
 
@@ -573,6 +576,37 @@ TEST_CASE("M12.9 server with credentials accepts matching password") {
     REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
                          user, pw, 0, &hConn) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M12.10 server Error frame surfaces the real ACE code") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_10";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    Server srv;
+    srv.add_credential("admin", "letmein");
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+    UNSIGNED8 user[16] = "admin";
+    UNSIGNED8 wrong[16] = "nope";
+    ADSHANDLE hConn = 0;
+    UNSIGNED32 rc = AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                                  user, wrong, 0, &hConn);
+    // Was AE_INTERNAL_ERROR (5000) before M12.10; now AE_LOGIN_FAILED.
+    CHECK(rc == 7077u);
+    CHECK(hConn == 0);
+
     srv.stop();
     fs::remove_all(dir, ec);
 }

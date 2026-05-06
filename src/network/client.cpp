@@ -49,7 +49,27 @@ bool parse_tcp_uri(const std::string& uri,
 util::Result<Frame> RemoteConnection::request(const Frame& f) {
     std::lock_guard<std::mutex> lk(mu_);
     if (auto r = write_frame(sock_, f); !r) return r.error();
-    return read_frame(sock_);
+    auto rep = read_frame(sock_);
+    if (!rep) return rep.error();
+    // M12.10 — Error frame payload prefixed with [u32 LE ace_code].
+    // Parse it back into the util::Error so callers see the real ACE
+    // code (5036, 7077, 5066, ...) instead of a generic 5000.
+    if (rep.value().opcode == Opcode::Error) {
+        std::uint32_t code = 5000;
+        std::string   msg;
+        const auto&   pl = rep.value().payload;
+        if (pl.size() >= 4) {
+            code = read_u32_le(pl.data());
+            msg.assign(reinterpret_cast<const char*>(pl.data() + 4),
+                       pl.size() - 4);
+        } else {
+            msg.assign(reinterpret_cast<const char*>(pl.data()),
+                       pl.size());
+        }
+        return util::Error{static_cast<std::int32_t>(code), 0,
+                           std::move(msg), ""};
+    }
+    return rep;
 }
 
 util::Result<void> RemoteConnection::connect(const std::string& host,

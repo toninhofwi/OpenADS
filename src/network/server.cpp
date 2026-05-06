@@ -186,11 +186,21 @@ void Server::session_loop(Socket s) {
         }
     };
 
-    auto err = [](const char* msg) {
+    // M12.10 — Error frame payload:
+    //   [u32 LE ace_code][message bytes]
+    // Server-side handlers fold either a literal ACE code or a code
+    // pulled from a sub-result's util::Error into every Error frame
+    // they emit so the client can surface the right `Ads*` code.
+    auto err = [](const std::string& msg,
+                  UNSIGNED32 code = openads::AE_INTERNAL_ERROR) {
         Frame f;
         f.opcode = Opcode::Error;
-        std::string e(msg);
-        f.payload.assign(e.begin(), e.end());
+        f.payload.resize(4);
+        f.payload[0] = static_cast<std::uint8_t>( code        & 0xFFu);
+        f.payload[1] = static_cast<std::uint8_t>((code >>  8) & 0xFFu);
+        f.payload[2] = static_cast<std::uint8_t>((code >> 16) & 0xFFu);
+        f.payload[3] = static_cast<std::uint8_t>((code >> 24) & 0xFFu);
+        f.payload.insert(f.payload.end(), msg.begin(), msg.end());
         return f;
     };
 
@@ -236,12 +246,17 @@ void Server::session_loop(Socket s) {
                 if (require_auth()) {
                     auto cit = creds_.find(user);
                     if (cit == creds_.end() || cit->second != pw) {
-                        reply = err("Connect: authentication failed");
+                        reply = err("Connect: authentication failed",
+                                    openads::AE_LOGIN_FAILED);
                         break;
                     }
                 }
                 auto co = openads::session::Connection::open(dir);
-                if (!co) { reply = err("Connect: connection open failed"); break; }
+                if (!co) {
+                    reply = err("Connect: connection open failed",
+                                static_cast<UNSIGNED32>(co.error().code));
+                    break;
+                }
                 sess_conn = std::make_unique<openads::session::Connection>(
                     std::move(co).value());
                 reply.opcode = Opcode::ConnectAck;
@@ -255,14 +270,22 @@ void Server::session_loop(Socket s) {
                 return;
             }
             case Opcode::OpenTable: {
-                if (!sess_conn) { reply = err("OpenTable: not connected"); break; }
+                if (!sess_conn) {
+                    reply = err("OpenTable: not connected",
+                                openads::AE_NO_CONNECTION);
+                    break;
+                }
                 std::string rel(reinterpret_cast<const char*>(
                                     f.payload.data()),
                                 f.payload.size());
                 auto th = sess_conn->open_table(rel,
                     openads::engine::TableType::Cdx,
                     openads::engine::OpenMode::Shared);
-                if (!th) { reply = err("OpenTable: open failed"); break; }
+                if (!th) {
+                    reply = err("OpenTable: open failed",
+                                static_cast<UNSIGNED32>(th.error().code));
+                    break;
+                }
                 std::uint32_t id = next_id++;
                 tbls.emplace(id, th.value());
                 reply.opcode = Opcode::OpenTableAck;
@@ -432,7 +455,7 @@ void Server::session_loop(Socket s) {
                 UNSIGNED32 rrc = AdsExecuteSQLDirect(abi_stmt,
                                                      sqlbuf.data(), &hCur);
                 if (rrc != 0) {
-                    reply = err("ExecuteSQL: server-side exec failed");
+                    reply = err("ExecuteSQL: server-side exec failed", rrc);
                     break;
                 }
                 std::uint32_t id = 0;

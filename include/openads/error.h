@@ -21,7 +21,9 @@ enum : std::uint32_t {
     AE_PARSE_ERROR              = 7200,
     AE_INVALID_SQL_TOKEN        = 7201,
     AE_TYPE_MISMATCH            = 7041,
-    AE_DIVISION_BY_ZERO         = 7042
+    AE_DIVISION_BY_ZERO         = 7042,
+    AE_LOGIN_FAILED             = 7077,
+    AE_REMOTE_ERROR             = 5172
 };
 
 } // namespace openads
