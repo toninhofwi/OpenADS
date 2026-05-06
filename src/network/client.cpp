@@ -356,9 +356,9 @@ RemoteConnection::fetch_batch(std::uint32_t id,
                 return util::Error{5000, 0,
                     "Fetch: truncated payload (vlen)", ""};
             }
-            std::uint16_t vlen =
-                static_cast<std::uint16_t>(pl[p]) |
-                (static_cast<std::uint16_t>(pl[p + 1]) << 8);
+            std::uint16_t vlen = static_cast<std::uint16_t>(
+                static_cast<std::uint32_t>(pl[p]) |
+                (static_cast<std::uint32_t>(pl[p + 1]) << 8));
             p += 2;
             if (p + vlen > pl.size()) {
                 return util::Error{5000, 0,
