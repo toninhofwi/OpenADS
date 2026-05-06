@@ -244,7 +244,7 @@ void CdxDriver::apply_ctr_(std::uint8_t* buf, std::size_t n,
             buf[i + k] ^= ks[k];
         }
         // Increment 12-byte block counter at bytes 4..15 (LE).
-        for (int b = 4; b < 16; ++b) {
+        for (std::size_t b = 4; b < 16; ++b) {
             if (++ctr[b] != 0) break;
         }
     }

@@ -82,22 +82,28 @@ std::string utf8_to_cp437(const char* in, std::size_t n) {
         if (b < 0x80) {
             cp = b;
         } else if ((b & 0xE0) == 0xC0 && i + 1 < n) {
-            cp = (static_cast<std::uint32_t>(b & 0x1F) << 6) |
-                 (static_cast<std::uint8_t>(in[i + 1]) & 0x3F);
+            cp = (static_cast<std::uint32_t>(b & 0x1Fu) << 6) |
+                  static_cast<std::uint32_t>(
+                      static_cast<std::uint8_t>(in[i + 1]) & 0x3Fu);
             consumed = 2;
         } else if ((b & 0xF0) == 0xE0 && i + 2 < n) {
-            cp = (static_cast<std::uint32_t>(b & 0x0F) << 12) |
-                 ((static_cast<std::uint8_t>(in[i + 1]) & 0x3F) << 6) |
-                 ( static_cast<std::uint8_t>(in[i + 2]) & 0x3F);
+            cp = (static_cast<std::uint32_t>(b & 0x0Fu) << 12) |
+                 (static_cast<std::uint32_t>(
+                      static_cast<std::uint8_t>(in[i + 1]) & 0x3Fu) << 6) |
+                  static_cast<std::uint32_t>(
+                      static_cast<std::uint8_t>(in[i + 2]) & 0x3Fu);
             consumed = 3;
         } else if ((b & 0xF8) == 0xF0 && i + 3 < n) {
-            cp = (static_cast<std::uint32_t>(b & 0x07) << 18) |
-                 ((static_cast<std::uint8_t>(in[i + 1]) & 0x3F) << 12) |
-                 ((static_cast<std::uint8_t>(in[i + 2]) & 0x3F) <<  6) |
-                 ( static_cast<std::uint8_t>(in[i + 3]) & 0x3F);
+            cp = (static_cast<std::uint32_t>(b & 0x07u) << 18) |
+                 (static_cast<std::uint32_t>(
+                      static_cast<std::uint8_t>(in[i + 1]) & 0x3Fu) << 12) |
+                 (static_cast<std::uint32_t>(
+                      static_cast<std::uint8_t>(in[i + 2]) & 0x3Fu) <<  6) |
+                  static_cast<std::uint32_t>(
+                      static_cast<std::uint8_t>(in[i + 3]) & 0x3Fu);
             consumed = 4;
         } else {
-            cp = '?';
+            cp = static_cast<std::uint32_t>('?');
         }
         if (cp < 0x80) {
             out.push_back(static_cast<char>(cp));

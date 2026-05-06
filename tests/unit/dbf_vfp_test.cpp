@@ -8,7 +8,7 @@
 
 namespace {
 
-void write_u16_le(std::uint8_t* p, std::uint16_t v) {
+[[maybe_unused]] void write_u16_le(std::uint8_t* p, std::uint16_t v) {
     p[0] = static_cast<std::uint8_t>( v       & 0xFFu);
     p[1] = static_cast<std::uint8_t>((v >> 8) & 0xFFu);
 }

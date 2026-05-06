@@ -476,8 +476,8 @@ util::Result<SeekOutcome> CdxIndex::seek_last() {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
     cur_index_ = static_cast<std::int32_t>(cur_decoded_.size() - 1);
-    current_key_ = cur_decoded_[cur_index_].first;
-    return SeekOutcome{SeekHit::Exact, cur_decoded_[cur_index_].second, true};
+    current_key_ = cur_decoded_[static_cast<std::size_t>(cur_index_)].first;
+    return SeekOutcome{SeekHit::Exact, cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
 }
 
 util::Result<SeekOutcome>
@@ -526,8 +526,8 @@ util::Result<SeekOutcome> CdxIndex::next() {
     if (cur_index_ < 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
     if (static_cast<std::size_t>(cur_index_ + 1) < cur_decoded_.size()) {
         cur_index_ += 1;
-        current_key_ = cur_decoded_[cur_index_].first;
-        return SeekOutcome{SeekHit::Exact, cur_decoded_[cur_index_].second, true};
+        current_key_ = cur_decoded_[static_cast<std::size_t>(cur_index_)].first;
+        return SeekOutcome{SeekHit::Exact, cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
     }
     auto pg = get_page_(cur_leaf_);
     if (!pg) return pg.error();
@@ -553,8 +553,8 @@ util::Result<SeekOutcome> CdxIndex::prev() {
     if (cur_index_ < 0) return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     if (cur_index_ > 0) {
         cur_index_ -= 1;
-        current_key_ = cur_decoded_[cur_index_].first;
-        return SeekOutcome{SeekHit::Exact, cur_decoded_[cur_index_].second, true};
+        current_key_ = cur_decoded_[static_cast<std::size_t>(cur_index_)].first;
+        return SeekOutcome{SeekHit::Exact, cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
     }
     auto pg = get_page_(cur_leaf_);
     if (!pg) return pg.error();
@@ -572,8 +572,8 @@ util::Result<SeekOutcome> CdxIndex::prev() {
         return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     }
     cur_index_ = static_cast<std::int32_t>(cur_decoded_.size() - 1);
-    current_key_ = cur_decoded_[cur_index_].first;
-    return SeekOutcome{SeekHit::Exact, cur_decoded_[cur_index_].second, true};
+    current_key_ = cur_decoded_[static_cast<std::size_t>(cur_index_)].first;
+    return SeekOutcome{SeekHit::Exact, cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
 }
 
 util::Result<void>

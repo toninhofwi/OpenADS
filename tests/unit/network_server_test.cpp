@@ -120,8 +120,8 @@ void m12_write_dbf(const std::filesystem::path& path,
     file.push_back(0x0D);
     for (auto& t : tags) {
         file.push_back(' ');
-        for (int i = 0; i < 4; ++i)
-            file.push_back(i < (int)t.size()
+        for (std::size_t i = 0; i < 4; ++i)
+            file.push_back(i < t.size()
                 ? static_cast<std::uint8_t>(t[i]) : ' ');
     }
     file.push_back(0x1A);

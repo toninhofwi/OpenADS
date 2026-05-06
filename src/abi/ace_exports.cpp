@@ -105,7 +105,7 @@ UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
     return ADS_FIELD_TYPE_UNKNOWN;
 }
 
-const openads::drivers::DbfField*
+[[maybe_unused]] const openads::drivers::DbfField*
 find_field(Table* tbl, const std::string& name) {
     for (std::uint16_t i = 0; i < tbl->field_count(); ++i) {
         const auto& f = tbl->field_descriptor(i);

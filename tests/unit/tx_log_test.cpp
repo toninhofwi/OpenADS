@@ -1,6 +1,7 @@
 #include "doctest.h"
 #include "engine/tx_log.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -127,7 +128,7 @@ TEST_CASE("TxLog: group commit — many threads append, single fsync covers all"
         threads.reserve(N_THREADS);
         for (int t = 0; t < N_THREADS; ++t) {
             threads.emplace_back([&, t]() {
-                for (int i = 0; i < N_PER_THR; ++i) {
+                for (std::size_t i = 0; i < N_PER_THR; ++i) {
                     std::uint64_t tx_id = static_cast<std::uint64_t>(
                         t * N_PER_THR + i + 1);
                     auto begin  = log.append_begin_async(tx_id);

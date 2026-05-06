@@ -355,8 +355,8 @@ util::Result<SeekOutcome> NtxIndex::next() {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
     cache_idx_     = nxt;
-    current_recno_ = cache_[nxt].recno;
-    current_key_   = cache_[nxt].key;
+    current_recno_ = cache_[static_cast<std::size_t>(nxt)].recno;
+    current_key_   = cache_[static_cast<std::size_t>(nxt)].key;
     return SeekOutcome{SeekHit::Exact, current_recno_, true};
 }
 
@@ -367,8 +367,8 @@ util::Result<SeekOutcome> NtxIndex::prev() {
         return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     }
     --cache_idx_;
-    current_recno_ = cache_[cache_idx_].recno;
-    current_key_   = cache_[cache_idx_].key;
+    current_recno_ = cache_[static_cast<std::size_t>(cache_idx_)].recno;
+    current_key_   = cache_[static_cast<std::size_t>(cache_idx_)].key;
     return SeekOutcome{SeekHit::Exact, current_recno_, true};
 }
 
@@ -382,9 +382,10 @@ void format_empty_page(NtxIndex::Page& p,
                        std::uint16_t entry_size) {
     std::fill(p.begin(), p.end(), std::uint8_t{0});
     write_u16_le(p.data(), 0);
-    std::size_t blocks_start = 2 + (max_keys + 1) * 2;
-    for (std::int32_t i = 0; i <= max_keys; ++i) {
-        std::uint16_t off = static_cast<std::uint16_t>(blocks_start + i * entry_size);
+    std::size_t blocks_start = 2 + static_cast<std::size_t>(max_keys + 1) * 2;
+    for (std::uint16_t i = 0; i <= max_keys; ++i) {
+        std::uint16_t off = static_cast<std::uint16_t>(
+            blocks_start + static_cast<std::size_t>(i) * entry_size);
         write_u16_le(p.data() + 2 + i * 2, off);
     }
 }
@@ -525,8 +526,10 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
     // Promote all[mid] up. left_half stays in the original page;
     // right_half holds entries strictly after mid.
     Entry separator = all[mid];
-    std::vector<Entry> left_half (all.begin(), all.begin() + mid);
-    std::vector<Entry> right_half(all.begin() + mid + 1, all.end());
+    std::vector<Entry> left_half (all.begin(),
+        all.begin() + static_cast<std::ptrdiff_t>(mid));
+    std::vector<Entry> right_half(
+        all.begin() + static_cast<std::ptrdiff_t>(mid) + 1, all.end());
     fill_leaf(left_off,  left_half);
     fill_leaf(right_off, right_half);
 
@@ -603,16 +606,18 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
         pinsert.lchild = prop_left;
         pinsert.recno  = prop_sep.recno;
         pinsert.key    = prop_sep.key;
-        ents.insert(ents.begin() + pos, std::move(pinsert));
+        ents.insert(ents.begin() +
+            static_cast<std::ptrdiff_t>(pos), std::move(pinsert));
         // The entry that was at pos now lives at pos+1; its lchild
         // becomes prop_right (the new sibling we just produced).
-        ents[pos + 1].lchild = prop_right;
+        ents[static_cast<std::size_t>(pos) + 1].lchild = prop_right;
 
         std::size_t pmid = ents.size() / 2;
         std::vector<InternalEntry> p_left (ents.begin(),
-                                           ents.begin() + pmid);
-        std::vector<InternalEntry> p_right(ents.begin() + pmid + 1,
-                                           ents.end());
+            ents.begin() + static_cast<std::ptrdiff_t>(pmid));
+        std::vector<InternalEntry> p_right(
+            ents.begin() + static_cast<std::ptrdiff_t>(pmid) + 1,
+            ents.end());
         InternalEntry psep = ents[pmid];
 
         // Allocate the new right-sibling parent page.
