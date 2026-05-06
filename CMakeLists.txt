@@ -31,6 +31,7 @@ else()
 endif()
 
 add_subdirectory(src)
+add_subdirectory(tools/serverd)
 
 if(OPENADS_BUILD_TESTS)
     enable_testing()
