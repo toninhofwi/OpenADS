@@ -141,6 +141,7 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
       <button data-tab="sql">SQL</button>
       <button data-tab="server">Server</button>
       <button data-tab="sessions">Sessions</button>
+      <button data-tab="dd">Dict</button>
     </nav>
 
     <div id="pane-browse" class="pane">
@@ -186,6 +187,18 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
         <span id="sessions-status"></span>
       </div>
       <div id="sessions-body" class="empty">Loading…</div>
+    </div>
+
+    <div id="pane-dd" class="pane hidden">
+      <div class="toolbar">
+        <select id="dd-pick" style="background:#2d2d30;color:#ddd;
+                border:1px solid #444;padding:6px 10px;font-size:15px;
+                border-radius:2px"></select>
+        <button class="btn" id="dd-new">New dict…</button>
+        <button class="btn btn-danger" id="dd-drop">Drop</button>
+        <span id="dd-status"></span>
+      </div>
+      <div id="dd-body" class="empty">No dictionary selected.</div>
     </div>
   </section>
 </main>
@@ -257,7 +270,7 @@ async function api(url, opts) {
 }
 
 function showTab(tab) {
-  ["browse","structure","insert","sql","server","sessions"].forEach(t => {
+  ["browse","structure","insert","sql","server","sessions","dd"].forEach(t => {
     $("pane-" + t).classList.toggle("hidden", t !== tab);
   });
   document.querySelectorAll("nav.tabs button").forEach(b =>
@@ -272,6 +285,7 @@ function showTab(tab) {
   } else {
     stopSessionsAutoRefresh();
   }
+  if (tab === "dd") loadDicts();
 }
 
 async function loadTables() {
@@ -656,6 +670,149 @@ function fmtDuration(s) {
   if (s < 3600)  return Math.floor(s/60) + "m " + (s%60) + "s";
   return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
 }
+)OPENADS_SPA"
+R"OPENADS_SPA(// ---- studio.web.0.5 — Data Dictionary tab ---------------------------
+let ddState = { current: null };
+
+async function loadDicts() {
+  try {
+    const data = await api("/api/dd");
+    const sel = $("dd-pick");
+    sel.innerHTML = '<option value="">— pick a dictionary —</option>'
+      + data.dicts.map(d =>
+          `<option value="${esc(d.name)}">${esc(d.name)}` +
+          ` (${d.bytes} B)</option>`).join("");
+    if (ddState.current && data.dicts.find(d => d.name === ddState.current)) {
+      sel.value = ddState.current;
+      loadDictView(ddState.current);
+    } else {
+      $("dd-body").innerHTML =
+        `<div class="empty">${data.dicts.length} dictionary file(s) in `
+        + `${esc(data.data_dir)}.</div>`;
+    }
+  } catch (e) {
+    $("dd-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+async function loadDictView(name) {
+  ddState.current = name;
+  $("dd-status").textContent = "loading…"; $("dd-status").className = "";
+  try {
+    const d = await api(`/api/dd/${encodeURIComponent(name)}`);
+    const tblRows = (d.tables||[]).map(t =>
+      `<tr><td>${esc(t.alias)}</td><td>${esc(t.path)}</td>
+       <td><button class="btn btn-danger" data-rm-tbl="${esc(t.alias)}">Remove</button></td></tr>`).join("");
+    const usrRows = (d.users||[]).map(u =>
+      `<tr><td>${esc(u)}</td>
+       <td><button class="btn btn-danger" data-rm-usr="${esc(u)}">Remove</button></td></tr>`).join("");
+    const ixRows  = (d.indexes||[]).map(i =>
+      `<tr><td>${esc(i.table)}</td><td>${esc(i.path)}</td><td>${esc(i.comment)}</td></tr>`).join("");
+    const lkRows  = (d.links||[]).map(l =>
+      `<tr><td>${esc(l.alias)}</td><td>${esc(l.path)}</td><td>${esc(l.user)}</td></tr>`).join("");
+    const riRows  = (d.ri||[]).map(r =>
+      `<tr><td>${esc(r.name)}</td><td>${esc(r.parent)}</td><td>${esc(r.child)}</td>
+       <td>${esc(r.tag)}</td><td>${esc(r.update_opt)}</td><td>${esc(r.delete_opt)}</td>
+       <td>${esc(r.fail_table)}</td></tr>`).join("");
+    const propRows = (d.db_props||[]).map(p =>
+      `<tr><td>${esc(p.key)}</td><td>${esc(p.value)}</td></tr>`).join("");
+
+    $("dd-body").innerHTML = `
+      <h3 style="font-size:17px;margin:0 0 8px">${esc(d.name)}</h3>
+      <p style="opacity:0.7;font-size:14px;margin:0 0 16px">${esc(d.path)}</p>
+
+      <h4 style="font-size:15px;margin:18px 0 6px">Tables</h4>
+      <form id="dd-add-tbl" class="form-row" style="margin-bottom:8px">
+        <input name="alias" placeholder="alias" required>
+        <input name="path"  placeholder="relative.dbf" required>
+        <button type="submit" class="btn">+ Add table</button>
+      </form>
+      ${tblRows ? `<table><thead><tr><th>alias</th><th>path</th><th></th></tr></thead><tbody>${tblRows}</tbody></table>`
+                : `<div class="empty">No tables yet.</div>`}
+
+      <h4 style="font-size:15px;margin:18px 0 6px">Users</h4>
+      <form id="dd-add-usr" class="form-row" style="margin-bottom:8px">
+        <input name="user" placeholder="username" required>
+        <button type="submit" class="btn">+ Add user</button>
+      </form>
+      ${usrRows ? `<table><thead><tr><th>name</th><th></th></tr></thead><tbody>${usrRows}</tbody></table>`
+                : `<div class="empty">No users yet.</div>`}
+
+      <h4 style="font-size:15px;margin:18px 0 6px">Indexes</h4>
+      ${ixRows  ? `<table><thead><tr><th>table</th><th>path</th><th>comment</th></tr></thead><tbody>${ixRows}</tbody></table>`
+                : `<div class="empty">No indexes registered.</div>`}
+
+      <h4 style="font-size:15px;margin:18px 0 6px">Links</h4>
+      ${lkRows  ? `<table><thead><tr><th>alias</th><th>path</th><th>user</th></tr></thead><tbody>${lkRows}</tbody></table>`
+                : `<div class="empty">No links.</div>`}
+
+      <h4 style="font-size:15px;margin:18px 0 6px">RI rules</h4>
+      ${riRows  ? `<table><thead><tr><th>name</th><th>parent</th><th>child</th><th>tag</th>
+                   <th>upd</th><th>del</th><th>fail</th></tr></thead><tbody>${riRows}</tbody></table>`
+                : `<div class="empty">No RI rules.</div>`}
+
+      <h4 style="font-size:15px;margin:18px 0 6px">DB properties</h4>
+      <form id="dd-add-prop" class="form-row" style="margin-bottom:8px">
+        <input name="key"   placeholder="key" required>
+        <input name="value" placeholder="value">
+        <button type="submit" class="btn">Set</button>
+      </form>
+      ${propRows ? `<table><thead><tr><th>key</th><th>value</th></tr></thead><tbody>${propRows}</tbody></table>`
+                 : `<div class="empty">No DB properties yet.</div>`}
+    `;
+    $("dd-status").textContent = ""; $("dd-status").className = "";
+
+    $("dd-add-tbl").addEventListener("submit", async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await ddPost(`/api/dd/${encodeURIComponent(name)}/tables`,
+                   {alias: fd.get("alias"), path: fd.get("path")});
+    });
+    $("dd-add-usr").addEventListener("submit", async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await ddPost(`/api/dd/${encodeURIComponent(name)}/users`,
+                   {user: fd.get("user")});
+    });
+    $("dd-add-prop").addEventListener("submit", async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await ddPost(`/api/dd/${encodeURIComponent(name)}/dbprop`,
+                   {key: fd.get("key"), value: fd.get("value") || ""});
+    });
+    document.querySelectorAll("[data-rm-tbl]").forEach(b =>
+      b.addEventListener("click", () => ddDelete(
+        `/api/dd/${encodeURIComponent(name)}/tables/${
+          encodeURIComponent(b.dataset.rmTbl)}`)));
+    document.querySelectorAll("[data-rm-usr]").forEach(b =>
+      b.addEventListener("click", () => ddDelete(
+        `/api/dd/${encodeURIComponent(name)}/users/${
+          encodeURIComponent(b.dataset.rmUsr)}`)));
+  } catch (e) {
+    $("dd-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+async function ddPost(url, body) {
+  try {
+    await api(url, {method:"POST",
+                    headers:{"content-type":"application/json"},
+                    body: JSON.stringify(body)});
+    if (ddState.current) loadDictView(ddState.current);
+  } catch (e) {
+    $("dd-status").textContent = e.message;
+    $("dd-status").className = "err";
+  }
+}
+async function ddDelete(url) {
+  if (!confirm("Remove?")) return;
+  try {
+    await api(url, {method:"DELETE"});
+    if (ddState.current) loadDictView(ddState.current);
+  } catch (e) {
+    $("dd-status").textContent = e.message;
+    $("dd-status").className = "err";
+  }
+}
+
 async function loadSessions() {
   try {
     const data = await api("/api/server/sessions");
@@ -712,6 +869,29 @@ $("enc-cancel").addEventListener("click", () =>
   $("modal-encrypt").classList.remove("show"));
 $("sessions-refresh").addEventListener("click", loadSessions);
 $("sessions-auto").addEventListener("change", startSessionsAutoRefresh);
+
+$("dd-pick").addEventListener("change", e => {
+  if (e.target.value) loadDictView(e.target.value);
+});
+$("dd-new").addEventListener("click", async () => {
+  const n = prompt("New dictionary file name (e.g. orders.add):");
+  if (!n) return;
+  try {
+    await api("/api/dd", {method:"POST",
+       headers:{"content-type":"application/json"},
+       body: JSON.stringify({name: n})});
+    ddState.current = n; loadDicts();
+  } catch (e) { alert(e.message); }
+});
+$("dd-drop").addEventListener("click", async () => {
+  const n = ddState.current;
+  if (!n) return alert("Pick a dictionary first.");
+  if (!confirm(`Drop ${n}?  This deletes the .add file on disk.`)) return;
+  try {
+    await api(`/api/dd/${encodeURIComponent(n)}`, {method:"DELETE"});
+    ddState.current = null; loadDicts();
+  } catch (e) { alert(e.message); }
+});
 
 // URL params let docs / scripts deep-link to a specific tab + table.
 //   /?table=employees.dbf&tab=structure

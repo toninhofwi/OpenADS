@@ -113,6 +113,28 @@ contents intact.
 
 ## Studio integration
 
-Today the Studio web console connects to a directory and lists
-`*.dbf` files directly. Surfacing DD aliases / users / RI rules
-in the SPA is queued as a follow-up (`studio.web.0.5`).
+The Studio web console exposes Data Dictionary CRUD through a
+dedicated **Dict** tab (`studio.web.0.5`):
+
+- Picks any `*.add` in the data dir from a dropdown.
+- Lists every TABLE alias, USER, INDEX entry, LINK, RI rule, and
+  DBPROP key in tabular form.
+- Add / remove TABLE alias from a tiny inline form.
+- Add / remove USER.
+- Set DBPROP (key + value).
+- Create new dictionary file.
+- Drop dictionary file.
+
+REST surface (used by Studio, also scriptable from curl / Python):
+
+| Method + path | Purpose |
+|---------------|---------|
+| `GET /api/dd`                                | list `*.add` files |
+| `POST /api/dd`                               | create new dictionary `{name}` |
+| `GET /api/dd/<n>`                            | full content as JSON |
+| `DELETE /api/dd/<n>`                         | drop the .add on disk |
+| `POST /api/dd/<n>/tables` `{alias, path}`    | add TABLE row |
+| `DELETE /api/dd/<n>/tables/<alias>`          | remove TABLE row |
+| `POST /api/dd/<n>/users` `{user}`            | add USER row |
+| `DELETE /api/dd/<n>/users/<u>`               | remove USER row |
+| `POST /api/dd/<n>/dbprop` `{key, value}`     | set DBPROP |

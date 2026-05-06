@@ -4,6 +4,7 @@
 
 #include "tools/serverd/spa_index.h"
 
+#include "engine/data_dict.h"
 #include "network/server.h"
 #include "openads/ace.h"
 #include "openads/error.h"
@@ -21,6 +22,7 @@ extern "C" UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable,
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -372,6 +374,248 @@ json table_encrypt(const std::string& dir, const std::string& tname,
     return json{{"ok", true}, {"table", tname}};
 }
 
+// studio.web.0.5 — Data Dictionary surface.
+//
+// Each request opens a fresh DataDict, mutates if needed, calls
+// save(), drops it. Stateless web => safe under concurrent edits;
+// the DD's own write-then-rename keeps the on-disk file
+// crash-consistent.
+
+std::vector<std::string> list_add_files(const std::string& dir) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    if (!fs::exists(dir, ec)) return out;
+    for (auto& e : fs::directory_iterator(dir, ec)) {
+        if (!e.is_regular_file()) continue;
+        auto ext = e.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+        if (ext == ".add") out.push_back(e.path().filename().string());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+json dd_list(const std::string& dir) {
+    auto names = list_add_files(dir);
+    json arr = json::array();
+    for (auto& n : names) {
+        std::error_code ec;
+        auto sz = fs::file_size(fs::path(dir) / n, ec);
+        arr.push_back(json{
+            {"name",  n},
+            {"bytes", ec ? 0 : static_cast<std::uint64_t>(sz)}
+        });
+    }
+    return json{{"dicts", arr}, {"data_dir", dir}};
+}
+
+json dd_view(const std::string& dir, const std::string& name) {
+    auto p = (fs::path(dir) / name).string();
+    auto dd_r = openads::engine::DataDict::open(p);
+    if (!dd_r) {
+        return json_error("DataDict::open failed: " + p, 404);
+    }
+    auto& dd = dd_r.value();
+
+    json tables = json::array();
+    // DataDict exposes tables_ via has_alias / resolve only; use
+    // a private accessor via DBPROP iteration is not available.
+    // Workaround: re-parse the file ourselves to enumerate every
+    // row. (DataDict doesn't expose a list_tables() API yet.)
+    {
+        std::ifstream in(p);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            // crude split on first run of spaces
+            std::size_t sp = line.find_first_of(" \t");
+            if (sp == std::string::npos) continue;
+            std::string kind = line.substr(0, sp);
+            std::string rest = line.substr(sp);
+            // ltrim
+            std::size_t a = rest.find_first_not_of(" \t");
+            if (a == std::string::npos) continue;
+            rest = rest.substr(a);
+            if (kind == "TABLE") {
+                auto eq = rest.find('=');
+                if (eq != std::string::npos) {
+                    tables.push_back(json{
+                        {"alias", rest.substr(0, eq)},
+                        {"path",  rest.substr(eq + 1)}
+                    });
+                }
+            }
+        }
+    }
+
+    json indexes = json::array();
+    for (auto& ix : dd.indexes()) {
+        indexes.push_back(json{
+            {"table",   ix.table_alias},
+            {"path",    ix.index_path},
+            {"comment", ix.comment}
+        });
+    }
+
+    json links = json::array();
+    for (auto& kv : dd.links()) {
+        links.push_back(json{
+            {"alias", kv.second.alias},
+            {"path",  kv.second.path},
+            {"user",  kv.second.user}
+        });
+    }
+
+    json ri = json::array();
+    for (auto& kv : dd.ri()) {
+        ri.push_back(json{
+            {"name",        kv.second.name},
+            {"parent",      kv.second.parent},
+            {"child",       kv.second.child},
+            {"tag",         kv.second.tag},
+            {"update_opt",  kv.second.update_opt},
+            {"delete_opt",  kv.second.delete_opt},
+            {"fail_table",  kv.second.fail_table}
+        });
+    }
+
+    // Re-parse for users + props (DataDict doesn't expose iteration
+    // of users_ or db_props_ directly today).
+    json users = json::array();
+    json props = json::array();
+    {
+        std::ifstream in(p);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::size_t sp = line.find_first_of(" \t");
+            if (sp == std::string::npos) continue;
+            std::string kind = line.substr(0, sp);
+            std::string rest = line.substr(sp);
+            std::size_t a = rest.find_first_not_of(" \t");
+            if (a == std::string::npos) continue;
+            rest = rest.substr(a);
+            if (kind == "USER") users.push_back(rest);
+            else if (kind == "DBPROP") {
+                auto eq = rest.find('=');
+                if (eq != std::string::npos) {
+                    props.push_back(json{
+                        {"key",   rest.substr(0, eq)},
+                        {"value", rest.substr(eq + 1)}
+                    });
+                }
+            }
+        }
+    }
+
+    return json{
+        {"name",    name},
+        {"path",    p},
+        {"tables",  tables},
+        {"indexes", indexes},
+        {"users",   users},
+        {"links",   links},
+        {"ri",      ri},
+        {"db_props", props}
+    };
+}
+
+json dd_create(const std::string& dir, const std::string& name) {
+    fs::path p = fs::path(dir) / name;
+    if (fs::exists(p)) {
+        return json_error("dictionary already exists: " + name, 409);
+    }
+    auto r = openads::engine::DataDict::create(p.string());
+    if (!r) return json_error("DataDict::create failed", 500);
+    return json{{"ok", true}, {"name", name}};
+}
+
+json dd_drop(const std::string& dir, const std::string& name) {
+    fs::path p = fs::path(dir) / name;
+    std::error_code ec;
+    if (!fs::exists(p, ec)) {
+        return json_error("dictionary not found: " + name, 404);
+    }
+    fs::remove(p, ec);
+    return json{{"ok", true}, {"removed", name}};
+}
+
+json dd_add_table(const std::string& dir, const std::string& name,
+                  const json& body) {
+    auto p = (fs::path(dir) / name).string();
+    auto dd_r = openads::engine::DataDict::open(p);
+    if (!dd_r) return json_error("DataDict::open failed", 404);
+    auto& dd = dd_r.value();
+    std::string alias = body.value("alias", "");
+    std::string rel   = body.value("path",  "");
+    if (alias.empty() || rel.empty()) {
+        return json_error("body needs {alias, path}", 400);
+    }
+    if (auto r = dd.add_table(alias, rel); !r) {
+        return json_error("add_table failed", 500);
+    }
+    if (auto r = dd.save(); !r) return json_error("save failed", 500);
+    return json{{"ok", true}, {"alias", alias}, {"path", rel}};
+}
+
+json dd_remove_table(const std::string& dir, const std::string& name,
+                     const std::string& alias) {
+    auto p = (fs::path(dir) / name).string();
+    auto dd_r = openads::engine::DataDict::open(p);
+    if (!dd_r) return json_error("DataDict::open failed", 404);
+    auto& dd = dd_r.value();
+    if (auto r = dd.remove_table(alias); !r) {
+        return json_error("remove_table failed", 500);
+    }
+    if (auto r = dd.save(); !r) return json_error("save failed", 500);
+    return json{{"ok", true}, {"alias", alias}};
+}
+
+json dd_add_user(const std::string& dir, const std::string& name,
+                 const json& body) {
+    auto p = (fs::path(dir) / name).string();
+    auto dd_r = openads::engine::DataDict::open(p);
+    if (!dd_r) return json_error("DataDict::open failed", 404);
+    auto& dd = dd_r.value();
+    std::string user = body.value("user", "");
+    if (user.empty()) return json_error("body needs {user}", 400);
+    if (auto r = dd.create_user(user); !r) {
+        return json_error("create_user failed", 500);
+    }
+    if (auto r = dd.save(); !r) return json_error("save failed", 500);
+    return json{{"ok", true}, {"user", user}};
+}
+
+json dd_remove_user(const std::string& dir, const std::string& name,
+                    const std::string& user) {
+    auto p = (fs::path(dir) / name).string();
+    auto dd_r = openads::engine::DataDict::open(p);
+    if (!dd_r) return json_error("DataDict::open failed", 404);
+    auto& dd = dd_r.value();
+    if (auto r = dd.delete_user(user); !r) {
+        return json_error("delete_user failed", 500);
+    }
+    if (auto r = dd.save(); !r) return json_error("save failed", 500);
+    return json{{"ok", true}, {"user", user}};
+}
+
+json dd_set_dbprop(const std::string& dir, const std::string& name,
+                   const json& body) {
+    auto p = (fs::path(dir) / name).string();
+    auto dd_r = openads::engine::DataDict::open(p);
+    if (!dd_r) return json_error("DataDict::open failed", 404);
+    auto& dd = dd_r.value();
+    std::string k = body.value("key",   "");
+    std::string v = body.value("value", "");
+    if (k.empty()) return json_error("body needs {key, value}", 400);
+    if (auto r = dd.set_db_property(k, v); !r) {
+        return json_error("set_db_property failed", 500);
+    }
+    if (auto r = dd.save(); !r) return json_error("save failed", 500);
+    return json{{"ok", true}, {"key", k}};
+}
+
 // studio.web.0.2 — server info panel.
 json server_info(const std::string& dir) {
     json out{
@@ -579,6 +823,80 @@ bool HttpConsole::start(const std::string& host,
     srv.Get("/api/server/info",
             [this](const httplib::Request&, httplib::Response& res) {
         json j = server_info(data_dir_);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    // studio.web.0.5 — Data Dictionary endpoints.
+    srv.Get("/api/dd",
+            [this](const httplib::Request&, httplib::Response& res) {
+        res.set_content(dd_list(data_dir_).dump(), "application/json");
+    });
+    srv.Post("/api/dd",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body; try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        std::string n = body.value("name", "");
+        if (n.empty()) { res.status = 400;
+            res.set_content(json_error("body needs {name}", 400).dump(),
+                            "application/json"); return; }
+        json j = dd_create(data_dir_, n);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Get(R"(/api/dd/([^/]+))",
+            [this](const httplib::Request& req, httplib::Response& res) {
+        json j = dd_view(data_dir_, req.matches[1]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Delete(R"(/api/dd/([^/]+))",
+               [this](const httplib::Request& req, httplib::Response& res) {
+        json j = dd_drop(data_dir_, req.matches[1]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Post(R"(/api/dd/([^/]+)/tables)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body; try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = dd_add_table(data_dir_, req.matches[1], body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Delete(R"(/api/dd/([^/]+)/tables/([^/]+))",
+               [this](const httplib::Request& req, httplib::Response& res) {
+        json j = dd_remove_table(data_dir_, req.matches[1], req.matches[2]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Post(R"(/api/dd/([^/]+)/users)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body; try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = dd_add_user(data_dir_, req.matches[1], body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Delete(R"(/api/dd/([^/]+)/users/([^/]+))",
+               [this](const httplib::Request& req, httplib::Response& res) {
+        json j = dd_remove_user(data_dir_, req.matches[1], req.matches[2]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Post(R"(/api/dd/([^/]+)/dbprop)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body; try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = dd_set_dbprop(data_dir_, req.matches[1], body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
 

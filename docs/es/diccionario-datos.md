@@ -102,6 +102,26 @@ contenidos previos intactos.
 
 ## Integración con Studio
 
-Studio actualmente lista `*.dbf` directamente del directorio.
-Mostrar DD aliases / users / RI en la SPA está en cola como
-`studio.web.0.5`.
+Studio incluye una pestaña **Dict** dedicada (`studio.web.0.5`):
+
+- Dropdown con cada `*.add` del data dir.
+- Tablas listando aliases TABLE, USERs, INDEX, LINK, RI, DBPROP.
+- Add / remove TABLE alias mediante formulario inline.
+- Add / remove USER.
+- Set DBPROP (key + value).
+- Crear nuevo diccionario.
+- Drop diccionario.
+
+REST (usado por Studio, scriptable desde curl / Python):
+
+| Método + ruta | Función |
+|---------------|---------|
+| `GET /api/dd`                                | listar `*.add` |
+| `POST /api/dd`                               | crear `{name}` |
+| `GET /api/dd/<n>`                            | contenido JSON |
+| `DELETE /api/dd/<n>`                         | borrar .add |
+| `POST /api/dd/<n>/tables` `{alias, path}`    | añadir TABLE |
+| `DELETE /api/dd/<n>/tables/<alias>`          | quitar TABLE |
+| `POST /api/dd/<n>/users` `{user}`            | añadir USER |
+| `DELETE /api/dd/<n>/users/<u>`               | quitar USER |
+| `POST /api/dd/<n>/dbprop` `{key, value}`     | set DBPROP |
