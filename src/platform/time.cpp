@@ -37,6 +37,16 @@ std::string host_name() {
     }
     return {};
 #else
+    // macOS doesn't define HOST_NAME_MAX in <limits.h>; fall back to
+    // _POSIX_HOST_NAME_MAX (255) when absent. Linux glibc carries
+    // HOST_NAME_MAX = 64.
+#  ifndef HOST_NAME_MAX
+#    ifdef _POSIX_HOST_NAME_MAX
+#      define HOST_NAME_MAX _POSIX_HOST_NAME_MAX
+#    else
+#      define HOST_NAME_MAX 255
+#    endif
+#  endif
     char buf[HOST_NAME_MAX + 1] = {0};
     if (::gethostname(buf, sizeof(buf) - 1) == 0) {
         return std::string(buf);
