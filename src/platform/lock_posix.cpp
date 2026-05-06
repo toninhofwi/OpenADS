@@ -19,6 +19,20 @@ util::Error os_error(const char* op) {
     return e;
 }
 
+// Prefer OFD (open-file-description) locks where available
+// (Linux >= 3.15). Plain F_SETLK locks are process-scoped, which
+// breaks the ByteLock contract that two fds in the SAME process
+// should still contend (Win32 LockFile is fd-scoped). OFD locks
+// are tied to the open file description, matching the Win32
+// semantics used by the engine.
+#ifdef F_OFD_SETLK
+constexpr int kSetLk  = F_OFD_SETLK;
+constexpr int kSetLkW = F_OFD_SETLKW;
+#else
+constexpr int kSetLk  = F_SETLK;
+constexpr int kSetLkW = F_SETLKW;
+#endif
+
 util::Result<ByteLock> do_lock(File& f, std::uint64_t offset,
                                std::uint64_t length, LockKind kind,
                                int cmd) {
@@ -27,6 +41,7 @@ util::Result<ByteLock> do_lock(File& f, std::uint64_t offset,
     fl.l_whence = SEEK_SET;
     fl.l_start  = static_cast<off_t>(offset);
     fl.l_len    = static_cast<off_t>(length);
+    fl.l_pid    = 0;            // OFD requires l_pid=0
     int fd = static_cast<int>(reinterpret_cast<intptr_t>(f.native_handle()));
     if (::fcntl(fd, cmd, &fl) == -1) return os_error("fcntl(F_SETLK)");
     return ByteLock{f.native_handle(), offset, length};
@@ -59,20 +74,21 @@ void ByteLock::release_() noexcept {
     fl.l_whence = SEEK_SET;
     fl.l_start  = static_cast<off_t>(offset_);
     fl.l_len    = static_cast<off_t>(length_);
+    fl.l_pid    = 0;
     int fd = static_cast<int>(reinterpret_cast<intptr_t>(native_));
-    ::fcntl(fd, F_SETLK, &fl);
+    ::fcntl(fd, kSetLk, &fl);
     native_ = nullptr;
 }
 
 util::Result<ByteLock> ByteLock::acquire(File& f, std::uint64_t offset,
                                          std::uint64_t length, LockKind kind) {
-    return do_lock(f, offset, length, kind, F_SETLKW);
+    return do_lock(f, offset, length, kind, kSetLkW);
 }
 
 util::Result<ByteLock> ByteLock::try_acquire(File& f, std::uint64_t offset,
                                              std::uint64_t length,
                                              LockKind kind) {
-    return do_lock(f, offset, length, kind, F_SETLK);
+    return do_lock(f, offset, length, kind, kSetLk);
 }
 
 util::Result<void> ByteLock::release() {
