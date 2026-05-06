@@ -86,4 +86,15 @@ bool parse_tcp_uri(const std::string& uri,
                    std::uint16_t& port,
                    std::string& data_dir);
 
+// M12.12 — TLS URI scheme `tls://host:port/<data_dir>` is reserved
+// but not yet implemented. parse_tls_uri only returns true when the
+// input carries the tls:// prefix; AdsConnect60 surfaces
+// AE_FUNCTION_NOT_AVAILABLE so apps get a clear failure instead of
+// a silent plaintext fallback. Real TLS (vendored mbedtls /
+// platform-native) lands in v0.4.0.
+bool parse_tls_uri(const std::string& uri,
+                   std::string& host,
+                   std::uint16_t& port,
+                   std::string& data_dir);
+
 } // namespace openads::network

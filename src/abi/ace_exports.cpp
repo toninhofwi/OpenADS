@@ -234,6 +234,19 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     // M12.9 — pucUser / pucPwd are forwarded into the Connect frame;
     // the server validates them when it has credentials registered.
     {
+        // M12.12 — `tls://...` URI is reserved but TLS is not yet
+        // implemented; surface a clear AE_FUNCTION_NOT_AVAILABLE so
+        // apps don't silently downgrade to plaintext. Real TLS
+        // (vendored mbedtls / platform-native) lands in v0.4.0.
+        std::string thost, tdir;
+        std::uint16_t tport = 0;
+        if (openads::network::parse_tls_uri(path, thost, tport, tdir)) {
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "tls:// URI scheme is reserved but TLS transport is "
+                "not yet implemented (planned for v0.4.0)");
+        }
+    }
+    {
         std::string host, dir;
         std::uint16_t port = 0;
         if (openads::network::parse_tcp_uri(path, host, port, dir)) {

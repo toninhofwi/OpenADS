@@ -630,6 +630,35 @@ TEST_CASE("M12.11 batch fetch returns multiple rows in one frame") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M12.12 tls:// URI is reserved and reports unavailable") {
+    // tls:// is parsed + recognised, but transport is not yet wired
+    // up; AdsConnect60 must surface AE_FUNCTION_NOT_AVAILABLE so apps
+    // don't silently downgrade to plaintext.
+    UNSIGNED8 srvbuf[64];
+    std::strcpy(reinterpret_cast<char*>(srvbuf),
+                "tls://127.0.0.1:6262/whatever");
+    ADSHANDLE hConn = 0;
+    UNSIGNED32 rc = AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                                  nullptr, nullptr, 0, &hConn);
+    CHECK(rc == 5004u);                            // AE_FUNCTION_NOT_AVAILABLE
+    CHECK(hConn == 0);
+
+    // tls:// parser correctness — split host / port / data_dir.
+    std::string h, dd;
+    std::uint16_t p = 0;
+    REQUIRE(openads::network::parse_tls_uri(
+        "tls://server.example:7777/some/dir", h, p, dd));
+    CHECK(h == "server.example");
+    CHECK(p == 7777u);
+    CHECK(dd == "some/dir");
+
+    // tls:// is not parsed by parse_tcp_uri (and vice-versa).
+    CHECK_FALSE(openads::network::parse_tcp_uri(
+        "tls://x:1/y", h, p, dd));
+    CHECK_FALSE(openads::network::parse_tls_uri(
+        "tcp://x:1/y", h, p, dd));
+}
+
 TEST_CASE("M12.10 server Error frame surfaces the real ACE code") {
     namespace fs = std::filesystem;
     auto dir = fs::temp_directory_path() / "openads_m12_10";

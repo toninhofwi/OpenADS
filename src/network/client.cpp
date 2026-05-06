@@ -23,16 +23,18 @@ inline std::uint32_t read_u32_le(const std::uint8_t* p) {
 
 } // namespace
 
-bool parse_tcp_uri(const std::string& uri,
-                   std::string& host,
-                   std::uint16_t& port,
-                   std::string& data_dir) {
-    const std::string kPrefix = "tcp://";
-    if (uri.size() < kPrefix.size() ||
-        uri.compare(0, kPrefix.size(), kPrefix) != 0) {
+namespace {
+
+bool parse_scheme_uri(const std::string& uri,
+                      const std::string& scheme,
+                      std::string& host,
+                      std::uint16_t& port,
+                      std::string& data_dir) {
+    if (uri.size() < scheme.size() ||
+        uri.compare(0, scheme.size(), scheme) != 0) {
         return false;
     }
-    std::size_t after = kPrefix.size();
+    std::size_t after = scheme.size();
     std::size_t slash = uri.find('/', after);
     std::string hostport = uri.substr(after,
         slash == std::string::npos ? std::string::npos : slash - after);
@@ -44,6 +46,22 @@ bool parse_tcp_uri(const std::string& uri,
     data_dir = (slash == std::string::npos) ? std::string()
                                             : uri.substr(slash + 1);
     return true;
+}
+
+} // namespace
+
+bool parse_tcp_uri(const std::string& uri,
+                   std::string& host,
+                   std::uint16_t& port,
+                   std::string& data_dir) {
+    return parse_scheme_uri(uri, "tcp://", host, port, data_dir);
+}
+
+bool parse_tls_uri(const std::string& uri,
+                   std::string& host,
+                   std::uint16_t& port,
+                   std::string& data_dir) {
+    return parse_scheme_uri(uri, "tls://", host, port, data_dir);
 }
 
 util::Result<Frame> RemoteConnection::request(const Frame& f) {
