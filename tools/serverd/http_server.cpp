@@ -405,15 +405,27 @@ json run_sql(const std::string& dir, const std::string& sql,
     ADSHANDLE hCur = 0;
     UNSIGNED32 rrc = AdsExecuteSQLDirect(hStmt, sqlbuf.data(), &hCur);
     if (rrc != 0) {
-        AdsCloseSQLStatement(hStmt);
+        // Capture the engine error BEFORE AdsCloseSQLStatement —
+        // ok() inside the close clears thread-local last_error.
         char emsg[512] = {0};
         UNSIGNED16 elen = sizeof(emsg);
         UNSIGNED32 ecode = 0;
         AdsGetLastError(&ecode,
                         reinterpret_cast<UNSIGNED8*>(emsg), &elen);
-        return json_error(std::string("AdsExecuteSQLDirect failed (") +
-                          std::to_string(rrc) + "): " + std::string(emsg, elen),
-                          400);
+        AdsCloseSQLStatement(hStmt);
+        std::string detail(emsg, elen);
+        // Soft heuristics — surface the most common SQL-101 traps
+        // back to the user as a "did you mean…?" hint.
+        std::string hint;
+        if (sql.find('"') != std::string::npos) {
+            hint = " hint: ADS SQL uses single quotes for string "
+                   "literals — try '...' instead of \"...\".";
+        }
+        return json_error(
+            "AdsExecuteSQLDirect failed (" +
+            std::to_string(rrc) + ")" +
+            (detail.empty() ? "" : ": " + detail) + hint,
+            400);
     }
     json out{{"cols", json::array()}, {"rows", json::array()},
              {"rows_returned", 0}};
