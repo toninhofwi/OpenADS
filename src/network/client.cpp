@@ -90,6 +90,7 @@ void RemoteConnection::disconnect() noexcept {
     req.opcode = Opcode::Disconnect;
     (void)write_frame(sock_, req);
     sock_close(sock_);
+    sock_ = Socket{};
 }
 
 util::Result<std::uint32_t>

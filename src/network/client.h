@@ -19,6 +19,11 @@ namespace openads::network {
 
 class RemoteConnection {
 public:
+    RemoteConnection() = default;
+    ~RemoteConnection() { disconnect(); }
+    RemoteConnection(const RemoteConnection&) = delete;
+    RemoteConnection& operator=(const RemoteConnection&) = delete;
+
     util::Result<void> connect(const std::string& host,
                                std::uint16_t port,
                                const std::string& data_dir,
