@@ -13,3 +13,11 @@
 *.adm   binary
 *.fpt   binary
 *.dbt   binary
+
+# Exclude internal AI-scaffold planning notes from `git archive`
+# (and therefore from the GitHub-Release auto-attached
+# "Source code (zip/tar.gz)" tarballs). They stay in the repo
+# for local reference but never ship to consumers.
+docs/superpowers/ export-ignore
+build/            export-ignore
+build-*/          export-ignore
