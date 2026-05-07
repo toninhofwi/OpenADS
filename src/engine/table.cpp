@@ -244,8 +244,11 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
         return {};
     }
     if (recno > driver_->record_count()) {
-        state_ = State::Eof; recno_ = 0;
-        return util::Error{5025, 0, "recno out of range", ""};
+        // Clipper / dbf1.c: GO past-end is a phantom position
+        // (Limbo) — BOTH BOF() and EOF() true. recno() reports
+        // LastRec()+1.
+        state_ = State::Limbo; recno_ = 0;
+        return {};
     }
     return load_record_(recno);
 }
