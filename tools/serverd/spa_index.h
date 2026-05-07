@@ -944,8 +944,13 @@ function fmtBytes(n) {
 async function loadServerInfo() {
   try {
     const d = await api("/api/server/info");
+    const osIcon = ({Windows:"🪟", Linux:"🐧", macOS:"🍎"}[d.os]
+                     || "⚠");
     $("server-body").innerHTML = `<div class="kv">
       <div>Engine</div><div>${esc(d.engine)} ${esc(d.version || "")}</div>
+      <div>Host OS</div><div>${osIcon} ${esc(d.os || "?")}
+        ${d.arch ? "(" + esc(d.arch) + ")" : ""}</div>
+      <div>Compiler</div><div>${esc(d.compiler || "")}</div>
       <div>HTTP module</div><div>${esc(d.http || "")}</div>
       <div>Server name</div><div>${esc(d.server_name || "")}</div>
       <div>Data dir</div><div>${esc(d.data_dir)}</div>

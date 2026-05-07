@@ -895,13 +895,68 @@ json table_sidecars(const std::string& dir, const std::string& tname) {
     return json{{"table", tname}, {"sidecars", arr}};
 }
 
+// studio.web.0.14 — host OS / arch / compiler banner so Studio can
+// surface "running on Linux x86_64 / clang 18" etc. Detected at
+// compile time so a packaged binary always reports the platform
+// it was built for.
+const char* host_os() {
+    // Only report platforms that are actually tested in CI and on
+    // the project's reference servers: Windows / Linux / macOS.
+    // Anything else compiles, but we report it as "untested" so
+    // users know they're running on an unsupported configuration.
+#if defined(_WIN32)
+    return "Windows";
+#elif defined(__APPLE__)
+    return "macOS";
+#elif defined(__linux__)
+    return "Linux";
+#else
+    return "untested";
+#endif
+}
+const char* host_arch() {
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "arm";
+#else
+    return "unknown";
+#endif
+}
+const char* host_compiler() {
+#if defined(__clang__)
+    static char b[40];
+    std::snprintf(b, sizeof(b), "clang %d.%d.%d",
+                  __clang_major__, __clang_minor__, __clang_patchlevel__);
+    return b;
+#elif defined(__GNUC__)
+    static char b[40];
+    std::snprintf(b, sizeof(b), "gcc %d.%d.%d",
+                  __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
+    return b;
+#elif defined(_MSC_VER)
+    static char b[40];
+    std::snprintf(b, sizeof(b), "MSVC %d", _MSC_VER);
+    return b;
+#else
+    return "unknown";
+#endif
+}
+
 // studio.web.0.2 — server info panel.
 json server_info(const std::string& dir) {
     json out{
         {"engine",      "openads"},
-        {"version",     "1.0.0-rc1"},
+        {"version",     "1.0.0-rc3"},
         {"data_dir",    dir},
-        {"http",        "studio.web.0.7"}
+        {"http",        "studio.web.0.14"},
+        {"os",          host_os()},
+        {"arch",        host_arch()},
+        {"compiler",    host_compiler()}
     };
     AbiSession sess(dir);
     if (sess.ok()) {
