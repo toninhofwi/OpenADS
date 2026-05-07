@@ -80,6 +80,89 @@ json json_error(const std::string& msg, int http_code) {
     return json{{"error", msg}, {"http_code", http_code}};
 }
 
+// studio.web.0.15 — Studio's row serialiser used to push raw memo
+// bytes into a JSON string, which throws json.exception.type_error.316
+// the moment the payload contained any non-UTF-8 byte (e.g. a ZIP /
+// JPG / encrypted blob stored in an M field). The helpers below let
+// `table_rows` emit:
+//   - a normal string when the bytes ARE valid UTF-8, OR
+//   - an object {"_b64": "<base64>", "_size": N, "_truncated": bool}
+//     for binary memos (with a 1 KB preview cap so the JSON response
+//     stays bounded even for multi-MB blobs).
+bool is_valid_utf8(const std::uint8_t* p, std::size_t n) {
+    std::size_t i = 0;
+    while (i < n) {
+        std::uint8_t c = p[i];
+        if (c < 0x80) { ++i; continue; }
+        std::size_t need;
+        std::uint8_t lo, hi;
+        if      ((c & 0xE0) == 0xC0) { need = 1; lo = 0x80; hi = 0xBF;
+                                       if (c < 0xC2) return false; }
+        else if ((c & 0xF0) == 0xE0) { need = 2; lo = 0x80; hi = 0xBF; }
+        else if ((c & 0xF8) == 0xF0) { need = 3; lo = 0x80; hi = 0xBF;
+                                       if (c > 0xF4) return false; }
+        else return false;
+        if (i + need >= n) return false;
+        for (std::size_t k = 1; k <= need; ++k) {
+            std::uint8_t cc = p[i + k];
+            std::uint8_t llo = (k == 1 && c == 0xE0) ? 0xA0 :
+                                (k == 1 && c == 0xED) ? 0x80 :
+                                (k == 1 && c == 0xF0) ? 0x90 :
+                                (k == 1 && c == 0xF4) ? 0x80 : lo;
+            std::uint8_t hhi = (k == 1 && c == 0xED) ? 0x9F :
+                                (k == 1 && c == 0xF4) ? 0x8F : hi;
+            if (cc < llo || cc > hhi) return false;
+        }
+        i += need + 1;
+    }
+    return true;
+}
+
+std::string base64_encode(const std::uint8_t* p, std::size_t n) {
+    static const char* T =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((n + 2) / 3 * 4);
+    std::size_t i = 0;
+    while (i + 3 <= n) {
+        std::uint32_t v = (std::uint32_t(p[i]) << 16) |
+                          (std::uint32_t(p[i + 1]) << 8) |
+                           std::uint32_t(p[i + 2]);
+        out.push_back(T[(v >> 18) & 0x3F]);
+        out.push_back(T[(v >> 12) & 0x3F]);
+        out.push_back(T[(v >>  6) & 0x3F]);
+        out.push_back(T[ v        & 0x3F]);
+        i += 3;
+    }
+    if (i < n) {
+        std::uint32_t v = std::uint32_t(p[i]) << 16;
+        if (i + 1 < n) v |= std::uint32_t(p[i + 1]) << 8;
+        out.push_back(T[(v >> 18) & 0x3F]);
+        out.push_back(T[(v >> 12) & 0x3F]);
+        out.push_back(i + 1 < n ? T[(v >> 6) & 0x3F] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+constexpr std::size_t STUDIO_BIN_PREVIEW_BYTES = 1024;
+
+json bytes_to_json_cell(const std::uint8_t* p, std::size_t n) {
+    if (is_valid_utf8(p, n)) {
+        // Trim trailing spaces (legacy Studio behaviour for fixed-
+        // width C / N fields) but only when the payload is text.
+        while (n > 0 && p[n - 1] == ' ') --n;
+        return std::string(reinterpret_cast<const char*>(p), n);
+    }
+    std::size_t preview = n < STUDIO_BIN_PREVIEW_BYTES
+        ? n : STUDIO_BIN_PREVIEW_BYTES;
+    return json{
+        {"_b64",       base64_encode(p, preview)},
+        {"_size",      static_cast<std::uint64_t>(n)},
+        {"_truncated", n > preview}
+    };
+}
+
 // List `*.dbf` files in the data dir.
 std::vector<std::string> list_dbf_files(const std::string& dir) {
     std::vector<std::string> out;
@@ -166,10 +249,17 @@ json table_rows(const std::string& dir, const std::string& tname,
     UNSIGNED16 nf = 0;
     AdsGetNumFields(hTable, &nf);
     std::vector<std::string> cnames; cnames.reserve(nf);
+    std::vector<UNSIGNED16> ctypes; ctypes.reserve(nf);
     for (UNSIGNED16 i = 1; i <= nf; ++i) {
         UNSIGNED8 nm[64] = {0}; UNSIGNED16 cap = sizeof(nm);
         AdsGetFieldName(hTable, i, nm, &cap);
-        cnames.emplace_back(reinterpret_cast<char*>(nm), cap);
+        std::string fname(reinterpret_cast<char*>(nm), cap);
+        UNSIGNED16 ftype = 0;
+        std::vector<UNSIGNED8> fbuf(fname.size() + 1);
+        std::memcpy(fbuf.data(), fname.data(), fname.size());
+        AdsGetFieldType(hTable, fbuf.data(), &ftype);
+        cnames.emplace_back(std::move(fname));
+        ctypes.push_back(ftype);
     }
     UNSIGNED32 rc = 0;
     AdsGetRecordCount(hTable, 0, &rc);
@@ -190,18 +280,30 @@ json table_rows(const std::string& dir, const std::string& tname,
         UNSIGNED16 deleted = 0;
         AdsIsRecordDeleted(hTable, &deleted);
         json row = json::array();
-        // First "column" is the recno + deleted flag for editing.
         row.push_back(json{{"_recno", recno},
                            {"_deleted", deleted != 0}});
-        for (auto& cn : cnames) {
+        for (std::size_t i = 0; i < cnames.size(); ++i) {
+            const auto& cn = cnames[i];
             std::vector<UNSIGNED8> fbuf(cn.size() + 1);
             std::memcpy(fbuf.data(), cn.data(), cn.size());
-            UNSIGNED8 vbuf[4096] = {0};
-            UNSIGNED32 vcap = sizeof(vbuf);
-            if (AdsGetField(hTable, fbuf.data(), vbuf, &vcap, 0) != 0)
+
+            const bool is_memo = (ctypes[i] == ADS_MEMO ||
+                                  ctypes[i] == ADS_BINARY ||
+                                  ctypes[i] == ADS_IMAGE ||
+                                  ctypes[i] == ADS_NMEMO);
+            UNSIGNED32 mlen = 0;
+            if (is_memo) {
+                if (AdsGetMemoLength(hTable, fbuf.data(), &mlen) != 0)
+                    mlen = 0;
+            }
+            // Memo path: allocate exact size + 1; non-memo path: 4 KB
+            // is plenty for fixed-width C / N / D / L / T / I / Y.
+            std::uint32_t cap = is_memo ? (mlen + 1) : 4096u;
+            std::vector<UNSIGNED8> vbuf(cap, 0);
+            UNSIGNED32 vcap = cap;
+            if (AdsGetField(hTable, fbuf.data(), vbuf.data(), &vcap, 0) != 0)
                 vcap = 0;
-            while (vcap > 0 && vbuf[vcap - 1] == ' ') --vcap;
-            row.push_back(std::string(reinterpret_cast<char*>(vbuf), vcap));
+            row.push_back(bytes_to_json_cell(vbuf.data(), vcap));
         }
         out["rows"].push_back(std::move(row));
         ++walked;
