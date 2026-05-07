@@ -5633,7 +5633,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::array<std::uint8_t, 32> fd{};
                 char fn[16];
                 std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
-                std::strncpy(reinterpret_cast<char*>(fd.data()), fn, 11);
+                std::size_t fn_len = std::strlen(fn);
+                std::memcpy(fd.data(), fn,
+                            fn_len > 11 ? 11 : fn_len);
                 fd[11] = 'C'; fd[16] = 30;
                 jg_file.insert(jg_file.end(), fd.begin(), fd.end());
             }
