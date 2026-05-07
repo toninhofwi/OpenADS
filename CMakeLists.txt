@@ -87,6 +87,7 @@ endif()
 add_subdirectory(src)
 add_subdirectory(tools/serverd)
 add_subdirectory(tools/bench)
+add_subdirectory(tools/stress)
 
 if(OPENADS_BUILD_TESTS)
     enable_testing()

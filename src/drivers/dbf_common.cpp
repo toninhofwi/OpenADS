@@ -13,6 +13,8 @@ DbfFamily classify(std::uint8_t version) {
     switch (version) {
         case 0x03: case 0x83:
         case 0xC3:                          // M11.2 — encrypted variant
+        case 0xF5:                          // FoxPro 2.x with FPT memo
+        case 0xFB:                          // FoxBASE
             return DbfFamily::Clipper;
         case 0x30: case 0x31: case 0x32:
             return DbfFamily::Vfp;

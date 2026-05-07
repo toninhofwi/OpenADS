@@ -490,6 +490,28 @@ DbfTypeSpec dbf_type_for(const std::string& name) {
         }
         return true;
     };
+    // Single-letter DBF type codes (the dBASE convention every
+    // raw-DBF tool uses). Both the rddads verbose names AND the
+    // one-letter codes flow through here so callers can pick
+    // either style.
+    if (name.size() == 1) {
+        char c = static_cast<char>(std::toupper(
+                     static_cast<unsigned char>(name[0])));
+        switch (c) {
+            case 'C': return {'C', 0,  0, false};
+            case 'N': return {'N', 0,  0, false};
+            case 'L': return {'L', 1,  0, false};
+            case 'D': return {'D', 8,  0, false};
+            case 'M': return {'M', 10, 0, true };
+            case 'I': return {'N', 0,  0, false};   // integer-as-text
+            case 'Y': return {'N', 0,  2, false};   // currency-as-text
+            case 'B': return {'N', 0,  0, false};   // double-as-text
+            case 'V': return {'V', 0,  0, false};   // varchar (M11.1)
+            case 'Q': return {'Q', 0,  0, false};   // varbinary (M11.1)
+            case 'T': return {'C',23,  0, false};   // ISO-8601 fallback
+            default:  break;
+        }
+    }
     if (eq("Character") || eq("Char") || eq("CICHARACTER"))
         return {'C', 0, 0, false};
     if (eq("Numeric") || eq("Long") || eq("Number"))
