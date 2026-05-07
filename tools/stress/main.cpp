@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
         AdsSetString(hTable, ftag,
                      reinterpret_cast<UNSIGNED8*>(tag), 4);
         AdsSetDouble(hTable, famt,
-                     static_cast<double>((rng() % 100000) / 100.0));
+                     static_cast<double>(rng() % 100000) / 100.0);
         if ((r % 10000) == 0) {
             std::printf("  ...%u rows (%.1f s)\n",
                         r, (now_ms() - t0) / 1000.0);

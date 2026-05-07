@@ -27,7 +27,7 @@ TEST_CASE("M9.10 NTX multi-level split survives many sequential inserts") {
         // insert must split a level deeper).
         constexpr int N = 200;
         for (int i = 1; i <= N; ++i) {
-            char buf[8];
+            char buf[16];
             std::snprintf(buf, sizeof(buf), "%04d", i);
             auto e = ix.insert(static_cast<std::uint32_t>(i),
                                std::string(buf, 4));
@@ -42,7 +42,7 @@ TEST_CASE("M9.10 NTX multi-level split survives many sequential inserts") {
         NtxIndex ix;
         REQUIRE(ix.open(p.string(), IndexOpenMode::Shared).has_value());
         for (int i = 1; i <= 200; ++i) {
-            char buf[8];
+            char buf[16];
             std::snprintf(buf, sizeof(buf), "%04d", i);
             auto seek = ix.seek_key(std::string(buf, 4), false);
             INFO("seek i=" << i);

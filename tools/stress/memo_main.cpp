@@ -225,14 +225,14 @@ int main(int argc, char** argv) {
             if ((r % 500) == 0) {
                 std::printf("  ...%u rows (%.1f s, %.1f MB written)\n",
                             r, (now_ms() - t0) / 1000.0,
-                            bytes_written / (1024.0 * 1024.0));
+                            static_cast<double>(bytes_written) / (1024.0 * 1024.0));
                 std::fflush(stdout);
             }
         }
         AdsWriteRecord(hTable);
         std::printf("[memo] write phase done: %u rows, %.1f MB memo bytes,"
                     " %.1f s\n",
-                    rows, bytes_written / (1024.0 * 1024.0),
+                    rows, static_cast<double>(bytes_written) / (1024.0 * 1024.0),
                     (now_ms() - t0) / 1000.0);
         AdsCloseTable(hTable);
 
@@ -314,13 +314,13 @@ int main(int argc, char** argv) {
         if ((r % 500) == 0) {
             std::printf("  ...verified %u rows (%.1f s, %.1f MB)\n",
                         r, (now_ms() - v0) / 1000.0,
-                        total_bytes / (1024.0 * 1024.0));
+                        static_cast<double>(total_bytes) / (1024.0 * 1024.0));
             std::fflush(stdout);
         }
     }
     std::printf("[memo] verify done: %u rows, %.1f MB read,"
                 " %u mismatches, %.1f s\n",
-                cnt, total_bytes / (1024.0 * 1024.0),
+                cnt, static_cast<double>(total_bytes) / (1024.0 * 1024.0),
                 mismatches, (now_ms() - v0) / 1000.0);
 
     AdsCloseTable(hTable);

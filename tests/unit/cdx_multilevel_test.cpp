@@ -29,7 +29,7 @@ TEST_CASE("CDX multi-level split survives many sequential inserts") {
         REQUIRE(created.has_value());
         CdxIndex ix = std::move(created).value();
         for (int i = 1; i <= N; ++i) {
-            char buf[8];
+            char buf[16];
             std::snprintf(buf, sizeof(buf), "%04d", i);
             auto e = ix.insert(static_cast<std::uint32_t>(i),
                                std::string(buf, 4));
@@ -44,7 +44,7 @@ TEST_CASE("CDX multi-level split survives many sequential inserts") {
         CdxIndex ix;
         REQUIRE(ix.open(p.string(), IndexOpenMode::Shared).has_value());
         for (int i = 1; i <= N; ++i) {
-            char buf[8];
+            char buf[16];
             std::snprintf(buf, sizeof(buf), "%04d", i);
             auto seek = ix.seek_key(std::string(buf, 4), false);
             INFO("seek i=" << i);
@@ -94,7 +94,7 @@ TEST_CASE("CDX multi-level split with descending insert order") {
         REQUIRE(created.has_value());
         CdxIndex ix = std::move(created).value();
         for (int i = N; i >= 1; --i) {
-            char buf[8];
+            char buf[16];
             std::snprintf(buf, sizeof(buf), "%04d", i);
             auto e = ix.insert(static_cast<std::uint32_t>(i),
                                std::string(buf, 4));
@@ -108,7 +108,7 @@ TEST_CASE("CDX multi-level split with descending insert order") {
         CdxIndex ix;
         REQUIRE(ix.open(p.string(), IndexOpenMode::Shared).has_value());
         for (int i = 1; i <= N; ++i) {
-            char buf[8];
+            char buf[16];
             std::snprintf(buf, sizeof(buf), "%04d", i);
             auto seek = ix.seek_key(std::string(buf, 4), false);
             INFO("seek i=" << i);
