@@ -145,6 +145,13 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 <header>
   <h1>OpenADS Studio</h1>
   <div style="display:flex;gap:18px;align-items:center">
+    <select id="lang-pick"
+       style="background:transparent;color:white;border:1px solid rgba(255,255,255,0.4);
+              padding:5px 8px;border-radius:3px;cursor:pointer;font-size:14px">
+      <option value="en">EN</option>
+      <option value="es">ES</option>
+      <option value="pt">PT</option>
+    </select>
     <button id="theme-toggle"
        style="background:transparent;color:white;border:1px solid rgba(255,255,255,0.4);
               padding:5px 12px;border-radius:3px;cursor:pointer;font-size:15px">
@@ -163,7 +170,7 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 <main>
   <aside>
     <div class="aside-head">
-      <h2>Tables</h2>
+      <h2 data-i18n="tables">Tables</h2>
       <div style="display:flex;gap:4px">
         <button id="btn-refresh-tables" title="Refresh">↻</button>
         <button id="btn-upload-table"   title="Upload DBF">⇪</button>
@@ -173,25 +180,30 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
     <ul id="tables"></ul>
     <input type="file" id="upload-input" multiple
            style="display:none" accept=".dbf,.cdx,.ntx,.fpt,.dbt,.add">
-    <h2>Server</h2>
-    <ul><li id="server-link">Info</li></ul>
+    <h2 data-i18n="server">Server</h2>
+    <ul><li id="server-link" data-i18n="info">Info</li></ul>
   </aside>
   <section class="work">
     <nav class="tabs" id="tabs">
-      <button data-tab="browse" class="active">Browse</button>
-      <button data-tab="structure">Structure</button>
-      <button data-tab="insert">Insert</button>
-      <button data-tab="sql">SQL</button>
-      <button data-tab="server">Server</button>
-      <button data-tab="sessions">Sessions</button>
-      <button data-tab="dd">Dict</button>
+      <button data-tab="browse"    data-i18n="browse"    class="active">Browse</button>
+      <button data-tab="structure" data-i18n="structure">Structure</button>
+      <button data-tab="insert"    data-i18n="insert">Insert</button>
+      <button data-tab="sql"       data-i18n="sql">SQL</button>
+      <button data-tab="server"    data-i18n="server">Server</button>
+      <button data-tab="sessions"  data-i18n="sessions">Sessions</button>
+      <button data-tab="dd"        data-i18n="dict">Dict</button>
     </nav>
 
     <div id="pane-browse" class="pane">
       <div class="toolbar">
         <span id="browse-title" class="err"></span>
+        <input id="browse-filter" placeholder="filter rows…"
+               style="background:var(--panel-2);color:var(--fg);
+                      border:1px solid var(--border);
+                      padding:6px 10px;font-size:15px;border-radius:2px;
+                      flex:1;min-width:140px;max-width:340px">
       </div>
-      <div id="browse-grid" class="empty">Select a table on the left.</div>
+      <div id="browse-grid" class="empty" data-i18n="browse_pick">Select a table on the left.</div>
       <div class="pager" id="browse-pager"></div>
     </div>
 
@@ -305,6 +317,32 @@ const esc = s => (""+s)
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
   .replace(/"/g,"&quot;");
 
+// ---- studio.web.0.9 — i18n -----------------------------------------
+const I18N = {
+  en: { tables: "Tables", server: "Server", info: "Info",
+        browse: "Browse", structure: "Structure", insert: "Insert",
+        sql: "SQL", sessions: "Sessions", dict: "Dict",
+        browse_pick: "Select a table on the left." },
+  es: { tables: "Tablas", server: "Servidor", info: "Info",
+        browse: "Explorar", structure: "Estructura", insert: "Insertar",
+        sql: "SQL", sessions: "Sesiones", dict: "Dicc",
+        browse_pick: "Elige una tabla a la izquierda." },
+  pt: { tables: "Tabelas", server: "Servidor", info: "Info",
+        browse: "Procurar", structure: "Estrutura", insert: "Inserir",
+        sql: "SQL", sessions: "Sessões", dict: "Dic",
+        browse_pick: "Escolha uma tabela à esquerda." }
+};
+const LANG_KEY = "openads-studio.lang";
+function applyLang(l) {
+  if (!I18N[l]) l = "en";
+  document.documentElement.setAttribute("lang", l);
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const k = el.dataset.i18n;
+    if (I18N[l][k]) el.textContent = I18N[l][k];
+  });
+  $("lang-pick").value = l;
+}
+
 let state = { table: null, schema: null,
               browseOffset: 0, browseLimit: 50 };
 
@@ -367,53 +405,16 @@ async function loadBrowse() {
   try {
     const data = await api(`/api/tables/${encodeURIComponent(t)}` +
       `/rows?offset=${state.browseOffset}&limit=${state.browseLimit}`);
-    if (!data.rows || data.rows.length === 0) {
-      $("browse-grid").innerHTML = `<div class="empty">No rows.</div>`;
-    } else {
-      const cols = data.cols;
-      const tbody = data.rows.map((r, ri) => {
-        const meta = r[0];
-        const cells = r.slice(1);
-        const cls = meta._deleted ? "deleted" : "";
-        return `<tr class="${cls}">
-          <td>${meta._recno}</td>
-          ${cells.map((v, ci) => `<td class="cell"
-              data-row="${ri}" data-col="${ci}">${esc(v)}</td>`).join("")}
-          <td><button class="btn btn-secondary" data-edit="${meta._recno}">Edit</button>
-              <button class="btn btn-danger" data-delete="${meta._recno}"
-                      data-deleted="${meta._deleted}">${
-                meta._deleted ? "Recall" : "Delete"
-              }</button></td>
-        </tr>`;
-      }).join("");
-      $("browse-grid").innerHTML = `<table>
-        <thead><tr><th>recno</th>${cols.map(c => `<th>${esc(c)}</th>`).join("")}<th>actions</th></tr></thead>
-        <tbody>${tbody}</tbody>
-      </table>`;
-      document.querySelectorAll("[data-edit]").forEach(b =>
-        b.addEventListener("click", () => editRow(+b.dataset.edit)));
-      document.querySelectorAll("[data-delete]").forEach(b =>
-        b.addEventListener("click", () =>
-          deleteRow(+b.dataset.delete, b.dataset.deleted === "true")));
-      // Click a cell to expand in a modal (memo / long text).
-      const rowsCache = data.rows;
-      const colsCache = data.cols;
-      document.querySelectorAll("td.cell").forEach(td => {
-        td.addEventListener("click", () => {
-          const r = +td.dataset.row, c = +td.dataset.col;
-          const meta = rowsCache[r][0];
-          const v = rowsCache[r].slice(1)[c];
-          openCellModal(`recno ${meta._recno} / ${colsCache[c]}`, v);
-        });
-      });
-    }
+    state.lastBrowseData = data;
+    state.browseSort = state.browseSort || { col: -1, dir: 1 };
+    renderBrowseGrid();
     $("browse-pager").innerHTML = `
       <button class="btn btn-secondary" id="prev"
               ${state.browseOffset === 0 ? "disabled" : ""}>‹ Prev</button>
-      <span>${state.browseOffset + 1}–${state.browseOffset + data.rows.length}
+      <span>${state.browseOffset + 1}–${state.browseOffset + (data.rows||[]).length}
             of ${data.total}</span>
       <button class="btn btn-secondary" id="next"
-              ${state.browseOffset + data.rows.length >= data.total ?
+              ${state.browseOffset + (data.rows||[]).length >= data.total ?
                 "disabled" : ""}>Next ›</button>`;
     $("prev")?.addEventListener("click", () => {
       state.browseOffset = Math.max(0, state.browseOffset - state.browseLimit);
@@ -428,7 +429,82 @@ async function loadBrowse() {
 }
 
 )OPENADS_SPA"
-R"OPENADS_SPA(async function ensureSchema() {
+R"OPENADS_SPA()OPENADS_SPA"
+R"OPENADS_SPA(function renderBrowseGrid() {
+  const data = state.lastBrowseData;
+  if (!data) return;
+  if (!data.rows || data.rows.length === 0) {
+    $("browse-grid").innerHTML = `<div class="empty">No rows.</div>`;
+    return;
+  }
+  const cols = data.cols;
+  // Apply filter (case-insensitive substring across all cells).
+  const filterTxt = ($("browse-filter").value || "").toLowerCase().trim();
+  let rows = data.rows.map((r, idx) => ({ orig: idx, r }));
+  if (filterTxt) {
+    rows = rows.filter(({ r }) =>
+      r.slice(1).some(v => (""+v).toLowerCase().includes(filterTxt)));
+  }
+  // Apply sort.
+  const sort = state.browseSort;
+  if (sort.col >= 0) {
+    const idx = sort.col;
+    const numeric = rows.length > 0 &&
+      !isNaN(parseFloat((rows[0].r.slice(1)[idx] || "").trim()));
+    rows.sort((a, b) => {
+      const av = a.r.slice(1)[idx], bv = b.r.slice(1)[idx];
+      let c;
+      if (numeric) c = parseFloat(av) - parseFloat(bv);
+      else c = (""+av).localeCompare(""+bv);
+      return sort.dir * (isNaN(c) ? 0 : c);
+    });
+  }
+  const tbody = rows.map(({ r, orig }) => {
+    const meta = r[0];
+    const cells = r.slice(1);
+    const cls = meta._deleted ? "deleted" : "";
+    return `<tr class="${cls}">
+      <td>${meta._recno}</td>
+      ${cells.map((v, ci) => `<td class="cell"
+          data-row="${orig}" data-col="${ci}">${esc(v)}</td>`).join("")}
+      <td><button class="btn btn-secondary" data-edit="${meta._recno}">Edit</button>
+          <button class="btn btn-danger" data-delete="${meta._recno}"
+                  data-deleted="${meta._deleted}">${
+            meta._deleted ? "Recall" : "Delete"
+          }</button></td>
+    </tr>`;
+  }).join("");
+  const arrow = (i) => sort.col === i
+    ? (sort.dir > 0 ? " ▲" : " ▼") : "";
+  $("browse-grid").innerHTML = `<table>
+    <thead><tr><th>recno</th>${
+      cols.map((c, i) =>
+        `<th class="sort" data-col="${i}" style="cursor:pointer">${esc(c)}${arrow(i)}</th>`)
+        .join("")}<th>actions</th></tr></thead>
+    <tbody>${tbody}</tbody></table>`;
+  document.querySelectorAll("th.sort").forEach(th =>
+    th.addEventListener("click", () => {
+      const c = +th.dataset.col;
+      if (state.browseSort.col === c) state.browseSort.dir = -state.browseSort.dir;
+      else state.browseSort = { col: c, dir: 1 };
+      renderBrowseGrid();
+    }));
+  document.querySelectorAll("[data-edit]").forEach(b =>
+    b.addEventListener("click", () => editRow(+b.dataset.edit)));
+  document.querySelectorAll("[data-delete]").forEach(b =>
+    b.addEventListener("click", () =>
+      deleteRow(+b.dataset.delete, b.dataset.deleted === "true")));
+  document.querySelectorAll("td.cell").forEach(td => {
+    td.addEventListener("click", () => {
+      const r = +td.dataset.row, c = +td.dataset.col;
+      const meta = data.rows[r][0];
+      const v = data.rows[r].slice(1)[c];
+      openCellModal(`recno ${meta._recno} / ${cols[c]}`, v);
+    });
+  });
+}
+
+async function ensureSchema() {
   if (state.schema && state.schema.table === state.table) return state.schema;
   state.schema = await api(
     `/api/tables/${encodeURIComponent(state.table)}/schema`);
@@ -522,7 +598,8 @@ async function loadStructure() {
   }
 }
 
-async function maintenanceOp(op) {
+)OPENADS_SPA"
+R"OPENADS_SPA(async function maintenanceOp(op) {
   const t = state.table;
   if (op === "zap" && !confirm(
         `Zap ${t}?  All records are removed. Indexes are kept but emptied.`)) return;
@@ -1030,6 +1107,14 @@ $("theme-toggle").addEventListener("click", () => {
   applyTheme(nxt);
 });
 
+applyLang(localStorage.getItem(LANG_KEY) || "en");
+$("lang-pick").addEventListener("change", e => {
+  localStorage.setItem(LANG_KEY, e.target.value);
+  applyLang(e.target.value);
+});
+
+$("browse-filter").addEventListener("input", () => renderBrowseGrid());
+
 $("btn-new-table").addEventListener("click", openCreateModal);
 $("btn-refresh-tables").addEventListener("click", loadTables);
 $("btn-upload-table").addEventListener("click", () =>
@@ -1058,7 +1143,8 @@ $("enc-cancel").addEventListener("click", () =>
 $("sessions-refresh").addEventListener("click", loadSessions);
 $("sessions-auto").addEventListener("change", startSessionsAutoRefresh);
 
-function openCellModal(title, value) {
+)OPENADS_SPA"
+R"OPENADS_SPA(function openCellModal(title, value) {
   $("cell-title").textContent = title;
   $("cell-body").textContent  = value;
   $("modal-cell").classList.add("show");
