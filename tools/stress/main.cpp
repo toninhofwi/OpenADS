@@ -54,14 +54,18 @@ const char* LAST[]  = {"Smith","Lopez","Martin","Brown","Garcia",
 int main(int argc, char** argv) {
     std::uint32_t rows = 100000;
     std::string   data_dir = ".";
+    std::string   table_name = "stress.dbf";
     bool          with_indexes = false;
+    bool          skip_gen = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if      (a == "--rows" && i + 1 < argc)
             rows = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         else if (a == "--dir" && i + 1 < argc) data_dir = argv[++i];
+        else if (a == "--table" && i + 1 < argc) table_name = argv[++i];
         else if (a == "--with-indexes")        with_indexes = true;
+        else if (a == "--skip-gen")            skip_gen = true;
         else if (a == "-h" || a == "--help") {
             std::printf(
                 "usage: %s [--rows N] [--dir DIR] [--with-indexes]\n",
@@ -81,8 +85,9 @@ int main(int argc, char** argv) {
     }
 
     // Drop any pre-existing stress.dbf so AdsCreateTable doesn't
-    // collide.
-    {
+    // collide (skipped when --skip-gen leaves an existing file in
+    // place to test the index path against external data).
+    if (!skip_gen) {
         std::error_code ec;
         for (auto& f : {"stress.dbf", "stress.cdx", "stress.fpt",
                          "stress.dbt"}) {
@@ -97,18 +102,20 @@ int main(int argc, char** argv) {
     // bench tool's three-column DBF works fine; stress' eight-column
     // version trips 6106. Bisect by starting with bench-shape and
     // expand until the failure shows up.
-    UNSIGNED8 def[] =
-      "ID,N,8,0;TAG,C,4,0;AMT,N,8,2";
-    UNSIGNED8 tname[] = "stress";
     ADSHANDLE hTable = 0;
-    UNSIGNED32 rc = AdsCreateTable(hConn, tname, nullptr, ADS_CDX,
-                                   0, 0, 0, 0, def, &hTable);
-    if (rc != 0) {
-        std::fprintf(stderr, "AdsCreateTable failed: %u\n", rc);
-        return 1;
+    if (!skip_gen) {
+        UNSIGNED8 def[] =
+          "ID,N,8,0;TAG,C,4,0;AMT,N,8,2";
+        UNSIGNED8 tname[] = "stress";
+        UNSIGNED32 rc = AdsCreateTable(hConn, tname, nullptr, ADS_CDX,
+                                       0, 0, 0, 0, def, &hTable);
+        if (rc != 0) {
+            std::fprintf(stderr, "AdsCreateTable failed: %u\n", rc);
+            return 1;
+        }
+        std::printf("[stress] writing %u rows -> %s/%s\n",
+                    rows, data_dir.c_str(), table_name.c_str());
     }
-    std::printf("[stress] writing %u rows -> %s/stress.dbf\n",
-                rows, data_dir.c_str());
 
     std::mt19937 rng(42);
     auto pick = [&](const char* const* arr, std::size_t n) {
@@ -120,6 +127,7 @@ int main(int argc, char** argv) {
     UNSIGNED8 famt[]   = "AMT";
     (void)pick; (void)FIRST; (void)LAST; (void)DEPTS;
 
+    if (skip_gen) goto run_indexes;
     for (std::uint32_t r = 1; r <= rows; ++r) {
         AdsAppendRecord(hTable);
         AdsSetDouble(hTable, fid, static_cast<double>(r));
@@ -140,46 +148,69 @@ int main(int argc, char** argv) {
     std::printf("[stress] done writing in %.1f s\n",
                 (now_ms() - t0) / 1000.0);
 
-    AdsCloseTable(hTable);
+    if (hTable != 0) AdsCloseTable(hTable);
+run_indexes:
 
     // Re-open + verify count matches before attempting indexes.
     {
         ADSHANDLE hCheck = 0;
-        UNSIGNED8 leaf[] = "stress.dbf";
-        if (AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+        std::vector<UNSIGNED8> leafbuf(table_name.size() + 1);
+        std::memcpy(leafbuf.data(), table_name.c_str(),
+                    table_name.size() + 1);
+        if (AdsOpenTable(hConn, leafbuf.data(), nullptr, ADS_CDX,
                          0, 0, 0, 0, &hCheck) == 0) {
             UNSIGNED32 rc2 = 0;
             AdsGetRecordCount(hCheck, 0, &rc2);
-            std::printf("[stress] reopened: %u records\n", rc2);
+            std::printf("[stress] reopened %s: %u records\n",
+                        table_name.c_str(), rc2);
             AdsCloseTable(hCheck);
         }
     }
 
     if (with_indexes) {
-        // Use SQL DDL — the same code path the bench tool exercises
-        // and the most thoroughly tested CREATE INDEX entry point
-        // in the engine.
-        ADSHANDLE hStmt = 0;
-        AdsCreateSQLStatement(hConn, &hStmt);
-        struct IdxDef { const char* tag; const char* expr; };
+        // Open the table again for AdsCreateIndex61 (the direct
+        // ABI entry point, bypassing the CDX-only SQL DDL path so
+        // we can target either .cdx or .ntx by extension).
+        ADSHANDLE hIdxTable = 0;
+        std::vector<UNSIGNED8> leafbuf(table_name.size() + 1);
+        std::memcpy(leafbuf.data(), table_name.c_str(),
+                    table_name.size() + 1);
+        if (AdsOpenTable(hConn, leafbuf.data(), nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hIdxTable) != 0) {
+            std::fprintf(stderr, "open for index failed\n");
+            return 1;
+        }
+        struct IdxDef { const char* file; const char* tag; const char* expr; };
         IdxDef idxs[] = {
-            {"ID_TAG",   "ID"},
-            {"TAG_TAG",  "TAG"},
+            {"stress_id.ntx",   "ID_NTX",  "ID"},
+            {"stress_tag.ntx",  "TAG_NTX", "TAG"},
         };
         for (auto& d : idxs) {
             double i0 = now_ms();
-            char sql[256];
-            std::snprintf(sql, sizeof(sql),
-                          "CREATE INDEX %s ON stress.dbf (%s)",
-                          d.tag, d.expr);
-            ADSHANDLE hCur = 0;
-            UNSIGNED32 ir = AdsExecuteSQLDirect(
-                hStmt, reinterpret_cast<UNSIGNED8*>(sql), &hCur);
-            if (hCur != 0) AdsCloseTable(hCur);
-            std::printf("  idx %-10s %-22s %.1f s   rc=%u\n",
-                        d.tag, d.expr, (now_ms() - i0) / 1000.0, ir);
+            UNSIGNED8 file_buf[64]; std::strncpy(
+                reinterpret_cast<char*>(file_buf), d.file, sizeof(file_buf) - 1);
+            file_buf[sizeof(file_buf) - 1] = 0;
+            UNSIGNED8 tag_buf[64];  std::strncpy(
+                reinterpret_cast<char*>(tag_buf), d.tag, sizeof(tag_buf) - 1);
+            tag_buf[sizeof(tag_buf) - 1] = 0;
+            UNSIGNED8 expr_buf[128]; std::strncpy(
+                reinterpret_cast<char*>(expr_buf), d.expr, sizeof(expr_buf) - 1);
+            expr_buf[sizeof(expr_buf) - 1] = 0;
+            ADSHANDLE hIdx = 0;
+            UNSIGNED32 ir = AdsCreateIndex61(hIdxTable, file_buf, tag_buf,
+                                              expr_buf, nullptr, nullptr,
+                                              0, 0, &hIdx);
+            char emsg[512] = {0};
+            UNSIGNED16 elen = sizeof(emsg);
+            UNSIGNED32 ecode = 0;
+            if (ir != 0) AdsGetLastError(&ecode,
+                reinterpret_cast<UNSIGNED8*>(emsg), &elen);
+            std::printf("  idx %-10s on %-18s %-12s %.1f s  rc=%u  msg=%.*s\n",
+                        d.tag, d.file, d.expr,
+                        (now_ms() - i0) / 1000.0, ir,
+                        static_cast<int>(elen), emsg);
         }
-        AdsCloseSQLStatement(hStmt);
+        AdsCloseTable(hIdxTable);
     }
 
     AdsDisconnect(hConn);

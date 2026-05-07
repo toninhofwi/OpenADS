@@ -163,12 +163,14 @@ int main(int argc, char** argv) {
     std::uint32_t rows = 100000;
     int           repeats = 5;
     bool          csv = false;
+    bool          keep = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if      (a == "--rows"    && i + 1 < argc) rows    = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         else if (a == "--repeats" && i + 1 < argc) repeats = std::atoi(argv[++i]);
         else if (a == "--csv")                     csv     = true;
+        else if (a == "--keep")                    keep    = true;
         else if (a == "-h" || a == "--help") {
             std::printf("usage: %s [--rows N] [--repeats R] [--csv]\n", argv[0]);
             return 0;
@@ -262,7 +264,9 @@ int main(int argc, char** argv) {
 
     AdsCloseSQLStatement(hStmt);
     AdsDisconnect(hConn);
-    fs::remove_all(dir, ec);
+    if (!keep) fs::remove_all(dir, ec);
+    else       std::printf("[bench] data dir kept at: %s\n",
+                           dir.string().c_str());
 
     if (csv) {
         std::printf("workload,rows,run_ms_min,run_ms_med,run_ms_max,note\n");
