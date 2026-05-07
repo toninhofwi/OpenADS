@@ -30,6 +30,9 @@ recompilar.
   (Windows MSVC / Linux clang -O3 / macOS AppleClang).
 - **[Despliegue TLS](tls-despliegue/)** — terminar HTTPS
   delante de Studio con Caddy / nginx / stunnel / SSH tunnel.
+- **[Compatibilidad de ordinales](ordinal-compat/)** — solucionar
+  el error Win "no se encontró ordinal NNN" cuando la import
+  table de la app referencia ordinales SAP.
 
 ## Otros idiomas
 

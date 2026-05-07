@@ -25,6 +25,13 @@
             "binaryDir": "${sourceDir}/build/msvc-x64"
         },
         {
+            "name": "msvc-x86",
+            "inherits": "default",
+            "generator": "Visual Studio 17 2022",
+            "architecture": "Win32",
+            "binaryDir": "${sourceDir}/build/msvc-x86"
+        },
+        {
             "name": "ninja-clang",
             "inherits": "default",
             "generator": "Ninja",

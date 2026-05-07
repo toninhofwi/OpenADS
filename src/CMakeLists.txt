@@ -101,7 +101,17 @@ add_library(openads_ace SHARED
 )
 
 if(WIN32)
-    target_sources(openads_ace PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/openads_ace.def)
+    # Default .def is name-based exports. Apps linked against an
+    # ace32.lib / ace64.lib whose imports are by-ordinal need a
+    # custom .def whose @N values match the SAP-shipped DLL the
+    # user is replacing — generate it once per-machine with
+    # tools/scripts/sap_ordinals_to_def.py and pass it in via
+    # -DOPENADS_ACE_DEF=<path> at configure time.
+    set(OPENADS_ACE_DEF "${CMAKE_CURRENT_SOURCE_DIR}/openads_ace.def"
+        CACHE FILEPATH
+        "Path to the .def file driving openads_ace exports.")
+    target_sources(openads_ace PRIVATE ${OPENADS_ACE_DEF})
+    message(STATUS "openads_ace exports def: ${OPENADS_ACE_DEF}")
 endif()
 
 target_include_directories(openads_ace

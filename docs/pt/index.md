@@ -30,6 +30,9 @@ recompilar.
   (Windows MSVC / Linux clang -O3 / macOS AppleClang).
 - **[Implantação TLS](tls-implantacao/)** — terminar HTTPS
   na frente do Studio com Caddy / nginx / stunnel / túnel SSH.
+- **[Compatibilidade de ordinais](ordinal-compat/)** — resolver
+  o erro Win "ordinal NNN não encontrado" quando a import
+  table da app referencia ordinais SAP.
 
 ## Outros idiomas
 

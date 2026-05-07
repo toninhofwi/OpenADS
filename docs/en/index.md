@@ -33,6 +33,9 @@ for the Advantage Client Engine (`ace32.dll` / `ace64.dll` /
   numbers (Windows MSVC / Linux clang -O3 / macOS AppleClang).
 - **[TLS deployment](tls-deployment/)** — terminate HTTPS in
   front of Studio with Caddy / nginx / stunnel / SSH tunnel.
+- **[Ordinal compatibility](ordinal-compat/)** — fix the
+  Windows "ordinal NNN not found" loader error when an app's
+  import table references SAP-style ordinals.
 
 ## Other languages
 
