@@ -880,7 +880,8 @@ std::string b64decode(const std::string& in) {
         dec[static_cast<unsigned char>(tbl[i])] = i;
     std::string out;
     int v = 0, b = 0;
-    for (unsigned char c : in) {
+    for (char ch : in) {
+        unsigned char c = static_cast<unsigned char>(ch);
         if (c == '=' || c == '\n' || c == '\r' || c == ' ') continue;
         int d = dec[c];
         if (d < 0) return "";
