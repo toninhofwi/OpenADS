@@ -250,7 +250,19 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
         state_ = State::Limbo; recno_ = 0;
         return {};
     }
-    return load_record_(recno);
+    auto r = load_record_(recno);
+    if (!r) return r.error();
+    // Re-position the active index cursor on this row's key so a
+    // subsequent SKIP walks from here (and not from wherever the
+    // index was last left after a previous SEEK / SKIP-past-end).
+    if (order_ && order_->index()) {
+        order_->index()->invalidate_cursor();
+        std::string key = compute_index_key_(
+            order_->index()->expression(),
+            order_->index()->key_length());
+        (void)order_->index()->seek_key(key, /*soft=*/false);
+    }
+    return {};
 }
 
 util::Result<void> Table::skip(std::int32_t delta) {

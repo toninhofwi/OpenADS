@@ -53,6 +53,11 @@ public:
     util::Result<SeekOutcome> prev()       override;
     std::string current_key() const override { return current_key_; }
 
+    void invalidate_cursor() override {
+        cur_state_ = CurState::Initial;
+        cur_index_ = -1;
+    }
+
     util::Result<void> insert(std::uint32_t recno,
                               const std::string& key) override;
     util::Result<void> erase (std::uint32_t recno,

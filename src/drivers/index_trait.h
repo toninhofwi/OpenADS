@@ -40,6 +40,10 @@ public:
         seek_key(const std::string& key, bool soft) = 0;
     virtual util::Result<SeekOutcome> next()         = 0;
     virtual util::Result<SeekOutcome> prev()         = 0;
+    // Invalidate any cached cursor state so the next next() / prev()
+    // doesn't try to resume from a boundary set by an earlier walk.
+    // Default no-op; CdxIndex overrides to clear its CurState.
+    virtual void invalidate_cursor() {}
 
     virtual std::string current_key() const = 0;
 
