@@ -1024,6 +1024,25 @@ util::Result<void> CdxIndex::flush() {
     return file_.sync();
 }
 
+util::Result<void> CdxIndex::set_options(bool unique, bool descend) {
+    if (sub_header_offset_ == 0) {
+        return util::Error{6106, 0,
+            "CDX sub-tag header offset uninitialised", ""};
+    }
+    unique_  = unique;
+    descend_ = descend;
+    index_opt_ = static_cast<std::uint8_t>(
+        (unique ? 0x01 : 0x00) | 0x20);
+    std::array<std::uint8_t, CDX_HEADER_LEN> hdr{};
+    auto got = file_.read_at(sub_header_offset_, hdr.data(), hdr.size());
+    if (!got) return got.error();
+    hdr[14] = index_opt_;
+    write_u16_le(hdr.data() + 502, descend ? 1 : 0);
+    auto wrote = file_.write_at(sub_header_offset_, hdr.data(), hdr.size());
+    if (!wrote) return wrote.error();
+    return {};
+}
+
 util::Result<void> CdxIndex::clear_data() {
     root_page_ = 0;
     page_cache_.clear();

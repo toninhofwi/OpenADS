@@ -64,6 +64,11 @@ public:
     // (page leak); a future M(cdx-compact) milestone can reclaim.
     util::Result<void> clear_data();
 
+    // Overwrite the unique / descend bits in the on-disk sub-tag
+    // header. Used when CREATE INDEX overwrites an existing tag
+    // with new options (Clipper / Harbour silent overwrite).
+    util::Result<void> set_options(bool unique, bool descend);
+
     util::Result<void> insert(std::uint32_t recno,
                               const std::string& key) override;
     util::Result<void> erase (std::uint32_t recno,

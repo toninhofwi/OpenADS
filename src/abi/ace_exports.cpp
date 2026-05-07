@@ -198,6 +198,30 @@ openads::network::RemoteTable* get_remote_table(ADSHANDLE h) {
         h, HandleKind::RemoteTable);
 }
 
+// Harbour rddads' default connection handle is 0 when the caller
+// never AdsConnect'd. SAP-ACE in this mode auto-connects against the
+// current working directory; mirror that by lazily creating one
+// process-wide Connection rooted at fs::current_path. Returned handle
+// is cached so subsequent calls reuse the same Connection.
+ADSHANDLE get_or_create_default_connection() {
+    static ADSHANDLE cached = 0;
+    auto& s = state();
+    if (cached != 0) {
+        if (s.registry.lookup<Connection>(cached, HandleKind::Connection))
+            return cached;
+        cached = 0;
+    }
+    namespace fs = std::filesystem;
+    auto opened = Connection::open(fs::current_path().string());
+    if (!opened) return 0;
+    auto holder = std::make_unique<Connection>(std::move(opened).value());
+    Connection* raw = holder.get();
+    Handle h = s.registry.register_object(HandleKind::Connection, raw);
+    s.conns.emplace(h, std::move(holder));
+    cached = h;
+    return h;
+}
+
 Table* get_table(ADSHANDLE h) {
     auto& s = state();
     Table* t = s.registry.lookup<Table>(h, HandleKind::Table);
@@ -390,8 +414,14 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
         return ok();
     }
     auto* conn = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
-    if (conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
-                                     "unknown connection");
+    if (conn == nullptr) {
+        ADSHANDLE def = get_or_create_default_connection();
+        conn = s.registry.lookup<Connection>(def, HandleKind::Connection);
+        if (conn == nullptr) {
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE,
+                        "unknown connection");
+        }
+    }
     auto name = openads::abi::to_internal(pucName, 0);
     auto th = conn->open_table(name, map_type(usTableType));
     if (!th) return fail(th.error());
@@ -612,7 +642,13 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
     Connection* c = s.registry.lookup<Connection>(hConn,
                             HandleKind::Connection);
     if (c == nullptr) {
-        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        // rddads passes 0 when the host PRG never AdsConnect'd —
+        // fall back to a CWD-rooted default connection.
+        ADSHANDLE def = get_or_create_default_connection();
+        c = s.registry.lookup<Connection>(def, HandleKind::Connection);
+        if (c == nullptr) {
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        }
     }
 
     auto rel  = openads::abi::to_internal(pucName, 0);
@@ -2267,6 +2303,28 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
 
     auto& m   = index_bindings();
     auto& act = active_binding_for();
+    // Drop ANY existing binding whose tag matches the one we're
+    // re-creating: a CREATE INDEX command on an existing tag is a
+    // silent overwrite (clear_data already wiped the on-disk
+    // B+tree) so the stale binding must vanish too — otherwise
+    // ordinal lookups iterate over both the old and new bindings.
+    for (auto it = m.begin(); it != m.end(); ) {
+        if (it->second.table == t && it->second.tag_name == tag) {
+            // If the stale entry was the active one, take the
+            // active IIndex back from the Table so the next
+            // set_order doesn't double-free.
+            if (act.count(t) && act[t] == it->first) {
+                (void)t->take_order();
+                act.erase(t);
+            } else if (it->second.parked) {
+                t->unregister_extra_index_view(
+                    it->second.parked.get());
+            }
+            it = m.erase(it);
+        } else {
+            ++it;
+        }
+    }
     ADSHANDLE h = next_index_handle();
     // Each new CREATE INDEX makes itself the active order
     // (Clipper / Harbour convention). Park the previous active
@@ -2275,9 +2333,6 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     if (prev != act.end()) {
         auto pit = m.find(prev->second);
         if (pit != m.end()) {
-            // Move the soon-to-be-displaced active IIndex from
-            // Table::order_ back into its binding's `parked` slot
-            // so future OrdSetFocus can swap it back in.
             auto displaced = t->take_order();
             pit->second.parked = std::move(displaced);
             t->register_extra_index_view(pit->second.parked.get());
@@ -2286,6 +2341,9 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     t->set_order(std::move(idx_owner));
     m[h] = IndexBinding{t, tag, nullptr, p.string()};
     act[t] = h;
+    // Clipper / Harbour: a fresh CREATE INDEX leaves the cursor
+    // positioned at the new order's TOP key.
+    (void)t->goto_top();
     *phIndex = h;
     return ok();
 }
