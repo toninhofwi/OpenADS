@@ -8170,4 +8170,224 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     return ok();
 }
 
+// ---- M(rddads-compat): stubs for Harbour contrib/rddads -------------------
+//
+// rddads.hbp pulls in symbols across the full SAP ace.h surface even if
+// only a handful are actually exercised by `dbUseArea( .T., "ADS", ... )`.
+// To make rddads link clean against ace64.lib, every referenced symbol
+// must resolve. The stubs below return AE_FUNCTION_NOT_AVAILABLE for
+// features the engine doesn't implement yet (advisory-only management
+// API, AOF, scoped relations, callbacks); apps that don't touch those
+// features still link and run.
+
+#define ADS_STUB(rc) return (rc)
+
+extern "C" {
+
+UNSIGNED32 AdsConnect(UNSIGNED8* pucServer, ADSHANDLE* phConnect) {
+    return AdsConnect60(pucServer, ADS_LOCAL_SERVER,
+                        nullptr, nullptr, 0, phConnect);
+}
+UNSIGNED32 AdsApplicationExit(void) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsClearFilter(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsClearRelation(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsClearCallbackFunction(void) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsClearProgressCallback(void) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsCacheOpenCursors(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsCacheOpenTables(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsCacheRecords(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsCloseCachedTables(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsCopyTableContent(ADSHANDLE, ADSHANDLE)
+    { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsCustomizeAOF(ADSHANDLE, UNSIGNED32, UNSIGNED32*, UNSIGNED16)
+    { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsData(UNSIGNED16, void*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsEvalAOF(ADSHANDLE, UNSIGNED8*, UNSIGNED32*)
+    { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsFilterOption(ADSHANDLE, UNSIGNED16, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetAOF(ADSHANDLE, UNSIGNED32*, UNSIGNED32* c)
+    { if (c) *c = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetConnectionType(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = ADS_LOCAL_SERVER; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetDateFormat(UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    static const char fmt[] = "yyyy-mm-dd";
+    if (pusLen) {
+        UNSIGNED16 cap = *pusLen;
+        UNSIGNED16 n = static_cast<UNSIGNED16>(
+            cap == 0 ? 0 : (sizeof(fmt) - 1 < cap - 1
+                            ? sizeof(fmt) - 1 : cap - 1));
+        if (pucBuf && cap > 0) { std::memcpy(pucBuf, fmt, n); pucBuf[n] = 0; }
+        *pusLen = static_cast<UNSIGNED16>(sizeof(fmt) - 1);
+    }
+    return openads::AE_SUCCESS;
+}
+UNSIGNED32 AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l)
+    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetDeleted(UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+// AdsGetDouble already defined elsewhere in this file.
+UNSIGNED32 AdsGetEpoch(UNSIGNED16* p)
+    { if (p) *p = 1900; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetErrorString(UNSIGNED32, UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    if (pusLen) {
+        UNSIGNED16 cap = *pusLen;
+        if (pucBuf && cap > 0) pucBuf[0] = 0;
+        *pusLen = 0;
+    }
+    return openads::AE_SUCCESS;
+}
+UNSIGNED32 AdsGetExact(UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
+                          UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
+    return AdsGetField(hTable, pucField, pucBuf, pulLen, 0);
+}
+UNSIGNED32 AdsGetFilter(ADSHANDLE, UNSIGNED8* p, UNSIGNED16* l)
+    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetHandleType(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = ADS_TABLE; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetIndexCondition(ADSHANDLE, UNSIGNED8* p, UNSIGNED16* l)
+    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetIndexFilename(ADSHANDLE, UNSIGNED16, UNSIGNED8* p, UNSIGNED16* l)
+    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetIndexOrderByHandle(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+// AdsGetJulian already defined elsewhere in this file.
+UNSIGNED32 AdsGetKeyLength(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetKeyNum(ADSHANDLE, UNSIGNED16, UNSIGNED32* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetKeyType(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = ADS_STRINGKEY; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetLastTableUpdate(ADSHANDLE, SIGNED32* d, SIGNED32* t)
+    { if (d) *d = 0; if (t) *t = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetLogical(ADSHANDLE hTable, UNSIGNED8* pucField, UNSIGNED16* pb) {
+    if (pb == nullptr) return openads::AE_INTERNAL_ERROR;
+    UNSIGNED8 buf[8] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    UNSIGNED32 rc = AdsGetField(hTable, pucField, buf, &cap, 0);
+    if (rc != openads::AE_SUCCESS) return rc;
+    *pb = (cap > 0 && (buf[0] == 'T' || buf[0] == 't' ||
+                        buf[0] == 'Y' || buf[0] == 'y' ||
+                        buf[0] == '1')) ? 1 : 0;
+    return openads::AE_SUCCESS;
+}
+UNSIGNED32 AdsGetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetNumActiveLinks(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetNumLocks(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetNumOpenTables(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32* p)
+    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE, double* p)
+    { if (p) *p = 0.0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l)
+    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetTableAlias(ADSHANDLE, UNSIGNED8* p, UNSIGNED16* l)
+    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetTableCharType(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = ADS_ANSI; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetTableConType(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = ADS_CDX; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetTableConnection(ADSHANDLE, ADSHANDLE* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsConnectionAlive(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 1; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsEmpty(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsExprValid(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
+    { if (p) *p = 1; return openads::AE_SUCCESS; }
+// AdsIsFound already defined elsewhere in this file.
+UNSIGNED32 AdsIsIndexCustom(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsIndexDescending(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsIndexUnique(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsNull(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsRecordInAOF(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
+    { if (p) *p = 1; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsRecordLocked(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsServerLoaded(UNSIGNED8*, UNSIGNED16* p)
+    { if (p) *p = 1; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsTableLocked(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsRefreshAOF(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsRegisterCallbackFunction(void*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsRegisterProgressCallback(void*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetDateFormat(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetDecimals(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetDefault(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetEpoch(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetExact(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetFilter(ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+// AdsSetJulian, AdsSetLongLong already defined elsewhere in this file.
+UNSIGNED32 AdsSetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsSetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE, double) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetScopedRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetServerType(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsShowDeleted(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsShowError(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsStmtSetTableLockType(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsStmtSetTablePassword(ADSHANDLE, UNSIGNED8*, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsStmtSetTableReadOnly(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsStmtSetTableType(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
+    { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsTestRecLocks(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsWriteAllRecords(ADSHANDLE hTable) { return AdsWriteRecord(hTable); }
+
+// AdsMg* stubs are implemented elsewhere. Kept tests/unit/abi_mgmt_test.cpp's
+// existing pattern: zero-fill caller's buffer, return AE_SUCCESS so apps
+// proceed without special-casing local-mode mgmt absence.
+UNSIGNED32 AdsMgConnect(UNSIGNED8*, UNSIGNED8*, UNSIGNED8*, ADSHANDLE* p)
+    { if (p) *p = 1; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgDisconnect(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+static inline void mg_zero_(void* p, UNSIGNED16* l) {
+    if (p && l && *l > 0) std::memset(p, 0, *l);
+}
+UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetCommStats(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetLockOwner(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetLocks(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetOpenIndexes(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetOpenTables(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetOpenTables2(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetServerType(ADSHANDLE, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetUserNames(ADSHANDLE, void*, UNSIGNED16* c)
+    { if (c) *c = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetWorkerThreadActivity(ADSHANDLE, void* p, UNSIGNED16* l)
+    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgKillUser(ADSHANDLE, UNSIGNED8*, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsMgResetCommStats(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+
+// All AdsDD* helpers (AddIndexFile, AddUserToGroup, CreateLink,
+// CreateRefIntegrity, CreateUser, DeleteUser, DropLink,
+// Get/SetDatabaseProperty, GetUserProperty, ModifyLink,
+// RemoveIndexFile, RemoveRefIntegrity, RemoveUserFromGroup) are
+// already defined earlier in this file.
+
+} // extern "C"
+
 } // extern "C"

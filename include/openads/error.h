@@ -2,6 +2,28 @@
 
 #include <cstdint>
 
+// openads/ace.h defines a subset of these names as preprocessor
+// macros for clipper / Harbour-style consumers. Undefining them
+// here keeps the enum members below from getting macro-expanded
+// when both headers are pulled into the same translation unit.
+#undef AE_SUCCESS
+#undef AE_INTERNAL_ERROR
+#undef AE_FUNCTION_NOT_AVAILABLE
+#undef AE_LOCKED
+#undef AE_LOCK_FAILED
+#undef AE_NO_CONNECTION
+#undef AE_NO_FILE_FOUND
+#undef AE_COLUMN_NOT_FOUND
+#undef AE_TABLE_NOT_FOUND
+#undef AE_TABLE_CORRUPTED
+#undef AE_INVALID_CONNECTION_HANDLE
+#undef AE_PARSE_ERROR
+#undef AE_INVALID_SQL_TOKEN
+#undef AE_TYPE_MISMATCH
+#undef AE_DIVISION_BY_ZERO
+#undef AE_LOGIN_FAILED
+#undef AE_REMOTE_ERROR
+
 namespace openads {
 
 // Mirror of the ACE error code surface OpenADS will emit.

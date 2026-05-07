@@ -253,3 +253,16 @@ EXPORTS
     _kbhit    = openads_kbhit
     _eof      = openads_eof
 
+    ; M(rddads-compat) — extra Ads* entry points needed by Harbour
+    ; contrib/rddads. Implemented as stubs in ace_exports.cpp;
+    ; promoted here so the contrib links cleanly against ace64.lib.
+    AdsClearProgressCallback
+    AdsCopyTableContent
+    AdsData
+    AdsFilterOption
+    AdsGetTableConType
+    AdsMgGetOpenTables2
+    AdsRegisterProgressCallback
+    AdsTestLogin
+    AdsTestRecLocks
+
