@@ -721,8 +721,12 @@ CdxIndex::insert_into_subtree_(std::uint32_t      subtree_root,
         Page tmp_left{};
         Page tmp_right{};
         while (mid > 0 && mid < keys.size()) {
-            left_keys.assign(keys.begin(), keys.begin() + mid);
-            right_keys.assign(keys.begin() + mid, keys.end());
+            using diff_t =
+                std::vector<std::pair<std::string, std::uint32_t>>::difference_type;
+            left_keys.assign(keys.begin(),
+                             keys.begin() + static_cast<diff_t>(mid));
+            right_keys.assign(keys.begin() + static_cast<diff_t>(mid),
+                              keys.end());
             auto el = encode_compact_leaf_static(tmp_left,  key_size_,
                                                   left_keys,  0u, 0u);
             auto er = encode_compact_leaf_static(tmp_right, key_size_,
@@ -822,7 +826,11 @@ CdxIndex::insert_into_subtree_(std::uint32_t      subtree_root,
     new_entry.key   = child_promote.right_max_key;
     new_entry.recno = child_promote.right_max_recno;
     new_entry.child = child_promote.new_right_off;
-    entries.insert(entries.begin() + idx + 1, new_entry);
+    {
+        using diff_t = std::vector<BranchEntry>::difference_type;
+        entries.insert(entries.begin() +
+                       static_cast<diff_t>(idx + 1), new_entry);
+    }
 
     // Re-fetch sibling pointers (page may have been moved by a get_).
     auto epg = get_page_(subtree_root);
@@ -841,8 +849,11 @@ CdxIndex::insert_into_subtree_(std::uint32_t      subtree_root,
     // Branch overflow → split midpoint. Branch encode is fixed-stride
     // so a single midpoint always works.
     std::size_t mid = entries.size() / 2;
-    std::vector<BranchEntry> left_be(entries.begin(), entries.begin() + mid);
-    std::vector<BranchEntry> right_be(entries.begin() + mid, entries.end());
+    using diff_t = std::vector<BranchEntry>::difference_type;
+    std::vector<BranchEntry> left_be(entries.begin(),
+                                     entries.begin() + static_cast<diff_t>(mid));
+    std::vector<BranchEntry> right_be(entries.begin() + static_cast<diff_t>(mid),
+                                      entries.end());
 
     std::uint32_t new_off = static_cast<std::uint32_t>(file_size_);
     page_cache_.emplace(new_off, Page{});
