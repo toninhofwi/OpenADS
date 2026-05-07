@@ -2922,16 +2922,32 @@ UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
 }
 
 
-UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 /*usOrder*/,
+UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
                                     ADSHANDLE* phIndex) {
     Table* t = get_table(hTable);
     if (!t || phIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
+    // Sequential creation-order lookup: AdsCreateIndex61 hands out
+    // monotonically increasing handle IDs, so sorting bindings by
+    // handle reproduces the order their CREATE INDEX commands fired
+    // — which is what Harbour / Clipper ORDSETFOCUS(N) expects.
+    std::vector<ADSHANDLE> ordered;
     for (auto& [h, b] : index_bindings()) {
-        if (b.table == t) { *phIndex = h; return ok(); }
+        if (b.table == t) ordered.push_back(h);
     }
-    return fail(openads::AE_INTERNAL_ERROR, "no active index");
+    if (ordered.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "no active index");
+    }
+    std::sort(ordered.begin(), ordered.end());
+    if (usOrder == 0 || usOrder > ordered.size()) {
+        // Fall back to first entry on out-of-range ordinal so legacy
+        // callers that pass 0 or 1 still resolve to *some* index.
+        *phIndex = ordered.front();
+    } else {
+        *phIndex = ordered[usOrder - 1];
+    }
+    return ok();
 }
 
 UNSIGNED32 AdsGetIndexExpr(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
@@ -3007,13 +3023,46 @@ UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
 UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
                    UNSIGNED8* pucKey,
                    UNSIGNED16 u16KeyLen,
-                   UNSIGNED16 /*u16KeyType*/,
+                   UNSIGNED16 u16KeyType,
                    UNSIGNED16 u16SeekType,
                    UNSIGNED16* pbFound) {
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
-    std::string key(reinterpret_cast<const char*>(pucKey),
-                    static_cast<std::size_t>(u16KeyLen));
+    std::string key;
+    // ADS_DOUBLEKEY (2): caller passed sizeof(double) raw bytes;
+    // engine indexes built from a field expression store ASCII-
+    // padded numerics (right-aligned, dec-padded). Convert the
+    // double to the same ASCII format using the active index's
+    // field schema so seek_key compares apples-to-apples.
+    if (u16KeyType == ADS_DOUBLEKEY && u16KeyLen == sizeof(double) &&
+        t->order() != nullptr && t->order()->index() != nullptr) {
+        double dv = 0;
+        std::memcpy(&dv, pucKey, sizeof(double));
+        auto* idx = t->order()->index();
+        std::uint16_t klen = idx->key_length();
+        // Probe the field schema for decimals (best effort — the
+        // expression is usually a bare field name).
+        std::uint16_t dec = 0;
+        std::int32_t fidx = t->field_index(idx->expression());
+        if (fidx >= 0) {
+            const auto& fd = t->field_descriptor(
+                static_cast<std::uint16_t>(fidx));
+            dec = static_cast<std::uint16_t>(fd.decimals);
+        }
+        char buf[64];
+        if (dec > 0) {
+            std::snprintf(buf, sizeof(buf), "%*.*f",
+                          static_cast<int>(klen),
+                          static_cast<int>(dec), dv);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%*.0f",
+                          static_cast<int>(klen), dv);
+        }
+        key.assign(buf, klen);
+    } else {
+        key.assign(reinterpret_cast<const char*>(pucKey),
+                   static_cast<std::size_t>(u16KeyLen));
+    }
     bool soft = (u16SeekType & 0x01) != 0;
     auto r = t->seek_key(key, soft);
     if (!r) return fail(r.error());

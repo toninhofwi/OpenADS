@@ -1223,10 +1223,10 @@ CdxIndex::add_tag(const std::string& path,
                           / CDX_PAGE_LEN * CDX_PAGE_LEN;
     if (new_off < CDX_SUB_DATA_BASE) new_off = CDX_SUB_DATA_BASE;
 
-    // 4) Append struct-tag entry, sort by name, re-encode, write back.
+    // 4) Append struct-tag entry, re-encode, write back. Keep
+    // creation order (no sort) so tag-ordinal lookups match
+    // Harbour rddads / Clipper convention.
     entries.emplace_back(padded, static_cast<std::uint32_t>(new_off));
-    std::sort(entries.begin(), entries.end(),
-              [](const auto& a, const auto& b){ return a.first < b.first; });
     Page new_leaf{};
     auto enc = encode_compact_leaf_static(new_leaf, CDX_STRUCT_KEY_LEN,
                                           entries,
