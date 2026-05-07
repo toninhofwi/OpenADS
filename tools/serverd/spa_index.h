@@ -139,6 +139,17 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
                font: 14px Consolas, monospace; white-space: pre-wrap;
                word-break: break-all; max-height: 70vh; overflow: auto;
                border: 1px solid var(--border); }
+  /* SQL editor syntax highlight overlay */
+  .sql-kw     { color: #569cd6; font-weight: 600; }
+  .sql-str    { color: #ce9178; }
+  .sql-num    { color: #b5cea8; }
+  .sql-cmt    { color: #6a9955; font-style: italic; }
+  body.light .sql-kw  { color: #0d6efd; }
+  body.light .sql-str { color: #a31515; }
+  body.light .sql-num { color: #098658; }
+  body.light .sql-cmt { color: #008000; }
+  td.sel-col { width: 30px; text-align: center; }
+  td.sel-col input { transform: scale(1.3); cursor: pointer; }
 </style>
 </head>
 <body>
@@ -202,6 +213,9 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
                       border:1px solid var(--border);
                       padding:6px 10px;font-size:15px;border-radius:2px;
                       flex:1;min-width:140px;max-width:340px">
+        <button class="btn btn-danger" id="browse-bulk-del"
+                style="display:none">Delete selected</button>
+        <span id="browse-bulk-count"></span>
       </div>
       <div id="browse-grid" class="empty" data-i18n="browse_pick">Select a table on the left.</div>
       <div class="pager" id="browse-pager"></div>
@@ -216,13 +230,27 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
     </div>
 
     <div id="pane-sql" class="pane hidden">
-      <div class="editor">
+      <div class="editor" style="position:relative">
+        <pre id="sql-hl" aria-hidden="true"
+             style="position:absolute;inset:0;margin:0;padding:14px;
+                    pointer-events:none;color:transparent;
+                    background:transparent;border:1px solid transparent;
+                    font:18px Consolas, Monaco, monospace;
+                    white-space:pre-wrap;word-break:break-word;
+                    overflow:hidden;min-height:170px"></pre>
         <textarea id="sql"
-                  placeholder="SELECT * FROM yourtable.dbf"></textarea>
+                  placeholder="SELECT * FROM yourtable.dbf"
+                  style="position:relative;background:transparent;
+                         caret-color:var(--fg)"></textarea>
       </div>
       <div class="toolbar">
         <button id="sql-run">Run (Ctrl+Enter)</button>
         <button id="sql-export" class="btn-secondary">Export CSV</button>
+        <button id="sql-save"   class="btn-secondary">Save query…</button>
+        <select id="sql-saved" style="background:var(--panel-2);color:var(--fg);
+                border:1px solid var(--border);padding:7px 10px;
+                font-size:15px;border-radius:2px"></select>
+        <button id="sql-saved-del" class="btn-danger" style="display:none">×</button>
         <span id="sql-status"></span>
       </div>
       <div id="sql-result" class="empty">Result will appear here.</div>
@@ -459,11 +487,15 @@ R"OPENADS_SPA(function renderBrowseGrid() {
       return sort.dir * (isNaN(c) ? 0 : c);
     });
   }
+  state.browseSelection = state.browseSelection || new Set();
   const tbody = rows.map(({ r, orig }) => {
     const meta = r[0];
     const cells = r.slice(1);
     const cls = meta._deleted ? "deleted" : "";
+    const checked = state.browseSelection.has(meta._recno) ? "checked" : "";
     return `<tr class="${cls}">
+      <td class="sel-col"><input type="checkbox"
+            data-sel="${meta._recno}" ${checked}></td>
       <td>${meta._recno}</td>
       ${cells.map((v, ci) => `<td class="cell"
           data-row="${orig}" data-col="${ci}">${esc(v)}</td>`).join("")}
@@ -477,11 +509,30 @@ R"OPENADS_SPA(function renderBrowseGrid() {
   const arrow = (i) => sort.col === i
     ? (sort.dir > 0 ? " ▲" : " ▼") : "";
   $("browse-grid").innerHTML = `<table>
-    <thead><tr><th>recno</th>${
+    <thead><tr>
+      <th class="sel-col"><input type="checkbox" id="sel-all"></th>
+      <th>recno</th>${
       cols.map((c, i) =>
         `<th class="sort" data-col="${i}" style="cursor:pointer">${esc(c)}${arrow(i)}</th>`)
         .join("")}<th>actions</th></tr></thead>
     <tbody>${tbody}</tbody></table>`;
+  document.querySelectorAll("[data-sel]").forEach(cb =>
+    cb.addEventListener("change", e => {
+      const rn = +cb.dataset.sel;
+      if (e.target.checked) state.browseSelection.add(rn);
+      else                  state.browseSelection.delete(rn);
+      updateBulkBar();
+    }));
+  $("sel-all").addEventListener("change", e => {
+    document.querySelectorAll("[data-sel]").forEach(cb => {
+      cb.checked = e.target.checked;
+      const rn = +cb.dataset.sel;
+      if (e.target.checked) state.browseSelection.add(rn);
+      else                  state.browseSelection.delete(rn);
+    });
+    updateBulkBar();
+  });
+  updateBulkBar();
   document.querySelectorAll("th.sort").forEach(th =>
     th.addEventListener("click", () => {
       const c = +th.dataset.col;
@@ -1114,6 +1165,104 @@ $("lang-pick").addEventListener("change", e => {
 });
 
 $("browse-filter").addEventListener("input", () => renderBrowseGrid());
+
+function updateBulkBar() {
+  const n = state.browseSelection ? state.browseSelection.size : 0;
+  $("browse-bulk-del").style.display = n > 0 ? "" : "none";
+  $("browse-bulk-count").textContent = n > 0 ? `${n} selected` : "";
+}
+$("browse-bulk-del").addEventListener("click", async () => {
+  const sel = [...(state.browseSelection || [])];
+  if (sel.length === 0) return;
+  if (!confirm(`Mark ${sel.length} record(s) deleted?`)) return;
+  for (const rn of sel) {
+    try {
+      await api(`/api/tables/${encodeURIComponent(state.table)}` +
+        `/delete?recno=${rn}`, {method:"POST"});
+    } catch (e) { console.warn("delete", rn, e.message); }
+  }
+  state.browseSelection.clear();
+  loadBrowse();
+});
+
+// ---- studio.web.0.10 — saved queries (localStorage) ----------------
+const SQL_SAVED_KEY = "openads-studio.sql.saved";
+function loadSavedQueries() {
+  try { return JSON.parse(localStorage.getItem(SQL_SAVED_KEY) || "[]"); }
+  catch { return []; }
+}
+function saveSavedQueries(arr) {
+  localStorage.setItem(SQL_SAVED_KEY, JSON.stringify(arr));
+}
+function refreshSavedDropdown() {
+  const arr = loadSavedQueries();
+  $("sql-saved").innerHTML = '<option value="">— saved queries —</option>'
+    + arr.map(q => `<option value="${esc(q.name)}">${esc(q.name)}</option>`).join("");
+  $("sql-saved-del").style.display = "none";
+}
+$("sql-save").addEventListener("click", () => {
+  const sql = $("sql").value.trim();
+  if (!sql) return alert("Editor empty.");
+  const name = prompt("Save query as:");
+  if (!name) return;
+  const arr = loadSavedQueries().filter(q => q.name !== name);
+  arr.push({ name, sql });
+  saveSavedQueries(arr);
+  refreshSavedDropdown();
+  $("sql-saved").value = name;
+});
+$("sql-saved").addEventListener("change", e => {
+  const name = e.target.value;
+  $("sql-saved-del").style.display = name ? "" : "none";
+  if (!name) return;
+  const q = loadSavedQueries().find(q => q.name === name);
+  if (q) { $("sql").value = q.sql; renderSqlHl(); }
+});
+$("sql-saved-del").addEventListener("click", () => {
+  const name = $("sql-saved").value;
+  if (!name) return;
+  if (!confirm(`Delete saved query "${name}"?`)) return;
+  saveSavedQueries(loadSavedQueries().filter(q => q.name !== name));
+  refreshSavedDropdown();
+});
+refreshSavedDropdown();
+
+// ---- studio.web.0.10 — SQL syntax highlight overlay ----------------
+const SQL_KEYWORDS = new RegExp(
+  "\\b(SELECT|FROM|WHERE|AND|OR|NOT|IN|IS|NULL|LIKE|BETWEEN|" +
+  "ORDER|BY|GROUP|HAVING|LIMIT|OFFSET|DISTINCT|UNION|ALL|" +
+  "INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|DROP|ALTER|" +
+  "TABLE|INDEX|VIEW|UNIQUE|DESCENDING|ASC|DESC|" +
+  "INNER|LEFT|RIGHT|FULL|OUTER|JOIN|ON|AS|EXISTS|CASE|WHEN|" +
+  "THEN|ELSE|END|COUNT|SUM|AVG|MIN|MAX|UPPER|LOWER|TRIM|" +
+  "LTRIM|RTRIM|SUBSTR|CONCAT|REPLACE|DATEDIFF|DATEADD|" +
+  "COALESCE|NULLIF|IFNULL|TOP|FETCH|FIRST|NEXT|ROWS|ONLY|" +
+  "WITH|RECURSIVE|FILTER|OVER|PARTITION|ROW_NUMBER|RANK|" +
+  "DENSE_RANK)\\b", "gi");
+function renderSqlHl() {
+  const txt = $("sql").value;
+  let out = txt
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  // Comments first so we don't recolor inside them.
+  out = out.replace(/--[^\n]*/g, m => `<span class="sql-cmt">${m}</span>`);
+  // Strings (single + double).
+  out = out.replace(/'([^']|'')*'/g, m => `<span class="sql-str">${m}</span>`)
+           .replace(/"([^"]|"")*"/g, m => `<span class="sql-str">${m}</span>`);
+  // Numeric literals.
+  out = out.replace(/\b\d+(\.\d+)?\b/g,
+                    m => `<span class="sql-num">${m}</span>`);
+  // Keywords last (do not match inside our spans because we
+  // already replaced their inner text — keywords live outside
+  // string/comment spans).
+  out = out.replace(SQL_KEYWORDS, m => `<span class="sql-kw">${m}</span>`);
+  $("sql-hl").innerHTML = out + "\n";
+}
+$("sql").addEventListener("input", renderSqlHl);
+$("sql").addEventListener("scroll", () => {
+  $("sql-hl").scrollTop  = $("sql").scrollTop;
+  $("sql-hl").scrollLeft = $("sql").scrollLeft;
+});
+renderSqlHl();
 
 $("btn-new-table").addEventListener("click", openCreateModal);
 $("btn-refresh-tables").addEventListener("click", loadTables);
