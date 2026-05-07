@@ -24,9 +24,13 @@ for the Advantage Client Engine (`ace32.dll` / `ace64.dll` /
 - **[Wire protocol](wire-protocol/)** — formal spec of the
   OpenADS-native TCP wire (frame layout, every opcode, payload
   format, error semantics, versioning).
+- **[Data Dictionary](data-dictionary/)** — clean-room `.add`
+  text format + the `engine::DataDict` API + REST surface.
 - **[Studio (web console)](studio-guide/)** — administer an
   OpenADS database from any browser through the embedded HTTP
   console hosted by `openads_serverd`.
+- **[Benchmarks](benchmarks/)** — cross-platform SQL workload
+  numbers (Windows MSVC / Linux clang -O3 / macOS AppleClang).
 
 ## Other languages
 

@@ -21,12 +21,13 @@ recompilar.
   primeiro build, smoke test.
 - **[Arquitetura](arquitetura/)** — arquitetura de cinco
   camadas (ABI / Sessão / SQL / Motor / Plataforma).
-- **[Protocolo de fio](protocolo-fio/)** — especificação formal
-  do protocolo TCP nativo OpenADS (frames, opcodes, payload,
-  erros, versionamento).
+- **[Dicionário de dados](dicionario-dados/)** — formato `.add`
+  clean-room + API `engine::DataDict` + superfície REST.
 - **[Studio (console web)](guia-studio/)** — administração do
   motor a partir de qualquer navegador através do console HTTP
   embutido em `openads_serverd`.
+- **[Benchmarks](benchmarks/)** — números cross-platform SQL
+  (Windows MSVC / Linux clang -O3 / macOS AppleClang).
 
 ## Outros idiomas
 

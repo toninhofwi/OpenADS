@@ -21,12 +21,13 @@ recompilar.
   build, smoke test.
 - **[Arquitectura](arquitectura/)** — arquitectura de cinco
   capas (ABI / Sesión / SQL / Motor / Plataforma).
-- **[Protocolo de cable](protocolo-cable/)** — especificación
-  formal del protocolo TCP nativo OpenADS (frames, opcodes,
-  payload, errores, versionado).
+- **[Diccionario de datos](diccionario-datos/)** — formato `.add`
+  clean-room + API `engine::DataDict` + superficie REST.
 - **[Studio (consola web)](guia-studio/)** — administración del
   motor desde cualquier navegador a través de la consola HTTP
   embebida en `openads_serverd`.
+- **[Benchmarks](benchmarks/)** — números cross-platform SQL
+  (Windows MSVC / Linux clang -O3 / macOS AppleClang).
 
 ## Otros idiomas
 
