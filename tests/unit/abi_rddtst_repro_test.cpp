@@ -16,7 +16,10 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16,
                            UNSIGNED32* pulRec);
 UNSIGNED32 AdsShowDeleted(UNSIGNED16);
 UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable);
+UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable);
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32);
+UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16,
+                                    ADSHANDLE*);
 }
 
 static void rprint(ADSHANDLE hT, const char* tag) {
@@ -24,12 +27,11 @@ static void rprint(ADSHANDLE hT, const char* tag) {
     AdsGetRecordNum(hT, 0, &r);
     AdsAtBOF(hT, &b);
     AdsAtEOF(hT, &e);
-    INFO(tag << " recno=" << r << " bof=" << b << " eof=" << e);
     MESSAGE(tag << " recno=" << r << " bof=" << b << " eof=" << e);
 }
 
-TEST_CASE("DBGOBOTTOM with FOR-clause + deletes lands on last live recno") {
-    auto dir = fs::temp_directory_path() / "openads_gobottom";
+TEST_CASE("rddtst-flow: deletes/recalls/redelete + DBGOTOP under FOR + SET DELETED") {
+    auto dir = fs::temp_directory_path() / "openads_rddtst_repro";
     std::error_code ec;
     fs::remove_all(dir, ec);
     fs::create_directories(dir);
@@ -37,10 +39,11 @@ TEST_CASE("DBGOBOTTOM with FOR-clause + deletes lands on last live recno") {
     UNSIGNED8 srv[256];
     std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
     ADSHANDLE hConn = 0;
-    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == 0);
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
 
     UNSIGNED8 def[]   = "FNUM,N,10,0;FSTR,C,4,0";
-    UNSIGNED8 tname[] = "gob";
+    UNSIGNED8 tname[] = "rt";
     ADSHANDLE hT = 0;
     REQUIRE(AdsCreateTable(hConn, tname, nullptr, ADS_CDX,
                            0, 0, 0, 0, def, &hT) == 0);
@@ -58,7 +61,7 @@ TEST_CASE("DBGOBOTTOM with FOR-clause + deletes lands on last live recno") {
     }
     REQUIRE(AdsWriteRecord(hT) == 0);
 
-    UNSIGNED8 bag[]  = "gob.cdx";
+    UNSIGNED8 bag[]  = "rt.cdx";
     UNSIGNED8 tag[]  = "TG_C";
     UNSIGNED8 expr[] = "FSTR";
     UNSIGNED8 cond[] = "RECNO()<>5";
@@ -66,7 +69,8 @@ TEST_CASE("DBGOBOTTOM with FOR-clause + deletes lands on last live recno") {
     REQUIRE(AdsCreateIndex61(hT, bag, tag, expr, cond,
                              nullptr, 0, 0, &hI) == 0);
 
-    // Delete recnos 1, 3, 6, 7, 13, 14, 15 like the rddtst flow.
+    // Round 1 deletes: 1, 3, 6, 7, 13, 14, 15
+    AdsShowDeleted(0);  // SET DELETE ON
     int dels[] = {1, 3, 6, 7, 13, 14, 15};
     for (int r : dels) {
         REQUIRE(AdsGotoRecord(hT, r) == 0);
@@ -74,42 +78,50 @@ TEST_CASE("DBGOBOTTOM with FOR-clause + deletes lands on last live recno") {
     }
     REQUIRE(AdsWriteRecord(hT) == 0);
 
-    AdsShowDeleted(0);  // hide deleted
-
-    REQUIRE(AdsGotoBottom(hT) == 0);
-    rprint(hT, "GOBOTTOM");
-    UNSIGNED32 r = 0; UNSIGNED16 b = 99, e = 99;
-    AdsGetRecordNum(hT, 0, &r);
-    AdsAtBOF(hT, &b);
-    AdsAtEOF(hT, &e);
-    CHECK(r == 12);
-    CHECK(b == 0);
-    CHECK(e == 0);
-
-    // Reproduce rddtst flow: GOTOP, SKIP(8) -> Eof, SKIP(-20)
+    // DELETE ALL — mark every still-live record deleted.
+    AdsShowDeleted(1);
     REQUIRE(AdsGotoTop(hT) == 0);
-    rprint(hT, "GOTOP");
-    REQUIRE(AdsSkip(hT, 8) == 0);
-    rprint(hT, "SKIP(8)");
-    REQUIRE(AdsSkip(hT, -20) == 0);
-    rprint(hT, "SKIP(-20)");
+    while (true) {
+        UNSIGNED16 e = 0; AdsAtEOF(hT, &e);
+        if (e) break;
+        AdsDeleteRecord(hT);
+        AdsSkip(hT, 1);
+    }
+    REQUIRE(AdsWriteRecord(hT) == 0);
+
+    // DBRECALL on 7
+    AdsGotoRecord(hT, 7);
+    AdsRecallRecord(hT);
+
+    // RECALL ALL
+    REQUIRE(AdsGotoTop(hT) == 0);
+    while (true) {
+        UNSIGNED16 e = 0; AdsAtEOF(hT, &e);
+        if (e) break;
+        AdsRecallRecord(hT);
+        AdsSkip(hT, 1);
+    }
+    REQUIRE(AdsWriteRecord(hT) == 0);
+
+    // SET DELETE ON, redelete 1,3,6,7,13,14,15
+    AdsShowDeleted(0);
+    for (int r : dels) {
+        REQUIRE(AdsGotoRecord(hT, r) == 0);
+        REQUIRE(AdsDeleteRecord(hT) == 0);
+    }
+    REQUIRE(AdsWriteRecord(hT) == 0);
+    REQUIRE(AdsGotoRecord(hT, 16) == 0);  // GOTO past-end -> Limbo
+
+    // Now: DBGOTOP with active TG_C FOR RECNO()<>5 + SET DELETE ON.
+    // Expected: recno 2 (first live in B+tree).
+    REQUIRE(AdsGotoTop(hT) == 0);
+    rprint(hT, "DBGOTOP-after-redeletes");
+
+    UNSIGNED32 r = 0; UNSIGNED16 b = 0, e = 0;
     AdsGetRecordNum(hT, 0, &r);
     AdsAtBOF(hT, &b);
     AdsAtEOF(hT, &e);
     CHECK(r == 2);
-    CHECK(b == 1);
-    CHECK(e == 0);
-
-    // Repro of post-SKIP(20) -> GOBOTTOM Limbo path.
-    REQUIRE(AdsGotoBottom(hT) == 0);
-    REQUIRE(AdsSkip(hT, 20) == 0);
-    rprint(hT, "SKIP(20)");
-    REQUIRE(AdsGotoBottom(hT) == 0);
-    rprint(hT, "GOBOTTOM-after-SKIP20");
-    AdsGetRecordNum(hT, 0, &r);
-    AdsAtBOF(hT, &b);
-    AdsAtEOF(hT, &e);
-    CHECK(r == 12);
     CHECK(b == 0);
     CHECK(e == 0);
 

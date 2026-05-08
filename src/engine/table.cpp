@@ -186,9 +186,6 @@ util::Result<void> Table::goto_top() {
         auto* idx = order_->index();
         util::Result<drivers::SeekOutcome> r = drivers::SeekOutcome{};
         if (order_->descending_traverse()) {
-            // Reverse traversal: "top" is the last key in ascending
-            // order. Scopes flip too — top-bound becomes the upper
-            // bound while walking backward.
             r = idx->seek_last();
         } else if (order_->scope().top.has_value()) {
             r = idx->seek_key(*order_->scope().top, true);
@@ -197,11 +194,6 @@ util::Result<void> Table::goto_top() {
         }
         if (!r) return r.error();
         if (!r.value().positioned) {
-            // Empty index (no entries) - report Limbo (BOF+EOF
-            // both true) so the caller sees this as "no
-            // navigable rows" rather than a bare EoF that came
-            // from a SKIP. Matches Clipper / DBFCDX behaviour
-            // for INDEX FOR <empty-result>.
             state_ = State::Limbo; recno_ = 0; return {};
         }
         if (!key_in_bottom_scope_(idx->current_key())) {
