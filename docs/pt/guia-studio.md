@@ -152,6 +152,52 @@ Uma segunda seção **Server / Info** linka à aba Server.
 | **Sessions**  | Registro vivo de cada sessão wire ativa: peer IP / port, user, dir, tempo conectado, idle, frames in/out, tabelas abertas. Auto-refresh 3 s. |
 | **Dict**      | Browse / edit Data Dictionary `.add`: dropdown, lista TABLE / USER / INDEX / LINK / RI / DBPROP; forms add/remove; New-dict + Drop-dict. |
 
+### Browse — filtro AOF (Rushmore)
+
+Uma segunda toolbar acima do grid traz um input **AOF (Rushmore)
+filter**, botão **Apply**, botão **Clear** e um badge com o
+OptLevel. Digite uma condição estilo Clipper:
+
+```
+AGE >= 25
+NAME = 'SMITH' .AND. ACTIVE = .T.
+TAG BETWEEN 'AAAA' AND 'CCCC'
+CITY IN ('NYC', 'LON', 'TOK')
+```
+
+pressione Apply, e o grid pagina apenas os registros que passam
+(`Skip` / `GoTop` respeitam o bitmap AOF, então Next / Prev
+percorrem o mesmo conjunto filtrado). O badge reflete o que
+`AdsGetAOFOptLevel` reporta:
+
+| Badge | OptLevel | Significado |
+|-------|----------|-------------|
+| 🟢 `OptLevel: FULL` | `ADS_OPTIMIZED_FULL` | Cada folha servida por range-scan de índice — janela Rushmore completa. |
+| 🟡 `OptLevel: PART` | `ADS_OPTIMIZED_PART` | Algumas folhas por índice, outras por avaliação AST por registro. |
+| ⚪ `OptLevel: NONE` | `ADS_OPTIMIZED_NONE` | Nenhuma folha sobre índice — bitmap construído por full-scan. |
+| ❌ `<error>`        | parse / não suportado | `AdsSetAOF` rejeitou a condição. |
+
+Clear restaura o walk completo. A condição é reencaminhada em
+cada page fetch como `?aof=<cond>`.
+
+Gramática V1 aceita por `AdsSetAOF`:
+
+```
+<campo> OP <literal>      OP em { = == != <> # < <= > >= }
+<campo> BETWEEN a AND b
+<campo> IN ( v1, v2, ... )
+expr AND expr             também `.AND.` (Clipper)
+expr OR  expr             também `.OR.`
+NOT expr                  também `.NOT.` e `!`
+( expr )
+```
+
+Folhas aceleradas por índice em V1: campos character / memo com
+índice cuja expressão seja bare-field-name. Numeric / date /
+logical, e índices com `UPPER(field)` / compound, produzem
+bitmap correto via fallback per-record — mas não contam como
+"served by index" no OptLevel.
+
 ### Browse
 
 ![Aba Browse — linhas paginadas de employees.dbf](/OpenADS/assets/img/studio/02-browse.png)

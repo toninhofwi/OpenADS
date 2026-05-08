@@ -158,6 +158,54 @@ Server tab.
 
 ![Browse pane — paginated rows of employees.dbf](/OpenADS/assets/img/studio/02-browse.png)
 
+#### AOF (Rushmore) filter
+
+A second toolbar above the grid carries an **AOF (Rushmore) filter**
+input, an **Apply** button, a **Clear** button, and an
+optimisation-level badge. Type a Clipper-flavoured cond like
+
+```
+AGE >= 25
+NAME = 'SMITH' .AND. ACTIVE = .T.
+TAG BETWEEN 'AAAA' AND 'CCCC'
+CITY IN ('NYC', 'LON', 'TOK')
+```
+
+press Apply, and the grid pages through only the matching records
+(`Skip` / `GoTop` honour the AOF bitmap, so Next / Prev keep walking
+the same filtered set). The badge reflects what
+`AdsGetAOFOptLevel` reports back:
+
+| Badge | OptLevel | Meaning |
+|-------|----------|---------|
+| 🟢 `OptLevel: FULL` | `ADS_OPTIMIZED_FULL` | Every leaf served by an index range scan — the textbook Rushmore speedup window. |
+| 🟡 `OptLevel: PART` | `ADS_OPTIMIZED_PART` | Some leaves served by an index, others fell back to per-record AST evaluation. |
+| ⚪ `OptLevel: NONE` | `ADS_OPTIMIZED_NONE` | No leaf hit an index — the bitmap was built by a full table scan. |
+| ❌ `<error>`        | parse / unsupported | `AdsSetAOF` rejected the cond (function call / arithmetic / LIKE / unterminated string / …). |
+
+Clear restores the full unfiltered walk. The cond is forwarded on
+every page fetch as `?aof=<cond>` — see the REST surface section
+below.
+
+V1 grammar accepted by `AdsSetAOF`:
+
+```
+<field> OP <literal>      OP in { = == != <> # < <= > >= }
+<field> BETWEEN a AND b
+<field> IN ( v1, v2, ... )
+expr AND expr             also `.AND.` (Clipper)
+expr OR  expr             also `.OR.`
+NOT expr                  also `.NOT.` and `!`
+( expr )
+```
+
+Index-accelerated leaves in V1: character / memo fields with a
+bare-field-name index expression. Numeric / date / logical
+fields, and indexes whose expression is `UPPER(field)` /
+compound, still produce a correct bitmap via the per-record
+fallback — they just don't count as "served by index" in the
+OptLevel report.
+
 ### Structure
 
 ![Structure pane — columns, record count, drop / encrypt / Reindex / Pack / Zap buttons](/OpenADS/assets/img/studio/03-structure.png)

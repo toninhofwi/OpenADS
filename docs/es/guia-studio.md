@@ -157,6 +157,52 @@ Una segunda sección **Server / Info** enlaza a la pestaña Server.
 
 ![Pestaña Browse — filas paginadas de employees.dbf](/OpenADS/assets/img/studio/02-browse.png)
 
+#### Filtro AOF (Rushmore)
+
+Una segunda toolbar sobre el grid trae un input **AOF (Rushmore)
+filter**, botón **Apply**, botón **Clear** y un badge con el
+OptLevel. Escribe una condición estilo Clipper:
+
+```
+AGE >= 25
+NAME = 'SMITH' .AND. ACTIVE = .T.
+TAG BETWEEN 'AAAA' AND 'CCCC'
+CITY IN ('NYC', 'LON', 'TOK')
+```
+
+pulsa Apply, y el grid pagina solo los registros que pasan
+(`Skip` / `GoTop` honran el bitmap AOF, así que Next / Prev
+recorren el mismo set filtrado). El badge refleja lo que
+`AdsGetAOFOptLevel` reporta:
+
+| Badge | OptLevel | Significado |
+|-------|----------|-------------|
+| 🟢 `OptLevel: FULL` | `ADS_OPTIMIZED_FULL` | Cada hoja servida por range-scan de índice — la ventana Rushmore textbook. |
+| 🟡 `OptLevel: PART` | `ADS_OPTIMIZED_PART` | Algunas hojas por índice, otras por evaluación AST por registro. |
+| ⚪ `OptLevel: NONE` | `ADS_OPTIMIZED_NONE` | Ninguna hoja sobre índice — bitmap construido por full-scan. |
+| ❌ `<error>`        | parse / no soportado | `AdsSetAOF` rechazó la condición (función / aritmética / LIKE / string sin cerrar / ...). |
+
+Clear restaura el walk completo. La condición se reenvía en
+cada page fetch como `?aof=<cond>`.
+
+Gramática V1 aceptada por `AdsSetAOF`:
+
+```
+<campo> OP <literal>      OP en { = == != <> # < <= > >= }
+<campo> BETWEEN a AND b
+<campo> IN ( v1, v2, ... )
+expr AND expr             también `.AND.` (Clipper)
+expr OR  expr             también `.OR.`
+NOT expr                  también `.NOT.` y `!`
+( expr )
+```
+
+Hojas aceleradas por índice en V1: campos character / memo con
+índice cuya expresión sea bare-field-name. Numeric / date /
+logical, y índices con `UPPER(field)` / compound, producen un
+bitmap correcto vía fallback per-record — pero no cuentan como
+"served by index" en el OptLevel.
+
 ### Structure
 
 ![Pestaña Structure — columnas + botones Reindex / Pack / Zap](/OpenADS/assets/img/studio/03-structure.png)
