@@ -1,0 +1,47 @@
+# systemd unit for openads_serverd. Drop into
+# /etc/systemd/system/openads-serverd.service, then:
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now openads-serverd
+#
+# Logs land in journalctl:
+#
+#   sudo journalctl -u openads-serverd -f
+#
+# Tweak User=, WorkingDirectory= and the --data / --port / --http-port
+# flags below to match your deployment. The User=openads account is a
+# placeholder — create one (`sudo useradd -r -s /usr/sbin/nologin
+# openads`) or substitute an existing service account.
+
+[Unit]
+Description=OpenADS Database Server
+Documentation=https://github.com/FiveTechSoft/OpenADS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openads
+Group=openads
+WorkingDirectory=/var/lib/openads
+ExecStart=/usr/local/bin/openads_serverd \
+    --host 0.0.0.0 \
+    --port 6262 \
+    --http-port 6263 \
+    --data /var/lib/openads
+Restart=on-failure
+RestartSec=5s
+# Hardening — drop privileges that the engine never needs.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/openads
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

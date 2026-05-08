@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd unit for openads_serverd on macOS. Drop into
+
+      /Library/LaunchDaemons/com.openads.serverd.plist
+
+  (system-wide, runs at boot under root) or
+
+      ~/Library/LaunchAgents/com.openads.serverd.plist
+
+  (per-user, runs at login as that user). Then:
+
+      sudo launchctl bootstrap system /Library/LaunchDaemons/com.openads.serverd.plist
+      sudo launchctl kickstart -kp system/com.openads.serverd
+
+  or:
+
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.openads.serverd.plist
+      launchctl kickstart -kp gui/$(id -u)/com.openads.serverd
+
+  Stop / restart / unload:
+
+      sudo launchctl kill SIGTERM system/com.openads.serverd
+      sudo launchctl bootout system /Library/LaunchDaemons/com.openads.serverd.plist
+
+  stdout / stderr land in /var/log/openads-serverd.{out,err}.log; tail
+  them with `tail -f`.
+
+  Adjust ProgramArguments + WorkingDirectory + UserName for your
+  install path / data dir / service account.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openads.serverd</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/openads_serverd</string>
+        <string>--host</string>     <string>0.0.0.0</string>
+        <string>--port</string>     <string>6262</string>
+        <string>--http-port</string><string>6263</string>
+        <string>--data</string>     <string>/Library/Application Support/OpenADS</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Library/Application Support/OpenADS</string>
+
+    <key>UserName</key>
+    <string>_openads</string>
+    <key>GroupName</key>
+    <string>_openads</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key><false/>
+        <key>Crashed</key>       <true/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/openads-serverd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/openads-serverd.err.log</string>
+</dict>
+</plist>

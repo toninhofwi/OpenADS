@@ -220,6 +220,67 @@ pass an explicit host through a wrapper) when the deployment
 genuinely needs LAN visibility, and pair it with
 `openads_serverd --http-user user:pass` for HTTP Basic auth.
 
+### Running as a system service
+
+`openads_serverd` knows how to register itself as a Windows
+Service and ships ready-to-drop unit files for the systemd /
+launchd equivalents on Linux / macOS, so a typical
+deployment never has to keep a console window open.
+
+**Windows.** From an elevated cmd / PowerShell:
+
+```bat
+:: register the service (auto-start at boot). The flags after
+:: --install-service are baked into the registered binPath:
+openads_serverd.exe --install-service --port 6262 --http-port 6263 --data C:\app\data
+
+:: start it via SCM
+sc start openads_serverd
+
+:: tail logs (the SCM redirects stdout to the Application event log)
+:: or check the running state:
+sc query openads_serverd
+
+:: drop the registration when you no longer need it:
+openads_serverd.exe --uninstall-service
+```
+
+The `--service` flag exists for the SCM dispatcher only; running
+`openads_serverd.exe --service` interactively now prints an
+explicit explanation rather than hanging.
+
+**Linux (systemd).** Drop the bundled unit and enable:
+
+```sh
+sudo install -m 644 tools/scripts/systemd/openads-serverd.service \
+    /etc/systemd/system/openads-serverd.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now openads-serverd
+sudo journalctl -u openads-serverd -f
+```
+
+The bundled unit drops privileges (`User=openads`,
+`ProtectSystem=strict`, `NoNewPrivileges`, restricted address
+families) and `Restart=on-failure`. Tweak the `--data` / `--port`
+flags inside the unit to match your deployment.
+
+**macOS (launchd).** Drop the bundled plist into
+`/Library/LaunchDaemons/` for a system-wide service or
+`~/Library/LaunchAgents/` for a per-user one:
+
+```sh
+sudo install -m 644 tools/scripts/launchd/com.openads.serverd.plist \
+    /Library/LaunchDaemons/com.openads.serverd.plist
+sudo launchctl bootstrap system \
+    /Library/LaunchDaemons/com.openads.serverd.plist
+sudo launchctl kickstart -kp system/com.openads.serverd
+tail -f /var/log/openads-serverd.{out,err}.log
+```
+
+Stop / unload via `sudo launchctl kill SIGTERM
+system/com.openads.serverd` and `sudo launchctl bootout system
+/Library/LaunchDaemons/com.openads.serverd.plist`.
+
 ### AOF — Rushmore-style query optimisation
 
 OpenADS ships a working AOF (Advantage Optimized Filters) layer

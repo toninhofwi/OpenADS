@@ -1,9 +1,16 @@
-// openads_serverd — standalone TCP server CLI.
+// openads_serverd — standalone TCP server CLI / Windows service.
 //
 // Wraps openads::network::Server in a long-lived process. Parses
 // --host / --port / --backlog from argv, prints the bound port,
 // blocks on a signal-handled exit so a Harbour client (or any
 // rddads app) can reach the server over LAN.
+//
+// On Windows the same binary doubles as a Windows Service: pass
+// `--install-service [extra flags...]` to register with the SCM
+// (run elevated; "OpenADS Database Server" appears under
+// Services), `--uninstall-service` to drop the registration, or
+// `--service` (used internally by the SCM dispatcher; not for
+// interactive use).
 
 #include "network/server.h"
 #if defined(OPENADS_WITH_HTTP)
@@ -20,6 +27,13 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#endif
 
 namespace {
 
@@ -39,65 +53,60 @@ void usage(const char* argv0) {
         "               (default = current working directory)\n"
         "  --http-user  user:password — register a Studio login\n"
         "               (repeatable; if none given, console is open)\n"
-        "  --version    print version + exit\n",
+        "  --version    print version + exit\n"
+#if defined(_WIN32)
+        "  --install-service [extra-flags...]   register Windows Service\n"
+        "  --uninstall-service                  deregister Windows Service\n"
+        "  --service                            (internal — used by SCM)\n"
+#endif
+        ,
         argv0);
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
-    std::string host        = "0.0.0.0";
-    std::uint16_t port      = 6262;
-    int backlog             = 16;
-    std::uint16_t http_port = 0;             // 0 = HTTP console disabled
-    std::string data_dir    = ".";
+// Args parsed from argv. Defaults match the original CLI.
+struct Args {
+    std::string   host        = "0.0.0.0";
+    std::uint16_t port        = 6262;
+    int           backlog     = 16;
+    std::uint16_t http_port   = 0;
+    std::string   data_dir    = ".";
     std::vector<std::pair<std::string, std::string>> http_users;
+};
 
+bool parse_args(int argc, char** argv, Args& out) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if      (a == "--host"      && i + 1 < argc) host    = argv[++i];
-        else if (a == "--port"      && i + 1 < argc) port    = static_cast<std::uint16_t>(std::atoi(argv[++i]));
-        else if (a == "--backlog"   && i + 1 < argc) backlog = std::atoi(argv[++i]);
-        else if (a == "--http-port" && i + 1 < argc) http_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
-        else if (a == "--data"      && i + 1 < argc) data_dir = argv[++i];
+        // Skip Windows-service-mode markers consumed by main().
+        if (a == "--service") continue;
+        if      (a == "--host"      && i + 1 < argc) out.host    = argv[++i];
+        else if (a == "--port"      && i + 1 < argc) out.port    = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        else if (a == "--backlog"   && i + 1 < argc) out.backlog = std::atoi(argv[++i]);
+        else if (a == "--http-port" && i + 1 < argc) out.http_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        else if (a == "--data"      && i + 1 < argc) out.data_dir = argv[++i];
         else if (a == "--http-user" && i + 1 < argc) {
             std::string up = argv[++i];
             auto colon = up.find(':');
             if (colon == std::string::npos) {
                 std::fprintf(stderr,
                     "--http-user expects user:password\n");
-                return 2;
+                return false;
             }
-            http_users.emplace_back(up.substr(0, colon),
-                                     up.substr(colon + 1));
+            out.http_users.emplace_back(up.substr(0, colon),
+                                         up.substr(colon + 1));
         }
-        else if (a == "--version") {
-            // Version string is injected at configure time from
-            // `git describe --tags --always --dirty`, so a release
-            // tagged v1.0.0-rc13 reports "1.0.0-rc13" and a build
-            // straight off main between tags reports
-            // "1.0.0-rc13-7-g<sha>[-dirty]". Falls back to the
-            // CMake PROJECT_VERSION when no .git tree is present.
-#ifndef OPENADS_VERSION_STR
-#  define OPENADS_VERSION_STR "unknown"
-#endif
-            std::printf("openads_serverd %s\n", OPENADS_VERSION_STR);
-            return 0;
-        } else if (a == "-h" || a == "--help") {
-            usage(argv[0]);
-            return 0;
-        } else {
+        else {
             std::fprintf(stderr, "unknown arg: %s\n", a.c_str());
-            usage(argv[0]);
-            return 2;
+            return false;
         }
     }
+    return true;
+}
 
-    std::signal(SIGINT,  on_signal);
-    std::signal(SIGTERM, on_signal);
-
+// Run the actual server. Returns when g_running flips to false
+// (signal handler on POSIX / SCM stop control on Windows).
+int run_server(const Args& args, bool console) {
     openads::network::Server srv;
-    auto r = srv.start(host, port);
+    auto r = srv.start(args.host, args.port);
     if (!r) {
         std::fprintf(stderr, "server start failed: %s (sub=%d)\n",
                      r.error().message.c_str(), r.error().sub_code);
@@ -106,7 +115,7 @@ int main(int argc, char** argv) {
         // (when both run on the same host) surface as a generic
         // bind failure; flag that case explicitly so the operator
         // knows to either stop the ADS service or pick a free port.
-        if (port == 6262) {
+        if (args.port == 6262) {
             std::fprintf(stderr,
                 "hint: port 6262 is the SAP Advantage Database Server\n"
                 "      default. If ADS is running on this host you'll\n"
@@ -117,30 +126,32 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                 "hint: another process is already bound to port %u.\n"
                 "      Either stop it or pick a free port via\n"
-                "      `--port <N>`.\n", port);
+                "      `--port <N>`.\n", args.port);
         }
         return 1;
     }
-    std::printf("openads_serverd listening on %s:%u (backlog=%d)\n",
-                host.c_str(), srv.port(), backlog);
-    std::fflush(stdout);
+    if (console) {
+        std::printf("openads_serverd listening on %s:%u (backlog=%d)\n",
+                    args.host.c_str(), srv.port(), args.backlog);
+        std::fflush(stdout);
+    }
 
 #if defined(OPENADS_WITH_HTTP)
     openads::studio::HttpConsole http;
-    for (auto& u : http_users) http.add_user(u.first, u.second);
-    if (http_port != 0) {
-        if (!http.start(host, http_port, data_dir, &srv)) {
+    for (auto& u : args.http_users) http.add_user(u.first, u.second);
+    if (args.http_port != 0) {
+        if (!http.start(args.host, args.http_port, args.data_dir, &srv)) {
             std::fprintf(stderr,
                 "Studio HTTP console: bind to %s:%u failed\n",
-                host.c_str(), http_port);
-        } else {
+                args.host.c_str(), args.http_port);
+        } else if (console) {
             std::printf("Studio web console on http://%s:%u/  (data=%s)\n",
-                        host.c_str(), http_port, data_dir.c_str());
+                        args.host.c_str(), args.http_port, args.data_dir.c_str());
             std::fflush(stdout);
         }
     }
 #else
-    if (http_port != 0) {
+    if (args.http_port != 0) {
         std::fprintf(stderr,
             "--http-port set but build lacks OPENADS_WITH_HTTP=ON\n");
     }
@@ -149,10 +160,233 @@ int main(int argc, char** argv) {
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-    std::printf("openads_serverd: shutdown signal received\n");
+    if (console) {
+        std::printf("openads_serverd: shutdown signal received\n");
+    }
 #if defined(OPENADS_WITH_HTTP)
-    if (http_port != 0) http.stop();
+    if (args.http_port != 0) http.stop();
 #endif
     srv.stop();
     return 0;
+}
+
+#ifndef OPENADS_VERSION_STR
+#  define OPENADS_VERSION_STR "unknown"
+#endif
+
+#if defined(_WIN32)
+
+// ---- Windows Service plumbing ---------------------------------------
+//
+// `--install-service` / `--uninstall-service` register / drop the
+// service with the Service Control Manager. `--service` is the
+// entry SCM hands us when launching the registered binary; we then
+// call StartServiceCtrlDispatcher and let SCM call svc_main().
+
+constexpr const char* kServiceName    = "openads_serverd";
+constexpr const char* kServiceDisplay = "OpenADS Database Server";
+
+static SERVICE_STATUS        g_svc_status{};
+static SERVICE_STATUS_HANDLE g_svc_handle = nullptr;
+static int                   g_svc_argc   = 0;
+static char**                g_svc_argv   = nullptr;
+
+VOID WINAPI svc_ctrl_handler(DWORD ctrl) {
+    switch (ctrl) {
+        case SERVICE_CONTROL_STOP:
+        case SERVICE_CONTROL_SHUTDOWN:
+            g_svc_status.dwCurrentState     = SERVICE_STOP_PENDING;
+            g_svc_status.dwWaitHint         = 5000;
+            SetServiceStatus(g_svc_handle, &g_svc_status);
+            g_running.store(false);
+            break;
+        default:
+            break;
+    }
+}
+
+VOID WINAPI svc_main(DWORD /*argc*/, LPSTR* /*argv*/) {
+    g_svc_handle = RegisterServiceCtrlHandlerA(
+        kServiceName, svc_ctrl_handler);
+    if (!g_svc_handle) return;
+
+    g_svc_status.dwServiceType      = SERVICE_WIN32_OWN_PROCESS;
+    g_svc_status.dwCurrentState     = SERVICE_START_PENDING;
+    g_svc_status.dwControlsAccepted = 0;
+    g_svc_status.dwWin32ExitCode    = NO_ERROR;
+    g_svc_status.dwServiceSpecificExitCode = 0;
+    g_svc_status.dwCheckPoint       = 0;
+    g_svc_status.dwWaitHint         = 5000;
+    SetServiceStatus(g_svc_handle, &g_svc_status);
+
+    Args args;
+    if (!parse_args(g_svc_argc, g_svc_argv, args)) {
+        g_svc_status.dwCurrentState  = SERVICE_STOPPED;
+        g_svc_status.dwWin32ExitCode = ERROR_INVALID_PARAMETER;
+        SetServiceStatus(g_svc_handle, &g_svc_status);
+        return;
+    }
+
+    g_svc_status.dwCurrentState     = SERVICE_RUNNING;
+    g_svc_status.dwControlsAccepted =
+        SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
+    SetServiceStatus(g_svc_handle, &g_svc_status);
+
+    int rc = run_server(args, /*console=*/false);
+
+    g_svc_status.dwCurrentState  = SERVICE_STOPPED;
+    g_svc_status.dwWin32ExitCode = (rc == 0) ? NO_ERROR
+                                              : ERROR_SERVICE_SPECIFIC_ERROR;
+    g_svc_status.dwServiceSpecificExitCode =
+        (rc == 0) ? 0 : static_cast<DWORD>(rc);
+    SetServiceStatus(g_svc_handle, &g_svc_status);
+}
+
+int install_service(int argc, char** argv) {
+    char path[MAX_PATH];
+    if (!GetModuleFileNameA(nullptr, path, MAX_PATH)) {
+        std::fprintf(stderr, "GetModuleFileNameA failed (err=%lu)\n",
+                     GetLastError());
+        return 1;
+    }
+    // Compose binPath with --service plus any extras the user wants
+    // baked into the registration ("--install-service --port 6263
+    // --data c:\app\data" → registered binPath includes those).
+    std::string cmd = "\"";
+    cmd += path;
+    cmd += "\" --service";
+    for (int i = 2; i < argc; ++i) {
+        cmd += " ";
+        cmd += "\"";
+        cmd += argv[i];
+        cmd += "\"";
+    }
+    SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    if (!scm) {
+        std::fprintf(stderr,
+            "OpenSCManager failed (err=%lu) — run from an elevated "
+            "Administrator prompt.\n", GetLastError());
+        return 1;
+    }
+    SC_HANDLE svc = CreateServiceA(
+        scm, kServiceName, kServiceDisplay,
+        SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS,
+        SERVICE_AUTO_START,
+        SERVICE_ERROR_NORMAL,
+        cmd.c_str(),
+        nullptr, nullptr, nullptr, nullptr, nullptr);
+    if (!svc) {
+        DWORD e = GetLastError();
+        if (e == ERROR_SERVICE_EXISTS) {
+            std::fprintf(stderr, "service '%s' is already installed\n",
+                         kServiceName);
+        } else {
+            std::fprintf(stderr,
+                "CreateService failed (err=%lu) — run elevated.\n", e);
+        }
+        CloseServiceHandle(scm);
+        return 1;
+    }
+    std::printf("service '%s' installed.\n  binPath: %s\n"
+                "  display: %s\n  startup: SERVICE_AUTO_START\n"
+                "Start it via: sc start %s\n",
+                kServiceName, cmd.c_str(), kServiceDisplay, kServiceName);
+    CloseServiceHandle(svc);
+    CloseServiceHandle(scm);
+    return 0;
+}
+
+int uninstall_service() {
+    SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    if (!scm) {
+        std::fprintf(stderr,
+            "OpenSCManager failed (err=%lu) — run elevated.\n",
+            GetLastError());
+        return 1;
+    }
+    SC_HANDLE svc = OpenServiceA(
+        scm, kServiceName,
+        DELETE | SERVICE_STOP | SERVICE_QUERY_STATUS);
+    if (!svc) {
+        std::fprintf(stderr,
+            "OpenService failed (err=%lu) — service not installed?\n",
+            GetLastError());
+        CloseServiceHandle(scm);
+        return 1;
+    }
+    SERVICE_STATUS status{};
+    // Best-effort stop; ignore errors (already stopped is fine).
+    ControlService(svc, SERVICE_CONTROL_STOP, &status);
+    if (!DeleteService(svc)) {
+        std::fprintf(stderr,
+            "DeleteService failed (err=%lu)\n", GetLastError());
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+        return 1;
+    }
+    std::printf("service '%s' uninstalled.\n", kServiceName);
+    CloseServiceHandle(svc);
+    CloseServiceHandle(scm);
+    return 0;
+}
+#endif // _WIN32
+
+} // namespace
+
+int main(int argc, char** argv) {
+    // Top-level switches that short-circuit the normal serve loop.
+    if (argc > 1) {
+        std::string a1 = argv[1];
+        if (a1 == "--version") {
+            std::printf("openads_serverd %s\n", OPENADS_VERSION_STR);
+            return 0;
+        }
+        if (a1 == "-h" || a1 == "--help") { usage(argv[0]); return 0; }
+#if defined(_WIN32)
+        if (a1 == "--install-service") {
+            return install_service(argc, argv);
+        }
+        if (a1 == "--uninstall-service") {
+            return uninstall_service();
+        }
+        if (a1 == "--service") {
+            // Hand control over to the SCM dispatcher; it calls
+            // svc_main() once the service is started by the SCM.
+            g_svc_argc = argc;
+            g_svc_argv = argv;
+            SERVICE_TABLE_ENTRYA tbl[] = {
+                {const_cast<LPSTR>(kServiceName), &svc_main},
+                {nullptr, nullptr}
+            };
+            if (!StartServiceCtrlDispatcherA(tbl)) {
+                DWORD e = GetLastError();
+                if (e == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) {
+                    std::fprintf(stderr,
+                        "openads_serverd was launched with --service "
+                        "but the process is not running under the\n"
+                        "Service Control Manager. This flag is meant "
+                        "to be set by the SCM itself; for an\n"
+                        "interactive run leave --service off.\n");
+                } else {
+                    std::fprintf(stderr,
+                        "StartServiceCtrlDispatcher failed (err=%lu)\n", e);
+                }
+                return 1;
+            }
+            return 0;
+        }
+#endif
+    }
+
+    Args args;
+    if (!parse_args(argc, argv, args)) {
+        usage(argv[0]);
+        return 2;
+    }
+
+    std::signal(SIGINT,  on_signal);
+    std::signal(SIGTERM, on_signal);
+
+    return run_server(args, /*console=*/true);
 }
