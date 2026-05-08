@@ -10,6 +10,22 @@
 #include <cstring>
 #include <utility>
 
+#include <atomic>
+
+namespace openads::engine {
+
+// Global SET DELETE flag (process-wide). Default true = include
+// deleted rows (Clipper SET DELETED OFF). Set by AdsShowDeleted in
+// the ABI layer.
+static std::atomic<bool> g_show_deleted{true};
+bool show_deleted() noexcept { return g_show_deleted.load(); }
+void set_show_deleted(bool v) noexcept { g_show_deleted.store(v); }
+} // namespace openads::engine
+
+namespace openads::abi { inline bool show_deleted() noexcept {
+    return openads::engine::show_deleted();
+} }
+
 namespace openads::engine {
 
 util::Result<Table> Table::open(const std::string& path,
@@ -186,6 +202,23 @@ util::Result<void> Table::goto_top() {
         if (!key_in_bottom_scope_(idx->current_key())) {
             state_ = State::Eof; recno_ = 0; return {};
         }
+        // SET DELETE ON: skip deleted rows in the walk direction.
+        if (!openads::abi::show_deleted()) {
+            while (r.value().positioned) {
+                if (auto ld = load_record_(r.value().recno); !ld) {
+                    return ld.error();
+                }
+                if (!is_deleted()) return {};
+                r = order_->descending_traverse()
+                        ? idx->prev() : idx->next();
+                if (!r) return r.error();
+                if (r.value().positioned &&
+                    !key_in_bottom_scope_(idx->current_key())) {
+                    state_ = State::Eof; recno_ = 0; return {};
+                }
+            }
+            state_ = State::Eof; recno_ = 0; return {};
+        }
         return load_record_(r.value().recno);
     }
     if (driver_->record_count() == 0) {
@@ -223,6 +256,23 @@ util::Result<void> Table::goto_bottom() {
         }
         if (!r.value().positioned ||
             !key_in_top_scope_(idx->current_key())) {
+            state_ = State::Eof; recno_ = 0; return {};
+        }
+        // SET DELETE ON: walk back over rows currently flagged
+        // as deleted. The B+tree may still hold their entries
+        // (CDX records deleted-row-keys; DBFCDX hides them from
+        // navigation but keeps them so a later RECALL works).
+        if (!openads::abi::show_deleted()) {
+            while (r.value().positioned) {
+                if (auto ld = load_record_(r.value().recno); !ld) {
+                    return ld.error();
+                }
+                if (!is_deleted()) {
+                    return {};
+                }
+                r = idx->prev();
+                if (!r) return r.error();
+            }
             state_ = State::Eof; recno_ = 0; return {};
         }
         return load_record_(r.value().recno);
@@ -292,7 +342,10 @@ util::Result<void> Table::skip(std::int32_t delta) {
         // tree in reverse from the caller's perspective.
         bool effective_forward = (delta > 0) ^ order_->descending_traverse();
         util::Result<drivers::SeekOutcome> r = drivers::SeekOutcome{};
-        for (std::int32_t i = 0; i < std::abs(delta); ++i) {
+        const bool skip_deleted = !openads::abi::show_deleted();
+        std::int32_t want = std::abs(delta);
+        std::int32_t taken = 0;
+        while (taken < want) {
             r = effective_forward ? idx->next() : idx->prev();
             if (!r) return r.error();
             if (!r.value().positioned) {
@@ -306,6 +359,15 @@ util::Result<void> Table::skip(std::int32_t delta) {
                 else           { state_ = State::Bof; recno_ = 0; }
                 return {};
             }
+            if (skip_deleted) {
+                // Probe the row's deleted flag without advancing
+                // the user-visible step count.
+                if (auto ld = load_record_(r.value().recno); !ld) {
+                    return ld.error();
+                }
+                if (is_deleted()) continue;
+            }
+            ++taken;
         }
         return load_record_(r.value().recno);
     }

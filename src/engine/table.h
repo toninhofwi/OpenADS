@@ -19,6 +19,10 @@
 
 namespace openads::engine {
 
+bool show_deleted() noexcept;
+void set_show_deleted(bool v) noexcept;
+
+
 enum class TableType { Cdx, Ntx, Adt, Vfp };
 enum class OpenMode  { Read, Shared, Exclusive };
 

@@ -1,6 +1,8 @@
 #include "openads/ace.h"
 #include "openads/error.h"
 
+#include <atomic>
+
 #include "abi/charset.h"
 #include "abi/last_error.h"
 
@@ -8552,7 +8554,10 @@ UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::
 UNSIGNED32 AdsSetScopedRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetServerType(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsShowDeleted(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsShowDeleted(UNSIGNED16 us) {
+    openads::engine::set_show_deleted(us != 0);
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsShowError(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsStmtSetTableLockType(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsStmtSetTablePassword(ADSHANDLE, UNSIGNED8*, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
