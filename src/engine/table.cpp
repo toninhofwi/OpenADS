@@ -967,11 +967,16 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
         return false;
     }
     bool exact = r.value().hit == drivers::SeekHit::Exact;
+    // DESCEND order treats the FIRST match in walk direction as
+    // the LAST entry in the equal-key group when sorted ASC. Walk
+    // duplicates regardless of `last` flag.
+    bool walk_to_last = last;
+    if (order_->descending_traverse() && exact) walk_to_last = true;
     // SAP-ACE / Clipper "AdsSeekLast" semantics: when fLast and we
     // have an exact hit, walk forward across equal-key entries and
     // stop on the last one. After the walk, idx's cursor is on
     // the last matching entry; load_record_ syncs the table buffer.
-    if (last && exact) {
+    if (walk_to_last && exact) {
         std::string padded_key = key;
         if (padded_key.size() < idx->key_length())
             padded_key.append(idx->key_length() - padded_key.size(), ' ');
