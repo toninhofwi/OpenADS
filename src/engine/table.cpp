@@ -950,6 +950,18 @@ void Table::clear_extra_index_views() {
     extra_index_views_.clear();
 }
 
+std::vector<drivers::IIndex*> Table::all_indexes() {
+    std::vector<drivers::IIndex*> out;
+    if (order_ && order_->index()) out.push_back(order_->index());
+    for (auto* x : extra_index_views_) {
+        if (x == nullptr) continue;
+        // Skip dup-of-active so callers see each index once.
+        if (order_ && order_->index() == x) continue;
+        out.push_back(x);
+    }
+    return out;
+}
+
 util::Result<bool>
 Table::seek_key(const std::string& key, bool soft, bool last) {
     if (!order_ || !order_->index()) {

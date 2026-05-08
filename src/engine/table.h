@@ -169,7 +169,7 @@ public:
     // advance past non-matching records in their movement direction.
     using RowPredicate = std::function<bool(Table&)>;
     void set_filter(RowPredicate p)   { filter_ = std::move(p); }
-    void clear_filter()                { filter_ = nullptr; aof_active_ = false; }
+    void clear_filter()                { filter_ = nullptr; aof_active_ = false; aof_opt_level_ = 0; }
     bool has_filter() const noexcept   { return static_cast<bool>(filter_); }
 
     // M-AOF.3 — install a per-record bitmap built by aof::evaluate
@@ -192,6 +192,12 @@ public:
         };
     }
     bool aof_active() const noexcept   { return aof_active_; }
+
+    // M-AOF.4 — cached opt level reported by AdsGetAOFOptLevel. Set
+    // by the ABI layer right after install_aof_bitmap so the answer
+    // doesn't require re-walking the AST. Cleared by clear_filter().
+    void          set_aof_opt_level(int v) noexcept { aof_opt_level_ = v; }
+    int           aof_opt_level() const noexcept    { return aof_opt_level_; }
     bool passes_filter() {
         return !filter_ || filter_(*this);
     }
@@ -222,6 +228,13 @@ public:
     void register_extra_index_view(drivers::IIndex* idx);
     void unregister_extra_index_view(drivers::IIndex* idx);
     void clear_extra_index_views();
+
+    // M-AOF.4 — read-only view of every open index on this table
+    // (active order plus parked extra views). The AOF leaf matcher
+    // uses this to find an index whose key expression matches the
+    // leaf's field, so a `field OP literal` leaf can be answered
+    // by an index range scan instead of a full table walk.
+    std::vector<drivers::IIndex*> all_indexes();
     const Order*       order() const noexcept { return order_ ? &*order_ : nullptr; }
     util::Result<bool> seek_key(const std::string& key, bool soft,
                                 bool last = false);
@@ -288,6 +301,7 @@ private:
     std::string                                   path_;
     bool                                          last_seek_found_ = false;
     bool                                          aof_active_      = false;
+    int                                           aof_opt_level_   = 0;
 
     // M10.6 recno-sequence cursor — empty means "natural order".
     std::vector<std::uint32_t>                    recno_sequence_;

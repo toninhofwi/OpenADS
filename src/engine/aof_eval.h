@@ -33,11 +33,31 @@ namespace aof {
 // short-circuits to EoF.
 using Bitmap = std::vector<bool>;
 
+// AdsGetAOFOptLevel mirror — how completely the AOF expression was
+// answered through index range scans rather than a full table walk.
+enum class OptLevel {
+    None = 0,           // ADS_OPTIMIZED_NONE — no leaf served by index
+    Part = 1,           // ADS_OPTIMIZED_PART — some leaves served, others scanned
+    Full = 2,           // ADS_OPTIMIZED_FULL — every leaf served by an index
+};
+
+struct EvalReport {
+    Bitmap   bm;
+    OptLevel level = OptLevel::None;
+};
+
 // Evaluate `n` against every record of `t` and produce the bitmap.
 // Reads the current cursor and walks all recnos in [1, count()];
 // the table position on return is unspecified — callers wanting to
 // keep their position must save and restore it themselves.
 util::Result<Bitmap> evaluate(const Node& n, Table& t);
+
+// M-AOF.4 — same contract as evaluate(), but routes individual
+// leaves through CDX / NTX index range scans whenever an open
+// index's key expression matches the leaf's field. Reports the
+// resulting OptLevel so AdsGetAOFOptLevel can surface the
+// FULL / PART / NONE flavour to the caller.
+util::Result<EvalReport> evaluate_optimised(const Node& n, Table& t);
 
 } // namespace aof
 } // namespace openads::engine

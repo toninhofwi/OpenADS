@@ -9,11 +9,14 @@
 #include "engine/table.h"
 #include "drivers/dbf_common.h"
 #include "drivers/driver_trait.h"
+#include "drivers/index_trait.h"
 #include "openads/error.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -166,6 +169,373 @@ util::Result<Bitmap> evaluate(const Node& n, Table& t) {
         bm[r - 1] = eval_node(n, t);
     }
     return bm;
+}
+
+// =====================================================================
+// M-AOF.4 — index-accelerated leaf evaluation.
+//
+// For each leaf we look up an open index (active order + extra views)
+// whose key expression is a bare reference to the same field, then
+// turn the leaf's predicate into a range scan over that index. The
+// scan walks the index entries directly and writes recnos into the
+// bitmap, avoiding the per-record decode + comparison cost of the
+// full-scan path.
+//
+// V1 surface served by index:
+//   * Character / Memo fields only (key encoding is right-padded
+//     bytes, identical to the value the index already stores).
+//   * Operators: Eq, Ne, Lt, Le, Gt, Ge, Between, In.
+//   * Index expression must equal the field name case-insensitively.
+//     UPPER(field) / DTOC(field) / compound expressions stay on the
+//     full-scan fallback for now — adding them is a matcher-only
+//     change downstream (no API impact).
+//
+// Numeric / Logical / Date fields fall back to per-record leaf
+// evaluation. They still produce a correct bitmap, just without the
+// index speedup, and the leaf is then counted as "not served by
+// index" so AdsGetAOFOptLevel correctly reports PART or NONE.
+// =====================================================================
+namespace {
+
+std::string upper(std::string s) {
+    for (auto& c : s) {
+        c = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+drivers::IIndex* find_index_for_field(Table& t, const std::string& field) {
+    std::string want = upper(field);
+    for (auto* idx : t.all_indexes()) {
+        if (idx == nullptr) continue;
+        std::string e = upper(idx->expression());
+        if (e == want) return idx;
+    }
+    return nullptr;
+}
+
+std::string pad_key(std::string v, std::uint16_t klen) {
+    if (v.size() < klen) v.append(klen - v.size(), ' ');
+    if (v.size() > klen) v.resize(klen);
+    return v;
+}
+
+// Encode a Value as a CDX/NTX-compatible character key. Returns
+// std::nullopt when the literal is not a string or coerceable to one
+// — in V1 we restrict the index path to character fields, so non-
+// string literals fall through to the full-scan path.
+std::optional<std::string>
+encode_char_key(const Value& v, std::uint16_t klen) {
+    if (auto p = std::get_if<std::string>(&v)) return pad_key(*p, klen);
+    return std::nullopt;
+}
+
+// Walk an index from the current cursor while pred(current_key())
+// is true; set the bit for each recno seen. Caller positions the
+// cursor before the call.
+util::Result<void>
+scan_while(drivers::IIndex& idx, Bitmap& bm,
+           std::uint32_t rc,
+           const std::function<bool(const std::string&)>& pred) {
+    for (;;) {
+        std::string k = idx.current_key();
+        if (!pred(k)) break;
+        // Index drivers may return SeekOutcome with positioned=false
+        // once we've walked off the end; loop terminator below covers
+        // that, but we still guard the recno write here.
+        // (recno fetched from a fresh next/seek call; current_key
+        //  alone doesn't carry it, so we can't write the bit until
+        //  the caller threads recno through. The driver-level cursor
+        //  state holds recno on each step — we read it via next().)
+        (void)bm; (void)rc;
+        // Defer write to driver-level recno: implemented in the
+        // outer loop by passing recno alongside current_key.
+        break;
+    }
+    return {};
+}
+
+// Drive a seek + walk loop: starting from `start`, advance with
+// `step` while `keep` returns true on the visited (recno, key) pair.
+// Each visited record sets bm[recno-1] when recno is in [1, rc].
+util::Result<void>
+range_walk(drivers::IIndex& idx, Bitmap& bm, std::uint32_t rc,
+           drivers::SeekOutcome start,
+           const std::function<bool(std::uint32_t, const std::string&)>& keep,
+           bool forward) {
+    auto outcome = start;
+    while (outcome.positioned) {
+        std::uint32_t r = outcome.recno;
+        std::string   k = idx.current_key();
+        if (!keep(r, k)) break;
+        if (r >= 1 && r <= rc) bm[r - 1] = true;
+
+        auto nxt = forward ? idx.next() : idx.prev();
+        if (!nxt) return nxt.error();
+        outcome = nxt.value();
+    }
+    return {};
+}
+
+// Try to serve a single Eq / Ne / Lt / Le / Gt / Ge / Between / In
+// leaf via an index range scan. Returns std::nullopt when the leaf
+// cannot be served (no matching index, non-character field, …). On
+// success returns the leaf's bitmap.
+std::optional<util::Result<Bitmap>>
+serve_leaf_via_index(const Leaf& leaf, Table& t) {
+    std::int32_t fidx = t.field_index(leaf.field);
+    if (fidx < 0) return std::nullopt;
+    const auto& fld = t.driver()->fields().at(static_cast<std::size_t>(fidx));
+    if (fld.type != drivers::DbfFieldType::Character &&
+        fld.type != drivers::DbfFieldType::Memo) {
+        return std::nullopt;
+    }
+
+    drivers::IIndex* idx = find_index_for_field(t, leaf.field);
+    if (idx == nullptr) return std::nullopt;
+    std::uint16_t klen = idx->key_length();
+    auto rc = t.record_count();
+
+    Bitmap bm;
+    bm.assign(rc, false);
+
+    auto eq_scan = [&](const std::string& key) -> util::Result<void> {
+        auto seek = idx->seek_key(key, /*soft=*/false);
+        if (!seek) return seek.error();
+        if (seek.value().hit != drivers::SeekHit::Exact) return {};
+        return range_walk(*idx, bm, rc, seek.value(),
+            [&](std::uint32_t /*r*/, const std::string& k) {
+                return k == key;
+            }, /*forward=*/true);
+    };
+
+    auto le_scan = [&](const std::string& key) -> util::Result<void> {
+        auto seek = idx->seek_first();
+        if (!seek) return seek.error();
+        return range_walk(*idx, bm, rc, seek.value(),
+            [&](std::uint32_t /*r*/, const std::string& k) {
+                return k <= key;
+            }, /*forward=*/true);
+    };
+
+    auto ge_scan = [&](const std::string& key) -> util::Result<void> {
+        auto seek = idx->seek_key(key, /*soft=*/true);
+        if (!seek) return seek.error();
+        if (!seek.value().positioned) return {};
+        return range_walk(*idx, bm, rc, seek.value(),
+            [&](std::uint32_t /*r*/, const std::string& /*k*/) {
+                return true;
+            }, /*forward=*/true);
+    };
+
+    auto between_scan = [&](const std::string& lo,
+                             const std::string& hi) -> util::Result<void> {
+        auto seek = idx->seek_key(lo, /*soft=*/true);
+        if (!seek) return seek.error();
+        if (!seek.value().positioned) return {};
+        return range_walk(*idx, bm, rc, seek.value(),
+            [&](std::uint32_t /*r*/, const std::string& k) {
+                return k <= hi;
+            }, /*forward=*/true);
+    };
+
+    switch (leaf.op) {
+        case Op::Eq: {
+            auto k = encode_char_key(leaf.values[0], klen);
+            if (!k) return std::nullopt;
+            if (auto r = eq_scan(*k); !r) return util::Result<Bitmap>{r.error()};
+            return util::Result<Bitmap>{std::move(bm)};
+        }
+        case Op::Le: {
+            auto k = encode_char_key(leaf.values[0], klen);
+            if (!k) return std::nullopt;
+            if (auto r = le_scan(*k); !r) return util::Result<Bitmap>{r.error()};
+            return util::Result<Bitmap>{std::move(bm)};
+        }
+        case Op::Lt: {
+            // strict less: walk while key < value (i.e. key <= prev-of-value
+            // in lex order — equivalent to key != value AND key <= value).
+            auto k = encode_char_key(leaf.values[0], klen);
+            if (!k) return std::nullopt;
+            auto seek = idx->seek_first();
+            if (!seek) return util::Result<Bitmap>{seek.error()};
+            auto rr = range_walk(*idx, bm, rc, seek.value(),
+                [&](std::uint32_t /*r*/, const std::string& kk) {
+                    return kk < *k;
+                }, /*forward=*/true);
+            if (!rr) return util::Result<Bitmap>{rr.error()};
+            return util::Result<Bitmap>{std::move(bm)};
+        }
+        case Op::Ge: {
+            auto k = encode_char_key(leaf.values[0], klen);
+            if (!k) return std::nullopt;
+            if (auto r = ge_scan(*k); !r) return util::Result<Bitmap>{r.error()};
+            return util::Result<Bitmap>{std::move(bm)};
+        }
+        case Op::Gt: {
+            auto k = encode_char_key(leaf.values[0], klen);
+            if (!k) return std::nullopt;
+            auto seek = idx->seek_key(*k, /*soft=*/true);
+            if (!seek) return util::Result<Bitmap>{seek.error()};
+            // skip the equal block first.
+            auto cur = seek.value();
+            while (cur.positioned && idx->current_key() == *k) {
+                auto nx = idx->next();
+                if (!nx) return util::Result<Bitmap>{nx.error()};
+                cur = nx.value();
+            }
+            auto rr = range_walk(*idx, bm, rc, cur,
+                [&](std::uint32_t /*r*/, const std::string& /*kk*/) {
+                    return true;
+                }, /*forward=*/true);
+            if (!rr) return util::Result<Bitmap>{rr.error()};
+            return util::Result<Bitmap>{std::move(bm)};
+        }
+        case Op::Between: {
+            auto lo = encode_char_key(leaf.values[0], klen);
+            auto hi = encode_char_key(leaf.values[1], klen);
+            if (!lo || !hi) return std::nullopt;
+            if (auto r = between_scan(*lo, *hi); !r) {
+                return util::Result<Bitmap>{r.error()};
+            }
+            return util::Result<Bitmap>{std::move(bm)};
+        }
+        case Op::In: {
+            for (auto& lit : leaf.values) {
+                auto k = encode_char_key(lit, klen);
+                if (!k) return std::nullopt;
+                if (auto r = eq_scan(*k); !r) {
+                    return util::Result<Bitmap>{r.error()};
+                }
+            }
+            return util::Result<Bitmap>{std::move(bm)};
+        }
+        case Op::Ne:
+            // !=  is "not (equality)" — easier to compute via equality
+            // scan + invert at the leaf level.
+            {
+                auto k = encode_char_key(leaf.values[0], klen);
+                if (!k) return std::nullopt;
+                Bitmap eq_bm;
+                eq_bm.assign(rc, false);
+                Bitmap save = std::move(bm);  // unused; reset below
+                (void)save;
+                {
+                    auto seek = idx->seek_key(*k, /*soft=*/false);
+                    if (!seek) return util::Result<Bitmap>{seek.error()};
+                    if (seek.value().hit == drivers::SeekHit::Exact) {
+                        auto rr = range_walk(*idx, eq_bm, rc, seek.value(),
+                            [&](std::uint32_t /*r*/, const std::string& kk) {
+                                return kk == *k;
+                            }, /*forward=*/true);
+                        if (!rr) return util::Result<Bitmap>{rr.error()};
+                    }
+                }
+                // Final !=  bitmap: every existing recno that isn't in
+                // the equality set. Walking the index also yields
+                // "exists" signals; rather than re-walking, mark every
+                // recno [1..rc] as candidate then strip the eq matches.
+                bm.assign(rc, true);
+                for (std::uint32_t i = 0; i < rc; ++i) {
+                    if (eq_bm[i]) bm[i] = false;
+                }
+                return util::Result<Bitmap>{std::move(bm)};
+            }
+    }
+    return std::nullopt;
+}
+
+struct LeafCounter {
+    std::uint32_t total      = 0;
+    std::uint32_t served_idx = 0;
+};
+
+util::Result<Bitmap>
+eval_optimised_node(const Node& n, Table& t, LeafCounter& lc) {
+    if (auto leaf = std::get_if<Leaf>(&n.v)) {
+        ++lc.total;
+        // Try the index path first.
+        auto opt = serve_leaf_via_index(*leaf, t);
+        if (opt.has_value()) {
+            ++lc.served_idx;
+            return std::move(*opt);
+        }
+        // Full-scan fallback for this leaf.
+        Bitmap bm;
+        bm.assign(t.record_count(), false);
+        for (std::uint32_t r = 1; r <= t.record_count(); ++r) {
+            auto g = t.goto_record(r);
+            if (!g) return g.error();
+            bm[r - 1] = eval_leaf(*leaf, t);
+        }
+        return bm;
+    }
+    if (auto a = std::get_if<And>(&n.v)) {
+        Bitmap acc;
+        bool first = true;
+        for (auto& k : a->kids) {
+            auto rb = eval_optimised_node(*k, t, lc);
+            if (!rb) return rb;
+            if (first) { acc = std::move(rb).value(); first = false; }
+            else {
+                auto& other = rb.value();
+                if (other.size() != acc.size()) {
+                    return util::Error{
+                        static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                        0, "AOF AND: bitmap size mismatch", {}};
+                }
+                for (std::size_t i = 0; i < acc.size(); ++i) {
+                    if (!other[i]) acc[i] = false;
+                }
+            }
+        }
+        if (first) acc.assign(t.record_count(), true);
+        return acc;
+    }
+    if (auto o = std::get_if<Or>(&n.v)) {
+        Bitmap acc;
+        acc.assign(t.record_count(), false);
+        for (auto& k : o->kids) {
+            auto rb = eval_optimised_node(*k, t, lc);
+            if (!rb) return rb;
+            auto& other = rb.value();
+            if (other.size() != acc.size()) {
+                return util::Error{
+                    static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                    0, "AOF OR: bitmap size mismatch", {}};
+            }
+            for (std::size_t i = 0; i < acc.size(); ++i) {
+                if (other[i]) acc[i] = true;
+            }
+        }
+        return acc;
+    }
+    if (auto nt = std::get_if<Not>(&n.v)) {
+        auto rb = eval_optimised_node(*nt->child, t, lc);
+        if (!rb) return rb;
+        Bitmap inv = std::move(rb).value();
+        for (std::size_t i = 0; i < inv.size(); ++i) inv[i] = !inv[i];
+        return inv;
+    }
+    return util::Error{
+        static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+        0, "AOF eval: unknown node kind", {}};
+}
+
+} // namespace
+
+util::Result<EvalReport> evaluate_optimised(const Node& n, Table& t) {
+    LeafCounter lc;
+    auto rb = eval_optimised_node(n, t, lc);
+    if (!rb) return rb.error();
+    EvalReport r;
+    r.bm = std::move(rb).value();
+    if      (lc.total == 0)              r.level = OptLevel::None;
+    else if (lc.served_idx == lc.total)  r.level = OptLevel::Full;
+    else if (lc.served_idx == 0)         r.level = OptLevel::None;
+    else                                 r.level = OptLevel::Part;
+    return r;
 }
 
 } // namespace openads::engine::aof

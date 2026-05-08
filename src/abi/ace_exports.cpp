@@ -3511,22 +3511,36 @@ UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
         // declined; don't degrade silently.
         return fail(ast.error());
     }
-    auto bm = openads::engine::aof::evaluate(*ast.value(), *t);
-    if (!bm) return fail(bm.error());
-    t->install_aof_bitmap(std::move(bm).value());
+    // Route through the M-AOF.4 index-accelerated evaluator: every
+    // leaf that hits an open CDX/NTX index whose key expression is
+    // the field name turns into a range scan; the rest fall back
+    // to a per-record AST evaluation. The cached OptLevel feeds
+    // AdsGetAOFOptLevel so callers see PART/FULL when their leaves
+    // were served by an index.
+    auto rep = openads::engine::aof::evaluate_optimised(*ast.value(), *t);
+    if (!rep) return fail(rep.error());
+    t->install_aof_bitmap(std::move(rep.value().bm));
+    int lvl = ADS_OPTIMIZED_NONE;
+    switch (rep.value().level) {
+        case openads::engine::aof::OptLevel::None: lvl = ADS_OPTIMIZED_NONE; break;
+        case openads::engine::aof::OptLevel::Part: lvl = ADS_OPTIMIZED_PART; break;
+        case openads::engine::aof::OptLevel::Full: lvl = ADS_OPTIMIZED_FULL; break;
+    }
+    t->set_aof_opt_level(lvl);
     return ok();
 }
 
 UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                              UNSIGNED8* /*pucBuf*/, UNSIGNED16* /*pusLen*/) {
     Table* t = get_table(hTable);
-    // V1 reports NONE even when AOF is installed: the bitmap was
-    // built by a full table scan, so by the strict ADS definition
-    // the filter is "not optimised" — no index range was used. The
-    // signal still flips to PART / FULL once M-AOF.4 starts routing
-    // individual leaves through CDX / NTX range scans.
-    (void)t;
-    if (pusLevel != nullptr) *pusLevel = ADS_OPTIMIZED_NONE;
+    int lvl = ADS_OPTIMIZED_NONE;
+    if (t != nullptr && t->aof_active()) {
+        lvl = t->aof_opt_level();
+        if (lvl == 0) lvl = ADS_OPTIMIZED_NONE;
+    }
+    if (pusLevel != nullptr) {
+        *pusLevel = static_cast<UNSIGNED16>(lvl);
+    }
     return ok();
 }
 

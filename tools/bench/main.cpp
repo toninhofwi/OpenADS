@@ -251,6 +251,98 @@ int main(int argc, char** argv) {
         "SELECT COUNT(*) FROM bench.dbf WHERE ID BETWEEN 10000 AND 20000",
         repeats, "indexed BETWEEN range (post CREATE INDEX)"));
 
+    // M-AOF.4 — AdsSetAOF speedup. Same TAG = 'AAAA' predicate, two
+    // variants: one against the unindexed default state (full-scan
+    // bitmap, ADS_OPTIMIZED_NONE) and one after building a TAG
+    // index (range-scan bitmap, ADS_OPTIMIZED_FULL). The contrast
+    // between aof_eq_unidx_walk and aof_eq_idx_walk is the
+    // user-visible Rushmore-style speedup OpenADS now ships.
+    //
+    // The table is opened once and the TAG index is built via
+    // AdsCreateIndex61 between the two AOF runs so the binding the
+    // matcher walks (active order + extra views) actually carries
+    // the new tag — re-opening the table after a CREATE INDEX SQL
+    // statement on a separate hStmt does NOT auto-bind the tag.
+    {
+        std::vector<UNSIGNED8> tname(11);
+        std::strcpy(reinterpret_cast<char*>(tname.data()), "bench.dbf");
+        ADSHANDLE hT = 0;
+        bool ok = (AdsOpenTable(hConn, tname.data(), nullptr,
+                                 ADS_CDX, ADS_ANSI, 0, 0, 0, &hT) == 0);
+
+        auto aof_walk = [&](const char* name,
+                             const char* cond,
+                             const char* note) -> WorkloadResult {
+            WorkloadResult r;
+            r.name = name;
+            if (!ok) { r.note = std::string(note) + " | open failed"; return r; }
+            std::vector<double> samples;
+            std::uint32_t kept = 0;
+            UNSIGNED16 lvl = 0;
+            for (int i = 0; i < repeats; ++i) {
+                std::vector<UNSIGNED8> c(std::strlen(cond) + 1);
+                std::strcpy(reinterpret_cast<char*>(c.data()), cond);
+                double t0 = now_ms();
+                if (AdsSetAOF(hT, c.data(), 0) != 0) break;
+                UNSIGNED16 buflen = 0;
+                AdsGetAOFOptLevel(hT, &lvl, nullptr, &buflen);
+                AdsGotoTop(hT);
+                kept = 0;
+                UNSIGNED16 eof = 0;
+                while (AdsAtEOF(hT, &eof) == 0 && eof == 0) {
+                    ++kept;
+                    AdsSkip(hT, 1);
+                }
+                double dt = now_ms() - t0;
+                samples.push_back(dt);
+                AdsClearAOF(hT);
+            }
+            r.rows = kept;
+            if (samples.empty()) {
+                r.note = std::string(note) + " | FAILED";
+                return r;
+            }
+            std::sort(samples.begin(), samples.end());
+            r.min_ms = samples.front();
+            r.med_ms = samples[samples.size()/2];
+            r.max_ms = samples.back();
+            const char* lvl_s =
+                (lvl == ADS_OPTIMIZED_FULL) ? "FULL" :
+                (lvl == ADS_OPTIMIZED_PART) ? "PART" : "NONE";
+            r.note = std::string(note) + " | OptLevel=" + lvl_s;
+            return r;
+        };
+
+        // Pre-AOF baseline: same predicate, no index on TAG yet.
+        results.push_back(aof_walk("aof_eq_unidx_walk",
+            "TAG = 'AAAA'",
+            "AdsSetAOF(TAG='AAAA') walk, no TAG index"));
+
+        // Build a TAG index bound directly to the open table via
+        // AdsCreateIndex61. The returned hIndex is an extra index
+        // view on the table; subsequent AOF runs see it through
+        // Table::all_indexes() and route the leaf through a CDX
+        // range scan.
+        ADSHANDLE hIdx = 0;
+        if (ok) {
+            UNSIGNED8 cdx[64]  = "bench_aof.cdx";
+            UNSIGNED8 nm [16]  = "TAG_IDX";
+            UNSIGNED8 expr[8]  = "TAG";
+            (void)AdsCreateIndex61(hT, cdx, nm, expr,
+                                   nullptr, nullptr,
+                                   /*ulOptions=*/0, /*usPageSize=*/0,
+                                   &hIdx);
+        }
+        results.push_back(aof_walk("aof_eq_idx_walk",
+            "TAG = 'AAAA'",
+            "AdsSetAOF(TAG='AAAA') walk, TAG indexed"));
+        results.push_back(aof_walk("aof_between_idx_walk",
+            "TAG BETWEEN 'AAAA' AND 'CCCC'",
+            "AdsSetAOF(TAG BETWEEN ...) walk, TAG indexed"));
+
+        if (ok) AdsCloseTable(hT);
+    }
+
     results.push_back(time_workload("union_all",        hStmt,
         "SELECT TAG FROM bench.dbf WHERE TAG = 'AAAA' "
         "UNION ALL "
