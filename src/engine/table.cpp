@@ -197,7 +197,12 @@ util::Result<void> Table::goto_top() {
         }
         if (!r) return r.error();
         if (!r.value().positioned) {
-            state_ = State::Eof; recno_ = 0; return {};
+            // Empty index (no entries) - report Limbo (BOF+EOF
+            // both true) so the caller sees this as "no
+            // navigable rows" rather than a bare EoF that came
+            // from a SKIP. Matches Clipper / DBFCDX behaviour
+            // for INDEX FOR <empty-result>.
+            state_ = State::Limbo; recno_ = 0; return {};
         }
         if (!key_in_bottom_scope_(idx->current_key())) {
             state_ = State::Eof; recno_ = 0; return {};
@@ -249,7 +254,8 @@ util::Result<void> Table::goto_bottom() {
         util::Result<drivers::SeekOutcome> r = idx->seek_last();
         if (!r) return r.error();
         if (!r.value().positioned) {
-            state_ = State::Eof; recno_ = 0; return {};
+            // Empty index → Limbo, same rationale as goto_top above.
+            state_ = State::Limbo; recno_ = 0; return {};
         }
         // Walk backwards while bottom scope is exceeded.
         while (r.value().positioned &&
