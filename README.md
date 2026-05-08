@@ -100,6 +100,7 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **v1.0.0-rc12** | 2026-05-08 | M-AOF.5 — **sparse-bitmap `Skip` / `GoTop` (O(M) walk through the visible set)**. The AOF bitmap installed by `AdsSetAOF` is now flattened into a sorted `recno_sequence_` on the table; `Skip` / `GoTop` / `GoBottom` therefore O(1)-jump per step over only the matching records instead of decoding every recno asking the predicate. On the same 100k-row synthetic dataset, `aof_between_idx_walk` (3-tag visible set) drops from **321 ms** (rc11, OptLevel=FULL but O(N) walk) to **24 ms** — a **13.4× total speedup** vs the original full-scan baseline; the eq-walk case (~3.8% selectivity) is now bounded only by the per-visible-record `load_record_` decode cost (~80 µs × 3848 records = ~310 ms floor). `AdsClearAOF` drops both the predicate and the sequence in lockstep. Pinned by 367 / 367 tests, 43 424 / 43 424 assertions; nothing previously-tested broke. |
 | **v1.0.0-rc11** | 2026-05-08 | M-AOF.1..4 — first working slice of **Advantage Optimized Filters (AOF) — Rushmore-style query optimisation**. `AdsSetAOF` now actually parses + evaluates the cond, installs a per-record bitmap as a filter predicate that `Skip` / `GoTop` honour, and routes individual leaves through CDX / NTX range scans whenever an open index's key expression matches the leaf's field. `AdsGetAOFOptLevel` reports `ADS_OPTIMIZED_FULL` / `PART` / `NONE` based on per-leaf coverage. V1 grammar: `<field> OP <literal>` (`= == != <> # < <= > >=`), `BETWEEN`, `IN`, `AND` / `OR` / `NOT`, parens; both Clipper-style (`.AND.`, `.T.`) and SQL-style keywords; index-accelerated leaves on character / memo fields with bare-field-name index expressions. `tools/bench/openads_bench` carries three AOF workloads — on a 100 000-row synthetic DBF, `AdsSetAOF("TAG='AAAA'")` is 1.83× faster with a TAG index installed (`OptLevel=FULL`) than without (`OptLevel=NONE`). Pinned by 367 / 367 tests, 43 424 / 43 424 assertions; nothing previously-tested broke. M-AOF.5 (sparse-bitmap Skip → O(M) walk through visible set) is the next step and is what unlocks the textbook 10-100× total speedup. |
 | **v1.0.0-rc10** | 2026-05-08 | studio.web.0.17 — Studio's SPA header now carries a deployment-mode badge: 🏠 `LocalServer` (green) when the console is hosted in-process by `ace64.dll` / `ace32.dll` (the rc9 in-DLL Studio), 🌐 `Remote Server` (blue) when hosted by `openads_serverd`. Hover surfaces the active data directory. Driven by a new `mode` field on `/api/health` (`"localserver"` when the `HttpConsole` was started without a backing wire-server pointer, `"remote-server"` otherwise) so two side-by-side Studio tabs are trivial to tell apart at a glance. Failure path is silent — the badge stays hidden if `/api/health` is unreachable, so reverse-proxy deployments that strip unknown fields keep working. |
 | **v1.0.0-rc9** | 2026-05-08 | Embedded Studio in `ace64.dll` / `ace32.dll`. Three new OpenADS-only entry points (`AdsStudioStart(port, data_dir)` / `AdsStudioStop()` / `AdsStudioPort(*port)`) plus an `OPENADS_STUDIO_PORT=<N>` (`OPENADS_STUDIO_DATA`, `OPENADS_STUDIO_HOST`) env-var auto-start hook driven from `DllMain` on Windows / a constructor attribute on POSIX. LocalServer apps (Harbour / X# / Clipper) loading the OpenADS DLL directly now get the same single-page Studio web console + REST surface in their own process — no `openads_serverd.exe` daemon required. The Studio HTTP target is built into the DLL only when `-DOPENADS_WITH_HTTP=ON`; without that flag the three entry points are still exported but return `AE_FUNCTION_NOT_AVAILABLE` so callers can detect the build flavour at runtime. Auto-start path is silent on bind failure so a host loading the DLL on a port-busy box doesn't crash; explicit `AdsStudioStart()` returns `AE_INTERNAL_ERROR` instead. Default bind host is `127.0.0.1` to keep the console off the LAN unless explicitly opted in. |
@@ -293,21 +294,29 @@ bitmap via the per-record fallback — they just don't count as
 "served by index" in the OptLevel report.
 
 Measured speedup (`tools/bench/openads_bench`, 100 000 synthetic
-rows, Windows MSVC x64 Release):
+rows, Windows MSVC x64 Release, M-AOF.5):
 
-| AOF workload                              | med (ms) | OptLevel | Speedup |
-|-------------------------------------------|---------:|----------|--------:|
-| `AdsSetAOF("TAG='AAAA'")`, no TAG index    |     586  | NONE     |   1.0×  |
-| `AdsSetAOF("TAG='AAAA'")`, TAG indexed     |     321  | FULL     |   1.83× |
-| `AdsSetAOF("TAG BETWEEN 'AAAA' AND 'CCCC'")`, TAG indexed | 321 | FULL | 1.83× |
+| AOF workload                                              | med (ms) | OptLevel | Speedup |
+|-----------------------------------------------------------|---------:|----------|--------:|
+| `AdsSetAOF("TAG='AAAA'")`, no TAG index                    |     586  | NONE     |   1.0×  |
+| `AdsSetAOF("TAG='AAAA'")`, TAG indexed                     |     323  | FULL     |   1.83× |
+| `AdsSetAOF("TAG BETWEEN 'AAAA' AND 'CCCC'")`, TAG indexed  |      24  | FULL     |  24.4×  |
 
-The 1.83× is the `AdsSetAOF` call itself becoming a range scan
-instead of a full record decode + AST eval per row. The subsequent
-`Skip` / `GoTop` walk through the visible set is still O(N) today
-because `Skip` iterates every recno checking the bitmap. M-AOF.5
-(sparse-bitmap Skip — find-next-set-bit) lifts that to O(M) where
-M is the number of matching records, which is where the textbook
-Rushmore "10-100×" total speedup actually shows up.
+Two things drive the speedup:
+
+1. `AdsSetAOF` itself becomes a range scan over the matching index
+   instead of a full record decode + AST eval per row. That alone
+   is the rc11 (M-AOF.4) gain.
+2. `Skip` / `GoTop` walk only the matching records (sparse-bitmap
+   navigation, M-AOF.5) instead of iterating every recno asking
+   the predicate. That's the rc12 gain that flips the textbook
+   Rushmore window on for selective filters.
+
+The eq-walk case at 1.83× is now bounded by the per-visible-record
+`load_record_` decode cost (~80 µs × 3848 matching records ≈ 310
+ms floor); applications that don't touch the matched data — for
+example `COUNT(*)` over the AOF set, or `dbSeek`-style point
+lookups — hit the full Rushmore speedup window on top of that.
 
 ### Performance — cross-platform SQL bench
 
