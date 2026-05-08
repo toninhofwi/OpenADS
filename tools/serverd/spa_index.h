@@ -254,6 +254,13 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
                      background:rgba(255,255,255,0.05);
                      border:1px solid var(--border);
                      display:none"></span>
+        <!-- studio.web.0.19 — when the AOF didn't reach FULL, list
+             the candidate character/memo fields that don't have a
+             matching index yet. Each chip kicks off a one-click
+             CREATE INDEX so the next Apply lifts OptLevel. -->
+        <span id="browse-aof-hints"
+              style="font-size:13px;color:var(--muted);
+                     display:none"></span>
       </div>
       <div id="browse-grid" class="empty" data-i18n="browse_pick">Select a table on the left.</div>
       <div class="pager" id="browse-pager"></div>
@@ -1518,6 +1525,94 @@ function paintAofBadge(data) {
     el.title = data.aof_error;
   } else {
     el.style.display = "none";
+  }
+  paintAofHints(data);
+}
+
+// studio.web.0.19 — when the AOF didn't reach FULL, suggest a
+// CREATE INDEX for each character / memo field referenced by the
+// cond that doesn't already have a matching index. V1's index-
+// accelerated path only serves char / memo leaves; numeric / date /
+// logical leaves stay on the per-record fallback so we don't bother
+// suggesting indexes for them — that would be a downstream UX trap.
+function paintAofHints(data) {
+  const el = document.getElementById("browse-aof-hints");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!data || !data.aof_active || data.aof_level === "FULL") {
+    el.style.display = "none";
+    return;
+  }
+  const cond = (state.aofCond || "").toUpperCase();
+  if (!cond) { el.style.display = "none"; return; }
+  const KEYWORDS = new Set([
+    "AND", "OR", "NOT", "BETWEEN", "IN",
+    "T", "F", "TRUE", "FALSE", "Y", "N"
+  ]);
+  // Match bare identifiers; drop quoted strings + keywords.
+  const stripped = cond.replace(/'[^']*'|"[^"]*"/g, " ");
+  const tokens = stripped.match(/\b[A-Z_][A-Z0-9_]*\b/g) || [];
+  const candidates = new Set();
+  for (const tok of tokens) {
+    if (KEYWORDS.has(tok)) continue;
+    candidates.add(tok);
+  }
+  // ADS_STRING = 4, ADS_MEMO = 5 (V1-indexable char-key types).
+  const cols = data.cols || [];
+  const types = data.col_types || [];
+  const indexable = [];
+  cols.forEach((name, i) => {
+    if (!candidates.has(name.toUpperCase())) return;
+    const t = types[i];
+    if (t === 4 || t === 5) indexable.push(name);
+  });
+  if (indexable.length === 0) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "inline-flex";
+  el.style.gap = "6px";
+  el.style.alignItems = "center";
+  el.style.flexWrap = "wrap";
+  const lead = document.createElement("span");
+  lead.textContent = "💡 lift to FULL:";
+  lead.style.color = "var(--muted)";
+  el.appendChild(lead);
+  for (const f of indexable) {
+    const btn = document.createElement("button");
+    btn.className = "btn btn-secondary";
+    btn.textContent = "Create index on " + f;
+    btn.title = "Run CREATE INDEX " + f + "_IDX ON " + state.table +
+                " (" + f + ") and re-apply the AOF.";
+    btn.style.fontSize = "12px";
+    btn.style.padding = "3px 8px";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Creating " + f + "_IDX…";
+      try {
+        const sql = "CREATE INDEX " + f + "_IDX ON " +
+                    state.table + " (" + f + ")";
+        const r = await fetch("/api/sql", {
+          method: "POST",
+          headers: {"content-type": "application/json"},
+          body: JSON.stringify({sql, limit: 1})
+        });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          alert("CREATE INDEX failed: " + (j.error || r.status));
+          btn.disabled = false;
+          btn.textContent = "Create index on " + f;
+          return;
+        }
+        // Re-apply the AOF so the OptLevel badge refreshes.
+        await loadBrowse();
+      } catch (e) {
+        alert("CREATE INDEX failed: " + e.message);
+        btn.disabled = false;
+        btn.textContent = "Create index on " + f;
+      }
+    });
+    el.appendChild(btn);
   }
 }
 

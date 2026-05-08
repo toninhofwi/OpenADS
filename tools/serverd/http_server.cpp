@@ -315,7 +315,15 @@ json table_rows(const std::string& dir, const std::string& tname,
     }
     UNSIGNED32 rc = 0;
     AdsGetRecordCount(hTable, 0, &rc);
-    json out{{"cols", cnames}, {"rows", json::array()},
+    // studio.web.0.18 — expose col_types so the SPA AOF toolbar can
+    // surface "Create index on <field>" hints only for the column
+    // types V1's index-accelerated path actually serves (character /
+    // memo). Numeric / date / logical fields stay on the per-record
+    // fallback regardless of indexing in V1.
+    json col_types = json::array();
+    for (auto t : ctypes) col_types.push_back(t);
+    json out{{"cols", cnames}, {"col_types", col_types},
+             {"rows", json::array()},
              {"total", rc}, {"offset", offset}, {"limit", limit},
              {"aof_active", aof_active},
              {"aof_level",  aof_level}};
