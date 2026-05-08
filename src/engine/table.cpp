@@ -893,7 +893,9 @@ void Table::attach_memo(std::unique_ptr<drivers::IMemoStore> memo) {
 }
 
 void Table::set_order(std::unique_ptr<drivers::IIndex> idx) {
+    bool desc = idx && idx->descending();
     order_.emplace(std::move(idx));
+    if (desc) order_->set_descending_traverse(true);
 }
 
 void Table::clear_order() {

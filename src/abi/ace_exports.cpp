@@ -2280,6 +2280,11 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             // prior CREATE INDEX accumulate and break SKIP walks.
             if (auto cl = existing.clear_data(); !cl)
                 return fail(cl.error());
+            // CREATE INDEX overwrite must also pick up the new
+            // UNIQUE / DESCEND options; the sub-header was loaded
+            // from disk with the prior options.
+            if (auto so = existing.set_options(unique, descend); !so)
+                return fail(so.error());
             idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
                 std::move(existing));
         } else if (!added) {
@@ -8523,8 +8528,14 @@ UNSIGNED32 AdsIsExprValid(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
 // AdsIsFound already defined elsewhere in this file.
 UNSIGNED32 AdsIsIndexCustom(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsIsIndexDescending(ADSHANDLE, UNSIGNED16* p)
-    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsIndexDescending(ADSHANDLE hIndex, UNSIGNED16* p) {
+    if (p == nullptr) return openads::AE_INTERNAL_ERROR;
+    *p = 0;
+    auto* idx = iindex_for_handle(hIndex);
+    if (idx == nullptr) return openads::AE_INTERNAL_ERROR;
+    *p = idx->descending() ? 1 : 0;
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsIsIndexUnique(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsIsNull(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)

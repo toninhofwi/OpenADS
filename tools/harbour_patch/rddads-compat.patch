@@ -1,8 +1,40 @@
 diff --git a/contrib/rddads/ads1.c b/contrib/rddads/ads1.c
-index 4c37b03a7a..cd6d317747 100644
+index 4c37b03a7a..4aafe2e39d 100644
 --- a/contrib/rddads/ads1.c
 +++ b/contrib/rddads/ads1.c
-@@ -1142,7 +1142,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1112,14 +1112,24 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+                                pszKey, u16KeyLen, u16KeyType, &u16Found );
+       if( u32RetVal == AE_SUCCESS && bSoftSeek && ! u16Found )
+       {
+-         /* in such case ADS set record at EOF position so we
+-            should make normal soft seek and then skip -1 to emulate
+-            Clipper behavior, Druzus */
+-         u32RetVal = AdsSeek( pArea->hOrdCurrent, pszKey, u16KeyLen,
+-                              u16KeyType, u16SeekType, &u16Found );
++         /* OpenADS rddads-compat: DBFCDX bFindLast soft-seeks
++            that miss every key stay at EOF; the original ADS
++            retry-with-soft-then-skip-back path overshoots. Only
++            run that path on ADS-side ASCENDING orders where
++            AdsSeekLast really did position the cursor at EOF
++            past the last duplicate (and hence the recovery
++            walk-back is needed). For descending orders we just
++            keep the EOF the SeekLast already gave us. */
++         UNSIGNED16 u16Desc = 0;
++         AdsIsIndexDescending( pArea->hOrdCurrent, &u16Desc );
++         if( ! u16Desc )
++         {
++            u32RetVal = AdsSeek( pArea->hOrdCurrent, pszKey, u16KeyLen,
++                                 u16KeyType, u16SeekType, &u16Found );
+ 
+-         if( u32RetVal == AE_SUCCESS )
+-            u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
++            if( u32RetVal == AE_SUCCESS )
++               u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
++         }
+       }
+    }
+    else
+@@ -1142,7 +1152,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
        #if 0
        HB_ERRCODE errCode = SELF_GOTOP( &pArea->area );
        #endif
@@ -17,7 +49,7 @@ index 4c37b03a7a..cd6d317747 100644
  #if defined( ADS_USE_OEM_TRANSLATION ) && ADS_LIB_VERSION < 600
        if( pszKeyFree )
           hb_adsOemAnsiFree( ( char * ) pszKeyFree );
-@@ -1249,8 +1255,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1249,8 +1265,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
      * Clipper clears BOF after seek - I found only one strange situation
      * when it doesn't but only sometimes. I've not been able to detect
      * the rule yet. Any how it's much safer to clear it, Druzus.
@@ -32,7 +64,7 @@ index 4c37b03a7a..cd6d317747 100644
  
     if( pucSavedKey )
        hb_xfree( pucSavedKey );
-@@ -1323,6 +1334,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1323,6 +1344,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
     {
        HB_ERRCODE errCode = HB_SUCCESS;
        HB_LONG lSkipper;
@@ -40,7 +72,7 @@ index 4c37b03a7a..cd6d317747 100644
  
        if( ! pArea->fPositioned && lToSkip < 0 )
        {
-@@ -1332,10 +1344,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1332,10 +1354,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
  
        if( ! pArea->fPositioned )
        {
