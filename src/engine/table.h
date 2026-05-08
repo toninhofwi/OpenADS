@@ -169,7 +169,15 @@ public:
     // advance past non-matching records in their movement direction.
     using RowPredicate = std::function<bool(Table&)>;
     void set_filter(RowPredicate p)   { filter_ = std::move(p); }
-    void clear_filter()                { filter_ = nullptr; aof_active_ = false; aof_opt_level_ = 0; }
+    void clear_filter()                {
+        filter_ = nullptr;
+        // M-AOF.5: AOF also installs a recno sequence on the table
+        // for the sparse-bitmap Skip path. Drop both in lockstep so
+        // AdsClearAOF restores the full unfiltered walk.
+        if (aof_active_) clear_recno_sequence();
+        aof_active_ = false;
+        aof_opt_level_ = 0;
+    }
     bool has_filter() const noexcept   { return static_cast<bool>(filter_); }
 
     // M-AOF.3 — install a per-record bitmap built by aof::evaluate
@@ -190,6 +198,20 @@ public:
             if (r == 0 || r > p->size()) return false;
             return static_cast<bool>((*p)[r - 1]);
         };
+        // M-AOF.5 — sparse-bitmap navigation. Translate the bitmap
+        // into the sorted recno sequence Table already uses to walk
+        // a precomputed visible set; goto_top / goto_bottom / skip
+        // then jump O(1) per step instead of iterating every recno
+        // checking the predicate. Result: Skip-through-visible-set
+        // becomes O(M) where M is the number of matching records,
+        // which is where the textbook Rushmore "10-100x" total
+        // speedup actually shows up.
+        std::vector<std::uint32_t> seq;
+        seq.reserve(p->size() / 4);     // typical AOF selectivities
+        for (std::size_t i = 0; i < p->size(); ++i) {
+            if ((*p)[i]) seq.push_back(static_cast<std::uint32_t>(i + 1));
+        }
+        set_recno_sequence(std::move(seq));
     }
     bool aof_active() const noexcept   { return aof_active_; }
 
