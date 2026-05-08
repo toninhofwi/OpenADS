@@ -440,6 +440,30 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
     Table* tbl = conn->lookup_table(th.value());
     Handle gh = s.registry.register_object(HandleKind::Table, tbl);
     *phTable = gh;
+
+    // M-AOF.6 — production-CDX auto-open. ADS / rddads convention:
+    // opening `<base>.dbf` auto-binds `<base>.cdx` if it exists, so
+    // every tag inside it becomes navigable on this Table without
+    // an explicit AdsOpenIndex60 call. Without this, the AOF
+    // matcher in evaluate_optimised() never finds the index and
+    // every leaf falls back to the per-record evaluation —
+    // AdsGetAOFOptLevel reports NONE forever even after a
+    // CREATE INDEX SQL ran in a prior session.
+    namespace fs = std::filesystem;
+    fs::path tp(tbl->path());
+    if (tp.extension() == ".dbf" || tp.extension() == ".DBF") {
+        fs::path cdx = tp; cdx.replace_extension(".cdx");
+        std::error_code ec;
+        if (fs::exists(cdx, ec)) {
+            std::string cdxs = cdx.string();
+            std::vector<UNSIGNED8> b(cdxs.size() + 1);
+            std::memcpy(b.data(), cdxs.data(), cdxs.size());
+            // Up to 64 tag handles is plenty for a production CDX.
+            ADSHANDLE arr[64] = {0};
+            UNSIGNED16 alen = 64;
+            (void)AdsOpenIndex(gh, b.data(), arr, &alen);
+        }
+    }
     return ok();
 }
 
