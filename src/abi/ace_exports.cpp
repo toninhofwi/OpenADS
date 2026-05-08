@@ -2257,7 +2257,6 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     }
 
     std::unique_ptr<openads::drivers::IIndex> idx_owner;
-    openads::drivers::IIndex* idx_view = nullptr;
     bool exists = false;
     {
         std::error_code ec;
@@ -2307,8 +2306,6 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         idx_owner = std::make_unique<openads::drivers::ntx::NtxIndex>(
             std::move(created).value());
     }
-    idx_view = idx_owner.get();
-
     auto rec_count = t->record_count();
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto g = t->goto_record(r); !g) return fail(g.error());
