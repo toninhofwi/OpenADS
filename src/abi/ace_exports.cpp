@@ -2328,39 +2328,52 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     }
     if (auto fl = idx_owner->flush(); !fl) return fail(fl.error());
 
+    auto& m   = index_bindings();
+    auto& act = active_binding_for();
     // Sibling tag refresh: a fresh CREATE INDEX implicitly resyncs
     // every tag in the bag (rddads' ORDLSTCLEAR + INDEX cycle drops
     // every other tag's binding so sync_all_indexes_ skipped them
     // on subsequent dbappend / replace, leaving stale or empty
-    // B+trees on disk). Walk the bag's other sub-tags, clear them,
-    // then per-record-insert from scratch using each tag's own key
-    // expression. Skip the just-rebuilt tag.
+    // B+trees on disk). Re-build each sibling tag's B+tree from the
+    // current DBF, then register it as a parked extra binding so
+    // later dbappend / dbreplace cycles update it via
+    // sync_all_indexes_ instead of leaving it stale again.
+    auto& m_pre   = index_bindings();
+    auto& act_pre = active_binding_for();
     if (is_cdx) {
         auto sibs = openads::drivers::cdx::CdxIndex::list_tags(p.string());
         if (sibs) {
             for (const auto& sib : sibs.value()) {
                 if (sib == tag) continue;
-                openads::drivers::cdx::CdxIndex sub;
-                if (auto r0 = sub.open_named(p.string(),
+                auto sub = std::make_unique<
+                    openads::drivers::cdx::CdxIndex>();
+                if (auto r0 = sub->open_named(p.string(),
                         openads::drivers::IndexOpenMode::Shared,
                         sib); !r0) continue;
-                if (auto cl = sub.clear_data(); !cl) continue;
-                std::string sib_expr = sub.expression();
-                std::uint16_t sib_klen = sub.key_length();
+                if (auto cl = sub->clear_data(); !cl) continue;
+                std::string sib_expr = sub->expression();
+                std::uint16_t sib_klen = sub->key_length();
                 for (std::uint32_t r2 = 1; r2 <= rec_count; ++r2) {
                     if (auto g = t->goto_record(r2); !g) continue;
                     auto k2 = openads::engine::evaluate_index_expr(
                         *t, sib_expr, sib_klen);
                     if (!k2) continue;
-                    (void)sub.insert(r2, k2.value());
+                    (void)sub->insert(r2, k2.value());
                 }
-                (void)sub.flush();
+                (void)sub->flush();
+                // Park as extra binding (persists across rddads
+                // ORDLSTCLEAR cycles? - it gets dropped, but at
+                // least sync_all_indexes_ can see it until then).
+                ADSHANDLE sh = next_index_handle();
+                openads::drivers::IIndex* raw = sub.get();
+                m_pre[sh] = IndexBinding{t, sib, std::move(sub),
+                                         p.string()};
+                t->register_extra_index_view(raw);
+                (void)act_pre;
             }
         }
     }
 
-    auto& m   = index_bindings();
-    auto& act = active_binding_for();
     // Drop ANY existing binding whose tag matches the one we're
     // re-creating: a CREATE INDEX command on an existing tag is a
     // silent overwrite (clear_data already wiped the on-disk
@@ -3203,25 +3216,34 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
         std::memcpy(&dv, pucKey, sizeof(double));
         auto* idx = t->order()->index();
         std::uint16_t klen = idx->key_length();
-        // Probe the field schema for decimals (best effort — the
-        // expression is usually a bare field name).
+        // Format width matches the FIELD width (eg N,10,0 -> 10),
+        // not the index key_length: a stale key_length from an
+        // INDEX-on-empty-table run would otherwise produce a
+        // different right-aligned padding than evaluate_index_expr
+        // wrote, and seek_key would never find an exact match.
+        std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
         std::int32_t fidx = t->field_index(idx->expression());
         if (fidx >= 0) {
             const auto& fd = t->field_descriptor(
                 static_cast<std::uint16_t>(fidx));
             dec = static_cast<std::uint16_t>(fd.decimals);
+            if (fd.length > 0)
+                fmt_w = static_cast<std::uint16_t>(fd.length);
         }
         char buf[64];
         if (dec > 0) {
             std::snprintf(buf, sizeof(buf), "%*.*f",
-                          static_cast<int>(klen),
+                          static_cast<int>(fmt_w),
                           static_cast<int>(dec), dv);
         } else {
             std::snprintf(buf, sizeof(buf), "%*.0f",
-                          static_cast<int>(klen), dv);
+                          static_cast<int>(fmt_w), dv);
         }
-        key.assign(buf, klen);
+        // Pad to klen with trailing spaces (matches how
+        // evaluate_index_expr right-pads the field's raw bytes).
+        key.assign(buf, fmt_w);
+        if (key.size() < klen) key.append(klen - key.size(), ' ');
     } else {
         key.assign(reinterpret_cast<const char*>(pucKey),
                    static_cast<std::size_t>(u16KeyLen));

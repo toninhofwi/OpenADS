@@ -1044,6 +1044,13 @@ util::Result<void> CdxIndex::flush() {
         auto r = flush_page_(off);
         if (!r) return r.error();
     }
+    // Persist root_page_ / counter — `insert` already does this on
+    // every root change, but a paranoia rewrite here keeps the
+    // sub-tag header in sync if the caller reaches `flush` via a
+    // different path (eg. set_options + clear_data + insert chain).
+    if (sub_header_offset_ != 0) {
+        if (auto r = rewrite_header_(); !r) return r.error();
+    }
     return file_.sync();
 }
 
