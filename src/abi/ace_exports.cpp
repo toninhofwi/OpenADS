@@ -2311,10 +2311,10 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     auto rec_count = t->record_count();
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto g = t->goto_record(r); !g) return fail(g.error());
-        if (t->is_deleted()) continue;
-        // FOR-clause: only insert records that match the predicate.
-        // Rows that fail the FOR are excluded from the B+tree, so
-        // DBGOTOP / DBGOBOTTOM / DBSKIP only walk the matching set.
+        // DBFCDX inserts deleted rows too — the index is a logical
+        // mirror of the table, not a "live-only" view. SET DELETED
+        // hides them at navigation time. Only the FOR clause filters
+        // entries out at build time.
         if (!for_expr.empty()) {
             if (!openads::engine::evaluate_index_expr_truthy(*t, for_expr))
                 continue;
