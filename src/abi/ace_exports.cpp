@@ -3206,13 +3206,20 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     // as soft + skip-to-end-of-key-group; the empty key has only
     // one "group" so first/last collapse to first under our walk).
     if (zero_length_key && t->record_count() > 0) {
-        // Position cursor on the first record in the active order
-        // (or recno 1 if no active order).
-        auto gt = t->goto_top();
-        if (!gt) return fail(gt.error());
-        if (pbFound != nullptr) *pbFound = 1;
-        t->set_last_seek_found(true);
-        return ok();
+        // DBFCDX: empty key always matches; soft-or-hard, asc-only.
+        // For DESCEND orders the empty key falls through to the
+        // regular seek path so DBFCDX's CDX_MAX_REC_NUM / fLast
+        // inversion takes effect — `DBSEEK("",T,T)` on a DESCEND
+        // tag is expected to miss (Eof), not land on the bottom.
+        bool desc = (t->order() != nullptr &&
+                     t->order()->descending_traverse());
+        if (!desc) {
+            auto gt = t->goto_top();
+            if (!gt) return fail(gt.error());
+            if (pbFound != nullptr) *pbFound = 1;
+            t->set_last_seek_found(true);
+            return ok();
+        }
     }
     auto r = t->seek_key(key, soft);
     if (!r) return fail(r.error());
