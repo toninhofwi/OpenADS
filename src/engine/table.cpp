@@ -237,6 +237,18 @@ util::Result<void> Table::goto_top() {
     if (filter_ && state_ == State::Positioned && !filter_(*this)) {
         return skip(1);
     }
+    // SET DELETE ON without an active index: walk forward over the
+    // raw record range until a live row appears.
+    if (!openads::abi::show_deleted()) {
+        std::uint32_t r = 1;
+        while (r <= driver_->record_count() && is_deleted()) {
+            ++r;
+            if (r > driver_->record_count()) {
+                state_ = State::Limbo; recno_ = 0; return {};
+            }
+            if (auto ld = load_record_(r); !ld) return ld.error();
+        }
+    }
     return {};
 }
 
@@ -291,7 +303,19 @@ util::Result<void> Table::goto_bottom() {
     if (n == 0) {
         state_ = State::Limbo; recno_ = 0; return {};
     }
-    return load_record_(n);
+    if (auto r = load_record_(n); !r) return r.error();
+    // SET DELETE ON without active index: walk back to first live.
+    if (!openads::abi::show_deleted()) {
+        std::uint32_t r = n;
+        while (r >= 1 && is_deleted()) {
+            if (r == 1) {
+                state_ = State::Limbo; recno_ = 0; return {};
+            }
+            --r;
+            if (auto ld = load_record_(r); !ld) return ld.error();
+        }
+    }
+    return {};
 }
 
 util::Result<void> Table::goto_record(std::uint32_t recno) {
