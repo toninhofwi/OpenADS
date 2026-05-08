@@ -385,18 +385,40 @@ util::Result<void> Table::skip(std::int32_t delta) {
         const bool skip_deleted = !openads::abi::show_deleted();
         std::int32_t want = std::abs(delta);
         std::int32_t taken = 0;
+        // Clipper convention: SKIP that overshoots the order leaves
+        // the cursor on the LAST visited live record and reports Bof
+        // / Eof — not on recno 0. Track the most-recent live we saw.
+        std::uint32_t last_live = recno_;
         while (taken < want) {
             r = effective_forward ? idx->next() : idx->prev();
             if (!r) return r.error();
             if (!r.value().positioned) {
-                if (delta > 0) { state_ = State::Eof; recno_ = 0; }
-                else           { state_ = State::Bof; recno_ = 0; }
+                if (delta > 0) {
+                    state_ = State::Eof; recno_ = 0;
+                } else {
+                    state_ = State::Bof;
+                    if (last_live != 0) {
+                        (void)load_record_(last_live);
+                        state_ = State::Bof;
+                    } else {
+                        recno_ = 0;
+                    }
+                }
                 return {};
             }
             if (!key_in_top_scope_(idx->current_key()) ||
                 !key_in_bottom_scope_(idx->current_key())) {
-                if (delta > 0) { state_ = State::Eof; recno_ = 0; }
-                else           { state_ = State::Bof; recno_ = 0; }
+                if (delta > 0) {
+                    state_ = State::Eof; recno_ = 0;
+                } else {
+                    state_ = State::Bof;
+                    if (last_live != 0) {
+                        (void)load_record_(last_live);
+                        state_ = State::Bof;
+                    } else {
+                        recno_ = 0;
+                    }
+                }
                 return {};
             }
             if (skip_deleted) {
@@ -407,6 +429,7 @@ util::Result<void> Table::skip(std::int32_t delta) {
                 }
                 if (is_deleted()) continue;
             }
+            last_live = r.value().recno;
             ++taken;
         }
         return load_record_(r.value().recno);
