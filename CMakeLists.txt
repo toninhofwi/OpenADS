@@ -10,6 +10,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# openads_core is a STATIC library that gets linked into both an
+# executable (openads_serverd, tests) and a SHARED library
+# (openads_ace -> ace64.dll / libace64.so). On Linux / macOS the
+# shared-library link path requires every translation unit pulled
+# in to be position-independent, otherwise we hit
+# `R_X86_64_TPOFF32 ... can not be used when making a shared
+# object; recompile with -fPIC`. Force PIC globally — Windows
+# silently ignores the flag, so this is a no-op there.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
@@ -63,6 +73,17 @@ endif()
 
 if(OPENADS_WITH_HTTP)
     include(FetchContent)
+    # cpp-httplib auto-detects OpenSSL / zlib / brotli on the host
+    # and pulls them in as link libraries on its INTERFACE target.
+    # That collides with the OpenADS no-runtime-DLL deployment
+    # promise (the shipped DLL must not depend on libssl /
+    # libcrypto). Force-disable the auto-link so Linux/macOS
+    # builds match the Windows side: plain HTTP only, no system
+    # OpenSSL pulled into ace64.dll / libace64.so.
+    set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_ZLIB_IF_AVAILABLE    OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_BROTLI_IF_AVAILABLE  OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_REQUIRE_OPENSSL          OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
         cpp_httplib
         GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
