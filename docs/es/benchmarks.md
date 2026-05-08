@@ -46,6 +46,47 @@ oportunidad conocida: el planner SQL actualmente NO empuja los
 predicados WHERE a un índice CDX/NTX coincidente. Cerrar esa
 brecha es un milestone futuro.
 
+## Bench v3 — AOF (Rushmore-style) (rc12, 100 k filas)
+
+`AdsSetAOF` parsea + evalúa la condición, instala un bitmap por
+registro como predicado de filtro que `Skip` / `GoTop` honran, y
+enruta cada hoja por range-scan de CDX / NTX cuando un índice
+abierto tiene ese campo como key expr. `AdsGetAOFOptLevel` reporta
+`ADS_OPTIMIZED_FULL` / `PART` / `NONE` según cobertura.
+La navegación con bitmap sparse (M-AOF.5) lleva el walk del
+visible-set de O(N) a O(M).
+
+Mismo DBF sintético de 100 000 filas, todas medianas de 5
+repeticiones, builds `Release`:
+
+| Carga AOF                                          | Win MSVC x64 | Linux clang -O3 | macOS AppleClang | OptLevel |
+|----------------------------------------------------|-------------:|----------------:|-----------------:|----------|
+| `AdsSetAOF("TAG='AAAA'")`, sin índice TAG          |   593 ms     |     93 ms       |    210 ms        | NONE     |
+| `AdsSetAOF("TAG='AAAA'")`, con índice TAG          |   323 ms     |     58 ms       |    119 ms        | FULL     |
+| `AdsSetAOF("TAG BETWEEN 'AAAA' AND 'CCCC'")`, idx  |    24 ms     |    4.5 ms       |      9 ms        | FULL     |
+
+Speedup vs baseline full-scan no-indexada (mismo host):
+
+| Carga AOF                                          | Win MSVC | Linux clang | macOS |
+|----------------------------------------------------|---------:|------------:|------:|
+| `AdsSetAOF("TAG='AAAA'")`, con índice TAG          |   1.83×  |    1.61×    | 1.77× |
+| `AdsSetAOF("TAG BETWEEN 'AAAA' AND 'CCCC'")`       |  24.4×   |   20.7×     | 23.4× |
+
+Qué provoca la aceleración:
+
+1. `AdsSetAOF` se convierte en range-scan sobre el índice en
+   lugar de decode + AST eval por fila. Ganancia rc11 (M-AOF.4).
+2. `Skip` / `GoTop` sólo recorren los registros que pasan
+   (navegación sparse, M-AOF.5) en vez de iterar cada recno
+   consultando el predicado. Ganancia rc12 — la ventana
+   "10-100×" tipo Rushmore para filtros selectivos.
+
+El speedup de ~1.83× del eq-walk está limitado por el coste de
+`load_record_` por registro visible (~80 µs × 3848 matches ≈
+310 ms suelo en Windows). Aplicaciones que no tocan el dato
+matched — `COUNT(*)` sobre el AOF, o `dbSeek` puntual — entran
+en la ventana Rushmore completa encima del range-scan gain.
+
 ## Ejecutar en tu hardware
 
 ```sh
