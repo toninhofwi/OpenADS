@@ -35,4 +35,10 @@ util::Result<std::string>
                         const std::string& expr,
                         std::uint16_t      key_len);
 
+// FOR-clause / scope predicate evaluator. Parses a Clipper-style
+// boolean expression and returns whether the current row passes.
+// On parse failure or unsupported syntax returns true (be permissive
+// — the FOR clause then degrades to "include all").
+bool evaluate_index_expr_truthy(Table& t, const std::string& expr);
+
 } // namespace openads::engine

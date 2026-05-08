@@ -2208,7 +2208,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                             UNSIGNED8*  pucFileName,
                             UNSIGNED8*  pucIndexName,
                             UNSIGNED8*  pucExpr,
-                            UNSIGNED8*  /*pucCondition*/,
+                            UNSIGNED8*  pucCondition,
                             UNSIGNED8*  /*pucKeyFilter*/,
                             UNSIGNED32  ulOptions,
                             UNSIGNED16  /*usPageSize*/,
@@ -2221,6 +2221,9 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     auto bag  = openads::abi::to_internal(pucFileName, 0);
     auto tag  = openads::abi::to_internal(pucIndexName, 0);
     auto expr = openads::abi::to_internal(pucExpr, 0);
+    std::string for_expr = pucCondition != nullptr
+        ? openads::abi::to_internal(pucCondition, 0)
+        : std::string{};
 
     namespace fs = std::filesystem;
     fs::path p(bag);
@@ -2302,6 +2305,13 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto g = t->goto_record(r); !g) return fail(g.error());
         if (t->is_deleted()) continue;
+        // FOR-clause: only insert records that match the predicate.
+        // Rows that fail the FOR are excluded from the B+tree, so
+        // DBGOTOP / DBGOBOTTOM / DBSKIP only walk the matching set.
+        if (!for_expr.empty()) {
+            if (!openads::engine::evaluate_index_expr_truthy(*t, for_expr))
+                continue;
+        }
         auto k = openads::engine::evaluate_index_expr(*t, expr, klen);
         if (!k) return fail(k.error());
         if (auto ins = idx_owner->insert(r, k.value()); !ins) {
@@ -3178,18 +3188,16 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
                    static_cast<std::size_t>(u16KeyLen));
     }
     bool soft = (u16SeekType & 0x01) != 0;
-    // Trim trailing whitespace so an "all-spaces" key reduces to the
-    // empty-string special case below.
-    std::string trimmed = key;
-    while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+    bool zero_length_key = (u16KeyLen == 0);
     auto r = t->seek_key(key, soft);
     if (!r) return fail(r.error());
     bool found = r.value();
     // Clipper / DBFCDX quirk: DBSEEK( "" ) with bSoftSeek positions
-    // on the first record and reports FOUND = TRUE. Mirror that
-    // when the seek landed on a record (state == Positioned) so we
-    // don't undo a successful Eof/Limbo classification above.
-    if (!found && soft && trimmed.empty()
+    // on the first record and reports FOUND = TRUE. Only the literal
+    // zero-length key gets this treatment — DBSEEK( " " ) (one
+    // space) still goes through the regular soft-seek path and
+    // returns FALSE / EoF when no key actually starts with a space.
+    if (!found && soft && zero_length_key
         && !t->bof() && !t->eof()
         && !seek_last_retry_latch()) {
         found = true;

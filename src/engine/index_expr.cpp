@@ -398,4 +398,230 @@ evaluate_index_expr(Table& t, const std::string& expr, std::uint16_t key_len) {
     return s;
 }
 
+// ---- M(rddads-compat) FOR-clause / scope truthy evaluator ----------------
+//
+// A tiny recursive-descent parser sufficient for the predicate forms
+// rddtst.prg + most Clipper apps emit:
+//
+//   FNUM > 2 .AND. FNUM <= 4
+//   FSTR == "3"
+//   FNUM != 2 .AND. FNUM < 4
+//   RECNO() <> 5
+//
+// Anything outside the supported grammar evaluates to TRUE (so the
+// FOR clause degrades to "include every row" rather than corrupting
+// the index — callers can still use it, just without the filter).
+namespace {
+
+struct Lex {
+    const std::string& s;
+    std::size_t i = 0;
+    explicit Lex(const std::string& src) : s(src) {}
+
+    void skip_ws() {
+        while (i < s.size() && std::isspace(
+                static_cast<unsigned char>(s[i]))) ++i;
+    }
+    bool eof() { skip_ws(); return i >= s.size(); }
+    bool peek_kw(const char* kw) {
+        skip_ws();
+        std::size_t L = std::strlen(kw);
+        if (i + L > s.size()) return false;
+        for (std::size_t k = 0; k < L; ++k) {
+            char a = static_cast<char>(std::toupper(
+                static_cast<unsigned char>(s[i + k])));
+            if (a != kw[k]) return false;
+        }
+        return true;
+    }
+    bool match_kw(const char* kw) {
+        if (!peek_kw(kw)) return false;
+        i += std::strlen(kw);
+        return true;
+    }
+    bool match_char(char c) {
+        skip_ws();
+        if (i < s.size() && s[i] == c) { ++i; return true; }
+        return false;
+    }
+};
+
+bool eval_or(Lex& lx, Table& t);
+bool eval_and(Lex& lx, Table& t);
+bool eval_not(Lex& lx, Table& t);
+bool eval_cmp(Lex& lx, Table& t);
+
+Value parse_atom(Lex& lx, Table& t) {
+    lx.skip_ws();
+    Value v;
+    if (lx.i < lx.s.size() &&
+        (lx.s[lx.i] == '"' || lx.s[lx.i] == '\'')) {
+        char q = lx.s[lx.i++];
+        std::string lit;
+        while (lx.i < lx.s.size() && lx.s[lx.i] != q) {
+            lit.push_back(lx.s[lx.i++]);
+        }
+        if (lx.i < lx.s.size() && lx.s[lx.i] == q) ++lx.i;
+        v.is_number = false; v.s = lit;
+        return v;
+    }
+    // Number literal (including a leading minus).
+    if (lx.i < lx.s.size() &&
+        (std::isdigit(static_cast<unsigned char>(lx.s[lx.i])) ||
+         (lx.s[lx.i] == '-' && lx.i + 1 < lx.s.size() &&
+          std::isdigit(static_cast<unsigned char>(lx.s[lx.i + 1]))))) {
+        std::string num;
+        if (lx.s[lx.i] == '-') num.push_back(lx.s[lx.i++]);
+        while (lx.i < lx.s.size() &&
+               (std::isdigit(static_cast<unsigned char>(lx.s[lx.i])) ||
+                lx.s[lx.i] == '.')) {
+            num.push_back(lx.s[lx.i++]);
+        }
+        v.is_number = true;
+        v.n = std::strtod(num.c_str(), nullptr);
+        return v;
+    }
+    // Identifier / function call.
+    if (lx.i < lx.s.size() &&
+        (std::isalpha(static_cast<unsigned char>(lx.s[lx.i])) ||
+         lx.s[lx.i] == '_')) {
+        std::string name;
+        while (lx.i < lx.s.size() &&
+               (std::isalnum(static_cast<unsigned char>(lx.s[lx.i])) ||
+                lx.s[lx.i] == '_')) {
+            name.push_back(lx.s[lx.i++]);
+        }
+        std::string upper = upper_utf8(name);
+        if (lx.match_char('(')) {
+            // Only RECNO() / DELETED() are common in FOR clauses.
+            std::vector<Value> args;
+            lx.skip_ws();
+            if (!lx.match_char(')')) {
+                args.push_back(parse_atom(lx, t));
+                while (lx.match_char(',')) args.push_back(parse_atom(lx, t));
+                lx.match_char(')');
+            }
+            if (upper == "RECNO") {
+                v.is_number = true;
+                v.n = static_cast<double>(t.recno());
+                return v;
+            }
+            if (upper == "DELETED") {
+                v.is_number = true;
+                v.n = t.is_deleted() ? 1.0 : 0.0;
+                return v;
+            }
+            // Fallback: treat unknown call as empty string.
+            v.is_number = false;
+            return v;
+        }
+        // Field lookup.
+        std::int32_t fidx = t.field_index(name);
+        if (fidx < 0) {
+            v.is_number = false;
+            return v;
+        }
+        auto r = t.read_field(static_cast<std::uint16_t>(fidx));
+        if (!r) { v.is_number = false; return v; }
+        const auto& f = t.field_descriptor(static_cast<std::uint16_t>(fidx));
+        if (f.type == drivers::DbfFieldType::Numeric ||
+            f.type == drivers::DbfFieldType::Float    ||
+            f.type == drivers::DbfFieldType::Integer  ||
+            f.type == drivers::DbfFieldType::Double   ||
+            f.type == drivers::DbfFieldType::Currency) {
+            v.is_number = true;
+            v.n = r.value().as_double;
+        } else {
+            v.is_number = false;
+            std::string sv = r.value().as_string;
+            while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+            v.s = sv;
+        }
+        return v;
+    }
+    return v;
+}
+
+bool eval_cmp(Lex& lx, Table& t) {
+    lx.skip_ws();
+    if (lx.match_char('(')) {
+        bool inner = eval_or(lx, t);
+        lx.match_char(')');
+        return inner;
+    }
+    Value lhs = parse_atom(lx, t);
+    lx.skip_ws();
+    // Pick a comparison operator (longest match first).
+    std::string op;
+    auto try_op = [&](const char* s) {
+        std::size_t L = std::strlen(s);
+        if (lx.i + L > lx.s.size()) return false;
+        if (std::memcmp(lx.s.data() + lx.i, s, L) != 0) return false;
+        op.assign(s);
+        lx.i += L;
+        return true;
+    };
+    if (!try_op("==") && !try_op("!=") && !try_op("<>") &&
+        !try_op(">=") && !try_op("<=") &&
+        !try_op("=")  && !try_op(">")  && !try_op("<")  &&
+        !try_op("#")) {
+        // No comparison operator → treat lhs as truthy.
+        return lhs.is_number ? (lhs.n != 0.0) : !lhs.s.empty();
+    }
+    Value rhs = parse_atom(lx, t);
+    int cmp;
+    if (lhs.is_number || rhs.is_number) {
+        double a = lhs.is_number ? lhs.n : std::strtod(lhs.s.c_str(), nullptr);
+        double b = rhs.is_number ? rhs.n : std::strtod(rhs.s.c_str(), nullptr);
+        cmp = (a < b) ? -1 : (a > b ? 1 : 0);
+    } else {
+        cmp = lhs.s.compare(rhs.s);
+        if (cmp < 0) cmp = -1; else if (cmp > 0) cmp = 1;
+    }
+    if (op == "==" || op == "=") return cmp == 0;
+    if (op == "!=" || op == "<>" || op == "#") return cmp != 0;
+    if (op == ">")  return cmp >  0;
+    if (op == ">=") return cmp >= 0;
+    if (op == "<")  return cmp <  0;
+    if (op == "<=") return cmp <= 0;
+    return true;
+}
+
+bool eval_not(Lex& lx, Table& t) {
+    lx.skip_ws();
+    if (lx.match_kw(".NOT.")) {
+        return !eval_not(lx, t);
+    }
+    if (lx.match_char('!')) {
+        return !eval_not(lx, t);
+    }
+    return eval_cmp(lx, t);
+}
+
+bool eval_and(Lex& lx, Table& t) {
+    bool a = eval_not(lx, t);
+    while (lx.match_kw(".AND.")) {
+        bool b = eval_not(lx, t);
+        a = a && b;
+    }
+    return a;
+}
+
+bool eval_or(Lex& lx, Table& t) {
+    bool a = eval_and(lx, t);
+    while (lx.match_kw(".OR.")) {
+        bool b = eval_and(lx, t);
+        a = a || b;
+    }
+    return a;
+}
+
+} // anonymous namespace
+
+bool evaluate_index_expr_truthy(Table& t, const std::string& expr) {
+    if (expr.empty()) return true;
+    Lex lx(expr);
+    return eval_or(lx, t);
+}
+
 } // namespace openads::engine
