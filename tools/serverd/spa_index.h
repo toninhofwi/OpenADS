@@ -228,6 +228,33 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
                 style="display:none">Delete selected</button>
         <span id="browse-bulk-count"></span>
       </div>
+      <!-- studio.web.0.18 — Rushmore-style AOF (Advantage Optimised
+           Filters) toolbar. Type a cond like AGE >= 25 or
+           NAME = 'SMITH', press Apply; Skip / GoTop walk only the
+           matching records. The badge shows whether the filter was
+           served by an index (🟢 FULL), partly (🟡 PART) or fell
+           back to a full-record AST evaluation (⚪ NONE / no AOF). -->
+      <div class="toolbar" style="margin-top:6px">
+        <span style="font-size:13px;color:var(--muted);min-width:170px"
+              data-i18n="aof_label">AOF (Rushmore) filter:</span>
+        <input id="browse-aof" placeholder="e.g. AGE >= 25"
+               style="background:var(--panel-2);color:var(--fg);
+                      border:1px solid var(--border);
+                      padding:6px 10px;font-size:15px;border-radius:2px;
+                      flex:1;min-width:200px;max-width:520px;
+                      font-family:ui-monospace,monospace">
+        <button class="btn btn-primary" id="browse-aof-apply"
+                data-i18n="apply">Apply</button>
+        <button class="btn btn-secondary" id="browse-aof-clear"
+                data-i18n="clear">Clear</button>
+        <span id="browse-aof-badge"
+              title="AdsGetAOFOptLevel — shows whether the filter is served by an index"
+              style="font-size:13px;font-weight:600;
+                     padding:4px 10px;border-radius:3px;
+                     background:rgba(255,255,255,0.05);
+                     border:1px solid var(--border);
+                     display:none"></span>
+      </div>
       <div id="browse-grid" class="empty" data-i18n="browse_pick">Select a table on the left.</div>
       <div class="pager" id="browse-pager"></div>
     </div>
@@ -448,10 +475,17 @@ async function loadBrowse() {
   const t = state.table;
   $("browse-title").textContent = `Table: ${t}`;
   try {
-    const data = await api(`/api/tables/${encodeURIComponent(t)}` +
-      `/rows?offset=${state.browseOffset}&limit=${state.browseLimit}`);
+    let url = `/api/tables/${encodeURIComponent(t)}` +
+      `/rows?offset=${state.browseOffset}&limit=${state.browseLimit}`;
+    // studio.web.0.18 — forward the AOF cond on every paged fetch
+    // so Next / Prev keep walking the same Rushmore-filtered set.
+    if (state.aofCond && state.aofCond.length > 0) {
+      url += `&aof=${encodeURIComponent(state.aofCond)}`;
+    }
+    const data = await api(url);
     state.lastBrowseData = data;
     state.browseSort = state.browseSort || { col: -1, dir: 1 };
+    paintAofBadge(data);
     renderBrowseGrid();
     $("browse-pager").innerHTML = `
       <button class="btn btn-secondary" id="prev"
@@ -1452,6 +1486,58 @@ async function paintModeBadge() {
     }
   } catch (e) { /* ignore — badge stays hidden on failure */ }
 }
+
+// studio.web.0.18 — Rushmore-style AOF (Advantage Optimised Filters)
+// toolbar wiring. Keeps `state.aofCond` in sync with the input field
+// and paints the optimisation-level badge from the response.
+function paintAofBadge(data) {
+  const el = document.getElementById("browse-aof-badge");
+  if (!el) return;
+  if (data && data.aof_active) {
+    const lvl = data.aof_level || "NONE";
+    let bg = "rgba(148,148,148,0.30)";
+    let bd = "rgba(148,148,148,0.65)";
+    let icon = "⚪";
+    if (lvl === "FULL") {
+      icon = "🟢"; bg = "rgba(34,197,94,0.30)"; bd = "rgba(34,197,94,0.65)";
+    } else if (lvl === "PART") {
+      icon = "🟡"; bg = "rgba(234,179,8,0.30)"; bd = "rgba(234,179,8,0.65)";
+    }
+    el.textContent = `${icon} OptLevel: ${lvl}`;
+    el.style.background  = bg;
+    el.style.borderColor = bd;
+    el.style.display = "inline-block";
+    el.title = "AdsGetAOFOptLevel — FULL = every leaf served by an "
+             + "index range scan, PART = some leaves served + others "
+             + "scanned, NONE = full-record AST evaluation.";
+  } else if (data && data.aof_error) {
+    el.textContent = "❌ " + data.aof_error;
+    el.style.background  = "rgba(239,68,68,0.30)";
+    el.style.borderColor = "rgba(239,68,68,0.65)";
+    el.style.display = "inline-block";
+    el.title = data.aof_error;
+  } else {
+    el.style.display = "none";
+  }
+}
+
+document.getElementById("browse-aof-apply")?.addEventListener("click", () => {
+  const v = (document.getElementById("browse-aof").value || "").trim();
+  state.aofCond = v;
+  state.browseOffset = 0;
+  if (state.table) loadBrowse();
+});
+document.getElementById("browse-aof-clear")?.addEventListener("click", () => {
+  document.getElementById("browse-aof").value = "";
+  state.aofCond = "";
+  state.browseOffset = 0;
+  if (state.table) loadBrowse();
+});
+document.getElementById("browse-aof")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    document.getElementById("browse-aof-apply").click();
+  }
+});
 
 // URL params let docs / scripts deep-link to a specific tab + table.
 //   /?table=employees.dbf&tab=structure

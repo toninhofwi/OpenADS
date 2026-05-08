@@ -261,7 +261,8 @@ json table_schema(const std::string& dir, const std::string& tname,
 // studio.web.0.2 — paginated row browse for a single table.
 json table_rows(const std::string& dir, const std::string& tname,
                 std::uint32_t offset, std::uint32_t limit,
-                const std::string& type_ov = "") {
+                const std::string& type_ov = "",
+                const std::string& aof_cond = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
@@ -272,6 +273,30 @@ json table_rows(const std::string& dir, const std::string& tname,
                      resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+
+    // studio.web.0.18 — Rushmore-style AOF filter applied here. If
+    // the caller passed `?aof=<cond>`, install it via AdsSetAOF;
+    // Skip / GoTop afterwards walk only the matching records, and
+    // AdsGetAOFOptLevel reports back FULL / PART / NONE so the SPA
+    // can render an explicit "served by index" badge.
+    std::string aof_level = "NONE";
+    std::string aof_error;
+    bool aof_active = false;
+    if (!aof_cond.empty()) {
+        std::vector<UNSIGNED8> c(aof_cond.size() + 1);
+        std::memcpy(c.data(), aof_cond.data(), aof_cond.size());
+        if (AdsSetAOF(hTable, c.data(), 0) != 0) {
+            aof_error = "AdsSetAOF rejected the condition (parse error or "
+                        "unsupported expression)";
+        } else {
+            aof_active = true;
+            UNSIGNED16 lvl = 0; UNSIGNED16 buflen = 0;
+            AdsGetAOFOptLevel(hTable, &lvl, nullptr, &buflen);
+            aof_level = (lvl == ADS_OPTIMIZED_FULL) ? "FULL"
+                      : (lvl == ADS_OPTIMIZED_PART) ? "PART"
+                                                    : "NONE";
+        }
     }
     UNSIGNED16 nf = 0;
     AdsGetNumFields(hTable, &nf);
@@ -291,12 +316,28 @@ json table_rows(const std::string& dir, const std::string& tname,
     UNSIGNED32 rc = 0;
     AdsGetRecordCount(hTable, 0, &rc);
     json out{{"cols", cnames}, {"rows", json::array()},
-             {"total", rc}, {"offset", offset}, {"limit", limit}};
+             {"total", rc}, {"offset", offset}, {"limit", limit},
+             {"aof_active", aof_active},
+             {"aof_level",  aof_level}};
+    if (!aof_error.empty()) out["aof_error"] = aof_error;
     if (offset >= rc) {
         AdsCloseTable(hTable);
         return out;
     }
-    AdsGotoRecord(hTable, offset + 1);
+    // With AOF active the bitmap drives navigation; GotoTop+Skip
+    // walks only the visible set. Without AOF the legacy
+    // GotoRecord(offset+1) path is preserved.
+    if (aof_active) {
+        AdsGotoTop(hTable);
+        for (std::uint32_t i = 0; i < offset; ++i) {
+            UNSIGNED16 atend = 0;
+            AdsAtEOF(hTable, &atend);
+            if (atend) break;
+            AdsSkip(hTable, 1);
+        }
+    } else {
+        AdsGotoRecord(hTable, offset + 1);
+    }
     std::uint32_t walked = 0;
     while (walked < limit) {
         UNSIGNED16 atend = 0;
@@ -1336,8 +1377,10 @@ bool HttpConsole::start(const std::string& host,
             limit  = static_cast<std::uint32_t>(
                 std::strtoul(req.get_param_value("limit").c_str(), nullptr, 10));
         if (limit == 0 || limit > 5000) limit = 50;
+        std::string aof_cond;
+        if (req.has_param("aof")) aof_cond = req.get_param_value("aof");
         json j = table_rows(data_dir_, req.matches[1], offset, limit,
-                            type_param(req));
+                            type_param(req), aof_cond);
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
