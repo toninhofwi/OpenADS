@@ -87,6 +87,23 @@ public:
     util::Result<void>          set_aof(std::uint32_t id, const std::string& cond);
     util::Result<void>          clear_aof(std::uint32_t id);
     util::Result<std::uint16_t> get_aof_opt_level(std::uint32_t id);
+    // M12.16 — remote index handle subsystem.
+    util::Result<std::vector<std::uint32_t>>
+                                open_index(std::uint32_t table_id,
+                                           const std::string& path);
+    util::Result<void>          close_index(std::uint32_t index_id);
+    util::Result<void>          set_order(std::uint32_t table_id,
+                                          std::uint32_t index_id);
+    util::Result<void>          set_order_by_name(std::uint32_t table_id,
+                                                   const std::string& tag);
+    struct SeekOutcome {
+        std::uint8_t  hit  = 0;     // 1 = exact, 0 = soft / not found
+        std::uint32_t recno = 0;
+    };
+    util::Result<SeekOutcome>   seek(std::uint32_t index_id,
+                                     const std::string& key,
+                                     std::uint8_t soft,
+                                     std::uint8_t last);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
     util::Result<void>          set_field(std::uint32_t id,
@@ -128,6 +145,15 @@ struct RemoteTable {
     // adsOpen field-iteration loop stays at one wire round-trip.
     std::vector<RemoteConnection::FieldDesc> fields;
     bool fields_cached = false;
+};
+
+// M12.16 — per-handle wrapper for a remote index. Each tag
+// returned by AdsOpenIndex (the multi-tag CDX case) gets one of
+// these so the ABI surface can hand the host a real ADSHANDLE.
+struct RemoteIndex {
+    RemoteConnection* conn  = nullptr;
+    std::uint32_t     id    = 0;     // server-side index id
+    std::uint32_t     tbl_id = 0;    // server-side table id this binds to
 };
 
 // Parse `tcp://host:port/<data_dir>` into its parts. Returns

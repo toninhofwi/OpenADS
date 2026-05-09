@@ -16,7 +16,11 @@ enum class HandleKind {
     // M12.5 — remote (TCP) variants. Same Ads* surface routes to
     // a wire client instead of a local engine::Connection.
     RemoteConnection = 6,
-    RemoteTable      = 7
+    RemoteTable      = 7,
+    // M12.16 — remote (TCP) index handle. Wraps a server-side
+    // index id; ABI calls (AdsSeek, AdsCloseIndex, …) route the
+    // hIndex through the wire instead of a local IIndex.
+    RemoteIndex      = 8
 };
 
 using Handle = std::uint64_t;

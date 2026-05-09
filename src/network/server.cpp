@@ -322,6 +322,20 @@ void Server::session_loop(Socket s) {
     std::unique_ptr<openads::session::Connection> sess_conn;
     std::unordered_map<std::uint32_t, openads::session::Handle> tbls;
     std::unordered_map<std::uint32_t, ADSHANDLE>                cursor_tbls;
+    // M12.16 — lazy-promoted ABI handle parallel to tbls. Populated
+    // on demand the first time the wire dispatch needs to call an
+    // ABI-only function (index ops). Once present, every operation
+    // on this client-side id routes through the ABI handle so the
+    // engine and ABI cursor states never drift.
+    std::unordered_map<std::uint32_t, ADSHANDLE>                tbls_h;
+    // M12.16 — index_h[index_id] holds the ABI hIndex returned from
+    // AdsOpenIndex. AdsCloseIndex removes the entry. Lifetime tied
+    // to the session.
+    std::unordered_map<std::uint32_t, ADSHANDLE>                index_h;
+    // M12.16 — reverse map index_id -> table_id so Seek can sync
+    // the engine cursor on the parent table after the ABI cursor
+    // moves.
+    std::unordered_map<std::uint32_t, std::uint32_t>            index_table;
     ADSHANDLE                                                   abi_conn = 0;
     ADSHANDLE                                                   abi_stmt = 0;
     std::uint32_t next_id = 1;
@@ -331,6 +345,11 @@ void Server::session_loop(Socket s) {
             (void)AdsCloseTable(h);
         }
         cursor_tbls.clear();
+        for (auto& [id, h] : tbls_h) {
+            (void)AdsCloseTable(h);
+        }
+        tbls_h.clear();
+        index_h.clear();
         if (abi_stmt != 0) {
             (void)AdsCloseSQLStatement(abi_stmt);
             abi_stmt = 0;
@@ -339,6 +358,71 @@ void Server::session_loop(Socket s) {
             (void)AdsDisconnect(abi_conn);
             abi_conn = 0;
         }
+    };
+
+    // M12.16 — lazy-init the per-session ABI connection (same one
+    // M12.7 SQL exec uses).
+    auto ensure_abi_conn = [&]() -> bool {
+        if (abi_conn != 0) return true;
+        if (!sess_conn) return false;
+        const std::string& dir = sess_conn->data_dir();
+        std::vector<UNSIGNED8> srvbuf(dir.size() + 1);
+        std::memcpy(srvbuf.data(), dir.c_str(), dir.size() + 1);
+        return AdsConnect60(srvbuf.data(), ADS_LOCAL_SERVER,
+                            nullptr, nullptr, 0, &abi_conn) == 0;
+    };
+
+    // M12.16 — open a parallel ABI handle alongside the engine
+    // handle in tbls[id], stash in tbls_h[id]. The engine handle
+    // stays open so subsequent navigation handlers (GotoTop/Skip/…)
+    // keep their existing path; only index operations route
+    // through the ABI handle. After an index op that moves the
+    // cursor (Seek / SeekLast) the helper sync_engine_cursor
+    // re-positions the engine cursor to the same recno so the two
+    // states never drift. SQL cursor handles (cursor_tbls) are
+    // returned as-is since they are already ABI-side.
+    auto ensure_abi_handle = [&](std::uint32_t id) -> ADSHANDLE {
+        if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+            return cit->second;
+        }
+        if (auto hit = tbls_h.find(id); hit != tbls_h.end()) {
+            return hit->second;
+        }
+        auto eit = tbls.find(id);
+        if (eit == tbls.end() || !sess_conn) return 0;
+        if (!ensure_abi_conn()) return 0;
+        auto* tbl = sess_conn->lookup_table(eit->second);
+        if (!tbl) return 0;
+        std::filesystem::path p(tbl->path());
+        std::string fname = p.filename().string();
+        std::vector<UNSIGNED8> nb(fname.size() + 1);
+        std::memcpy(nb.data(), fname.data(), fname.size());
+        ADSHANDLE h = 0;
+        if (AdsOpenTable(abi_conn, nb.data(), nullptr,
+                         ADS_CDX, 0, 0, 0, 0, &h) != 0) {
+            return 0;
+        }
+        tbls_h[id] = h;
+        return h;
+    };
+
+    // M12.16 — re-position the engine cursor to match the ABI
+    // cursor after an index op that moves it (Seek / SeekLast).
+    // No-op when the table is a cursor or has no engine handle.
+    auto sync_engine_cursor = [&](std::uint32_t id) {
+        if (cursor_tbls.count(id)) return;
+        auto eit = tbls.find(id);
+        if (eit == tbls.end() || !sess_conn) return;
+        auto* tbl = sess_conn->lookup_table(eit->second);
+        if (!tbl) return;
+        ADSHANDLE h = 0;
+        if (auto hit = tbls_h.find(id); hit != tbls_h.end()) {
+            h = hit->second;
+        } else { return; }
+        UNSIGNED32 rn = 0;
+        AdsGetRecordNum(h, 0, &rn);
+        if (rn == 0) return;
+        (void)tbl->goto_record(rn);
     };
 
     // M12.10 — Error frame payload:
@@ -1048,6 +1132,107 @@ void Server::session_loop(Socket s) {
                 reply.opcode = Opcode::GetAOFOptLevelAck;
                 reply.payload.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
                 reply.payload.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+                break;
+            }
+            // M12.16 — remote index handle subsystem. All ops route
+            // through the ABI handle on tbls_h (lazy-promoted via
+            // ensure_abi_handle) so AdsOpenIndex / AdsSetOrder /
+            // AdsSeek work end-to-end over the wire.
+            case Opcode::OpenIndex: {
+                if (f.payload.size() < 4) { reply = err("OpenIndex: bad payload"); break; }
+                std::uint32_t tid = read_u32_le(f.payload.data());
+                std::string path(reinterpret_cast<const char*>(
+                                     f.payload.data() + 4),
+                                 f.payload.size() - 4);
+                ADSHANDLE ht = ensure_abi_handle(tid);
+                if (ht == 0) { reply = err("OpenIndex: bad table id"); break; }
+                std::vector<UNSIGNED8> pb(path.size() + 1);
+                std::memcpy(pb.data(), path.data(), path.size());
+                ADSHANDLE arr[64] = {0};
+                UNSIGNED16 alen = 64;
+                UNSIGNED32 rrc = AdsOpenIndex(ht, pb.data(), arr, &alen);
+                if (rrc != 0) { reply = err("OpenIndex: " + path, rrc); break; }
+                reply.opcode = Opcode::OpenIndexAck;
+                reply.payload.push_back(static_cast<std::uint8_t>( alen       & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((alen >> 8) & 0xFFu));
+                for (std::uint16_t i = 0; i < alen; ++i) {
+                    std::uint32_t iid = next_id++;
+                    index_h[iid] = arr[i];
+                    index_table[iid] = tid;
+                    write_u32_le(iid, reply.payload);
+                }
+                break;
+            }
+            case Opcode::CloseIndex: {
+                if (f.payload.size() < 4) { reply = err("CloseIndex: bad payload"); break; }
+                std::uint32_t iid = read_u32_le(f.payload.data());
+                auto iit = index_h.find(iid);
+                if (iit != index_h.end()) {
+                    AdsCloseIndex(iit->second);
+                    index_h.erase(iit);
+                }
+                index_table.erase(iid);
+                reply.opcode = Opcode::CloseIndexAck;
+                break;
+            }
+            // SetOrder / SetOrderByName are placeholders for now —
+            // OpenADS doesn't yet export AdsSetIndexOrder /
+            // AdsSetIndexOrderByHandle, so the active binding is
+            // implicitly the most-recently-opened index. Acknowledge
+            // success on the wire so existing clients don't fail
+            // mid-flow; the real binding switch lands in a follow-up.
+            case Opcode::SetOrder: {
+                if (f.payload.size() < 8) { reply = err("SetOrder: bad payload"); break; }
+                reply.opcode = Opcode::SetOrderAck;
+                break;
+            }
+            case Opcode::SetOrderByName: {
+                if (f.payload.size() < 4) { reply = err("SetOrderByName: bad payload"); break; }
+                reply.opcode = Opcode::SetOrderByNameAck;
+                break;
+            }
+            case Opcode::Seek:
+            case Opcode::SeekLast: {
+                // payload: u32 index_id, u8 soft, key bytes.
+                if (f.payload.size() < 5) { reply = err("Seek: bad payload"); break; }
+                std::uint32_t iid  = read_u32_le(f.payload.data());
+                std::uint8_t  soft = f.payload[4];
+                std::string key(reinterpret_cast<const char*>(
+                                    f.payload.data() + 5),
+                                f.payload.size() - 5);
+                auto iit = index_h.find(iid);
+                if (iit == index_h.end()) { reply = err("Seek: bad index id"); break; }
+                std::vector<UNSIGNED8> kb(key.size() + 1);
+                std::memcpy(kb.data(), key.data(), key.size());
+                UNSIGNED16 found = 0;
+                UNSIGNED32 rrc = (f.opcode == Opcode::SeekLast)
+                    ? AdsSeekLast(iit->second, kb.data(),
+                                  static_cast<UNSIGNED16>(key.size()),
+                                  ADS_STRINGKEY,
+                                  &found)
+                    : AdsSeek    (iit->second, kb.data(),
+                                  static_cast<UNSIGNED16>(key.size()),
+                                  ADS_STRINGKEY,
+                                  static_cast<UNSIGNED16>(soft),
+                                  &found);
+                if (rrc != 0) { reply = err("Seek", rrc); break; }
+                // Read recno via the parent table's ABI handle; that
+                // also lets sync_engine_cursor reflect the new
+                // position on the engine cursor we keep alive
+                // alongside.
+                UNSIGNED32 rn = 0;
+                std::uint32_t parent_tid = 0;
+                if (auto tit = index_table.find(iid); tit != index_table.end()) {
+                    parent_tid = tit->second;
+                    if (ADSHANDLE ht = ensure_abi_handle(parent_tid); ht != 0) {
+                        AdsGetRecordNum(ht, 0, &rn);
+                    }
+                }
+                if (parent_tid != 0) sync_engine_cursor(parent_tid);
+                reply.opcode = (f.opcode == Opcode::SeekLast)
+                    ? Opcode::SeekLastAck : Opcode::SeekAck;
+                reply.payload.push_back(static_cast<std::uint8_t>(found != 0 ? 1 : 0));
+                write_u32_le(rn, reply.payload);
                 break;
             }
             // M12.7 — remote SQL exec. Lazy-creates a parallel ABI

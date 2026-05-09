@@ -758,4 +758,95 @@ RemoteConnection::get_aof_opt_level(std::uint32_t id) {
     return read_u16_le(rep.value().payload.data());
 }
 
+// =====================================================================
+// M12.16 — remote index handle subsystem.
+// =====================================================================
+
+util::Result<std::vector<std::uint32_t>>
+RemoteConnection::open_index(std::uint32_t table_id,
+                              const std::string& path) {
+    Frame req; req.opcode = Opcode::OpenIndex;
+    write_u32_le(table_id, req.payload);
+    req.payload.insert(req.payload.end(), path.begin(), path.end());
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::OpenIndexAck ||
+        rep.value().payload.size() < 2) {
+        return util::Error{5000, 0, "OpenIndex: server error", path};
+    }
+    const auto& pl = rep.value().payload;
+    std::uint16_t n = read_u16_le(pl.data());
+    if (pl.size() < 2u + 4u * n) {
+        return util::Error{5000, 0,
+            "OpenIndex: short payload", path};
+    }
+    std::vector<std::uint32_t> ids;
+    ids.reserve(n);
+    for (std::uint16_t i = 0; i < n; ++i) {
+        ids.push_back(read_u32_le(pl.data() + 2 + 4u * i));
+    }
+    return ids;
+}
+
+util::Result<void> RemoteConnection::close_index(std::uint32_t index_id) {
+    Frame req; req.opcode = Opcode::CloseIndex;
+    write_u32_le(index_id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::CloseIndexAck) {
+        return util::Error{5000, 0, "CloseIndex: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::set_order(std::uint32_t table_id,
+                                                std::uint32_t index_id) {
+    Frame req; req.opcode = Opcode::SetOrder;
+    write_u32_le(table_id, req.payload);
+    write_u32_le(index_id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SetOrderAck) {
+        return util::Error{5000, 0, "SetOrder: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void>
+RemoteConnection::set_order_by_name(std::uint32_t table_id,
+                                     const std::string& tag) {
+    Frame req; req.opcode = Opcode::SetOrderByName;
+    write_u32_le(table_id, req.payload);
+    req.payload.insert(req.payload.end(), tag.begin(), tag.end());
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SetOrderByNameAck) {
+        return util::Error{5000, 0, "SetOrderByName: server error", tag};
+    }
+    return {};
+}
+
+util::Result<RemoteConnection::SeekOutcome>
+RemoteConnection::seek(std::uint32_t index_id,
+                        const std::string& key,
+                        std::uint8_t soft,
+                        std::uint8_t last) {
+    Frame req;
+    req.opcode = last ? Opcode::SeekLast : Opcode::Seek;
+    write_u32_le(index_id, req.payload);
+    req.payload.push_back(soft);
+    req.payload.insert(req.payload.end(), key.begin(), key.end());
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    Opcode want = last ? Opcode::SeekLastAck : Opcode::SeekAck;
+    if (rep.value().opcode != want ||
+        rep.value().payload.size() < 5) {
+        return util::Error{5000, 0, "Seek: server error", key};
+    }
+    SeekOutcome o;
+    o.hit   = rep.value().payload[0];
+    o.recno = read_u32_le(rep.value().payload.data() + 1);
+    return o;
+}
+
 } // namespace openads::network

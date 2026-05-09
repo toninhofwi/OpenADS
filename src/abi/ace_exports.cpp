@@ -203,6 +203,14 @@ openads::network::RemoteTable* get_remote_table(ADSHANDLE h) {
         h, HandleKind::RemoteTable);
 }
 
+// M12.16 — same dispatch helper for remote-index handles. Returns
+// nullptr when `h` is a local IIndex / Connection / unknown.
+openads::network::RemoteIndex* get_remote_index(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::network::RemoteIndex>(
+        h, HandleKind::RemoteIndex);
+}
+
 // Latch set by AdsSeekLast. AdsSeek consults this to suppress its
 // empty-key always-found quirk when called as part of rddads'
 // AdsSeekLast retry chain. AdsSkip clears it.
@@ -2288,9 +2296,40 @@ bool same_index_path(const std::string& a, const std::string& b) {
 // .ntx / .cdx leaves at most one binding per tag.
 UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                         ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
+    if (ahIndex == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null out");
+    }
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string path = openads::abi::to_internal(pucName, 0);
+        auto r = rt->conn->open_index(rt->id, path);
+        if (!r) return fail(r.error());
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        // Persist RemoteIndex objects in a side container keyed by
+        // their ADSHANDLE; the registry only stores raw pointers.
+        static std::unordered_map<Handle,
+            std::unique_ptr<openads::network::RemoteIndex>> remote_indexes;
+        const auto& ids = r.value();
+        std::uint16_t out_n = static_cast<std::uint16_t>(ids.size());
+        if (pu16ArrayLen != nullptr && *pu16ArrayLen < out_n) {
+            out_n = *pu16ArrayLen;
+        }
+        for (std::uint16_t i = 0; i < out_n; ++i) {
+            auto ri = std::make_unique<openads::network::RemoteIndex>();
+            ri->conn   = rt->conn;
+            ri->id     = ids[i];
+            ri->tbl_id = rt->id;
+            Handle gh = s.registry.register_object(
+                HandleKind::RemoteIndex, ri.get());
+            ahIndex[i] = gh;
+            remote_indexes.emplace(gh, std::move(ri));
+        }
+        if (pu16ArrayLen != nullptr) *pu16ArrayLen = out_n;
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || ahIndex == nullptr) {
-        return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
+    if (!t) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     }
     auto bag_name = openads::abi::to_internal(pucName, 0);
     namespace fs = std::filesystem;
@@ -2397,6 +2436,11 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
 }
 
 UNSIGNED32 AdsCloseIndex(ADSHANDLE hIndex) {
+    if (auto* ri = get_remote_index(hIndex)) {
+        auto r = ri->conn->close_index(ri->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     auto& m = index_bindings();
     auto& act = active_binding_for();
     auto it = m.find(hIndex);
@@ -3448,6 +3492,17 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
                    UNSIGNED16 u16KeyType,
                    UNSIGNED16 u16SeekType,
                    UNSIGNED16* pbFound) {
+    if (auto* ri = get_remote_index(hIndex)) {
+        std::string key(reinterpret_cast<const char*>(pucKey),
+                        u16KeyLen);
+        auto r = ri->conn->seek(ri->id, key,
+            static_cast<std::uint8_t>(u16SeekType),
+            /*last=*/0);
+        if (!r) return fail(r.error());
+        if (pbFound) *pbFound = r.value().hit;
+        (void)u16KeyType;
+        return ok();
+    }
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
     std::string key;
@@ -3533,6 +3588,17 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
                        UNSIGNED16 u16KeyLen,
                        UNSIGNED16 u16KeyType,
                        UNSIGNED16* pbFound) {
+    if (auto* ri = get_remote_index(hIndex)) {
+        std::string key(reinterpret_cast<const char*>(pucKey),
+                        u16KeyLen);
+        auto r = ri->conn->seek(ri->id, key,
+            /*soft=*/0,
+            /*last=*/1);
+        if (!r) return fail(r.error());
+        if (pbFound) *pbFound = r.value().hit;
+        (void)u16KeyType;
+        return ok();
+    }
     // Latch the "we're inside an AdsSeekLast cycle" flag. rddads'
     // adsSeek retries via AdsSeek soft + AdsSkip(-1) when this hard
     // seek misses; AdsSeek consults the latch to suppress its
