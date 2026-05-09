@@ -1058,8 +1058,7 @@ UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
-        rt->row_valid = false;                      // M12.17 cache invalidation
-        auto r = rt->conn->goto_record(rt->id, ulRecord);
+        auto r = rt->conn->goto_record(rt, ulRecord);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -1159,8 +1158,10 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
-        rt->row_valid = false;                      // M12.17 cache invalidation
-        auto r = rt->conn->goto_top(rt->id);
+        // M12.18 — rt-aware overload parses the row trailer in the
+        // same RTT, so AdsGetField immediately after GoTop hits
+        // the cache.
+        auto r = rt->conn->goto_top(rt);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -1173,8 +1174,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
-        rt->row_valid = false;                      // M12.17 cache invalidation
-        auto r = rt->conn->goto_bottom(rt->id);
+        auto r = rt->conn->goto_bottom(rt);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -1188,8 +1188,7 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
 UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* rt = get_remote_table(hTable)) {
-        rt->row_valid = false;                      // M12.17 cache invalidation
-        auto r = rt->conn->skip(rt->id, lRows);
+        auto r = rt->conn->skip(rt, lRows);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -1384,12 +1383,9 @@ UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
     if (plVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
-        // M12.17 — typed reads also hit the row cache.
         if (!rt->row_valid) {
-            auto rs = rt->conn->fetch_current_row(rt->id);
-            if (!rs) return fail(rs.error());
-            rt->current_row = std::move(rs.value().fields);
-            rt->row_valid   = rs.value().has_row;
+            auto fr = rt->conn->fetch_current_row(rt);
+            if (!fr) return fail(fr.error());
         }
         std::string vstr;
         if (rt->row_valid) {
@@ -1424,10 +1420,8 @@ UNSIGNED32 AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
     if (pdVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         if (!rt->row_valid) {
-            auto rs = rt->conn->fetch_current_row(rt->id);
-            if (!rs) return fail(rs.error());
-            rt->current_row = std::move(rs.value().fields);
-            rt->row_valid   = rs.value().has_row;
+            auto fr = rt->conn->fetch_current_row(rt);
+            if (!fr) return fail(fr.error());
         }
         std::string vstr;
         if (rt->row_valid) {
@@ -1521,6 +1515,13 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
                            UNSIGNED32* pulRecordNum) {
     if (pulRecordNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
+        // M12.18 — recno is part of the row trailer that arrives
+        // with every nav ack, so the cache hit avoids a separate
+        // GetRecordNum RTT after a nav.
+        if (rt->row_valid) {
+            *pulRecordNum = rt->current_recno;
+            return ok();
+        }
         auto r = rt->conn->get_record_num(rt->id);
         if (!r) return fail(r.error());
         *pulRecordNum = r.value();
@@ -1574,15 +1575,14 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
                        UNSIGNED16 /*usOption*/) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        // M12.17 — serve from row cache when possible. The cache
-        // is invalidated by every nav / write bridge so a stale
-        // row never leaks. xbrowse-style repaints (W cols × H
-        // rows) collapse from W*H wire calls to H wire calls.
+        // M12.17/18 — serve from row cache. Cache populated either
+        // by piggyback on the prior nav-op ack (M12.18) or by a
+        // standalone FetchCurrentRow call here on first access.
+        // xbrowse-style W cols × H rows repaint: 1 RTT per row,
+        // zero RTT per cell.
         if (!rt->row_valid) {
-            auto rs = rt->conn->fetch_current_row(rt->id);
-            if (!rs) return fail(rs.error());
-            rt->current_row = std::move(rs.value().fields);
-            rt->row_valid   = rs.value().has_row;
+            auto fr = rt->conn->fetch_current_row(rt);
+            if (!fr) return fail(fr.error());
         }
         if (rt->row_valid) {
             auto i = remote_field_index(rt, pucField);
@@ -1736,6 +1736,11 @@ UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
 UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
     if (pbDeleted == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
+        // M12.18 — deleted flag rides with the row trailer.
+        if (rt->row_valid) {
+            *pbDeleted = rt->current_deleted ? 1 : 0;
+            return ok();
+        }
         auto r = rt->conn->is_record_deleted(rt->id);
         if (!r) return fail(r.error());
         *pbDeleted = r.value() ? 1 : 0;

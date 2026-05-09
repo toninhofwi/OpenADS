@@ -14,6 +14,8 @@
 
 namespace openads::network {
 
+struct RemoteTable;
+
 // M12.5 — wire client used by ace64.dll's dual-mode dispatch.
 // `RemoteConnection` opens a TCP socket to an OpenADS server,
 // sends a Connect frame for the data_dir, and exposes a small
@@ -51,7 +53,9 @@ public:
     util::Result<std::uint32_t> open_table(const std::string& rel);
     util::Result<void>          close_table(std::uint32_t id);
     util::Result<void>          goto_top(std::uint32_t id);
+    util::Result<void>          goto_top(RemoteTable* rt);
     util::Result<void>          skip(std::uint32_t id, std::int32_t step);
+    util::Result<void>          skip(RemoteTable* rt, std::int32_t step);
     util::Result<std::string>   get_field(std::uint32_t id,
                                            const std::string& field_name);
     util::Result<std::uint32_t> record_count(std::uint32_t id);
@@ -125,6 +129,7 @@ public:
         std::vector<std::string> fields;     // order matches FieldDesc cache
     };
     util::Result<RowSnapshot>   fetch_current_row(std::uint32_t table_id);
+    util::Result<void>          fetch_current_row(RemoteTable* rt);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
     util::Result<void>          set_field(std::uint32_t id,
@@ -134,6 +139,9 @@ public:
     util::Result<void>          recall_record(std::uint32_t id);
     util::Result<void>          goto_record(std::uint32_t id,
                                             std::uint32_t recno);
+    util::Result<void>          goto_record(RemoteTable* rt,
+                                            std::uint32_t recno);
+    util::Result<void>          goto_bottom(RemoteTable* rt);
     util::Result<void>          flush_table(std::uint32_t id);
     // M12.7 — remote SQL exec. Returns cursor table-id (0 = no cursor,
     // i.e. INSERT / UPDATE / DELETE / DDL).
@@ -174,6 +182,11 @@ struct RemoteTable {
     // not one per cell.
     std::vector<std::string> current_row;
     bool                     row_valid = false;
+    // M12.18 — recno + deleted flag arrive together with the row
+    // bytes so AdsGetRecordNum / AdsIsRecordDeleted can serve from
+    // cache instead of a separate RTT each.
+    std::uint32_t            current_recno   = 0;
+    bool                     current_deleted = false;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag

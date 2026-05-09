@@ -35,6 +35,52 @@ inline std::uint16_t read_u16_le(const std::uint8_t* p) {
 
 } // namespace
 
+// M12.18 — parse the per-row trailer the server appends to every
+// nav-op ack and the FetchCurrentRow ack. Format:
+//
+//   [u8 has_row]
+//   if has_row != 0:
+//     [u32 recno][u8 deleted][u16 nfields]
+//     per field: [u32 len][bytes]
+//
+// On success rt is updated in-place; on a "no row" trailer (has_row
+// == 0) rt->row_valid is cleared and current_row left as is.
+namespace {
+
+void parse_row_trailer_into(RemoteTable* rt,
+                             const std::vector<std::uint8_t>& pl,
+                             std::size_t pos = 0) {
+    if (rt == nullptr || pos >= pl.size()) {
+        if (rt) rt->row_valid = false;
+        return;
+    }
+    std::uint8_t has_row = pl[pos++];
+    if (has_row == 0) { rt->row_valid = false; return; }
+    if (pos + 4 + 1 + 2 > pl.size()) {
+        rt->row_valid = false; return;
+    }
+    rt->current_recno = read_u32_le(&pl[pos]); pos += 4;
+    rt->current_deleted = (pl[pos++] != 0);
+    std::uint16_t n = read_u16_le(&pl[pos]); pos += 2;
+    rt->current_row.clear();
+    rt->current_row.reserve(n);
+    for (std::uint16_t i = 0; i < n; ++i) {
+        if (pos + 4 > pl.size()) {
+            rt->row_valid = false; return;
+        }
+        std::uint32_t vlen = read_u32_le(&pl[pos]); pos += 4;
+        if (pos + vlen > pl.size()) {
+            rt->row_valid = false; return;
+        }
+        rt->current_row.emplace_back(
+            reinterpret_cast<const char*>(pl.data() + pos), vlen);
+        pos += vlen;
+    }
+    rt->row_valid = true;
+}
+
+} // namespace
+
 namespace {
 
 bool parse_scheme_uri(const std::string& uri,
@@ -210,6 +256,23 @@ util::Result<void> RemoteConnection::goto_top(std::uint32_t id) {
     return {};
 }
 
+// M12.18 — RemoteTable-aware overload: same wire op, but parses
+// the row trailer the server appends to populate the table's
+// row cache in-place. xbrowse repaint becomes 1 RTT per Skip
+// (the row arrives with the ack) instead of 2.
+util::Result<void> RemoteConnection::goto_top(RemoteTable* rt) {
+    Frame req;
+    req.opcode = Opcode::GotoTop;
+    write_u32_le(rt->id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GotoTopAck) {
+        return util::Error{5000, 0, "GotoTop: server error", ""};
+    }
+    parse_row_trailer_into(rt, rep.value().payload, 0);
+    return {};
+}
+
 util::Result<void> RemoteConnection::skip(std::uint32_t id,
                                            std::int32_t step) {
     Frame req;
@@ -221,6 +284,21 @@ util::Result<void> RemoteConnection::skip(std::uint32_t id,
     if (rep.value().opcode != Opcode::SkipAck) {
         return util::Error{5000, 0, "Skip: server error", ""};
     }
+    return {};
+}
+
+util::Result<void> RemoteConnection::skip(RemoteTable* rt,
+                                           std::int32_t step) {
+    Frame req;
+    req.opcode = Opcode::Skip;
+    write_u32_le(rt->id, req.payload);
+    write_u32_le(static_cast<std::uint32_t>(step), req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SkipAck) {
+        return util::Error{5000, 0, "Skip: server error", ""};
+    }
+    parse_row_trailer_into(rt, rep.value().payload, 0);
     return {};
 }
 
@@ -342,6 +420,34 @@ util::Result<void> RemoteConnection::goto_record(std::uint32_t id,
     if (rep.value().opcode != Opcode::GotoRecordAck) {
         return util::Error{5000, 0, "GotoRecord: server error", ""};
     }
+    return {};
+}
+
+util::Result<void> RemoteConnection::goto_record(RemoteTable* rt,
+                                                  std::uint32_t recno) {
+    Frame req;
+    req.opcode = Opcode::GotoRecord;
+    write_u32_le(rt->id, req.payload);
+    write_u32_le(recno, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GotoRecordAck) {
+        return util::Error{5000, 0, "GotoRecord: server error", ""};
+    }
+    parse_row_trailer_into(rt, rep.value().payload, 0);
+    return {};
+}
+
+util::Result<void> RemoteConnection::goto_bottom(RemoteTable* rt) {
+    Frame req;
+    req.opcode = Opcode::GotoBottom;
+    write_u32_le(rt->id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GotoBottomAck) {
+        return util::Error{5000, 0, "GotoBottom: server error", ""};
+    }
+    parse_row_trailer_into(rt, rep.value().payload, 0);
     return {};
 }
 
@@ -900,6 +1006,10 @@ RemoteConnection::set_scope(std::uint32_t index_id,
 
 util::Result<RemoteConnection::RowSnapshot>
 RemoteConnection::fetch_current_row(std::uint32_t table_id) {
+    // Compatibility wrapper for callers that don't carry a
+    // RemoteTable: fetch + extract just the visible-row vector. The
+    // M12.18 wire format is parsed via the same shared helper as
+    // the rt-aware overload below.
     Frame req; req.opcode = Opcode::FetchCurrentRow;
     write_u32_le(table_id, req.payload);
     auto rep = request(req);
@@ -909,32 +1019,29 @@ RemoteConnection::fetch_current_row(std::uint32_t table_id) {
         return util::Error{5000, 0,
             "FetchCurrentRow: server error", ""};
     }
-    const auto& pl = rep.value().payload;
+    RemoteTable scratch;
+    scratch.conn = this;
+    scratch.id   = table_id;
+    parse_row_trailer_into(&scratch, rep.value().payload, 0);
     RowSnapshot snap;
-    std::size_t pos = 0;
-    snap.has_row = pl[pos++] != 0;
-    if (!snap.has_row) return snap;
-    if (pos + 2 > pl.size()) {
-        return util::Error{5000, 0,
-            "FetchCurrentRow: truncated header", ""};
-    }
-    std::uint16_t n = read_u16_le(&pl[pos]); pos += 2;
-    snap.fields.reserve(n);
-    for (std::uint16_t i = 0; i < n; ++i) {
-        if (pos + 4 > pl.size()) {
-            return util::Error{5000, 0,
-                "FetchCurrentRow: truncated field len", ""};
-        }
-        std::uint32_t vlen = read_u32_le(&pl[pos]); pos += 4;
-        if (pos + vlen > pl.size()) {
-            return util::Error{5000, 0,
-                "FetchCurrentRow: truncated field value", ""};
-        }
-        snap.fields.emplace_back(
-            reinterpret_cast<const char*>(pl.data() + pos), vlen);
-        pos += vlen;
-    }
+    snap.has_row = scratch.row_valid;
+    snap.fields  = std::move(scratch.current_row);
     return snap;
+}
+
+util::Result<void>
+RemoteConnection::fetch_current_row(RemoteTable* rt) {
+    Frame req; req.opcode = Opcode::FetchCurrentRow;
+    write_u32_le(rt->id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::FetchCurrentRowAck ||
+        rep.value().payload.empty()) {
+        return util::Error{5000, 0,
+            "FetchCurrentRow: server error", ""};
+    }
+    parse_row_trailer_into(rt, rep.value().payload, 0);
+    return {};
 }
 
 util::Result<void>
