@@ -47,6 +47,32 @@ inline std::uint16_t read_u16_le(const std::uint8_t* p) {
 // == 0) rt->row_valid is cleared and current_row left as is.
 namespace {
 
+// Parse one record body starting at `pos`: [u32 recno][u8 deleted]
+// [u16 nfields][per-field: u32 len, bytes]. Returns the new cursor
+// position past the record, or std::size_t(-1) on truncation.
+std::size_t parse_one_row(const std::vector<std::uint8_t>& pl,
+                           std::size_t pos,
+                           std::uint32_t& recno,
+                           bool& deleted,
+                           std::vector<std::string>& fields) {
+    constexpr std::size_t fail = static_cast<std::size_t>(-1);
+    if (pos + 4 + 1 + 2 > pl.size()) return fail;
+    recno   = read_u32_le(&pl[pos]); pos += 4;
+    deleted = (pl[pos++] != 0);
+    std::uint16_t n = read_u16_le(&pl[pos]); pos += 2;
+    fields.clear();
+    fields.reserve(n);
+    for (std::uint16_t i = 0; i < n; ++i) {
+        if (pos + 4 > pl.size()) return fail;
+        std::uint32_t vlen = read_u32_le(&pl[pos]); pos += 4;
+        if (pos + vlen > pl.size()) return fail;
+        fields.emplace_back(
+            reinterpret_cast<const char*>(pl.data() + pos), vlen);
+        pos += vlen;
+    }
+    return pos;
+}
+
 void parse_row_trailer_into(RemoteTable* rt,
                              const std::vector<std::uint8_t>& pl,
                              std::size_t pos = 0) {
@@ -54,29 +80,31 @@ void parse_row_trailer_into(RemoteTable* rt,
         if (rt) rt->row_valid = false;
         return;
     }
+    rt->prefetch_queue.clear();
     std::uint8_t has_row = pl[pos++];
-    if (has_row == 0) { rt->row_valid = false; return; }
-    if (pos + 4 + 1 + 2 > pl.size()) {
+    if (has_row == 0) {
+        rt->row_valid = false;
+        // Optional lookahead count (always 0 when has_row=0, but
+        // accept the trailing 2 bytes for protocol stability).
+        return;
+    }
+    auto end = parse_one_row(pl, pos,
+        rt->current_recno, rt->current_deleted, rt->current_row);
+    if (end == static_cast<std::size_t>(-1)) {
         rt->row_valid = false; return;
     }
-    rt->current_recno = read_u32_le(&pl[pos]); pos += 4;
-    rt->current_deleted = (pl[pos++] != 0);
-    std::uint16_t n = read_u16_le(&pl[pos]); pos += 2;
-    rt->current_row.clear();
-    rt->current_row.reserve(n);
-    for (std::uint16_t i = 0; i < n; ++i) {
-        if (pos + 4 > pl.size()) {
-            rt->row_valid = false; return;
-        }
-        std::uint32_t vlen = read_u32_le(&pl[pos]); pos += 4;
-        if (pos + vlen > pl.size()) {
-            rt->row_valid = false; return;
-        }
-        rt->current_row.emplace_back(
-            reinterpret_cast<const char*>(pl.data() + pos), vlen);
-        pos += vlen;
-    }
+    pos = end;
     rt->row_valid = true;
+    // M12.21 lookahead block. [u16 count] then count rows.
+    if (pos + 2 > pl.size()) return;     // M12.18 server (no lookahead) — done.
+    std::uint16_t la = read_u16_le(&pl[pos]); pos += 2;
+    for (std::uint16_t i = 0; i < la; ++i) {
+        RemoteTable::PrefetchedRow pr;
+        end = parse_one_row(pl, pos, pr.recno, pr.deleted, pr.fields);
+        if (end == static_cast<std::size_t>(-1)) break;
+        pos = end;
+        rt->prefetch_queue.push_back(std::move(pr));
+    }
 }
 
 } // namespace

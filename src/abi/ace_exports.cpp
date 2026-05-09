@@ -1188,6 +1188,20 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
 UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* rt = get_remote_table(hTable)) {
+        // M12.21 — sequential prefetch: Skip(1) drains the queue
+        // populated by the previous Skip's lookahead block. Zero
+        // RTT for every cached step.
+        if (lRows == 1 && !rt->prefetch_queue.empty()) {
+            auto pr = std::move(rt->prefetch_queue.front());
+            rt->prefetch_queue.pop_front();
+            rt->current_recno   = pr.recno;
+            rt->current_deleted = pr.deleted;
+            rt->current_row     = std::move(pr.fields);
+            rt->row_valid       = true;
+            return ok();
+        }
+        // Any non-sequential nav drops the queue (handled inside
+        // parse_row_trailer_into when the new ack arrives).
         auto r = rt->conn->skip(rt, lRows);
         if (!r) return fail(r.error());
         return ok();

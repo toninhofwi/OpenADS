@@ -419,57 +419,71 @@ void Server::session_loop(Socket s) {
     //   [u8 has_row]
     //   if has_row:
     //     [u32 recno][u8 deleted][u16 nfields][per-field: u32 len, bytes]
+    // M12.21 — when called from Skip(step==1), the trailer is
+    // followed by an extra lookahead block:
+    //   [u16 lookahead_count]
+    //   for i in 0..lookahead_count:
+    //     [u32 recno][u8 deleted][u16 nfields][per-field: u32 len, bytes]
+    // The server walks Skip(+1) lookahead_count times capturing
+    // rows, then Skip(-N) back so the cursor lands at the same
+    // recno the lone Skip(+1) would have produced. xbrowse PgDn
+    // (20 sequential Skip(1) calls) collapses to 1 RTT for the
+    // whole repaint.
+    //
     // Resolves through cursor_tbls / engine tbls / promoted tbls_h
     // in the same priority order the existing handlers use.
-    auto pack_row_trailer = [&](Frame& reply, std::uint32_t id) {
+
+    // Pack one record's bytes into `dst` at the current cursor.
+    // Returns false on EoF / unread error so the caller can stop
+    // walking lookahead.
+    auto pack_one_row_engine = [&](std::vector<std::uint8_t>& dst,
+                                    openads::engine::Table* tbl) {
+        if (!tbl || tbl->eof() || tbl->bof() || tbl->recno() == 0) {
+            return false;
+        }
         auto write_u32_p = [&](std::uint32_t v) {
-            reply.payload.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
-            reply.payload.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
-            reply.payload.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFu));
-            reply.payload.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFu));
         };
         auto write_u16_p = [&](std::uint16_t v) {
-            reply.payload.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
-            reply.payload.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
         };
-        ADSHANDLE h_abi = 0;
-        if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
-            h_abi = cit->second;
-        } else if (auto eit = tbls.find(id); eit != tbls.end() && sess_conn) {
-            auto* tbl = sess_conn->lookup_table(eit->second);
-            if (!tbl || tbl->eof() || tbl->bof() || tbl->recno() == 0) {
-                reply.payload.push_back(0);
-                return;
-            }
-            reply.payload.push_back(1);
-            write_u32_p(tbl->recno());
-            reply.payload.push_back(tbl->is_deleted() ? 1 : 0);
-            auto nf = static_cast<std::uint16_t>(tbl->field_count());
-            write_u16_p(nf);
-            for (std::uint16_t i = 0; i < nf; ++i) {
-                auto v = tbl->read_field(i);
-                std::string vv = v ? v.value().as_string : std::string();
-                write_u32_p(static_cast<std::uint32_t>(vv.size()));
-                reply.payload.insert(reply.payload.end(),
-                    vv.begin(), vv.end());
-            }
-            return;
-        } else if (auto hit = tbls_h.find(id); hit != tbls_h.end()) {
-            h_abi = hit->second;
-        } else {
-            reply.payload.push_back(0);
-            return;
+        write_u32_p(tbl->recno());
+        dst.push_back(tbl->is_deleted() ? 1 : 0);
+        auto nf = static_cast<std::uint16_t>(tbl->field_count());
+        write_u16_p(nf);
+        for (std::uint16_t i = 0; i < nf; ++i) {
+            auto v = tbl->read_field(i);
+            std::string vv = v ? v.value().as_string : std::string();
+            write_u32_p(static_cast<std::uint32_t>(vv.size()));
+            dst.insert(dst.end(), vv.begin(), vv.end());
         }
+        return true;
+    };
+    auto pack_one_row_abi = [&](std::vector<std::uint8_t>& dst,
+                                 ADSHANDLE h_abi) {
         UNSIGNED16 atend = 0;
         AdsAtEOF(h_abi, &atend);
-        if (atend) { reply.payload.push_back(0); return; }
-        reply.payload.push_back(1);
+        if (atend) return false;
+        auto write_u32_p = [&](std::uint32_t v) {
+            dst.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFu));
+        };
+        auto write_u16_p = [&](std::uint16_t v) {
+            dst.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+        };
         UNSIGNED32 rn = 0;
         AdsGetRecordNum(h_abi, 0, &rn);
         write_u32_p(rn);
         UNSIGNED16 del = 0;
         AdsIsRecordDeleted(h_abi, &del);
-        reply.payload.push_back(del != 0 ? 1 : 0);
+        dst.push_back(del != 0 ? 1 : 0);
         UNSIGNED16 nf = 0;
         AdsGetNumFields(h_abi, &nf);
         write_u16_p(nf);
@@ -496,9 +510,116 @@ void Server::session_loop(Socket s) {
             }
             write_u32_p(vcap);
             if (vcap > 0) {
-                reply.payload.insert(reply.payload.end(),
-                    vbuf.data(), vbuf.data() + vcap);
+                dst.insert(dst.end(), vbuf.data(), vbuf.data() + vcap);
             }
+        }
+        return true;
+    };
+
+    auto pack_row_trailer = [&](Frame& reply, std::uint32_t id,
+                                 std::uint16_t lookahead_n = 0) {
+        auto write_u16_p = [&](std::uint16_t v,
+                                std::vector<std::uint8_t>& dst) {
+            dst.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+            dst.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+        };
+        // Resolve the table once; remember which path applies for
+        // both the current row and the lookahead block below.
+        openads::engine::Table* eng_tbl = nullptr;
+        ADSHANDLE               h_abi   = 0;
+        if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+            h_abi = cit->second;
+        } else if (auto eit = tbls.find(id); eit != tbls.end() && sess_conn) {
+            eng_tbl = sess_conn->lookup_table(eit->second);
+        } else if (auto hit = tbls_h.find(id); hit != tbls_h.end()) {
+            h_abi = hit->second;
+        }
+        if (!eng_tbl && h_abi == 0) {
+            reply.payload.push_back(0);
+            return;
+        }
+        // Pack the current row.
+        bool current_packed = false;
+        if (eng_tbl) {
+            if (eng_tbl->eof() || eng_tbl->bof() || eng_tbl->recno() == 0) {
+                reply.payload.push_back(0);
+            } else {
+                reply.payload.push_back(1);
+                std::vector<std::uint8_t> tmp;
+                if (pack_one_row_engine(tmp, eng_tbl)) {
+                    reply.payload.insert(reply.payload.end(),
+                        tmp.begin(), tmp.end());
+                    current_packed = true;
+                }
+            }
+        } else {
+            UNSIGNED16 atend = 0;
+            AdsAtEOF(h_abi, &atend);
+            if (atend) {
+                reply.payload.push_back(0);
+            } else {
+                reply.payload.push_back(1);
+                std::vector<std::uint8_t> tmp;
+                if (pack_one_row_abi(tmp, h_abi)) {
+                    reply.payload.insert(reply.payload.end(),
+                        tmp.begin(), tmp.end());
+                    current_packed = true;
+                }
+            }
+        }
+        // M12.21 lookahead block. Walk Skip(+1) up to lookahead_n
+        // times capturing each row, then Skip(-N) back so the
+        // cursor lands at the same spot the lone Skip(+1) the
+        // caller actually issued would have produced.
+        if (!current_packed || lookahead_n == 0) {
+            // No lookahead either way — emit a count of 0 so the
+            // wire format always carries the field. Old clients
+            // (M12.18) ignore the extra bytes.
+            write_u16_p(0, reply.payload);
+            return;
+        }
+        std::vector<std::vector<std::uint8_t>> rows;
+        rows.reserve(lookahead_n);
+        std::uint16_t taken = 0;
+        // Track cursor moves separately from rows packed: a Skip(+1)
+        // that lands on EoF still moves the cursor, even though no
+        // row gets packed. The restore step at the end has to undo
+        // every cursor advance, packed-row or not, otherwise the
+        // caller-visible cursor lands a row past where the lone
+        // Skip(+1) it issued would have produced.
+        int cursor_advance = 0;
+        for (std::uint16_t i = 0; i < lookahead_n; ++i) {
+            if (eng_tbl) {
+                auto sk = eng_tbl->skip(1);
+                if (!sk) break;
+                ++cursor_advance;
+                std::vector<std::uint8_t> row;
+                if (!pack_one_row_engine(row, eng_tbl)) break;
+                rows.push_back(std::move(row));
+                ++taken;
+            } else {
+                if (AdsSkip(h_abi, 1) != 0) break;
+                ++cursor_advance;
+                UNSIGNED16 atend = 0;
+                AdsAtEOF(h_abi, &atend);
+                if (atend) break;
+                std::vector<std::uint8_t> row;
+                if (!pack_one_row_abi(row, h_abi)) break;
+                rows.push_back(std::move(row));
+                ++taken;
+            }
+        }
+        if (cursor_advance > 0) {
+            if (eng_tbl) {
+                (void)eng_tbl->skip(-cursor_advance);
+            } else {
+                (void)AdsSkip(h_abi,
+                    -static_cast<SIGNED32>(cursor_advance));
+            }
+        }
+        write_u16_p(taken, reply.payload);
+        for (auto& r : rows) {
+            reply.payload.insert(reply.payload.end(), r.begin(), r.end());
         }
     };
 
@@ -675,10 +796,14 @@ void Server::session_loop(Socket s) {
                 std::uint32_t id = read_u32_le(f.payload.data());
                 std::int32_t step = static_cast<std::int32_t>(
                     read_u32_le(f.payload.data() + 4));
+                // M12.21 — sequential Skip(1) is the xbrowse PgDn
+                // pattern; piggyback up to 19 lookahead rows so the
+                // remaining cells in the repaint hit the client cache.
+                std::uint16_t lookahead = (step == 1) ? 19 : 0;
                 if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
                     (void)AdsSkip(cit->second, step);
                     reply.opcode = Opcode::SkipAck;
-                    pack_row_trailer(reply, id);
+                    pack_row_trailer(reply, id, lookahead);
                     break;
                 }
                 auto it = tbls.find(id);
@@ -689,7 +814,7 @@ void Server::session_loop(Socket s) {
                 if (!tbl) { reply = err("Skip: lookup failed"); break; }
                 (void)tbl->skip(step);
                 reply.opcode = Opcode::SkipAck;
-                pack_row_trailer(reply, id);
+                pack_row_trailer(reply, id, lookahead);
                 break;
             }
             case Opcode::GetField: {

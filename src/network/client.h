@@ -7,6 +7,7 @@
 #include "util/result.h"
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -193,6 +194,17 @@ struct RemoteTable {
     // DeleteRecord / RecallRecord / Pack / Zap.
     std::uint32_t            cached_rec_count   = 0;
     bool                     rec_count_cached   = false;
+    // M12.21 — sequential prefetch queue. SkipAck (when step==1)
+    // returns the row at +1 plus up to N lookahead rows; the
+    // bridge pops one entry per Skip(1) call so a 20-row PgDn
+    // costs 1 RTT total, not 20. Cleared by any non-sequential
+    // nav or write so the queue can never serve a stale row.
+    struct PrefetchedRow {
+        std::uint32_t            recno   = 0;
+        bool                     deleted = false;
+        std::vector<std::string> fields;
+    };
+    std::deque<PrefetchedRow> prefetch_queue;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag
