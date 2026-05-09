@@ -268,4 +268,6 @@ EXPORTS
     AdsStudioStart
     AdsStudioStop
     AdsStudioPort
+    AdsSetIndexOrder
+    AdsSetIndexOrderByHandle
 

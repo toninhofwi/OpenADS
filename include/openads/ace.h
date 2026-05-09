@@ -808,6 +808,14 @@ UNSIGNED32 ENTRYPOINT AdsGetIndexFilename  (ADSHANDLE hIndex,
                                              UNSIGNED16* pusLen);
 UNSIGNED32 ENTRYPOINT AdsGetIndexOrderByHandle(ADSHANDLE hIndex,
                                              UNSIGNED16* pusOrder);
+// M12.16c — flip the active order on a table to the named tag /
+// the handle returned by a previous AdsOpenIndex / AdsCreateIndex.
+// rddads' adsOrdSetActive uses these for dbSetOrder( cTagName )
+// and dbSetOrder( hIndex ).
+UNSIGNED32 ENTRYPOINT AdsSetIndexOrder         (ADSHANDLE hTable,
+                                             UNSIGNED8* pucName);
+UNSIGNED32 ENTRYPOINT AdsSetIndexOrderByHandle (ADSHANDLE hTable,
+                                             ADSHANDLE hIndex);
 UNSIGNED32 ENTRYPOINT AdsGetJulian         (ADSHANDLE hTable,
                                              UNSIGNED8* pucField,
                                              SIGNED32* plJulian);

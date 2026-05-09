@@ -3011,6 +3011,87 @@ UNSIGNED32 AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
     return ok();
 }
 
+// M12.16c — switch the active order on `hTable` to the binding
+// whose tag matches `pucName` (case-insensitive). Mirrors the
+// rddads adsOrdSetActive(cTagName) flow. Empty / NULL name flips
+// the table back to natural-record-order (clear active binding).
+UNSIGNED32 AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string name = pucName
+            ? openads::abi::to_internal(pucName, 0) : std::string();
+        auto r = rt->conn->set_order_by_name(rt->id, name);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::string name = pucName
+        ? openads::abi::to_internal(pucName, 0) : std::string();
+    if (name.empty()) {
+        // Empty tag = natural order. Park the active binding back
+        // into its slot so a subsequent AdsSetIndexOrder picks the
+        // current Table::order_ up cleanly.
+        auto& act = active_binding_for();
+        auto act_it = act.find(t);
+        if (act_it != act.end()) {
+            auto& m = index_bindings();
+            auto bit = m.find(act_it->second);
+            if (bit != m.end()) {
+                auto taken = t->take_order();
+                openads::drivers::IIndex* raw = taken.get();
+                bit->second.parked = std::move(taken);
+                if (raw) t->register_extra_index_view(raw);
+            }
+            act.erase(act_it);
+        }
+        return ok();
+    }
+    auto upper_eq = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            char ca = static_cast<char>(std::toupper(
+                static_cast<unsigned char>(a[i])));
+            char cb = static_cast<char>(std::toupper(
+                static_cast<unsigned char>(b[i])));
+            if (ca != cb) return false;
+        }
+        return true;
+    };
+    auto& m = index_bindings();
+    for (auto& [h, b] : m) {
+        if (b.table == t && upper_eq(b.tag_name, name)) {
+            auto r = activate_binding(h);
+            if (!r) return fail(r.error());
+            return ok();
+        }
+    }
+    return fail(openads::AE_INTERNAL_ERROR,
+                ("AdsSetIndexOrder: no tag '" + name + "' on table").c_str());
+}
+
+UNSIGNED32 AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hIndex) {
+    if (auto* rt = get_remote_table(hTable)) {
+        if (auto* ri = get_remote_index(hIndex)) {
+            auto r = rt->conn->set_order(rt->id, ri->id);
+            if (!r) return fail(r.error());
+            return ok();
+        }
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsSetIndexOrderByHandle: hIndex is not a remote index");
+    }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto& m = index_bindings();
+    auto it = m.find(hIndex);
+    if (it == m.end() || it->second.table != t) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsSetIndexOrderByHandle: index not bound to table");
+    }
+    auto r = activate_binding(hIndex);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
     if (auto* ri = get_remote_index(hIndex)) {
         auto r = ri->conn->skip_unique(ri->id, lDirection);

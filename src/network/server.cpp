@@ -1181,19 +1181,34 @@ void Server::session_loop(Socket s) {
                 reply.opcode = Opcode::CloseIndexAck;
                 break;
             }
-            // SetOrder / SetOrderByName are placeholders for now —
-            // OpenADS doesn't yet export AdsSetIndexOrder /
-            // AdsSetIndexOrderByHandle, so the active binding is
-            // implicitly the most-recently-opened index. Acknowledge
-            // success on the wire so existing clients don't fail
-            // mid-flow; the real binding switch lands in a follow-up.
             case Opcode::SetOrder: {
                 if (f.payload.size() < 8) { reply = err("SetOrder: bad payload"); break; }
+                std::uint32_t tid = read_u32_le(f.payload.data());
+                std::uint32_t iid = read_u32_le(f.payload.data() + 4);
+                ADSHANDLE ht = ensure_abi_handle(tid);
+                if (ht == 0) { reply = err("SetOrder: bad table id"); break; }
+                auto iit = index_h.find(iid);
+                if (iit == index_h.end()) { reply = err("SetOrder: bad index id"); break; }
+                UNSIGNED32 rrc = AdsSetIndexOrderByHandle(ht, iit->second);
+                if (rrc != 0) { reply = err("SetOrder", rrc); break; }
+                sync_engine_cursor(tid);
                 reply.opcode = Opcode::SetOrderAck;
                 break;
             }
             case Opcode::SetOrderByName: {
                 if (f.payload.size() < 4) { reply = err("SetOrderByName: bad payload"); break; }
+                std::uint32_t tid = read_u32_le(f.payload.data());
+                std::string tag(reinterpret_cast<const char*>(
+                                    f.payload.data() + 4),
+                                f.payload.size() - 4);
+                ADSHANDLE ht = ensure_abi_handle(tid);
+                if (ht == 0) { reply = err("SetOrderByName: bad table id"); break; }
+                std::vector<UNSIGNED8> tb(tag.size() + 1);
+                std::memcpy(tb.data(), tag.data(), tag.size());
+                UNSIGNED32 rrc = AdsSetIndexOrder(ht,
+                    tag.empty() ? nullptr : tb.data());
+                if (rrc != 0) { reply = err("SetOrderByName: " + tag, rrc); break; }
+                sync_engine_cursor(tid);
                 reply.opcode = Opcode::SetOrderByNameAck;
                 break;
             }
