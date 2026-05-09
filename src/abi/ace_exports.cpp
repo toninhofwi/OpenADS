@@ -8654,8 +8654,61 @@ UNSIGNED32 AdsGetNumOpenTables(UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32* p)
     { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE, double* p)
-    { if (p) *p = 0.0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
+    if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *p = 0.0;
+    Table* t = get_table(h);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    std::uint32_t rc = t->record_count();
+    std::uint32_t rn = t->recno();
+    if (rc <= 1 || rn == 0) { *p = 0.0; return ok(); }
+
+    // Active-order path: ADS reports the cursor's relative position
+    // in the *index walk*, not in raw recno space. Walk the index
+    // once collecting recnos in order; the cursor's recno's index
+    // in that list, divided by (total - 1), is the logical Get
+    // value. Cursor position is restored afterwards so a Get probe
+    // doesn't move the user-visible cursor.
+    auto* ord = t->order();
+    if (ord != nullptr && ord->index() != nullptr) {
+        auto* idx = ord->index();
+        idx->invalidate_cursor();
+        auto first = idx->seek_first();
+        if (!first) return fail(first.error());
+        std::vector<std::uint32_t> walk;
+        walk.reserve(128);
+        auto cur = first.value();
+        while (cur.positioned) {
+            walk.push_back(cur.recno);
+            auto nx = idx->next();
+            if (!nx) return fail(nx.error());
+            cur = nx.value();
+        }
+        idx->invalidate_cursor();
+        (void)t->goto_record(rn);
+        if (walk.size() <= 1) { *p = 0.0; return ok(); }
+        std::size_t pos = walk.size();
+        for (std::size_t i = 0; i < walk.size(); ++i) {
+            if (walk[i] == rn) { pos = i; break; }
+        }
+        if (pos >= walk.size()) {
+            // Cursor recno not present in the index — fall back to
+            // recno-based fraction so the result stays monotonic.
+            if (rn > rc) rn = rc;
+            *p = static_cast<double>(rn - 1) /
+                 static_cast<double>(rc - 1);
+            return ok();
+        }
+        *p = static_cast<double>(pos) /
+             static_cast<double>(walk.size() - 1);
+        return ok();
+    }
+
+    // No active order: relative position in raw recno space.
+    if (rn > rc) rn = rc;
+    *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
+    return ok();
+}
 UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l)
     { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetTableAlias(ADSHANDLE, UNSIGNED8* p, UNSIGNED16* l)
@@ -8707,7 +8760,54 @@ UNSIGNED32 AdsSetFilter(ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); 
 // AdsSetJulian, AdsSetLongLong already defined elsewhere in this file.
 UNSIGNED32 AdsSetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
 UNSIGNED32 AdsSetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
-UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE, double) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE h, double pos) {
+    Table* t = get_table(h);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    std::uint32_t rc = t->record_count();
+    if (rc == 0) return ok();
+    if (pos < 0.0) pos = 0.0;
+    if (pos > 1.0) pos = 1.0;
+
+    // Active-order path: ADS positions the cursor at fraction `pos`
+    // through the *index walk*, not through raw recno space. Walk
+    // the index once to collect every recno in order, then jump to
+    // walk[round(pos * (total - 1))]. Mirrors the Get path above so
+    // a round-trip Get-then-Set lands on the same key.
+    auto* ord = t->order();
+    if (ord != nullptr && ord->index() != nullptr) {
+        auto* idx = ord->index();
+        idx->invalidate_cursor();
+        auto first = idx->seek_first();
+        if (!first) return fail(first.error());
+        std::vector<std::uint32_t> walk;
+        walk.reserve(128);
+        auto cur = first.value();
+        while (cur.positioned) {
+            walk.push_back(cur.recno);
+            auto nx = idx->next();
+            if (!nx) return fail(nx.error());
+            cur = nx.value();
+        }
+        idx->invalidate_cursor();
+        if (walk.empty()) return ok();
+        std::size_t target =
+            static_cast<std::size_t>(
+                pos * static_cast<double>(walk.size() - 1) + 0.5);
+        if (target >= walk.size()) target = walk.size() - 1;
+        auto r = t->goto_record(walk[target]);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+
+    // No active order: position by raw recno fraction.
+    std::uint32_t rn = static_cast<std::uint32_t>(
+        pos * static_cast<double>(rc - 1) + 0.5) + 1;
+    if (rn < 1) rn = 1;
+    if (rn > rc) rn = rc;
+    auto r = t->goto_record(rn);
+    if (!r) return fail(r.error());
+    return ok();
+}
 UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetScopedRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
