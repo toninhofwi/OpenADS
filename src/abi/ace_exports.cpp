@@ -422,6 +422,10 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
     if (auto* rc = s.registry.lookup<openads::network::RemoteConnection>(
             hConnect, HandleKind::RemoteConnection)) {
         auto name = openads::abi::to_internal(pucName, 0);
+        // Callers (incl. X#'s ADSRDD) pass the bare table name without
+        // an extension; mirror the local path and default to .dbf so
+        // the server resolves it.
+        if (!std::filesystem::path(name).has_extension()) name += ".dbf";
         auto id = rc->open_table(name);
         if (!id) return fail(id.error());
         static std::unordered_map<Handle,
@@ -429,6 +433,7 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
         auto rt = std::make_unique<openads::network::RemoteTable>();
         rt->conn = rc;
         rt->id   = id.value();
+        rt->name = name;
         Handle gh = s.registry.register_object(
             HandleKind::RemoteTable, rt.get());
         remote_tables.emplace(gh, std::move(rt));
@@ -509,8 +514,13 @@ UNSIGNED32 AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {
 
 UNSIGNED32 AdsGetTableFilename(ADSHANDLE hTable, UNSIGNED16 /*usOption*/,
                                UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        openads::abi::copy_to_caller(pucBuf, pusLen, rt->name);
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     openads::abi::copy_to_caller(pucBuf, pusLen, t->path());
     return ok();
 }
@@ -1332,6 +1342,20 @@ std::size_t remote_field_index(openads::network::RemoteTable* rt,
         if (!r) return std::numeric_limits<std::size_t>::max();
         rt->fields = std::move(r).value();
         rt->fields_cached = true;
+    }
+    // ACE "field name OR 1-based ordinal cast to a pointer" idiom — X#'s
+    // ADSRDD calls AdsGetFieldType/Length/Decimals (and the value
+    // getters) by ordinal. A tiny pointer value is the ordinal; reading
+    // it as a string address would fault.
+    {
+        auto p = reinterpret_cast<std::uintptr_t>(pucField);
+        if (p != 0 && p < 0x10000u) {
+            std::size_t one_based = static_cast<std::size_t>(p);
+            if (one_based >= 1 && one_based <= rt->fields.size()) {
+                return one_based - 1;
+            }
+            return std::numeric_limits<std::size_t>::max();
+        }
     }
     std::string want = openads::abi::to_internal(pucField, 0);
     for (auto& c : want) {

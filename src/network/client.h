@@ -170,6 +170,9 @@ private:
 struct RemoteTable {
     RemoteConnection* conn = nullptr;
     std::uint32_t     id   = 0;
+    // The table name as passed to open_table (with extension). Served
+    // by AdsGetTableFilename so the consuming RDD has something to show.
+    std::string       name;
     // M12.14 — schema cache populated lazily on first
     // AdsGetNumFields / AdsGetFieldName / ... call so rddads'
     // adsOpen field-iteration loop stays at one wire round-trip.

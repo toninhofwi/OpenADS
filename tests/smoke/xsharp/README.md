@@ -53,13 +53,34 @@ echo EXIT=%ERRORLEVEL%
    Diana — verifies the index is maintained on a replace.
 9. `DbCloseArea`.
 
+## `AdsSmoke_remote.prg` — remote variant
+
+Drives the *same* X# `AXDBFCDX` RDD against a remote `openads_serverd`
+over the wire instead of local files:
+
+```
+AdsConnect60("tcp://host:port/<datadir>", ADS_REMOTE_SERVER, NULL, NULL, 0, OUT hConn)
+AX_SetConnectionHandle(hConn)        // parks it in CoreDb's RDD info
+RddSetDefault("AXDBFCDX")
+DbUseArea(TRUE, "AXDBFCDX", "customer", ...)   // → AdsOpenTable90(hConn, ...)
+```
+
+It opens an *existing* table (`customer.dbf`) — it doesn't `DbCreate`,
+since `AdsCreateTable` doesn't route remotely yet — and does read/nav
+(`RecCount` / `GoTop` / `Skip ±` / `GoBottom` / `Eof` / `FieldGet`).
+Server URI: env var `OPENADS_XS_REMOTE`, else the documented dev box.
+Build it the same way; run with OpenADS' `ace64.dll` on PATH.
+
 ## Status (M12.23)
 
-**Passes end-to-end** against OpenADS' `ace64.dll` (exit code 0).
+Both harnesses **pass end-to-end** against OpenADS' `ace64.dll` —
+local (`AdsSmoke.prg`) and remote-over-the-wire (`AdsSmoke_remote.prg`).
 
 Getting here closed: ~46 missing ACE exports; `AdsAppendRecord` not
 auto-locking the new record (X#'s `GoHot` requires it); an option-bit
 bug where `ADS_COMPOUND` (always set by X#'s ADSRDD for CDX) was
-misread as `ADS_DESCENDING` so every order built reversed; and
-`AdsCreateTable` not staging the `.fpt` for tables with an `M` field
-(so memo writes failed "memo store not attached").
+misread as `ADS_DESCENDING` so every order built reversed;
+`AdsCreateTable` not staging the `.fpt` for tables with an `M` field;
+and three remote-path gaps (`remote_field_index` ordinal-as-pointer
+AV, the remote `AdsOpenTable` `.dbf` default, `AdsGetTableFilename`
+missing a remote branch).

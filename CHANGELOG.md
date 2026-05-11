@@ -55,6 +55,20 @@ exposes against original ACE.
   `GoTop`/`Skip ±`/`GoBottom`/`Eof` → `DbSeek` hit + miss → memo
   round-trip → `DbDelete`/`DbRecall` → replace a key field + re-read
   through the CITY order → `DbCloseArea`.
+- **X# RDD against a remote OpenADS server.** Three more fixes so X#'s
+  ADSRDD drives `openads_serverd` over the wire (`AdsConnect60(tcp://
+  host:port/<datadir>, ADS_REMOTE_SERVER) → AX_SetConnectionHandle →
+  DbUseArea`): `remote_field_index` now honours the "field name OR
+  1-based ordinal cast to a pointer" idiom (X#'s `_FieldSub` calls
+  `AdsGetFieldType`/`Length`/`Decimals` by ordinal — a tiny pointer
+  value was being dereferenced as a string); the remote `AdsOpenTable`
+  branch defaults a missing extension to `.dbf` (X# passes the bare
+  table name for remote tables); and `AdsGetTableFilename` gained a
+  remote path (returning the opened name) instead of failing
+  `AE_INTERNAL_ERROR` — X#'s `Open` calls it right after `_FieldSub`.
+  New `tests/smoke/xsharp/AdsSmoke_remote.prg` opens `customer.dbf` on
+  the server and does read/nav (RecCount / GoTop / Skip ± / GoBottom /
+  Eof / FieldGet) — passes against the dev server.
 - **Test layout.** Third-party RDD smoke harnesses moved under
   `tests/smoke/` — `tests/smoke/harbour/` (was `tests/harbour_smoke/`)
   plus a new `tests/smoke/xsharp/` (`AdsSmoke.prg` driving OpenADS' DLL
