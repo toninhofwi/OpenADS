@@ -827,7 +827,8 @@ UNSIGNED32 ENTRYPOINT AdsGetKeyNum         (ADSHANDLE hIndex,
 UNSIGNED32 ENTRYPOINT AdsGetKeyType        (ADSHANDLE hIndex,
                                              UNSIGNED16* pusType);
 UNSIGNED32 ENTRYPOINT AdsGetLastTableUpdate(ADSHANDLE hTable,
-                                             SIGNED32* plDate, SIGNED32* plTime);
+                                             UNSIGNED8* pucDate,
+                                             UNSIGNED16* pusLen);
 UNSIGNED32 ENTRYPOINT AdsGetLogical        (ADSHANDLE hTable,
                                              UNSIGNED8* pucField,
                                              UNSIGNED16* pbValue);

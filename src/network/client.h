@@ -81,6 +81,8 @@ public:
     util::Result<std::uint32_t> get_record_length(std::uint32_t id);
     util::Result<std::uint16_t> get_num_indexes(std::uint32_t id);
     util::Result<std::uint32_t> get_last_autoinc(std::uint32_t id);
+    // DBF header "last updated" date, packed (y<<16)|(m<<8)|d.
+    util::Result<std::uint32_t> get_last_table_update(std::uint32_t id);
     util::Result<void>          lock_record(std::uint32_t id, std::uint32_t recno);
     util::Result<void>          unlock_record(std::uint32_t id, std::uint32_t recno);
     util::Result<void>          lock_table(std::uint32_t id);

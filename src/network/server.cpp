@@ -1222,6 +1222,31 @@ void Server::session_loop(Socket s) {
                 write_u32_le(v, reply.payload);
                 break;
             }
+            case Opcode::GetLastTableUpdate: {
+                if (f.payload.size() < 4) { reply = err("GetLastTableUpdate: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint32_t packed = 0;
+                if (cursor_tbls.find(id) == cursor_tbls.end()) {
+                    auto it = tbls.find(id);
+                    if (it == tbls.end() || !sess_conn) {
+                        reply = err("GetLastTableUpdate: bad table id"); break;
+                    }
+                    auto* tbl = sess_conn->lookup_table(it->second);
+                    if (!tbl) { reply = err("GetLastTableUpdate: lookup failed"); break; }
+                    if (tbl->driver()) {
+                        std::uint8_t b[3] = {0, 0, 0};
+                        auto got = tbl->driver()->file().read_at(1, b, sizeof(b));
+                        if (got && got.value() >= sizeof(b)) {
+                            packed = (static_cast<std::uint32_t>(1900 + b[0]) << 16) |
+                                     (static_cast<std::uint32_t>(b[1]) << 8) |
+                                      static_cast<std::uint32_t>(b[2]);
+                        }
+                    }
+                }
+                reply.opcode = Opcode::GetLastTableUpdateAck;
+                write_u32_le(packed, reply.payload);
+                break;
+            }
             // Locking is currently no-op at the engine level for
             // our LocalServer fallback path; the cursor branch
             // routes through real ABI locks. Both ack with success
@@ -1319,7 +1344,14 @@ void Server::session_loop(Socket s) {
                 auto* tbl = sess_conn->lookup_table(it->second);
                 if (!tbl) { reply = err("SetAOF: lookup failed"); break; }
                 auto ast = openads::engine::aof::parse(cond);
-                if (!ast) { reply = err("SetAOF: " + ast.error().message); break; }
+                if (!ast) {
+                    // Expression outside the optimisable AOF subset
+                    // (e.g. Empty(NAME)) — not an error. Drop any
+                    // prior AOF and ack; the client RDD filters.
+                    tbl->clear_filter();
+                    reply.opcode = Opcode::SetAOFAck;
+                    break;
+                }
                 auto rep = openads::engine::aof::evaluate_optimised(*ast.value(), *tbl);
                 if (!rep) { reply = err("SetAOF: " + rep.error().message); break; }
                 tbl->install_aof_bitmap(std::move(rep.value().bm));

@@ -143,6 +143,11 @@ enum class Opcode : std::uint8_t {
     // SQL grammar so it needs a dedicated opcode).
     Reindex            = 0x60,
     ReindexAck         = 0x61,
+    // M12.24 — remote AdsGetLastTableUpdate. Reply payload is the
+    // DBF header date packed big-endian-ish into 4 bytes:
+    // (year << 16) | (month << 8) | day.
+    GetLastTableUpdate    = 0x9E,
+    GetLastTableUpdateAck = 0x9F,
     Error              = 0xFF,
 };
 

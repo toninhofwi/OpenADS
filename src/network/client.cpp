@@ -761,6 +761,19 @@ RemoteConnection::get_last_autoinc(std::uint32_t id) {
     return read_u32_le(rep.value().payload.data());
 }
 
+util::Result<std::uint32_t>
+RemoteConnection::get_last_table_update(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::GetLastTableUpdate;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetLastTableUpdateAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0, "GetLastTableUpdate: server error", ""};
+    }
+    return read_u32_le(rep.value().payload.data());
+}
+
 util::Result<void> RemoteConnection::lock_record(std::uint32_t id,
                                                   std::uint32_t recno) {
     Frame req; req.opcode = Opcode::LockRecord;

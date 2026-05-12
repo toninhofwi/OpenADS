@@ -4129,12 +4129,13 @@ UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
     auto cond = openads::abi::to_internal(pucCondition, 0);
     auto ast = openads::engine::aof::parse(cond);
     if (!ast) {
-        // Per ADS docs, an AOF expression that cannot be parsed
-        // means the filter is not optimised at all — the caller
-        // is then free to walk the table manually. Surface the
-        // parse error so the host knows why optimisation was
-        // declined; don't degrade silently.
-        return fail(ast.error());
+        // An expression outside the optimisable AOF subset (e.g.
+        // `Empty(NAME)`, `UPPER(NAME) = 'A'`) is not an error — ADS
+        // just declines to optimise it and the client RDD applies the
+        // filter itself. Drop any prior AOF, report OPTIMIZED_NONE,
+        // and succeed so the caller's own row filter takes over.
+        t->clear_filter();
+        return ok();
     }
     // Route through the M-AOF.4 index-accelerated evaluator: every
     // leaf that hits an open CDX/NTX index whose key expression is
@@ -9174,6 +9175,86 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     return ok();
 }
 
+// ---- Date display format (AdsSetDateFormat / AdsGetDateFormat) -------------
+//
+// ACE keeps one process-wide date display string. The historical
+// default here is "yyyy-mm-dd"; AdsSetDateFormat overrides it (ADS
+// itself uses "MM/DD/CCYY" out of the box, but changing our default
+// would shift every existing caller, so the override is opt-in).
+//
+// This file is largely one big `extern "C"` block; these helpers
+// return std::string / a small struct, so they need C++ linkage.
+extern "C++" {
+namespace {
+
+std::string g_date_format = "yyyy-mm-dd";
+
+// Render (y, m, d) through an ACE-style format string. Recognised,
+// case-insensitively: CCYY / YYYY → 4-digit year, YY → 2-digit year,
+// MM → 2-digit month, DD → 2-digit day. Every other character is
+// copied verbatim, so separators ("/", "-", ".") pass straight through.
+std::string format_ace_date(const std::string& fmt, int y, int m, int d) {
+    char two_y[4], two[4], four[8];
+    std::snprintf(two_y, sizeof(two_y), "%02d", ((y % 100) + 100) % 100);
+    std::snprintf(four,  sizeof(four),  "%04d", y);
+    std::string up;
+    up.reserve(fmt.size());
+    for (char c : fmt)
+        up.push_back(static_cast<char>(std::toupper(
+            static_cast<unsigned char>(c))));
+    std::string out;
+    out.reserve(fmt.size() + 4);
+    for (std::size_t i = 0; i < up.size(); ) {
+        auto at = [&](const char* tok) {
+            std::size_t L = std::strlen(tok);
+            return up.compare(i, L, tok) == 0;
+        };
+        if (at("CCYY") || at("YYYY")) { out += four;  i += 4; }
+        else if (at("YY"))            { out += two_y; i += 2; }
+        else if (at("MM")) { std::snprintf(two, sizeof(two), "%02d", m);
+                             out += two; i += 2; }
+        else if (at("DD")) { std::snprintf(two, sizeof(two), "%02d", d);
+                             out += two; i += 2; }
+        else { out.push_back(up[i]); ++i; }
+    }
+    return out;
+}
+
+// Read the DBF header's "last updated" stamp (header bytes 1..3 are
+// YY MM DD, the year byte being an offset from 1900) straight off the
+// table file. Returns {0,0,0} when the table has no driver or the
+// read fails. Matches the convention in drivers/dbf_common.cpp.
+struct HeaderDate { int y = 0, m = 0, d = 0; };
+HeaderDate read_header_date(openads::engine::Table* t) {
+    HeaderDate r;
+    if (t == nullptr || t->driver() == nullptr) return r;
+    std::uint8_t b[3] = {0, 0, 0};
+    auto got = t->driver()->file().read_at(1, b, sizeof(b));
+    if (!got || got.value() < sizeof(b)) return r;
+    r.y = 1900 + static_cast<int>(b[0]);
+    r.m = static_cast<int>(b[1]);
+    r.d = static_cast<int>(b[2]);
+    return r;
+}
+
+// Copy `s` (plus NUL) into a caller buffer using the ACE in/out length
+// convention: *pusLen in = capacity, out = the string's true length;
+// the copy is truncated to fit. No-op when pusLen is null.
+void copy_ace_string(const std::string& s, UNSIGNED8* buf, UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return;
+    UNSIGNED16 cap = *pusLen;
+    if (buf != nullptr && cap > 0) {
+        std::size_t n = std::min<std::size_t>(s.size(),
+                                              static_cast<std::size_t>(cap - 1));
+        std::memcpy(buf, s.data(), n);
+        buf[n] = 0;
+    }
+    *pusLen = static_cast<UNSIGNED16>(s.size());
+}
+
+} // namespace
+} // extern "C++"
+
 // ---- M(rddads-compat): stubs for Harbour contrib/rddads -------------------
 //
 // rddads.hbp pulls in symbols across the full SAP ace.h surface even if
@@ -9215,15 +9296,7 @@ UNSIGNED32 AdsGetAOF(ADSHANDLE, UNSIGNED32*, UNSIGNED32* c)
 UNSIGNED32 AdsGetConnectionType(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = ADS_LOCAL_SERVER; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetDateFormat(UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
-    static const char fmt[] = "yyyy-mm-dd";
-    if (pusLen) {
-        UNSIGNED16 cap = *pusLen;
-        UNSIGNED16 n = static_cast<UNSIGNED16>(
-            cap == 0 ? 0 : (sizeof(fmt) - 1 < cap - 1
-                            ? sizeof(fmt) - 1 : cap - 1));
-        if (pucBuf && cap > 0) { std::memcpy(pucBuf, fmt, n); pucBuf[n] = 0; }
-        *pusLen = static_cast<UNSIGNED16>(sizeof(fmt) - 1);
-    }
+    copy_ace_string(g_date_format, pucBuf, pusLen);
     return openads::AE_SUCCESS;
 }
 UNSIGNED32 AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l)
@@ -9307,8 +9380,25 @@ UNSIGNED32 AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/,
 }
 UNSIGNED32 AdsGetKeyType(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = ADS_STRINGKEY; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsGetLastTableUpdate(ADSHANDLE, SIGNED32* d, SIGNED32* t)
-    { if (d) *d = 0; if (t) *t = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetLastTableUpdate(ADSHANDLE hTable, UNSIGNED8* pucDate,
+                                 UNSIGNED16* pusLen) {
+    int y = 0, m = 0, d = 0;
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_last_table_update(rt->id);
+        if (!r) return fail(r.error());
+        std::uint32_t v = r.value();
+        y = static_cast<int>((v >> 16) & 0xFFFFu);
+        m = static_cast<int>((v >>  8) & 0xFFu);
+        d = static_cast<int>( v        & 0xFFu);
+    } else {
+        Table* tbl = get_table(hTable);
+        if (tbl == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+        auto hd = read_header_date(tbl);
+        y = hd.y; m = hd.m; d = hd.d;
+    }
+    copy_ace_string(format_ace_date(g_date_format, y, m, d), pucDate, pusLen);
+    return ok();
+}
 UNSIGNED32 AdsGetLogical(ADSHANDLE hTable, UNSIGNED8* pucField, UNSIGNED16* pb) {
     if (pb == nullptr) return openads::AE_INTERNAL_ERROR;
     UNSIGNED8 buf[8] = {0};
@@ -9470,7 +9560,11 @@ UNSIGNED32 AdsIsTableLocked(ADSHANDLE, UNSIGNED16* p)
 UNSIGNED32 AdsRefreshAOF(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsRegisterCallbackFunction(void*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsRegisterProgressCallback(void*) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsSetDateFormat(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetDateFormat(UNSIGNED8* pucFormat) {
+    if (pucFormat != nullptr && pucFormat[0] != 0)
+        g_date_format.assign(reinterpret_cast<const char*>(pucFormat));
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsSetDecimals(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetDefault(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetEpoch(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }

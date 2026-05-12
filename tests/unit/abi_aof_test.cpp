@@ -135,7 +135,7 @@ TEST_CASE("AdsSetAOF: Skip walks only matching records") {
     fs::remove(p);
 }
 
-TEST_CASE("AdsSetAOF: parse-error AOF returns AE_PARSE_ERROR") {
+TEST_CASE("AdsSetAOF: non-optimisable AOF succeeds with OPTIMIZED_NONE") {
     auto p = make_fixture("badparse");
     auto dir = p.parent_path().string();
     auto base = p.filename().string();
@@ -150,14 +150,51 @@ TEST_CASE("AdsSetAOF: parse-error AOF returns AE_PARSE_ERROR") {
                              nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0,
                              &hT) == 0);
 
-        // UPPER(NAME) is out of scope V1 — AdsSetAOF must reject it
-        // so the host knows the filter is not optimised, instead of
-        // silently swallowing and behaving as if no filter was set.
-        std::string cond = "UPPER(NAME) = 'A'";
+        // UPPER(NAME) / Empty(NAME) are outside the optimisable AOF
+        // subset. ADS doesn't error on those — it declines to
+        // optimise (OPTIMIZED_NONE) and the client RDD filters
+        // client-side. AdsSetAOF must mirror that, not reject.
+        std::string cond = "Empty(NAME)";
         UNSIGNED32 rc = AdsSetAOF(hT,
                           reinterpret_cast<UNSIGNED8*>(cond.data()),
                           0);
-        CHECK(rc != 0);
+        CHECK(rc == 0);
+
+        UNSIGNED16 lvl = 0xFFFF;
+        CHECK(AdsGetAOFOptLevel(hT, &lvl, nullptr, nullptr) == 0);
+        CHECK(lvl == ADS_OPTIMIZED_NONE);
+
+        AdsCloseTable(hT);
+        AdsDisconnect(hConn);
+    }
+    fs::remove(p);
+}
+
+TEST_CASE("AdsGetLastTableUpdate: returns the DBF header date string") {
+    auto p = make_fixture("lastupd");
+    auto dir = p.parent_path().string();
+    auto base = p.filename().string();
+    {
+        ADSHANDLE hConn = 0;
+        REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(dir.data()),
+                             ADS_LOCAL_SERVER, nullptr, nullptr,
+                             ADS_DEFAULT, &hConn) == 0);
+        ADSHANDLE hT = 0;
+        REQUIRE(AdsOpenTable(hConn,
+                             reinterpret_cast<UNSIGNED8*>(base.data()),
+                             nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0,
+                             &hT) == 0);
+
+        // make_fixture writes header bytes 1..3 = {124, 1, 31}
+        // (year 1900+124 = 2024, month 1, day 31).
+        UNSIGNED8 fmt[] = "CCYY-MM-DD";
+        CHECK(AdsSetDateFormat(fmt) == 0);
+
+        UNSIGNED8  buf[32] = {0};
+        UNSIGNED16 len = sizeof(buf);
+        CHECK(AdsGetLastTableUpdate(hT, buf, &len) == 0);
+        CHECK(std::string(reinterpret_cast<char*>(buf)) == "2024-01-31");
+        CHECK(len == 10);
 
         AdsCloseTable(hT);
         AdsDisconnect(hConn);

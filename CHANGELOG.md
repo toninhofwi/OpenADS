@@ -55,6 +55,22 @@ exposes against original ACE.
   `GoTop`/`Skip ±`/`GoBottom`/`Eof` → `DbSeek` hit + miss → memo
   round-trip → `DbDelete`/`DbRecall` → replace a key field + re-read
   through the CITY order → `DbCloseArea`.
+- **M12.24 — X# RDD feedback: `AdsGetLastTableUpdate` + non-optimisable
+  AOF.** `AdsGetLastTableUpdate` was a 3-zero stub with the wrong
+  signature (`SIGNED32* date, SIGNED32* time`); it now matches ACE
+  (`UNSIGNED8* pucDate, UNSIGNED16* pusLen`), reads the DBF header's
+  last-updated stamp (header bytes 1..3, year offset from 1900) — over
+  the wire too, via a new `GetLastTableUpdate` opcode — and renders it
+  through the date display format. `AdsSetDateFormat` is no longer a
+  no-op: it stores the process-wide format string that `AdsGetDateFormat`
+  / `AdsGetLastTableUpdate` honour (`CCYY`/`YYYY`/`YY`/`MM`/`DD` tokens,
+  every other char passed through; default still `yyyy-mm-dd`).
+  `AdsSetAOF` no longer fails error 7200 on an expression outside the
+  optimisable subset (e.g. `Empty(NAME)`, `UPPER(NAME) = 'A'`) — ACE
+  treats those as "not optimised", so OpenADS now drops any prior AOF,
+  reports `ADS_OPTIMIZED_NONE`, and returns success, letting the client
+  RDD apply the filter itself (same for the server-side `SetAOF`
+  handler).
 - **X# RDD against a remote OpenADS server.** Three more fixes so X#'s
   ADSRDD drives `openads_serverd` over the wire (`AdsConnect60(tcp://
   host:port/<datadir>, ADS_REMOTE_SERVER) → AX_SetConnectionHandle →
