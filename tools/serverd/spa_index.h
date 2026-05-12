@@ -2,6 +2,8 @@
 
 #if defined(OPENADS_WITH_HTTP)
 
+#include <string>
+
 namespace openads::studio {
 
 // studio.web.0.2 — phpMyAdmin-style admin UI:
@@ -17,17 +19,17 @@ namespace openads::studio {
 // All UI state lives in the SPA; the server is stateless. Each
 // REST round-trip opens a short-lived ABI connection.
 
-// The SPA literal exceeds the 65 535-byte minimum required by the
-// C++ standard for a single string literal; clang's
-// -Woverlength-strings flags this even when the concatenation is
-// split across adjacent raw-string chunks. Silence it for the
-// span of the constant only — every other -W flag stays active.
+// The SPA HTML is ~73 KB. MSVC caps a single raw-string literal at
+// ~16 KB (and clang's -Woverlength-strings flags long literals), so the
+// HTML lives in several sub-12 KB `kSpaPartN` literals joined into one
+// std::string at static-init. The diagnostic pragma is kept as a guard.
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Woverlength-strings"
 #endif
 
-inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
+namespace detail {
+inline constexpr const char kSpaPart1[] = R"OPENADS_SPA(
 <!doctype html>
 <html lang="en">
 <head>
@@ -268,7 +270,8 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
         <span id="browse-aof-badge"
               title="AdsGetAOFOptLevel — shows whether the filter is served by an index"
               style="font-size:13px;font-weight:600;
-                     padding:4px 10px;border-radius:3px;
+                   )OPENADS_SPA";
+inline constexpr const char kSpaPart2[] = R"OPENADS_SPA(  padding:4px 10px;border-radius:3px;
                      background:rgba(255,255,255,0.05);
                      border:1px solid var(--border);
                      display:none"></span>
@@ -411,8 +414,7 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
     </div>
   </div>
 </div>
-)OPENADS_SPA"
-R"OPENADS_SPA(<script>
+<script>
 const $ = id => document.getElementById(id);
 const esc = s => (""+s)
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
@@ -536,9 +538,7 @@ async function loadBrowse() {
   }
 }
 
-)OPENADS_SPA"
-R"OPENADS_SPA()OPENADS_SPA"
-R"OPENADS_SPA(function renderBrowseGrid() {
+function renderBrowseGrid() {
   const data = state.lastBrowseData;
   if (!data) return;
   if (!data.rows || data.rows.length === 0) {
@@ -573,7 +573,8 @@ R"OPENADS_SPA(function renderBrowseGrid() {
     const cells = r.slice(1);
     const cls = meta._deleted ? "deleted" : "";
     const checked = state.browseSelection.has(meta._recno) ? "checked" : "";
-    return `<tr class="${cls}">
+    return `<tr clas)OPENADS_SPA";
+inline constexpr const char kSpaPart3[] = R"OPENADS_SPA(s="${cls}">
       <td class="sel-col"><input type="checkbox"
             data-sel="${meta._recno}" ${checked}></td>
       <td>${meta._recno}</td>
@@ -730,8 +731,7 @@ async function loadStructure() {
   }
 }
 
-)OPENADS_SPA"
-R"OPENADS_SPA(async function maintenanceOp(op) {
+async function maintenanceOp(op) {
   const t = state.table;
   if (op === "zap" && !confirm(
         `Zap ${t}?  All records are removed. Indexes are kept but emptied.`)) return;
@@ -873,7 +873,8 @@ async function loadInsertForm() {
       </div></form>`;
     $("insert-body").innerHTML = body;
     $("insert-form").addEventListener("submit", async e => {
-      e.preventDefault();
+      e.pr)OPENADS_SPA";
+inline constexpr const char kSpaPart4[] = R"OPENADS_SPA(eventDefault();
       const fd = new FormData(e.target);
       const obj = {};
       for (const [k,v] of fd.entries()) obj[k] = v;
@@ -1059,8 +1060,7 @@ function fmtDuration(s) {
   if (s < 3600)  return Math.floor(s/60) + "m " + (s%60) + "s";
   return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
 }
-)OPENADS_SPA"
-R"OPENADS_SPA(// ---- studio.web.0.5 — Data Dictionary tab ---------------------------
+// ---- studio.web.0.5 — Data Dictionary tab ---------------------------
 let ddState = { current: null };
 
 async function loadDicts() {
@@ -1159,7 +1159,8 @@ async function loadDictView(name) {
     $("dd-add-usr").addEventListener("submit", async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      await ddPost(`/api/dd/${encodeURIComponent(name)}/users`,
+      await ddPost(`/api/dd/${encodeURIComponent()OPENADS_SPA";
+inline constexpr const char kSpaPart5[] = R"OPENADS_SPA(name)}/users`,
                    {user: fd.get("user")});
     });
     $("dd-add-prop").addEventListener("submit", async e => {
@@ -1410,8 +1411,7 @@ $("enc-cancel").addEventListener("click", () =>
 $("sessions-refresh").addEventListener("click", loadSessions);
 $("sessions-auto").addEventListener("change", startSessionsAutoRefresh);
 
-)OPENADS_SPA"
-R"OPENADS_SPA(let cellState = { value: "" };
+let cellState = { value: "" };
 function renderCell(mode) {
   if (mode === "hex") {
     const v = cellState.value;
@@ -1459,7 +1459,8 @@ $("cell-copy").addEventListener("click", async () => {
     await navigator.clipboard.writeText($("cell-body").textContent);
     $("cell-copy").textContent = "copied";
     setTimeout(() => $("cell-copy").textContent = "Copy", 900);
-  } catch {}
+)OPENADS_SPA";
+inline constexpr const char kSpaPart6[] = R"OPENADS_SPA(  } catch {}
 });
 
 $("dd-pick").addEventListener("change", e => {
@@ -1551,9 +1552,7 @@ function paintAofBadge(data) {
   paintAofHints(data);
 }
 
-)OPENADS_SPA"
-R"OPENADS_SPA()OPENADS_SPA"
-R"OPENADS_SPA(// studio.web.0.19 — when the AOF didn't reach FULL, suggest a
+// studio.web.0.19 — when the AOF didn't reach FULL, suggest a
 // CREATE INDEX for each character / memo field referenced by the
 // cond that doesn't already have a matching index. V1's index-
 // accelerated path only serves char / memo leaves; numeric / date /
@@ -1767,7 +1766,8 @@ async function applyUrlState() {
   paintModeBadge();
   await loadTables();
   const u = new URL(location.href);
-  const t = u.searchParams.get("table");
+  const t = u.se)OPENADS_SPA";
+inline constexpr const char kSpaPart7[] = R"OPENADS_SPA(archParams.get("table");
   const tab = u.searchParams.get("tab");
   const q   = u.searchParams.get("q");
   const run = u.searchParams.get("autorun") === "1";
@@ -1787,6 +1787,21 @@ applyUrlState();
 </body>
 </html>
 )OPENADS_SPA";
+}  // namespace detail
+
+inline const std::string kSpaIndexHtml = []{
+    std::string s;
+    s.reserve(72706);
+    s += detail::kSpaPart1;
+    s += detail::kSpaPart2;
+    s += detail::kSpaPart3;
+    s += detail::kSpaPart4;
+    s += detail::kSpaPart5;
+    s += detail::kSpaPart6;
+    s += detail::kSpaPart7;
+    return s;
+}();
+
 
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
