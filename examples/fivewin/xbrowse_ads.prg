@@ -3,21 +3,29 @@
 // (instead of a SAP-shipped ACE).
 //
 // It stages a small .dbf in a temp dir, opens it through the ADSCDX
-// RDD, builds an indexed order, and shows it in an xBrowse. With
-// `/auto` on the command line the window closes itself after walking
-// the browse (GoBottom/GoTop/Seek) — handy for a quick "does it run
-// against OpenADS' DLL" check; without it, it's a normal interactive
-// window.
+// RDD, builds NAME/CITY orders, and pops FWH's xBrowser() over the
+// workarea. With `/auto` on the command line it skips the GUI and just
+// walks the workarea through the RDD (GoBottom / GoTop / Seek) and
+// checks the result — handy for a "does it run against OpenADS' DLL"
+// smoke check; without it, it's the interactive browser.
 //
-// Build: see build64.cmd in this directory (FWH bcc64 toolchain +
-// Harbour rddads + OpenADS' ace64). Put OpenADS' ace64.dll on PATH
-// (or next to the produced .exe) — NOT a SAP one.
+// Build: build_msvc64.cmd (FWH + Harbour + MSVC 64-bit + rddads +
+// OpenADS' ace64), or build64.cmd (FWH bcc64). Put OpenADS' ace64.dll
+// on PATH / next to the exe — NOT a SAP one.
 
 #include "FiveWin.ch"
 #include "xbrowse.ch"
 
 REQUEST ADSCDX
 REQUEST DBFCDX
+// FWH's xBrowse SetRDD() builds its bKeyNo / bKeyCount codeblocks for an
+// ADS workarea as MACRO strings that reference AdsKeyNo() / AdsKeyCount()
+// (and AdsGetRelKeyPos/AdsSetRelKeyPos for >200-row tables). Those names
+// appear only inside the macro text, so the linker dead-strips them —
+// at run time the browse can't get its row position and renders blank.
+// REQUEST keeps them in the image. (Needed for any FWH+rddads+ADS app,
+// independent of which ace.dll is underneath.)
+REQUEST ADSKEYNO, ADSKEYCOUNT, ADSGETRELKEYPOS, ADSSETRELKEYPOS
 
 #define ADS_LOCAL_SERVER 1
 #define ADS_CDX          2
@@ -26,8 +34,7 @@ REQUEST DBFCDX
 
 FUNCTION Main( cMode )
 
-   LOCAL oWnd, oBrw
-   LOCAL lAuto := ( ValType( cMode ) == "C" .AND. Lower( cMode ) == "/auto" )
+   LOCAL lAuto := ( ValType( cMode ) == "C" .AND. Lower( AllTrim( cMode ) ) == "/auto" )
    LOCAL cDir  := TempFolder() + "\openads_fwh_demo"
    LOCAL cDbf  := cDir + "\customer.dbf"
    LOCAL cCdx  := cDir + "\customer.cdx"
@@ -53,41 +60,66 @@ FUNCTION Main( cMode )
    OrdSetFocus( "NAME" )
    CUST->( DbGoTop() )
 
-   DEFINE WINDOW oWnd TITLE "OpenADS — FWH xBrowse over ADS (" + ;
-      AdsVersion() + ")" FROM 2, 2 TO 28, 96
+   IF lAuto
+      RETURN AutoWalk()
+   ENDIF
 
-   @ 0, 0 XBROWSE oBrw OF oWnd ALIAS "CUST" ;
-      COLUMNS "NAME", "CITY", "AGE" ;
-      AUTOSORT CELL LINES NOBORDER
-
-   oBrw:CreateFromCode()
-   oWnd:oClient := oBrw
-
-   ACTIVATE WINDOW oWnd ;
-      ON INIT ( oBrw:SetFocus(), ;
-                iif( lAuto, AutoWalk( oBrw, oWnd ), nil ) )
+   ShowBrowse()
 
    CUST->( DbCloseArea() )
    ? "OK: FWH xBrowse + ADS (via OpenADS) ran"
    RETURN 0
 
 //----------------------------------------------------------------------------//
-// In /auto mode: walk the browse through the RDD, then close the window.
 
-STATIC FUNCTION AutoWalk( oBrw, oWnd )
+STATIC FUNCTION ShowBrowse()
 
-   oBrw:GoBottom()
-   oBrw:Refresh()
-   SysRefresh()
-   oBrw:GoTop()
-   oBrw:Refresh()
-   SysRefresh()
-   CUST->( OrdSetFocus( "CITY" ) )
-   CUST->( DbGoTop() )
-   oBrw:Refresh()
-   SysRefresh()
-   oWnd:End()
+   LOCAL oWnd, oBrw
+
+   DbSelectArea( "CUST" )
+
+   DEFINE WINDOW oWnd FROM 1, 1 TO 28, 100 ;
+      TITLE "OpenADS — FWH xBrowse over ADS (" + AdsVersion() + ")"
+
+   @ 0, 0 XBROWSE oBrw OF oWnd ;
+      ALIAS "CUST" AUTOCOLS ;
+      CELL LINES NOBORDER FOOTERS
+
+   oBrw:CreateFromCode()
+   oWnd:oClient := oBrw
+
+   ACTIVATE WINDOW oWnd ;
+      ON INIT  ( oBrw:SetFocus(), oBrw:GoTop(), oBrw:Refresh() ) ;
+      ON RESIZE ( oBrw:adjust(), oBrw:Refresh() )
+
    RETURN nil
+
+//----------------------------------------------------------------------------//
+// /auto: walk the workarea through the RDD, verify, no GUI.
+
+STATIC FUNCTION AutoWalk()
+
+   LOCAL nRecs := CUST->( RecCount() )
+   LOCAL cTop, cBottom
+
+   IF nRecs <= 0
+      ? "FAIL: RecCount() =", nRecs ; CUST->( DbCloseArea() ) ; RETURN 1
+   ENDIF
+   CUST->( DbGoTop() )    ; cTop    := AllTrim( CUST->NAME )
+   CUST->( DbGoBottom() ) ; cBottom := AllTrim( CUST->NAME )
+   IF cTop != "Alice"  ; ? "FAIL: NAME top ='" + cTop + "'"    ; CUST->( DbCloseArea() ) ; RETURN 1 ; ENDIF
+   IF cBottom != "Edward" ; ? "FAIL: NAME bottom ='" + cBottom + "'" ; CUST->( DbCloseArea() ) ; RETURN 1 ; ENDIF
+   CUST->( OrdSetFocus( "CITY" ) ) ; CUST->( DbGoTop() )
+   IF AllTrim( CUST->CITY ) != "Barcelona"
+      ? "FAIL: CITY top ='" + AllTrim( CUST->CITY ) + "'" ; CUST->( DbCloseArea() ) ; RETURN 1
+   ENDIF
+   CUST->( DbSeek( "Bilbao" ) )
+   IF !Found() .OR. AllTrim( CUST->NAME ) != "Edward"
+      ? "FAIL: seek 'Bilbao' -> '" + AllTrim( CUST->NAME ) + "'" ; CUST->( DbCloseArea() ) ; RETURN 1
+   ENDIF
+   CUST->( DbCloseArea() )
+   ? "OK: FWH /auto — ADS via OpenADS:", AllTrim( Str( nRecs ) ), "records, nav + seek OK"
+   RETURN 0
 
 //----------------------------------------------------------------------------//
 

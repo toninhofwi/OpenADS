@@ -52,11 +52,12 @@ examples/fivewin/*.map
 examples/fivewin/*.tmp
 examples/fivewin/*.bc
 examples/fivewin/*.res
-examples/fivewin/xbrowse_ads.c
+examples/fivewin/*.c
+examples/fivewin/*.ppo
+examples/fivewin/*.dir
 examples/fivewin/ace32.dll
 examples/fivewin/ace64.dll
-examples/fivewin/comp.log
-examples/fivewin/warnings.log
+examples/fivewin/*.log
 examples/fivewin/*.ppo
 examples/fivewin/*.txlog
 examples/fivewin/out.txt

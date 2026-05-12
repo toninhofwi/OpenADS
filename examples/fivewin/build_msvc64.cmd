@@ -18,7 +18,8 @@ if "%HBDIR%"=="" set "HBDIR=c:\harbour"
 set "HDIRL=%HBDIR%\lib\win\msvc64"
 set "OPENADS_DLL=%~1"
 if "%OPENADS_DLL%"=="" set "OPENADS_DLL=%~dp0..\..\build\default\src\Release"
-set "PRG=xbrowse_ads"
+set "PRG=%~2"
+if "%PRG%"=="" set "PRG=xbrowse_ads"
 
 rem MSVC environment (prefer a complete VS 2022; fall back to VS 2026)
 if exist "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (

@@ -9260,8 +9260,51 @@ UNSIGNED32 AdsGetIndexOrderByHandle(ADSHANDLE, UNSIGNED16* p)
 // AdsGetJulian already defined elsewhere in this file.
 UNSIGNED32 AdsGetKeyLength(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsGetKeyNum(ADSHANDLE, UNSIGNED16, UNSIGNED32* p)
-    { if (p) *p = 0; return openads::AE_SUCCESS; }
+// 1-based position of the current record within the active order's key
+// sequence (== the record number when no order is active). FWH's
+// xBrowse uses this (via Harbour rddads' AdsKeyNo()) as its scrollbar
+// position; a stubbed 0 left the browse unable to paint any row.
+UNSIGNED32 AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/,
+                        UNSIGNED32* pulKeyNum) {
+    if (pulKeyNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pulKeyNum = 0;
+    if (auto* rt = get_remote_table(hObj)) {
+        if (rt->row_valid) { *pulKeyNum = rt->current_recno; return ok(); }
+        auto r = rt->conn->get_record_num(rt->id);
+        if (!r) return fail(r.error());
+        *pulKeyNum = r.value();
+        return ok();
+    }
+    Table* t = get_table(hObj);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    auto* ord = t->order();
+    if (ord == nullptr || ord->index() == nullptr) {
+        // natural order: key number == record number
+        *pulKeyNum = t->recno();
+        return ok();
+    }
+    // Active order: walk the index counting until we reach the current
+    // record's key. Mirrors AdsGetRelKeyPos's walk; cursor is restored.
+    std::uint32_t rn  = t->recno();
+    auto*         idx = ord->index();
+    idx->invalidate_cursor();
+    auto first = idx->seek_first();
+    if (!first) { (void)t->goto_record(rn); return fail(first.error()); }
+    std::uint32_t pos = 0, found = 0;
+    auto cur = first.value();
+    while (cur.positioned) {
+        ++pos;
+        if (cur.recno == rn) { found = pos; break; }
+        auto nx = idx->next();
+        if (!nx) { idx->invalidate_cursor(); (void)t->goto_record(rn);
+                   return fail(nx.error()); }
+        cur = nx.value();
+    }
+    idx->invalidate_cursor();
+    (void)t->goto_record(rn);
+    *pulKeyNum = found;            // 0 when rn isn't in the index walk
+    return ok();
+}
 UNSIGNED32 AdsGetKeyType(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = ADS_STRINGKEY; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetLastTableUpdate(ADSHANDLE, SIGNED32* d, SIGNED32* t)

@@ -66,7 +66,7 @@ option(OPENADS_WITH_TLS "Enable TLS transport (vendors mbedtls 3.6 LTS via Fetch
 # so the database can be administered from any browser on the LAN
 # without installing a desktop client. Vendors cpp-httplib (MIT)
 # and nlohmann/json (MIT) at configure time via FetchContent.
-option(OPENADS_WITH_HTTP "Enable embedded HTTP web console in openads_serverd" OFF)
+option(OPENADS_WITH_HTTP "Enable embedded HTTP web console (Studio) in openads_serverd / ace64.dll" ON)
 
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each
