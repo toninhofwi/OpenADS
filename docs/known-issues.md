@@ -1,71 +1,92 @@
-# Known issues — M3 / M3.5
+---
+title: Known issues
+layout: default
+nav_order: 9
+---
 
-A code review on 2026-05-03 surfaced compatibility-breaking deviations
-from the FoxPro CDX / Clipper NTX on-disk specs. The implementations
-round-trip *their own* output but cannot interoperate with `.cdx` /
-`.ntx` files produced by other tools, which contradicts the
-README "Validation" goal of byte-level compatibility.
+# Known issues — current
 
-## Status — M3.6 / M3.7
+Status as of **v1.0.0-rc22** (2026-05-13). The historical M3-era
+compat-breaking CDX / NTX list that lived here is closed and now
+only survives in `git log`.
 
-| # | Issue | Status |
-|---|-------|--------|
-| 1 | CDX leaf entry bit width hardcoded | **Fixed** (`c1b8cf8`). Encoder uses Harbour-equivalent `compute_layout` (bBits derived from key length). |
-| 3 | CDX branch descent wrong endian / offset | **Fixed** (`7f3041f`). `seek_first` now reads child as BE per `hb_cdxPageGetKeyPage`. |
-| 5 | NTX `insert` returns AE_FUNCTION_NOT_AVAILABLE on second page | **Fixed for single-level** (`6ab97c4`). Root-leaf overflow now creates a branch root with two leaves. Multi-level recursion still pending. |
-| 6 | AdsOpenIndex lifecycle race | **Fixed** (`efe8d22`). |
-| 7 | AdsCreateIndex indexes deleted records | **Fixed** (`efe8d22`). |
-| 10 | NTX erase ignores recno when recno=0 | **Confirmed-as-spec**. Matches Harbour's `NTX_IGNORE_REC_NUM = 0x0UL` convention (passing recno=0 means "any recno with this key"). |
-| 11 | NTX soft seek past end | **Confirmed-as-correct**. The seek loop already descends the trailing right child when `i >= kc` on a non-leaf path; soft fallback only trips when reaching a leaf, which lands on the last key with `AfterKey`. |
-| 12 | Descending / unique flag round-trip untested | **Fixed** (`bb75c22`). |
-| 4  | NTX multi-level `next` / `prev` correctness | **Fixed** (`aaf8f52`, M3.8). Cache-based in-order traversal + leaf-split fix (separator promoted, not duplicated). |
-| 2  | CDX compound structure tag                   | **Fixed** (M3.9). Compound layout: file header @0, structure-tag root leaf @1024, sub-tag header @1536, sub-tag data @2560+. |
+## Open
 
-All compat-breaking reviewer items now closed. Multi-tag-per-file is also supported as of M3.10 (`CdxIndex::add_tag` appends sub-tags to an existing compound CDX, `CdxIndex::open_named` selects by tag name, `CdxIndex::list_tags` enumerates).
+### X# `AXDBFCDX` RDD — minor gaps
 
-- **#4 (closed M3.8)** was solved via a cache-based traversal: `ensure_cache_()` walks the tree depth-first into a flat `std::vector<CachedKey>`; `seek_first` / `seek_last` / `seek_key` / `next` / `prev` operate on the vector by index. Write paths (`insert` / `erase`) keep stack-based descent via `seek_key_for_write_` and mark `cache_dirty_ = true`. A separate split-bug fix (`Entry separator = all[mid]; right_half = [mid+1, end)`) prevents the separator from appearing twice during multi-level walks.
-- **#2 (closed M3.9).** `CdxIndex::create` now writes the compound layout: file/structure-tag header at offset 0 with `root_page = 1024` and `key_size = 10` (tag-name length); structure-tag's root leaf at offset 1024 holding one compact entry mapping the padded tag name to the sub-tag header offset (1536); sub-tag CDXTAGHEADER at 1536 with the sub-tag's actual `key_size`, `key_expr`, and `unique`/`descend` flags; sub-tag B+tree pages allocated from offset 2560 onwards. `open()` reads the file header to discover the structure-tag root, decodes its leaf to find the first sub-tag, then loads that sub-tag's header. `rewrite_header_` writes the sub-tag header at `sub_header_offset_`, never at offset 0. As a side fix, the leaf bit-pack encoder had `dup` and `trl` swapped; the original tests never tripped it because every key had `dup = trl = 0`. The structure-tag leaf (`trl = 8` for a 2-char tag name padded to 10) exposed it; the encoder now matches the decoder layout.
+The full `tests/smoke/xsharp/AdsSmoke.prg` + `AdsSmoke_remote.prg`
+flow passes (rc19), but a handful of `ADSRDD.prg` entry points
+still resolve to `AE_FUNCTION_NOT_AVAILABLE` so the X# runtime
+falls back to its own client path. The X# RDD keeps working — but
+applications that explicitly depend on these calls will hit the
+not-available path.
 
-Items 8, 9, 13, 14, 15, 16, 17 are minor / hygiene and tracked below.
+- `AdsEval*Expr` family — server-side expression evaluation
+  helpers used by `ADSRDD.prg`'s server-side query path. The
+  client-side fallback handles every common case.
+- A handful of `AdsStmt*` helpers used by the X# SQL surface.
+- The RI / unique / autoinc enforcement *toggles* are
+  accept-and-ignore (the underlying enforcement still happens
+  through `AdsCreateIndex` / DD).
 
-## Critical (compat-breaking)
+See [rddads / X# RDD compat](en/rddads-compat/) for the full
+list of versioned overloads and what each one does.
 
-1. **CDX leaf entry bit width is hardcoded.** `src/drivers/cdx/cdx_index.cpp:163-167` always writes `recBits=24, dupBits=8, trlBits=8` (5 bytes per entry). FoxPro derives these dynamically: `bBits = ceil(log2(keylen+1))`, `dupBits = trlBits = bBits`, total `keyBytes ∈ {3,4,5}`. For `keylen=4` real layout is 18/3/3 bits packed in 3 bytes.
-2. **CDX tag name stashed in `reserved2`.** `src/drivers/cdx/cdx_index.cpp:117-120, 571-573` writes the tag name at offset 24 of `CDXTAGHEADER`, which corrupts the FoxPro `reserved2[68]`. Real FoxPro CDX is compound: page 0 is the structure tag; sub-tag names live as keys in the structure tag's B+tree, pointing at sub-tag header pages. Single-tag flat layout is non-standard.
-3. **CDX branch descent uses wrong offset and endianness.** `src/drivers/cdx/cdx_index.cpp:310-316` reads `LE_UINT32(base + 12 + key_size + 4)` for the leftmost child. Per Harbour `dbfcdx1.c:1554-1556`, the child page is stored **big-endian** at `(iKey+1) * (key_size+8) - 4`. Multi-level CDX trees are unreachable.
-4. **NTX `seek_key` / `next` / `prev` semantics are wrong on multi-level trees.** `src/drivers/ntx/ntx_index.cpp:248-258` returns `Exact` on an internal-node match without descending, then `next()` re-descends the right subtree → keys can be revisited.
-5. **NTX `insert` returns `AE_FUNCTION_NOT_AVAILABLE` on the second page.** `src/drivers/ntx/ntx_index.cpp:424-426`. The plan and the README "M3 Done" row claim full insert with split.
-6. **`AdsOpenIndex` lifecycle race.** `src/abi/ace_exports.cpp:464-490` calls `Table::set_order(...)` which destroys any previous order via `std::optional::emplace`, leaving the prior index handle dangling in `index_bindings()`. A subsequent `AdsCloseIndex(stale)` then clears the live order.
-7. **`AdsCreateIndex` indexes deleted records.** `src/abi/ace_exports.cpp:541-549` walks every recno via `goto_record` without checking `is_deleted()`. The resulting index produces phantom recnos.
+### Wire-protocol forward-only prefetch
 
-## Important (incomplete coverage)
+`M12.21` prefetch (forward-only row look-ahead on `Skip(+N)`)
+was disabled in **M12.21b** (rc9) after cursor-drift
+regressions on indexed scans. The wire still benefits from the
+row cache (M12.17), nav-ack trailer (M12.18), and record-count
+cache (M12.19), but speculative read-ahead is currently off.
 
-8. CDX `seek_key` always re-descends from `seek_first` — O(N) over the leaf chain instead of O(log N) via root descent.
-9. CDX `insert` mutates `file_size_` only in memory; a freshly created+inserted CDX read by another process before `flush()` returns garbage.
-10. NTX `erase` ignores `recno` when `recno == 0` but enforces it otherwise — opposite of Harbour `hb_ntxPageKeyDel` semantics.
-11. NTX soft seek past end leaves the cursor empty when `i ≥ kc` on a non-leaf path; should land on the last key with `AfterKey`.
-12. No tests round-trip `descending=true` or `unique=true` flags through reopen; descending order is silently broken.
-13. CDX test fixtures are all "create→insert→reopen" — zero coverage of real FoxPro byte sequences.
+### Studio LocalServer auth
 
-## Minor
+LocalServer mode (the Studio embedded in `ace64.dll` /
+`ace32.dll`) currently has no HTTP Basic auth. The default bind
+host is `127.0.0.1`, so a desktop app does not silently expose
+its data dir to the LAN — but if you set
+`OPENADS_STUDIO_HOST=0.0.0.0`, put the console behind a reverse
+proxy that handles authentication. Remote Server mode
+(`openads_serverd`) supports `--http-user user:password`.
 
-14. `src/drivers/cdx/cdx_index.cpp:283` silently writes `freeSpc=0` when entries collide with suffix bytes; should error.
-15. NTX `format_empty_page` doesn't reuse freed offset slots — divergent from Harbour but tolerable.
-16. `src/engine/order.cpp` is the placeholder line; class is header-only — collapse into header or move bodies.
-17. `AdsSetIndexDirection` returns `5004`; `descend_` is already on the index and could trivially be flipped on a follow-up.
+### Studio HTTPS
 
-## M3.6 plan (TBD)
+The embedded HTTP console (cpp-httplib) only ships TLS via
+OpenSSL, which isn't bundled in the daemon to keep the release
+binary lean. Terminate HTTPS in front with Caddy / nginx /
+stunnel / SSH tunnel — see [TLS deployment](en/tls-deployment/)
+for the recipes. A dedicated `OPENADS_WITH_OPENSSL=ON` CMake
+option is on the roadmap.
 
-A dedicated milestone will:
+## Closed in v1.0.0-rc1 .. rc22
 
-- Replace CDX bit-packing with the FoxPro-derived `bBits` formula (cite Harbour `hb_cdxPageLeafInitSpace`).
-- Implement the compound CDX layout: structure tag at page 0, sub-tag headers reachable via the structure tag B+tree.
-- Fix CDX branch descent (BE child pointers at the correct offset).
-- Land the NTX leaf split and revisit descent / next / prev for multi-level trees.
-- Tighten the `AdsOpenIndex` / `AdsCloseIndex` lifecycle so installing a new order does not orphan prior bindings.
-- Skip deleted records in `AdsCreateIndex`.
-- Add tests: descending flag round-trip, unique flag round-trip, soft-seek past-end, branch descent, multi-leaf walks, and at least one fixture file produced by Harbour `dbfcdx` so OpenADS proves it can read a real FoxPro `.cdx`.
+See `CHANGELOG.md` for the full per-release breakdown. The big
+ones since the M3-era list:
 
-Until M3.6 lands, the index path is functional **only against indexes
-created by OpenADS itself.** For interoperability with applications
-that already have `.cdx` / `.ntx` files on disk, defer to M3.6.
+- **M3 CDX / NTX compat-breaking issues** — all closed by
+  `M3.6` .. `M3.10` (`bBits` formula, compound structure-tag,
+  branch descent endian / offset, multi-tag-per-file, multi-
+  level NTX, descending / unique round-trip, deleted records
+  excluded from `AdsCreateIndex`).
+- **TLS** — shipped in v0.4.0 (M12.12 / M12.13).
+- **AOF / Rushmore** — shipped in v1.0.0-rc12; `AdsSetAOF` no
+  longer fails on non-optimisable expressions since rc21.
+- **X# `AXDBFCDX` RDD compatibility** — shipped in
+  v1.0.0-rc19 (M12.22 / M12.23), full local + remote.
+- **DBF header last-update date** — shipped in rc21 (M12.24)
+  and rc22 (M12.25 stamps on create).
+- **Embedded Studio** (LocalServer mode) — shipped in
+  v1.0.0-rc9.
+- **Wire perf (~30× xbrowse repaint)** — shipped in rc18 via
+  M12.17..M12.20.
+- **Windows Service + systemd / launchd units** — shipped in
+  rc14.
+
+## Reporting
+
+File issues at
+[github.com/FiveTechSoft/OpenADS/issues](https://github.com/FiveTechSoft/OpenADS/issues).
+For X# RDD specifics, include the `ADSRDD.prg` entry point that
+returned `AE_FUNCTION_NOT_AVAILABLE` and the exact call site —
+that's what drove the M12.22 / M12.23 batches.

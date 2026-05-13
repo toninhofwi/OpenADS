@@ -14,7 +14,7 @@ conjunto fixo de cargas SQL através da ABI pública
 (`AdsExecuteSQLDirect`). Mediana de 5 repetições por carga,
 builds `Release`.
 
-## Resultados v0.4.x (2026-05-06)
+## v0.4.x — SQL local in-process (2026-05-06)
 
 | Carga (mediana ms)     | Windows MSVC | Linux clang -O3 | macOS AppleClang |
 |------------------------|-------------:|----------------:|-----------------:|
@@ -86,6 +86,26 @@ O speedup de ~1.83× do eq-walk é limitado pelo custo de
 310 ms piso no Windows). Aplicações que não tocam o dado
 matched — `COUNT(*)` sobre o AOF, ou `dbSeek` pontual — entram
 na janela Rushmore completa em cima do range-scan gain.
+
+## Bench v4 — repaint xbrowse sobre o wire (rc18)
+
+A stack wire (rc18, M12.17 .. M12.20) traz quatro otimizações
+sobrepostas que reduzem o custo de um PgDn estilo xbrowse —
+W colunas × H linhas × metadata por linha — de ~300 round-trips
+para ~20 RTT × ~5 ms com Nagle off ≈ ~100 ms total.
+
+Medição end-to-end LAN, `openads_serverd` na mesma sub-rede,
+100 colunas × 25 linhas visíveis sobre `tcp://`:
+
+| Etapa                                              | RTT  | Nota |
+|----------------------------------------------------|-----:|------|
+| baseline pré-M12.17 (`FieldGet` por célula)        | ~300 | W células por linha + metadata por linha, cada uma com seu round-trip. |
+| **M12.17** — cache de linha `FetchCurrentRow`       | ~80  | W células por linha → 1 RTT. |
+| **M12.18** — nav-ack carrega o trailer da linha     | ~20  | Acks `GotoTop` / `Skip` / `GotoRecord` embarcam row buffer + recno + flag deleted, então `AdsGetField` / `AdsGetRecordNum` / `AdsIsRecordDeleted` batem no cache populado pelo nav anterior. |
+| **M12.19** — cache de record-count                  | ~20  | `AdsGetRecordCount` / `AdsGetRelKeyPos` (a scrollbar) servem do cache; invalidado só por writes que mudem o count. |
+| **M12.20** — `TCP_NODELAY`                          | ~100 ms | Nagle off — ping-pong estrito remove o tax de 200 ms de acumulação. |
+
+**Líquido**: ~30× speedup end-to-end vs pré-M12.17 em LAN típica.
 
 ## Executar no seu hardware
 

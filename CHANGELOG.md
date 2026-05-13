@@ -5,124 +5,125 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
-## Unreleased
+## 1.0.0-rc22 — 2026-05-13
 
-Post-v1.0.0-rc6 work, all rddads-compat deepening so a real Harbour
-`rddads` `.prg` drives OpenADS through the same edge cases Clipper
-exposes against original ACE.
-
-- **M12.22 — versioned ACE overloads for the X# RDD.** Exports the
-  `Ads*NN` entry-point names X# binds by name (`AdsConnect26`,
-  `AdsCreateTable71` / `90`, `AdsOpenTable90`, `AdsCreateIndex90`,
-  `AdsDDAddTable90`, `AdsDDCreateRefIntegrity62`, `AdsFindFirstTable62`
-  / `AdsFindNextTable62`, `AdsGetDateFormat60`, `AdsGetExact22`,
-  `AdsReindex61`, `AdsRestructureTable90`). Most forward to the base
-  signature (dropping the charset / collation / page-size params newer
-  ACE builds added); `AdsGetBookmark60` / `AdsGotoBookmark60`
-  round-trip the recno as a 4-byte blob; `AdsCancelUpdate90` /
-  `AdsSetProperty90` are accepted no-ops; `AdsFindConnection25` /
-  `AdsGetTableHandle25` report not-found (OpenADS keys by handle, not
-  path / name).
-- **M12.23 — close the export gap the X# Advantage RDD relies on.**
-  A live run of X#'s `AXDBFCDX` RDD against OpenADS' `ace64.dll`
-  surfaced ~45 more entry points `ADSRDD.prg` binds by name
-  (`AdsGetMemoBlockSize`, `AdsGetTableOpenOptions`, `AdsGetBookmark`,
-  `AdsCancelUpdate`, `AdsSetField`/`AdsSetEmpty`/`AdsSetNull`/
-  `AdsSetShort`/`AdsSetMoney`/`AdsSetTime`/`AdsSetTimeStamp`,
-  `AdsGetDate`, `AdsContinue`, `AdsEval*Expr`, the RI / unique /
-  autoinc enforcement toggles, `AdsStmt*` helpers, …). Added: forwards
-  where one fits, accept-and-ignore for session/statement toggles,
-  `AE_FUNCTION_NOT_AVAILABLE` for the genuinely-unimplemented (so the
-  X# runtime falls back to its own client path). The field-setter
-  family handles the ACE "field name *or* 1-based ordinal cast to a
-  pointer" idiom. **`AdsAppendRecord` now auto-locks the new record**
-  (ACE semantics for non-exclusive tables — X#'s `GoHot` refuses to
-  write a record it sees as unlocked), and **`AdsIsRecordLocked` /
-  `AdsLockRecord` / `AdsUnlockRecord` honour `recno == 0` = current
-  record** and report the real lock state instead of stubbing 0.
-  **`AdsCreateIndex61` / `AdsCreateIndex90` option-bit fix:** the
-  "descending" flag is `ADS_DESCENDING` (`0x08`), not `0x02` — `0x02`
-  is `ADS_COMPOUND`, which X#'s ADSRDD always sets for CDX orders, so
-  the old mask built every X# order descending and `DbGoTop` landed on
-  the last key. **`AdsCreateTable` / `AdsCreateTable90` now stage an
-  empty `.fpt` next to the `.dbf` when the field list has an `M` field**
-  (using `usMemoBlockSize`, default 64) — without it `Connection::
-  open_table` can't attach a memo store and any memo write fails
-  "memo store not attached". With these fixes the full X# `AXDBFCDX`
-  smoke (`tests/smoke/xsharp/AdsSmoke.prg`) passes end-to-end against
-  OpenADS' `ace64.dll`: `DbCreate` (incl. an M field) → `DbUseArea` →
-  `OrdCreate` ×2 → `DbAppend`+`FieldPut` ×4 → `DbCommit` → NAME-order
-  `GoTop`/`Skip ±`/`GoBottom`/`Eof` → `DbSeek` hit + miss → memo
-  round-trip → `DbDelete`/`DbRecall` → replace a key field + re-read
-  through the CITY order → `DbCloseArea`.
-- **M12.24 — X# RDD feedback: `AdsGetLastTableUpdate` + non-optimisable
-  AOF.** `AdsGetLastTableUpdate` was a 3-zero stub with the wrong
-  signature (`SIGNED32* date, SIGNED32* time`); it now matches ACE
-  (`UNSIGNED8* pucDate, UNSIGNED16* pusLen`), reads the DBF header's
-  last-updated stamp (header bytes 1..3, year offset from 1900) — over
-  the wire too, via a new `GetLastTableUpdate` opcode — and renders it
-  through the date display format. `AdsSetDateFormat` is no longer a
-  no-op: it stores the process-wide format string that `AdsGetDateFormat`
-  / `AdsGetLastTableUpdate` honour (`CCYY`/`YYYY`/`YY`/`MM`/`DD` tokens,
-  every other char passed through; default still `yyyy-mm-dd`).
-  `AdsSetAOF` no longer fails error 7200 on an expression outside the
-  optimisable subset (e.g. `Empty(NAME)`, `UPPER(NAME) = 'A'`) — ACE
-  treats those as "not optimised", so OpenADS now drops any prior AOF,
-  reports `ADS_OPTIMIZED_NONE`, and returns success, letting the client
-  RDD apply the filter itself (same for the server-side `SetAOF`
-  handler).
-- **M12.25 — `AdsCreateTable` stamps the header last-update date.**
+- **M12.25 — `AdsCreateTable` stamps the DBF header last-update date.**
   Follow-up to M12.24 (Robert van der Hulst): a freshly created+opened
   table reported `AdsGetLastTableUpdate()` = `1900-00-00` until the
   first `DbAppend` rewrote the DBF header. ACE writes the create date
   into header bytes 1..3 up front, so OpenADS now does too — in
   `AdsCreateTable` and every other path that lays down a fresh DBF
-  (`AdsRestructureTable`/convert, SQL `INTO`/`SELECT` result cursors,
-  GROUP BY / aggregate scratch tables). New `stamp_dbf_header_today`
-  helper uses the same UTC clock as `CdxDriver::rewrite_header_`, so
-  the create stamp and the first-append stamp agree. Doctest
-  `abi_aof_test.cpp` gains an `AdsCreateTable` → `AdsGetLastTableUpdate`
-  == today's date case.
-- **X# RDD against a remote OpenADS server.** Three more fixes so X#'s
-  ADSRDD drives `openads_serverd` over the wire (`AdsConnect60(tcp://
-  host:port/<datadir>, ADS_REMOTE_SERVER) → AX_SetConnectionHandle →
-  DbUseArea`): `remote_field_index` now honours the "field name OR
-  1-based ordinal cast to a pointer" idiom (X#'s `_FieldSub` calls
-  `AdsGetFieldType`/`Length`/`Decimals` by ordinal — a tiny pointer
-  value was being dereferenced as a string); the remote `AdsOpenTable`
-  branch defaults a missing extension to `.dbf` (X# passes the bare
-  table name for remote tables); and `AdsGetTableFilename` gained a
-  remote path (returning the opened name) instead of failing
-  `AE_INTERNAL_ERROR` — X#'s `Open` calls it right after `_FieldSub`.
-  New `tests/smoke/xsharp/AdsSmoke_remote.prg` opens `customer.dbf` on
-  the server and does read/nav (RecCount / GoTop / Skip ± / GoBottom /
-  Eof / FieldGet) — passes against the dev server.
-- **Test layout.** Third-party RDD smoke harnesses moved under
-  `tests/smoke/` — `tests/smoke/harbour/` (was `tests/harbour_smoke/`)
-  plus a new `tests/smoke/xsharp/` (`AdsSmoke.prg` driving OpenADS' DLL
-  through X#'s `AXDBFCDX` RDD). GUI showcases (FiveWin, X# WinForms)
-  get an `examples/` tree. All opt-in — none run in the default `ctest`
-  pass. Added doctest coverage `abi_versioned_overloads_test.cpp` (local)
-  + `abi_remote_overloads_test.cpp` (over the wire, gated on
-  `OPENADS_TEST_REMOTE`).
+  (`AdsRestructureTable` / convert, SQL `INTO` / `SELECT` result
+  cursors, GROUP BY / aggregate scratch tables). New
+  `stamp_dbf_header_today` helper uses the same UTC clock as
+  `CdxDriver::rewrite_header_`, so the create stamp and the
+  first-append stamp agree.
+
+## 1.0.0-rc21 — 2026-05-12
+
+- **M12.24 — `AdsGetLastTableUpdate` real signature + AOF
+  non-optimisable handling.** Was a 3-zero stub with the wrong
+  signature (`SIGNED32* date, SIGNED32* time`); now matches ACE
+  (`UNSIGNED8* pucDate, UNSIGNED16* pusLen`), reads the DBF header's
+  last-updated stamp (header bytes 1..3, year offset from 1900) — over
+  the wire too via a new `GetLastTableUpdate` opcode — and renders it
+  through the date display format.
+- **`AdsSetDateFormat`** stores a process-wide format string that
+  `AdsGetDateFormat` / `AdsGetLastTableUpdate` honour
+  (`CCYY` / `YYYY` / `YY` / `MM` / `DD` tokens; default
+  `yyyy-mm-dd`).
+- **`AdsSetAOF` no longer fails error 7200** on a non-optimisable
+  expression (e.g. `Empty(NAME)`, `UPPER(NAME) = 'A'`) — ACE treats
+  those as "not optimised", so OpenADS drops any prior AOF, reports
+  `ADS_OPTIMIZED_NONE`, and returns success, letting the client RDD
+  apply the filter itself (same on the server-side `SetAOF` handler).
+
+## 1.0.0-rc20 — 2026-05-12
+
+- **`OPENADS_WITH_HTTP` defaults to ON.** Studio no longer needs the
+  explicit CMake flag — pass `-DOPENADS_WITH_HTTP=OFF` to opt out.
+- **`AdsGetKeyNum` returns the correct relative key position.**
+- **FiveWin + xBrowse over ADS** sample under `examples/fivewin/`.
+
+## 1.0.0-rc19 — 2026-05-12 — X# Advantage RDD compatibility (local + remote)
+
+- **M12.22 — versioned ACE overloads for the X# RDD.** Exports the
+  `Ads*NN` entry-point names X# binds by name (`AdsConnect26`,
+  `AdsCreateTable71` / `90`, `AdsOpenTable90`, `AdsCreateIndex90`,
+  `AdsDDAddTable90`, `AdsDDCreateRefIntegrity62`,
+  `AdsFindFirstTable62` / `AdsFindNextTable62`, `AdsGetDateFormat60`,
+  `AdsGetExact22`, `AdsReindex61`, `AdsRestructureTable90`). Most
+  forward to the base signature (dropping the charset / collation /
+  page-size params newer ACE builds added); `AdsGetBookmark60` /
+  `AdsGotoBookmark60` round-trip the recno as a 4-byte blob;
+  `AdsCancelUpdate90` / `AdsSetProperty90` are accepted no-ops;
+  `AdsFindConnection25` / `AdsGetTableHandle25` report not-found
+  (OpenADS keys by handle, not path / name).
+- **M12.23 — close the export gap the X# Advantage RDD relies on.**
+  Live run of X#'s `AXDBFCDX` RDD against OpenADS' `ace64.dll`
+  surfaced ~45 more entry points `ADSRDD.prg` binds by name
+  (`AdsGetMemoBlockSize`, `AdsGetTableOpenOptions`, `AdsGetBookmark`,
+  `AdsCancelUpdate`, `AdsSetField` / `AdsSetEmpty` / `AdsSetNull` /
+  `AdsSetShort` / `AdsSetMoney` / `AdsSetTime` / `AdsSetTimeStamp`,
+  `AdsGetDate`, `AdsContinue`, `AdsEval*Expr`, RI / unique / autoinc
+  enforcement toggles, `AdsStmt*` helpers, …). Forwards where one
+  fits, accept-and-ignore for session / statement toggles,
+  `AE_FUNCTION_NOT_AVAILABLE` for the genuinely-unimplemented (so the
+  X# runtime falls back to its own client path). The field-setter
+  family handles the ACE "field name *or* 1-based ordinal cast to a
+  pointer" idiom.
+- **`AdsAppendRecord` auto-locks the new record** (ACE semantics for
+  non-exclusive tables — X#'s `GoHot` refuses to write a record it
+  sees as unlocked).
+- **`AdsIsRecordLocked` / `AdsLockRecord` / `AdsUnlockRecord` honour
+  `recno == 0` = current record** and report the real lock state
+  instead of stubbing 0.
+- **`AdsCreateIndex61` / `AdsCreateIndex90` option-bit fix:** the
+  "descending" flag is `ADS_DESCENDING` (`0x08`), not `0x02` — `0x02`
+  is `ADS_COMPOUND`, which X#'s ADSRDD always sets for CDX orders, so
+  the old mask built every X# order descending and `DbGoTop` landed
+  on the last key.
+- **`AdsCreateTable` / `AdsCreateTable90` stage an empty `.fpt` next
+  to the `.dbf`** when the field list has an `M` field (using
+  `usMemoBlockSize`, default 64) — without it `Connection::open_table`
+  can't attach a memo store and any memo write fails "memo store not
+  attached".
+- **X# RDD against a remote OpenADS server.** Three remote-path
+  fixes so X#'s ADSRDD drives `openads_serverd` over the wire
+  (`AdsConnect60("tcp://host:port/<datadir>", ADS_REMOTE_SERVER) →
+  AX_SetConnectionHandle → DbUseArea`): `remote_field_index` now
+  honours the "field name OR 1-based ordinal cast to a pointer" idiom
+  (X#'s `_FieldSub` calls `AdsGetFieldType` / `Length` / `Decimals`
+  by ordinal — a tiny pointer value was being dereferenced as a
+  string); the remote `AdsOpenTable` branch defaults a missing
+  extension to `.dbf`; and `AdsGetTableFilename` gained a remote
+  path (returning the opened name) instead of failing
+  `AE_INTERNAL_ERROR`.
+- Full X# `AXDBFCDX` smoke (`tests/smoke/xsharp/AdsSmoke.prg` +
+  `AdsSmoke_remote.prg`) passes end-to-end against OpenADS'
+  `ace64.dll`.
+- **Test layout.** Third-party RDD smoke harnesses under
+  `tests/smoke/` (Harbour + X#). GUI showcases (FiveWin, X#
+  WinForms) under `examples/`. All opt-in — none run in default
+  `ctest`. Doctest coverage `abi_versioned_overloads_test.cpp` +
+  `abi_remote_overloads_test.cpp` (gated on `OPENADS_TEST_REMOTE`).
 - **Clipper-convention empty / past-end / Limbo states.**
   `goto_record(0)` is no-op + Eof (not error 5000); empty table
-  reports BOF / EOF + `RecNo() = LastRec()+1`; GO past-end enters
+  reports BOF / EOF + `RecNo() = LastRec() + 1`; GO past-end enters
   Limbo; CDX dup-tag silent reopen; CDX dup-key insertion uses recno
   tie-break.
 - **Index cursor consistency.** `goto_record` re-syncs the index
   cursor to the row's key (so the next SKIP walks the right
-  neighbour); CDX cursor state tracking + `Table::seek_key` last-key
-  variant; hard-seek miss parks the cursor on the `>` neighbour for
-  SKIP; hard-seek past every key parks at AfterEnd; `GO 0` keeps
-  Limbo.
+  neighbour); CDX cursor state tracking; hard-seek miss parks the
+  cursor on the `>` neighbour for SKIP; hard-seek past every key
+  parks at AfterEnd; `GO 0` keeps Limbo.
 - **`SET DELETED ON` everywhere.** Index walks skip deleted rows;
   natural-order GOTOP / GOBOTTOM skip deleted; all-deleted under
   `SET DELETED` reports Limbo (not Eof); `GOTOP` / `GOBOTTOM` on an
   empty index report Limbo.
 - **DESCEND wired through.** `bFindLast` retry on DESCEND retired;
-  `DBSEEK( '' )` with `bSoftSeek` lands at the first record + `FOUND
-  = .T.`; the empty-key shortcut applies only to ASC orders.
+  `DBSEEK( '' )` with `bSoftSeek` lands at the first record +
+  `FOUND = .T.`; empty-key shortcut applies only to ASC orders.
 - **CDX FOR-clause filter.** `CREATE INDEX … FOR <expr>` honoured at
   build time and on every subsequent insert; `CREATE INDEX` inserts
   deleted rows too (DBFCDX semantics); each new `CREATE INDEX`
@@ -136,8 +137,204 @@ exposes against original ACE.
   ids; `rddads-compat` default connection + `CREATE INDEX` goto-top.
 - **SKIP overshoot.** Cursor stays on the last live record, not
   recno 0.
-- Tests: `rddtst-flow` repro for `DBGOTOP` after delete / recall /
-  redelete; unit test for `DBGOBOTTOM` + FOR-clause + deletes.
+
+## 1.0.0-rc18 — 2026-05-09 — wire-protocol perf overhaul (~30× xbrowse repaint)
+
+- **M12.17 — `RemoteTable` row cache.** New `FetchCurrentRow` opcode
+  returns the entire current record's column values in one frame.
+  `AdsGetField` / `AdsGetLong` / `AdsGetDouble` / `AdsGetJulian`
+  serve every cell from the cache; W cells per row collapse to 1
+  RTT.
+- **M12.18 — piggyback row trailer on nav acks.** `GotoTopAck` /
+  `GotoBottomAck` / `SkipAck` / `GotoRecordAck` /
+  `FetchCurrentRowAck` carry the full row buffer + recno + deleted
+  flag. `AdsGetField` / `AdsGetRecordNum` / `AdsIsRecordDeleted`
+  all hit the cache populated by the prior nav ack — zero extra RTT
+  after every nav.
+- **M12.19 — record_count cache.** `AdsGetRecordCount` and
+  `AdsGetRelKeyPos` now serve from a per-table cache, invalidated
+  only on writes that change row count (`AdsAppendRecord`,
+  `AdsDeleteRecord`, `AdsRecallRecord`, `AdsPackTable`,
+  `AdsZapTable`).
+- **M12.20 — `TCP_NODELAY`** disabled Nagle on every per-connection
+  socket. The OpenADS wire is strict ping-pong, so Nagle's
+  accumulation delay (up to 200 ms) was pure latency tax. Removes
+  ~40–200 ms per RTT on slow links.
+- **Net xbrowse PgDn**: pre-M12.17 ~300 RTT → ~20 RTT × ~5 ms (Nagle
+  off) ≈ ~100 ms. ~30× end-to-end speedup vs pre-M12.17.
+
+## 1.0.0-rc17 — 2026-05-09 — full wire bridges (rddads parity) + AOF/Rushmore + Studio Demo
+
+The wire layer now carries every common ABI op rddads emits when an
+app connects via `AdsConnect60("tcp://host:port/dir")`. Until rc16
+most ABI calls past `AdsOpenTable` collapsed with "unknown table"
+because they only resolved local `Table*`. Fixed across 40+ entry
+points:
+
+- **M12.14 — field metadata + cursor state.** `AdsGetNumFields`,
+  `AdsGetFieldName`, `AdsGetFieldType`, `AdsGetFieldLength`,
+  `AdsGetFieldDecimals`, `AdsAtBOF`, `AdsGetRecordNum`,
+  `AdsIsRecordDeleted`, `AdsGotoBottom`. New `DescribeTable` opcode
+  returns schema in one round-trip (cached on `RemoteTable` so
+  `adsOpen` field-iter stays cheap).
+- **M12.14b — typed reads.** `AdsGetLong`, `AdsGetDouble`,
+  `AdsGetJulian` reuse `GetField`, parse client-side. No new opcode.
+- **M12.15 — info / lock / maintenance / AOF.** `AdsIsFound`,
+  `AdsRefreshRecord`, `AdsGetTableType`, `AdsGetRecordLength`,
+  `AdsGetNumIndexes`, `AdsGetLastAutoinc`, `AdsLockRecord` /
+  `Unlock`, `AdsLockTable` / `Unlock`, `AdsPackTable`,
+  `AdsZapTable`, `AdsFlushFileBuffers`, `AdsCloseAllIndexes`,
+  `AdsSetAOF`, `AdsClearAOF`, `AdsGetAOFOptLevel`.
+- **M12.15b — memo.** `AdsGetMemoLength`, `AdsBinaryToFile`,
+  `AdsFileToBinary` reuse `GetField` / `SetField`.
+- **M12.16 — index handle subsystem.** New
+  `HandleKind::RemoteIndex` + `RemoteIndex` wrapper.
+  `AdsOpenIndex` / `AdsCloseIndex` / `AdsSeek` / `AdsSeekLast` over
+  the wire. Server lazy-promotes ABI handles in `tbls_h` and syncs
+  the engine cursor after Seek so the two cursors never drift.
+- **M12.16b — remaining index ops.** `AdsCreateIndex` /
+  `AdsCreateIndex61` (CDX-on-the-wire), `AdsSkipUnique`,
+  `AdsSetScope`, `AdsClearScope`.
+- **M12.16c — order switching.** New ABI exports
+  `AdsSetIndexOrder` (by tag name) and `AdsSetIndexOrderByHandle`
+  (by hIndex). Wire bridges via `SetOrder` / `SetOrderByName`
+  opcodes.
+
+## 1.0.0-rc16 — 2026-05-09
+
+- **`AdsGetRelKeyPos` / `AdsSetRelKeyPos` honour the active index
+  walk.** When `t->order()->index()` is bound, both walk the index
+  once (seek_first → next() loop) to compute / position by *key*
+  fraction, not raw recno. Cursor recno is restored after the `Get`
+  probe so it doesn't visibly move the user-facing position. No-
+  active-order behaviour unchanged.
+
+## 1.0.0-rc15 — 2026-05-09
+
+- **`+` (VFP autoincrement) field type.** dBASE Level 7 / VFP
+  autoincrement column carries the field-descriptor type byte `+`;
+  classifier in `src/drivers/dbf_common.cpp` now maps it to
+  `DbfFieldType::Integer`. Prior fall-through left the schema
+  parser at `Unknown`.
+
+## 1.0.0-rc14 — 2026-05-08 — Windows Service + systemd / launchd units
+
+- **Windows Service support.** `openads_serverd --install-service`
+  registers a `SERVICE_AUTO_START` Win32 service;
+  `--uninstall-service` drops the registration; the same binary
+  doubles as both interactive CLI and SCM-driven service through a
+  real `RegisterServiceCtrlHandler` with `SERVICE_CONTROL_STOP` /
+  `SERVICE_CONTROL_SHUTDOWN` driving the same graceful-shutdown
+  path as interactive Ctrl+C.
+- **Linux systemd unit** (`scripts/openads-serverd.service`)
+  hardened — `User=openads`, `ProtectSystem=strict`,
+  `NoNewPrivileges`, `RestrictAddressFamilies=AF_INET AF_INET6`,
+  `PrivateTmp`, `Restart=on-failure`.
+- **macOS launchd plist**
+  (`scripts/com.openads.serverd.plist`) — KeepAlive on crash;
+  stdout / stderr to `/var/log/openads-serverd.{out,err}.log`.
+
+## 1.0.0-rc13 — 2026-05-08 — production-CDX auto-open + Studio Demo + version fix
+
+- **M-AOF.6 — production-CDX auto-open in `AdsOpenTable`.** Opening
+  `<base>.dbf` auto-binds the sibling `<base>.cdx` so every tag in
+  it becomes navigable on the Table without an explicit
+  `AdsOpenIndex60` call. rc12 didn't do that — Studio's per-request
+  short-lived `AbiSession` re-opened the DBF on every `/rows` fetch
+  but never picked up a CDX created in a prior session, so
+  `AdsGetAOFOptLevel` reported `NONE` forever even after `CREATE
+  INDEX`.
+- **Studio — guided AOF demo.** Browse-tab `▶ Demo` button walks
+  the full Rushmore-style AOF story end-to-end against whatever
+  table is active.
+- **Studio — AOF hint chips functional.** When the AOF doesn't
+  reach `FULL`, Studio surfaces a chip per character / memo field
+  referenced by the cond that doesn't have a matching index yet.
+  Click → runs `CREATE INDEX <field>_IDX ON <table> (<field>)` +
+  re-applies the AOF.
+- **`openads_serverd --version`** now reports the actual tag via
+  `git describe --tags --always --dirty` at CMake configure time.
+  Previously hard-coded `1.0.0-rc1` since rc1.
+
+## 1.0.0-rc12 — 2026-05-08 — AOF (Rushmore-style) full slice
+
+First working slice of **Advantage Optimised Filters (AOF) —
+Rushmore-style query optimisation**. `AdsSetAOF` parses + evaluates
+the cond, installs a per-record bitmap as a filter predicate that
+`Skip` / `GoTop` honour, and routes individual leaves through CDX /
+NTX index range scans whenever an open index has the leaf's field
+as its key expression. `AdsGetAOFOptLevel` reports
+`ADS_OPTIMIZED_FULL` / `PART` / `NONE` based on per-leaf coverage.
+Sparse-bitmap navigation lifts the visible-set walk from O(N) to
+O(M).
+
+V1 grammar (identifiers + keywords case-insensitive, both
+Clipper-style `.T.` / `.AND.` and SQL-style accepted):
+
+```
+<field> OP <literal>      OP in { = == != <> # < <= > >= }
+<field> BETWEEN a AND b
+<field> IN ( v1, v2, ... )
+expr AND expr      OR     NOT expr      ( expr )
+```
+
+Index-accelerated leaves in V1: character / memo fields with a
+bare-field-name index expression; operators Eq, Ne, Lt, Le, Gt, Ge,
+Between, In. Numeric / date / logical fields, `UPPER(field)` /
+compound expressions still produce a correct bitmap via per-record
+fallback (don't count as "served by index").
+
+## 1.0.0-rc10 — 2026-05-08
+
+- **Studio mode badge.** SPA header now shows 🏠 `LocalServer`
+  (green) when the console runs in-process inside `ace64.dll` /
+  `ace32.dll`, or 🌐 `Remote Server` (blue) when hosted by
+  `openads_serverd`. Hover reveals the active data directory.
+  Signal from a new `mode` field on `/api/health`
+  (`"localserver"` when `HttpConsole` was started without a backing
+  wire-server pointer, `"remote-server"` otherwise). Reverse-proxy
+  deployments that strip unknown fields keep working unchanged —
+  the badge stays hidden when `/api/health` is unreachable.
+
+## 1.0.0-rc9 — 2026-05-08 — embedded Studio (LocalServer)
+
+Studio web console is now embedded inside `ace64.dll` / `ace32.dll`
+itself. A LocalServer application — Harbour / X# / Clipper loading
+the OpenADS DLL directly without launching `openads_serverd.exe` —
+spins up the console in its own process.
+
+- Three OpenADS-only entry points:
+  `AdsStudioStart(port, data_dir)`, `AdsStudioStop()`,
+  `AdsStudioPort(&port)` (ordinals 238–240).
+- Env-driven auto-start: `OPENADS_STUDIO_PORT=<port>` before
+  launching the host app; `OPENADS_STUDIO_DATA` / `OPENADS_STUDIO_HOST`
+  default to `"."` / `127.0.0.1`. Without the port env var the auto
+  hook is a no-op — no surprise localhost listener.
+- Compiled into the DLL only when `-DOPENADS_WITH_HTTP=ON` (default
+  since rc20). Without that flag the three exports return
+  `AE_FUNCTION_NOT_AVAILABLE` so callers can detect the build
+  flavour at runtime.
+
+## 1.0.0-rc8 — 2026-05-08 — dual x64+x86, static mbedtls
+
+Addresses XSharp-Project feedback (Robert van der Hulst):
+
+- **Dual x64+x86 ZIP.** Bundle ships both `ace64.dll` and
+  `ace32.dll` plus matching `openads_serverd_{x64,x86}.exe` /
+  `openads_bench_{x64,x86}.exe`. X#, Harbour-x86, and legacy
+  Clipper apps all pick the right bitness without a separate
+  download.
+- **Static-linked mbedtls 3.6.2.** Zero runtime `libssl` /
+  `libcrypto` / `mbedtls` DLL dependency. Verified via
+  `dumpbin /dependents`: only KERNEL32, WS2_32, bcrypt, MSVCP140,
+  VCRUNTIME, and Windows ucrt `api-ms-win-crt-*` show up.
+- **`openads_serverd --port <N>`** plus an explicit "port 6262 is
+  the SAP Advantage Database Server default" hint when the bind
+  clashes with a running ADS service.
+- **`tools/bench/README.md`** documents that `openads_bench`
+  synthesises its own three-column DBF (`ID N(8,0)`, `TAG C(4)`,
+  `AMT N(8,2)`) on each run from a fixed seed; nothing is shipped,
+  fully reproducible.
 
 ## 1.0.0-rc6 — 2026-05-07
 

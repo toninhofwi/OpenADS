@@ -6,7 +6,7 @@ nav_order: 4
 permalink: /en/wire-protocol/
 ---
 
-# OpenADS Wire Protocol — v0.3.6
+# OpenADS Wire Protocol — v1.0.0-rc22
 
 This document specifies the OpenADS-native wire protocol spoken
 between an OpenADS client (`ace64.dll` opened with a
@@ -22,9 +22,9 @@ covered by the Advantage SDK / ACE EULA.
 
 This spec is the canonical reference for downstream consumers
 that want to write a non-C++ client (Python, Go, Rust, Harbour
-extension hosts) without reading the C++ source. It freezes the
-on-the-wire byte layout for **v0.3.6**; future revisions will
-note any opcode changes in this file.
+extension hosts) without reading the C++ source. The on-the-wire
+byte layout has only grown — opcode bytes are stable; new opcodes
+get appended.
 
 ---
 
@@ -32,10 +32,19 @@ note any opcode changes in this file.
 
 - **TCP/IP** over an arbitrary port (no IANA allocation; the
   server binds to whatever its CLI / API caller picks). The
-  reference daemon (`openads_serverd`) defaults to `127.0.0.1:6262`.
-- **Plaintext** today (`tcp://...`). The `tls://...` URI scheme is
-  reserved but currently returns `AE_FUNCTION_NOT_AVAILABLE`
-  (5004). Real TLS lands in v0.4.0.
+  reference daemon (`openads_serverd`) defaults to
+  `127.0.0.1:6262`.
+- **Plaintext** (`tcp://...`) or **TLS** (`tls://...`). The TLS
+  transport landed in v0.4.0 (M12.12 / M12.13) via vendored
+  `mbedtls 3.6 LTS` (Apache-2.0, statically linked since v1.0.0-rc8 —
+  no runtime `libssl` / `libcrypto` / `mbedtls` DLL dependency).
+- **No multiplexing.** One connection = one session = one logical
+  database connection. Statements + cursors are scoped to the
+  session; multiple parallel SQL queries on the same TCP
+  connection are serialised by the client mutex.
+- **Nagle disabled** (`TCP_NODELAY`, M12.20 / v1.0.0-rc18) — the
+  wire is strict ping-pong, so Nagle's accumulation delay was pure
+  latency tax.
 - **No multiplexing.** One connection = one session = one logical
   database connection. Statements + cursors are scoped to the
   session; multiple parallel SQL queries on the same TCP
@@ -134,6 +143,42 @@ The byte values are stable; new opcodes only get appended.
 | `FlushTableAck`     | `0x5B` | S→C |                                | M12.6 |
 | `Reindex`           | `0x60` | C→S | Rebuild bound indexes          | M12.8 |
 | `ReindexAck`        | `0x61` | S→C |                                | M12.8 |
+| `DescribeTable`     | `0x62` | C→S | Schema in one round-trip       | M12.14 |
+| `DescribeTableAck`  | `0x63` | S→C | Column list + types            | M12.14 |
+| `FetchCurrentRow`   | `0x64` | C→S | Read whole current row         | M12.17 |
+| `FetchCurrentRowAck`| `0x65` | S→C | Full record buffer             | M12.17 |
+| `GotoBottom`        | `0x66` | C→S |                                | M12.14 |
+| `GotoBottomAck`     | `0x67` | S→C |                                | M12.14 |
+| `LockRecord`        | `0x68` | C→S | Single record byte-range lock  | M12.15 |
+| `LockRecordAck`     | `0x69` | S→C |                                | M12.15 |
+| `UnlockRecord`      | `0x6A` | C→S |                                | M12.15 |
+| `UnlockRecordAck`   | `0x6B` | S→C |                                | M12.15 |
+| `LockTable`         | `0x6C` | C→S | Whole-table lock               | M12.15 |
+| `LockTableAck`      | `0x6D` | S→C |                                | M12.15 |
+| `UnlockTable`       | `0x6E` | C→S |                                | M12.15 |
+| `UnlockTableAck`    | `0x6F` | S→C |                                | M12.15 |
+| `Pack`              | `0x70` | C→S | Compact deleted rows           | M12.15 |
+| `PackAck`           | `0x71` | S→C |                                | M12.15 |
+| `Zap`               | `0x72` | C→S | Empty table                    | M12.15 |
+| `ZapAck`            | `0x73` | S→C |                                | M12.15 |
+| `SetAOF`            | `0x74` | C→S | Install Rushmore filter        | M12.15 |
+| `SetAOFAck`         | `0x75` | S→C | OptLevel + opt-bitmap meta     | M12.15 |
+| `ClearAOF`          | `0x76` | C→S |                                | M12.15 |
+| `ClearAOFAck`       | `0x77` | S→C |                                | M12.15 |
+| `OpenIndex`         | `0x78` | C→S | Open `.cdx` / `.ntx` index     | M12.16 |
+| `OpenIndexAck`      | `0x79` | S→C | Wire index-id                  | M12.16 |
+| `CloseIndex`        | `0x7A` | C→S |                                | M12.16 |
+| `CloseIndexAck`     | `0x7B` | S→C |                                | M12.16 |
+| `Seek`              | `0x7C` | C→S | Index key seek (hit / miss)    | M12.16 |
+| `SeekAck`           | `0x7D` | S→C | Found flag + recno             | M12.16 |
+| `CreateIndex`       | `0x7E` | C→S | CDX-on-the-wire `CREATE INDEX` | M12.16b |
+| `CreateIndexAck`    | `0x7F` | S→C |                                | M12.16b |
+| `SetOrder`          | `0x80` | C→S | Switch active order by handle  | M12.16c |
+| `SetOrderAck`       | `0x81` | S→C |                                | M12.16c |
+| `SetOrderByName`    | `0x82` | C→S | Switch active order by tag name| M12.16c |
+| `SetOrderByNameAck` | `0x83` | S→C |                                | M12.16c |
+| `GetLastTableUpdate`| `0x84` | C→S | DBF header last-update stamp   | M12.24 |
+| `GetLastTableUpdateAck` | `0x85` | S→C | Date as `YYYYMMDD` bytes   | M12.24 |
 | `Error`             | `0xFF` | S→C | Any failure                    | M12.3 (M12.10 for code prefix) |
 
 ## 5. Payload formats
@@ -146,7 +191,9 @@ Notation:
 
 ### 5.1 Hello / HelloAck
 - Hello: empty.
-- HelloAck: `bytes` — server banner, e.g. `openads/0.3.6`.
+- HelloAck: `bytes` — server banner, e.g. `openads/1.0.0-rc22`.
+  Since v1.0.0-rc13 the banner is driven from `git describe`, so
+  it always reflects the actual build.
 
 ### 5.2 Connect / ConnectAck
 - Connect: `[u16 dlen][dir][u16 ulen][user][u16 plen][password]`
@@ -183,12 +230,17 @@ Notation:
   request. `nrows` is the number actually returned; may be less
   than `max_rows` (EOF or skip failure stops the walk early).
 
-### 5.8 GotoTop / GotoTopAck, Skip / SkipAck, GotoRecord / GotoRecordAck
-- GotoTop: `[u32 tid]`.
+### 5.8 GotoTop / GotoTopAck, GotoBottom / GotoBottomAck, Skip / SkipAck, GotoRecord / GotoRecordAck
+- GotoTop / GotoBottom: `[u32 tid]`.
 - Skip: `[u32 tid][u32 step_le]` (`step` is signed; transmit as
   little-endian raw u32 bits).
 - GotoRecord: `[u32 tid][u32 recno]`.
-- All three Acks are empty payload.
+- Acks **carry a row trailer** since M12.18 (v1.0.0-rc18):
+  `[u32 recno][u8 deleted][u32 row_buf_len][row_buf bytes]`. The
+  trailer is empty (length 0) only when the cursor lands at EOF /
+  Limbo. Clients that pre-date M12.18 can ignore extra bytes past
+  the prior 0-length frame — the wire codec passes the full payload
+  through.
 
 ### 5.9 GetField / GetFieldAck
 - GetField: `[u32 tid][bytes field_name]` (no length prefix —
@@ -202,8 +254,12 @@ Notation:
 - GetRecordCount: `[u32 tid]`. Ack: `[u32 record_count]`.
 - AtEOF: `[u32 tid]`. Ack: 1 byte (`0` = not EOF, `1` = EOF).
 
-### 5.11 AppendBlank, DeleteRecord, RecallRecord, FlushTable, Reindex
-- All five: `[u32 tid]`, ack empty.
+### 5.11 AppendBlank, DeleteRecord, RecallRecord, FlushTable, Reindex, Pack, Zap
+- All seven: `[u32 tid]`, ack empty.
+- `AppendBlank` since M12.23 / v1.0.0-rc19 auto-acquires a record
+  byte-range lock on the new row (ACE semantics for non-exclusive
+  tables — X#'s `GoHot` refuses to write a record it sees as
+  unlocked).
 
 ### 5.12 SetField / SetFieldAck
 - SetField: `[u32 tid][u16 namelen][name_bytes][value_bytes]`.
@@ -223,9 +279,61 @@ Notation:
 - `message` is a human-readable diagnostic; not stable across
   versions, only for debugging / logs.
 
+### 5.14 DescribeTable / DescribeTableAck (M12.14)
+- DescribeTable: `[u32 tid]`.
+- Ack: `[u8 ncols][per col: u8 nlen, name, u8 type, u16 len, u8 dec]`.
+- Client caches the result on `RemoteTable` so the entire field-
+  metadata API (`AdsGetNumFields`, `AdsGetFieldName/Type/Length/
+  Decimals`) costs one round-trip per opened table.
+
+### 5.15 FetchCurrentRow / FetchCurrentRowAck (M12.17)
+- C→S: `[u32 tid]`.
+- Ack: same row-trailer layout as the navigation acks (§5.8):
+  `[u32 recno][u8 deleted][u32 row_buf_len][row_buf bytes]`.
+- The client caches the row buffer and serves every cell read
+  (`AdsGetField` / `AdsGetLong` / `AdsGetDouble` / `AdsGetJulian`)
+  out of the cache until the next navigation, collapsing W cells
+  per row to 1 RTT.
+
+### 5.16 Lock / Unlock (M12.15)
+- `LockRecord` / `UnlockRecord`: `[u32 tid][u32 recno]`. `recno == 0`
+  means "current record" (M12.23 / rc19).
+- `LockTable` / `UnlockTable`: `[u32 tid]`. Ack empty.
+
+### 5.17 SetAOF / ClearAOF / GetAOFOptLevel (M12.15)
+- `SetAOF`: `[u32 tid][bytes cond]` — cond is the Clipper-style
+  AOF expression text (`TAG = 'AAAA'`, `AGE BETWEEN 25 AND 40`, …).
+- `SetAOFAck`: `[u32 opt_level]` (`0` NONE, `1` PART, `2` FULL).
+- `ClearAOF`: `[u32 tid]`, ack empty.
+- Non-optimisable expressions (since M12.24 / rc21) return
+  `opt_level = 0` rather than an Error frame, matching ACE.
+
+### 5.18 OpenIndex / CloseIndex / Seek / CreateIndex (M12.16, M12.16b)
+- `OpenIndex`: `[u32 tid][bytes index_path]`.
+- `OpenIndexAck`: `[u32 wire_index_id]`. Server promotes an ABI
+  index handle in `tbls_h` and syncs the engine cursor.
+- `CloseIndex`: `[u32 wire_index_id]`, ack empty.
+- `Seek`: `[u32 tid][u32 hindex][u8 soft][u8 last][u16 klen][key]`.
+- `SeekAck`: `[u8 found][u32 recno]`.
+- `CreateIndex`: `[u32 tid][u16 tlen][tag][u16 elen][expr][u32 flags]`
+  (flags = `ADS_DESCENDING` / `ADS_UNIQUE` / `ADS_COMPOUND` /
+  `ADS_DOUBLEKEY`).
+- Ack: empty.
+
+### 5.19 SetOrder / SetOrderByName (M12.16c)
+- `SetOrder`: `[u32 tid][u32 hindex]` — `hindex == 0` clears order.
+- `SetOrderByName`: `[u32 tid][bytes tag_name]`.
+- Both acks empty.
+
+### 5.20 GetLastTableUpdate / Ack (M12.24)
+- C→S: `[u32 tid]`.
+- Ack: `[bytes date_str]` — 8 bytes `YYYYMMDD` (raw, no format
+  applied; client renders via the process-wide date format set by
+  `AdsSetDateFormat`).
+
 ## 6. Versioning
 
-- This spec covers OpenADS **v0.3.6**. Bumps will append new
+- This spec covers OpenADS **v1.0.0-rc22**. Bumps append new
   opcodes and document them here without breaking existing ones.
 - Clients can probe the server version via `Hello` → the banner
   string is `openads/<semver>`.
@@ -239,7 +347,8 @@ Notation:
   `AE_INTERNAL_ERROR` 5000 with message `peer closed connection`
   — the wire layer bubbles this up via `recv_exact`.
 - `AE_FUNCTION_NOT_AVAILABLE` 5004 from `Connect` means the URI
-  scheme isn't supported (e.g. `tls://` until v0.4.0).
+  scheme isn't supported, or the server was built without the
+  matching transport (rare since TLS shipped in v0.4.0).
 
 ## 8. Reference impls
 
@@ -247,9 +356,11 @@ Notation:
   `tools/serverd/openads_serverd` CLI.
 - **Client**: `src/network/client.{h,cpp}` (`RemoteConnection`)
   + the dual-mode dispatch in `src/abi/ace_exports.cpp`'s
-  `AdsConnect60` for the public `tcp://` URI integration.
+  `AdsConnect60` for the public `tcp://` / `tls://` URI
+  integration.
 - **Transport abstraction**: `src/network/transport.h` defines
-  the `ITransport` polymorphic surface (M12.13). PlainTransport
-  is the only concrete impl today; v0.4.0 adds `TlsTransport`.
+  the `ITransport` polymorphic surface (M12.13). Concrete impls:
+  `PlainTransport` (TCP) and `TlsTransport` (mbedtls, vendored
+  statically since v1.0.0-rc8).
 - **Wire codec**: `src/network/wire.{h,cpp}` (frame
   encode / decode + `Opcode` enum).

@@ -43,17 +43,29 @@ NtxDriver    .dbf + .ntx + .dbt    (Clipper)
 VfpDriver    .dbf + .cdx + .fpt    (Visual FoxPro)
 ```
 
-## Servidor Phase 2
+## Servidor daemon
 
 `openads_serverd` roda L2–L5 in-process e os expõe via o
-protocolo de fio nativo OpenADS sobre TCP. A mesma DLL que
-fala com um diretório local também fala com um servidor remoto
-via URI `tcp://host:porta/<dir>`.
+protocolo de fio nativo OpenADS sobre TCP (`tcp://` em claro ou
+`tls://` com TLS, desde v0.4.0). A mesma DLL que fala com um
+diretório local também fala com um servidor remoto via URI
+`tcp://host:porta/<dir>`.
 
-## Studio Phase 2 (console web)
+## Studio (console web)
 
-Quando o daemon é compilado com `OPENADS_WITH_HTTP=ON`, um
-servidor HTTP embutido (cpp-httplib) serve uma SPA de
-administração em outra porta. Cada requisição REST abre uma
-conexão ABI curta — o console web é **outro consumidor do ABI
-público**, igual a uma app Harbour.
+`OPENADS_WITH_HTTP=ON` é o padrão de build desde v1.0.0-rc20.
+A mesma SPA Studio é servida por dois hosts:
+
+- **Modo Remote Server** — embutida em `openads_serverd.exe`,
+  servindo o wire e o HTTP em paralelo.
+- **Modo LocalServer** (desde v1.0.0-rc9) — embutida em
+  `ace64.dll` / `ace32.dll`. Uma app Harbour / X# / Clipper que
+  carregue a DLL recebe o console Studio dentro do próprio
+  processo. Três exports exclusivos controlam: `AdsStudioStart`
+  / `Stop` / `Port`, mais auto-start por
+  `OPENADS_STUDIO_PORT` desde `DllMain`. O header do Studio
+  traz um badge de modo (desde rc10) que distingue os dois
+  modos via campo `mode` de `/api/health`.
+
+Cada requisição REST abre uma conexão ABI curta — o console é
+**outro consumidor do ABI público**, igual a uma app Harbour.

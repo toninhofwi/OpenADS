@@ -46,18 +46,32 @@ Each driver implements the same trait, so `Table::open(path)`
 returns a polymorphic handle the rest of L4 / L3 doesn't have
 to specialise on.
 
-## Phase 2 server
+## Server daemon
 
 `openads_serverd` runs L2–L5 in-process and exposes them over
-the OpenADS-native wire protocol on a TCP port. The same DLL
-that talks to a local data dir can also speak to a remote
+the OpenADS-native wire protocol on a TCP port (cleartext
+`tcp://` or TLS `tls://`, since v0.4.0). The same DLL that
+talks to a local data dir also speaks to a remote
 `openads_serverd` via a `tcp://host:port/<dir>` URI — see
 [Wire protocol](../wire-protocol/) for the on-the-wire bytes.
 
-## Phase 2 Studio (web console)
+## Studio (web console)
 
-When the daemon is built with `OPENADS_WITH_HTTP=ON`, an
-embedded HTTP server (cpp-httplib) serves a single-page admin
-UI on a separate port. Each REST request opens a short-lived
-ABI connection, so the web console is **just another consumer
-of the public ABI** — same as a Harbour app.
+`OPENADS_WITH_HTTP=ON` is the build default since v1.0.0-rc20.
+The same Studio SPA is served by two hosts:
+
+- **Remote Server mode** — embedded in `openads_serverd.exe`,
+  serving the wire protocol and the HTTP console side-by-side.
+- **LocalServer mode** (since v1.0.0-rc9) — embedded in
+  `ace64.dll` / `ace32.dll` itself. A Harbour / X# / Clipper
+  app that loads the OpenADS DLL gets the Studio web console
+  in its own process. Three OpenADS-only exports drive it —
+  `AdsStudioStart` / `Stop` / `Port` — plus an
+  `OPENADS_STUDIO_PORT` env-var auto-start hook from
+  `DllMain`. Studio's header carries a mode badge (since rc10)
+  that distinguishes the two modes via `/api/health`'s `mode`
+  field.
+
+Each REST request opens a short-lived ABI connection, so the
+console is **just another consumer of the public ABI** — same
+as a Harbour app.

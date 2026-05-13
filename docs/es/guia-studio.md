@@ -26,11 +26,14 @@ en dos modos:
 
 ## Habilitar + arrancar — Remote Server (`openads_serverd`)
 
-```sh
-cmake -S . -B build/http -DOPENADS_WITH_HTTP=ON
-cmake --build build/http --target openads_serverd --config Release
+HTTP va **activado por defecto** desde v1.0.0-rc20 — no requiere
+flag CMake extra. Pasa `-DOPENADS_WITH_HTTP=OFF` para excluirlo.
 
-./build/http/tools/serverd/openads_serverd \
+```sh
+cmake --preset default
+cmake --build build/default --target openads_serverd --config Release
+
+./build/default/tools/serverd/openads_serverd \
     --port 6262 \
     --http-port 6263 \
     --data /ruta/a/tus/datos \
@@ -41,10 +44,11 @@ Después abre `http://<host-servidor>:6263/`.
 
 ## Habilitar + arrancar — LocalServer (in-process)
 
-Studio se compila dentro de `openads_ace` (es decir, `ace64.dll` /
-`ace32.dll`) cuando el build se configura con
-`-DOPENADS_WITH_HTTP=ON`. Tres entry points propios de OpenADS
-controlan la consola in-process:
+Desde v1.0.0-rc9 Studio se compila dentro de `openads_ace` (es
+decir, `ace64.dll` / `ace32.dll`). HTTP va activado por defecto
+desde v1.0.0-rc20, así que el ZIP de release ya trae una DLL
+con Studio. Tres entry points propios de OpenADS controlan la
+consola in-process:
 
 ```c
 UNSIGNED32 AdsStudioStart(UNSIGNED16 usPort, UNSIGNED8* pucDataDir);
@@ -67,7 +71,7 @@ AdsStudioStop();
 `AdsStudioStart` devuelve `AE_SUCCESS` (0) si todo va bien,
 `AE_INTERNAL_ERROR` si el bind / listen falla (puerto ocupado o
 `pucDataDir == NULL`), o `AE_FUNCTION_NOT_AVAILABLE` si la DLL se
-compiló sin `-DOPENADS_WITH_HTTP=ON`.
+compiló con `-DOPENADS_WITH_HTTP=OFF`.
 
 **2) Auto-start por variable de entorno.** Define
 `OPENADS_STUDIO_PORT=<puerto>` antes de lanzar la app anfitriona
@@ -269,3 +273,13 @@ prompt nativo. Sin `--http-user` la consola es abierta.
 | `studio.web.0.7`   | Sidecar list + server-stats + DBF upload + refresh. |
 | `studio.web.0.8`   | HTTP Basic auth + table download + theme toggle. |
 | `studio.web.0.9`   | Browse sort + filter + i18n (EN / ES / PT). |
+| `studio.web.0.10`  | Selección múltiple + queries guardadas + resaltado SQL. |
+| `studio.web.0.11`  | Botón kill-session + export JSON. |
+| `studio.web.0.12`  | Backup ZIP del directorio de datos activo. |
+| `studio.web.0.13`  | Override tipo tabla + memo hex viewer. |
+| `studio.web.0.14`  | Banner host OS / arch / compilador. |
+| rc9                | **Studio embebido (LocalServer)** — misma consola en `ace64.dll` / `ace32.dll`; `AdsStudioStart` / `Stop` / `Port` + auto-start por `OPENADS_STUDIO_PORT`. |
+| rc10               | **Badge de modo** — 🏠 LocalServer / 🌐 Remote Server en el header (campo `mode` de `/api/health`). |
+| rc12               | **Toolbar AOF (Rushmore) + badge OptLevel** en la pestaña Browse. |
+| rc13               | **Botón `▶ Demo` guiado** + chips AOF funcionales. |
+| rc20               | `OPENADS_WITH_HTTP=ON` pasa a ser el default. |

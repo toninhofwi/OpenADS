@@ -15,24 +15,37 @@ de banco de dados compatível com ADS. Funciona como
 fazem link com `contrib/rddads` continuam funcionando sem
 recompilar.
 
+Release atual: **v1.0.0-rc22**.
+
 ## Conteúdo
 
 - **[Primeiros passos](primeiros-passos/)** — instalação,
   primeiro build, smoke test.
 - **[Arquitetura](arquitetura/)** — arquitetura de cinco
   camadas (ABI / Sessão / SQL / Motor / Plataforma).
+- **[Protocolo wire](/OpenADS/en/wire-protocol/)** — spec do
+  wire TCP / TLS nativo OpenADS (frame, opcodes, payload, erros,
+  versionamento). *Disponível em inglês.*
 - **[Dicionário de dados](dicionario-dados/)** — formato `.add`
   clean-room + API `engine::DataDict` + superfície REST.
 - **[Studio (console web)](guia-studio/)** — administração do
-  motor a partir de qualquer navegador através do console HTTP
-  embutido em `openads_serverd`.
-- **[Benchmarks](benchmarks/)** — números cross-platform SQL
-  (Windows MSVC / Linux clang -O3 / macOS AppleClang).
+  motor a partir de qualquer navegador (modo Remote Server *ou*
+  LocalServer).
+- **[Benchmarks](benchmarks/)** — SQL local + AOF (Rushmore) +
+  repaint xbrowse sobre o wire.
+- **[Compat rddads / X# RDD](rddads-compat/)** — superfície de
+  compatibilidade Harbour `contrib/rddads` e X# `AXDBFCDX`
+  (rc19 M12.22 / M12.23).
+- **[Implantação como serviço](servico-implantacao/)** — rodar
+  `openads_serverd` como serviço Windows / unit systemd /
+  launchd plist (rc14).
 - **[Implantação TLS](tls-implantacao/)** — terminar HTTPS
   na frente do Studio com Caddy / nginx / stunnel / túnel SSH.
 - **[Compatibilidade de ordinais](ordinal-compat/)** — resolver
   o erro Win "ordinal NNN não encontrado" quando a import
   table da app referencia ordinais SAP.
+- **[Issues conhecidos](/OpenADS/known-issues/)** — items em
+  aberto. *Disponível em inglês.*
 
 ## Outros idiomas
 
