@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "generated_for": "v1.0.0-rc22",
+  "project": "OpenADS",
+  "summary": "Canonical end-to-end flows through the five-layer OpenADS engine (ABI / Session / SQL / Engine / Platform), plus its wire protocol and Studio HTTP console.",
+  "layers": [
+    { "id": "L1", "name": "ABI",      "owns": "extern \"C\" Ads* exports (ace32/64.dll, libace.so/.dylib); OEM/ANSI/UTF-8/UTF-16 conversion; ACE error code translation." },
+    { "id": "L2", "name": "Session",  "owns": "Connection, Statement, HandleRegistry, Tx stack, AEP procedure registry, encryption key." },
+    { "id": "L3", "name": "SQL",      "owns": "Lexer, Parser, Resolver, Planner, Executor; AEP host; xBase UDFs." },
+    { "id": "L4", "name": "Engine",   "owns": "Table, Index, MemoStore, Cursor, LockMgr, TxLog/WAL, Catalog; Driver trait." },
+    { "id": "L5", "name": "Platform", "owns": "File, mmap, byte-range locks, sockets, DLL loader (Win32 + POSIX)." }
+  ],
+  "drivers": [
+    { "id": "AdtDriver", "files": ".adt + .adm + .adi",       "notes": "Proprietary ADS format — out of scope." },
+    { "id": "CdxDriver", "files": ".dbf + .cdx + .fpt",       "notes": "FoxPro compound index." },
+    { "id": "NtxDriver", "files": ".dbf + .ntx + .dbt",       "notes": "Clipper single-tag index." },
+    { "id": "VfpDriver", "files": ".dbf + .cdx + .fpt",       "notes": "Visual FoxPro variants." }
+  ],
+  "flows": [
+    {
+      "id": "local-dbf",
+      "title": "Local DBF access (in-process)",
+      "category": "core",
+      "summary": "Harbour / Clipper / X# / C app links contrib/rddads (or calls AdsConnect60 directly) against ace64.dll; OpenADS opens DBF + CDX + FPT siblings on disk and serves rows entirely in the host process.",
+      "actors": ["Host app (Harbour/Clipper/X#)", "ace64.dll (L1 ABI)", "Session (L2)", "Driver (L4)", "Platform (L5)", "DBF/CDX/FPT files"],
+      "trigger": "AdsConnect60(\"c:\\\\app\\\\data\", ...)",
+      "steps": [
+        { "from": "Host app",  "to": "L1 ABI",   "action": "AdsConnect60(path)",        "layer": "L1" },
+        { "from": "L1 ABI",    "to": "L2",       "action": "Connection::open(dir)",     "layer": "L2" },
+        { "from": "Host app",  "to": "L1 ABI",   "action": "AdsOpenTable(\"orders.dbf\", \"orders.cdx\", ...)", "layer": "L1" },
+        { "from": "L1 ABI",    "to": "L4",       "action": "Table::open(path) → CdxDriver",  "layer": "L4" },
+        { "from": "L4",        "to": "L5",       "action": "mmap(orders.dbf), open(orders.cdx)", "layer": "L5" },
+        { "from": "L4",        "to": "L4",       "action": "auto-bind sibling .cdx (rc13) — every tag navigable without explicit AdsOpenIndex60", "layer": "L4" },
+        { "from": "Host app",  "to": "L1 ABI",   "action": "AdsGotoTop / AdsSkip / AdsGetField", "layer": "L1" },
+        { "from": "L1 ABI",    "to": "L4",       "action": "Cursor walks current order; LockMgr serialises shared/exclusive byte-range locks", "layer": "L4" },
+        { "from": "L4",        "to": "L1 ABI",   "action": "column bytes (OEM/ANSI/UTF-8 conv on L1)", "layer": "L1" },
+        { "from": "Host app",  "to": "L1 ABI",   "action": "AdsCloseTable / AdsDisconnect", "layer": "L1" }
+      ],
+      "files_touched": ["src/abi/ace_*.cpp", "src/engine/connection.cpp", "src/engine/table.cpp", "src/drivers/cdx_driver.cpp"],
+      "notes": "Same DLL serves both this in-process mode and tcp:// remote mode — chosen by the URI shape passed to AdsConnect60."
+    },
+    {
+      "id": "remote-tcp",
+      "title": "Remote TCP access (openads_serverd)",
+      "category": "core",
+      "summary": "Same ace64.dll, given a tcp://host:port/<dir> URI, opens a TCP session to openads_serverd. The daemon runs L2–L5 in-process on the server box; the client DLL forwards every Ads* call as a wire-protocol opcode pair.",
+      "actors": ["Host app", "ace64.dll (RemoteConnection)", "TCP (TLS optional)", "openads_serverd", "Engine on server", "Files on server"],
+      "trigger": "AdsConnect60(\"tcp://host:6262/data\", ...)  or  \"tls://host:6262/data\"",
+      "steps": [
+        { "from": "Host app",      "to": "L1 ABI",      "action": "AdsConnect60(\"tcp://host:6262/data\", user, pw)", "layer": "L1" },
+        { "from": "L1 ABI",        "to": "RemoteConn",  "action": "URI parse → RemoteConnection; TCP_NODELAY set",   "layer": "L1" },
+        { "from": "RemoteConn",    "to": "Server",      "action": "Hello (0x01) → HelloAck (0x02) — optional banner", "layer": "wire" },
+        { "from": "RemoteConn",    "to": "Server",      "action": "Connect (0x10) {dir,user,pw} → ConnectAck (0x11)", "layer": "wire" },
+        { "from": "Host app",      "to": "L1 ABI",      "action": "AdsOpenTable / AdsGetField / AdsSkip / ...",       "layer": "L1" },
+        { "from": "L1 ABI",        "to": "RemoteConn",  "action": "Translate Ads* into OpenTable/Fetch/Skip/GetField opcodes", "layer": "wire" },
+        { "from": "Server",        "to": "Engine (L4)", "action": "Decode opcode, call ABI session, encode Ack frame", "layer": "L4" },
+        { "from": "Server",        "to": "RemoteConn",  "action": "Ack frames (FetchAck batches matrix of rows — M12.11)", "layer": "wire" },
+        { "from": "Host app",      "to": "L1 ABI",      "action": "AdsDisconnect → Disconnect (0x12), server closes socket", "layer": "L1" }
+      ],
+      "files_touched": ["src/network/remote_connection.cpp", "tools/serverd/openads_serverd.cpp", "src/network/server.cpp", "src/network/protocol.cpp"],
+      "notes": "Strict ping-pong frame format: BE u32 length, u8 opcode, payload. One TCP connection = one session = one engine::Connection. TLS plug-in transport since v0.4.0 via vendored static mbedtls."
+    },
+    {
+      "id": "sql",
+      "title": "SQL execution (L3 pipeline)",
+      "category": "core",
+      "summary": "AdsExecuteSQL / AdsPrepareSQL drives the L3 pipeline: Lexer → Parser → Resolver → Planner → Executor. The Executor builds a transient Cursor backed by L4 engine reads.",
+      "actors": ["Host app", "L1 ABI", "L3 Lexer", "L3 Parser", "L3 Resolver", "L3 Planner", "L3 Executor", "L4 Engine"],
+      "trigger": "AdsExecuteSQL(stmt, \"SELECT ... FROM ... WHERE ... ORDER BY ...\")",
+      "steps": [
+        { "from": "Host app",    "to": "L1 ABI",     "action": "AdsExecuteSQL(stmt, sql)",          "layer": "L1" },
+        { "from": "L1 ABI",      "to": "L2",         "action": "Statement::execute(sql)",            "layer": "L2" },
+        { "from": "L2",          "to": "L3 Lexer",   "action": "tokenize",                           "layer": "L3" },
+        { "from": "L3 Lexer",    "to": "L3 Parser",  "action": "build AST (joins, subqueries, CTEs, window fns)", "layer": "L3" },
+        { "from": "L3 Parser",   "to": "L3 Resolver","action": "bind names → table/column handles via Catalog", "layer": "L3" },
+        { "from": "L3 Resolver", "to": "L3 Planner", "action": "choose join order, push WHERE down, plan ORDER/GROUP", "layer": "L3" },
+        { "from": "L3 Planner",  "to": "L3 Executor","action": "materialise / stream rows; spill via L4 Cursor", "layer": "L3" },
+        { "from": "L3 Executor", "to": "L4",         "action": "Table::scan / Index::range / MemoStore::read", "layer": "L4" },
+        { "from": "L3 Executor", "to": "L2",         "action": "result cursor (wire returns cursor table-id; in-proc returns Statement-bound cursor)", "layer": "L2" },
+        { "from": "L2",          "to": "Host app",   "action": "AdsFetch / AdsGetField over the SQL cursor", "layer": "L1" }
+      ],
+      "files_touched": ["src/sql/lexer.cpp", "src/sql/parser.cpp", "src/sql/resolver.cpp", "src/sql/planner.cpp", "src/sql/executor.cpp"],
+      "notes": "Full Advantage SQL dialect — INNER/LEFT/RIGHT/FULL OUTER, correlated subqueries, GROUP BY+HAVING, UNION, window fns, CTEs, CASE, AEP-hosted stored procedures."
+    },
+    {
+      "id": "studio",
+      "title": "Studio web console (HTTP)",
+      "category": "tooling",
+      "summary": "The same Studio SPA is served by two hosts: openads_serverd (Remote Server mode) and ace64.dll itself (LocalServer mode). Each REST request opens a short-lived ABI connection — Studio is just another ABI consumer.",
+      "actors": ["Browser", "HttpConsole", "Short-lived AbiSession", "Engine (L4)"],
+      "trigger": "GET http://host:6263/  (or AdsStudioStart(8080, dir) in LocalServer mode)",
+      "steps": [
+        { "from": "Browser",     "to": "HttpConsole","action": "GET /api/health",                              "layer": "http" },
+        { "from": "HttpConsole", "to": "Browser",    "action": "JSON {mode: localserver|remote-server, data_dir, version}", "layer": "http" },
+        { "from": "Browser",     "to": "HttpConsole","action": "GET /api/tables → list",                       "layer": "http" },
+        { "from": "Browser",     "to": "HttpConsole","action": "GET /api/tables/<t>/schema → cols, type_name", "layer": "http" },
+        { "from": "Browser",     "to": "HttpConsole","action": "GET /api/tables/<t>/rows?start=0&count=N",     "layer": "http" },
+        { "from": "HttpConsole", "to": "AbiSession", "action": "AdsConnect60 + AdsOpenTable + walk + GetField",  "layer": "L1" },
+        { "from": "AbiSession",  "to": "Engine",     "action": "auto-binds sibling .cdx (rc13); decodes memo cells", "layer": "L4" },
+        { "from": "HttpConsole", "to": "Browser",    "action": "JSON rows (binary cells → {_b64, _size, _truncated})", "layer": "http" },
+        { "from": "Browser",     "to": "HttpConsole","action": "POST /api/sql {sql} → cursor result",          "layer": "http" }
+      ],
+      "files_touched": ["src/http/http_console.cpp", "src/abi/studio_extension.cpp"],
+      "notes": "Mode badge (rc10) distinguishes LocalServer (green 🏠) from Remote Server (blue 🌐) via /api/health's `mode` field. Default bind 127.0.0.1 to keep the console off the LAN unless opted in."
+    },
+    {
+      "id": "aof",
+      "title": "Advantage Optimized Filter (Rushmore / AOF)",
+      "category": "perf",
+      "summary": "AdsSetAOF parses an xBase/SQL-flavoured boolean cond, evaluates it once, installs a per-record bitmap, and walks only the visible set on subsequent Skip / GoTop. Index-accelerated leaves push the range scan into CDX / NTX.",
+      "actors": ["Host app", "L1 ABI", "AOF parser", "AOF evaluator", "Index (CDX/NTX)", "Cursor"],
+      "trigger": "AdsSetAOF(table, \"TAG='AAAA' .AND. AMT > 100\", ADS_AOF_ADD_RECORD)",
+      "steps": [
+        { "from": "Host app",   "to": "L1 ABI",      "action": "AdsSetAOF(cond)",                                "layer": "L1" },
+        { "from": "L1 ABI",     "to": "AOF parser",  "action": "tokenize cond (Clipper .AND./.T. + SQL keywords)", "layer": "L4" },
+        { "from": "AOF parser", "to": "AOF eval",    "action": "per-leaf: index-accelerated (Index::range_scan) or scan-decode", "layer": "L4" },
+        { "from": "AOF eval",   "to": "Cursor",      "action": "install bitmap → sorted recno_sequence_ (rc12)", "layer": "L4" },
+        { "from": "Host app",   "to": "L1 ABI",      "action": "AdsGetAOFOptLevel → FULL / PART / NONE",         "layer": "L1" },
+        { "from": "Host app",   "to": "L1 ABI",      "action": "AdsSkip / AdsGotoTop  (now O(M) over visible set)", "layer": "L1" },
+        { "from": "Host app",   "to": "L1 ABI",      "action": "AdsClearAOF → drop predicate + sequence in lockstep", "layer": "L1" }
+      ],
+      "files_touched": ["src/engine/aof.cpp", "src/engine/cursor.cpp", "src/drivers/cdx_index.cpp"],
+      "notes": "On 100k-row TAG eq-walk, rc12 sparse-bitmap Skip is 13.4× faster than rc10 full-scan baseline."
+    },
+    {
+      "id": "memo",
+      "title": "Memo / blob I/O (FPT / DBT / ADM)",
+      "category": "core",
+      "summary": "Memo columns are out-of-line in a sibling FPT / DBT / ADM file. GetField/SetField on an M/B/P/Q cell routes through MemoStore to fetch (or extend) the block chain.",
+      "actors": ["Host app", "L1 ABI", "MemoStore (L4)", "FPT/DBT/ADM file"],
+      "trigger": "AdsGetField(handle, \"NOTES\", buf, &len, ...)  or  AdsSetMemo(...)",
+      "steps": [
+        { "from": "Host app",   "to": "L1 ABI",     "action": "AdsGetField on memo col",                          "layer": "L1" },
+        { "from": "L1 ABI",     "to": "MemoStore",  "action": "block ptr from DBF row → MemoStore::read(block_id)", "layer": "L4" },
+        { "from": "MemoStore",  "to": "L5",         "action": "read N blocks from .fpt/.dbt/.adm (no 65 534-byte cap since rc4)", "layer": "L5" },
+        { "from": "MemoStore",  "to": "L1 ABI",     "action": "raw bytes; HTTP path may wrap as {_b64,_size,_truncated} if non-UTF-8", "layer": "L1" },
+        { "from": "Host app",   "to": "L1 ABI",     "action": "AdsSetMemo: extend chain, mark row dirty, write through (or hold for TxLog)", "layer": "L1" }
+      ],
+      "files_touched": ["src/engine/memo_store.cpp", "src/drivers/fpt_driver.cpp", "src/drivers/dbt_driver.cpp"],
+      "notes": "Validated bit-perfect at any size via openads_memo_stress (1.0 GB FPT, 12 000 rows × 2 fields, 0 mismatches)."
+    },
+    {
+      "id": "transaction",
+      "title": "ARIES transaction (BeginTx / Commit / Rollback)",
+      "category": "core",
+      "summary": "AdsBeginTransaction nests a frame on the Session's Tx stack. Mutations (AppendRecord, SetField, DeleteRecord, …) write redo/undo records to TxLog. Commit flushes; Rollback rewinds via undo chain.",
+      "actors": ["Host app", "L1 ABI", "Tx stack (L2)", "TxLog/WAL (L4)", "Table/Index/MemoStore (L4)"],
+      "trigger": "AdsBeginTransaction(conn)",
+      "steps": [
+        { "from": "Host app", "to": "L1 ABI",  "action": "AdsBeginTransaction",                              "layer": "L1" },
+        { "from": "L1 ABI",   "to": "L2",      "action": "push TxFrame; pin Tables for tx scope",            "layer": "L2" },
+        { "from": "Host app", "to": "L1 ABI",  "action": "AdsAppendRecord / AdsSetField / AdsDeleteRecord",  "layer": "L1" },
+        { "from": "L1 ABI",   "to": "L4",      "action": "mutate page; append (lsn, before, after) to TxLog", "layer": "L4" },
+        { "from": "Host app", "to": "L1 ABI",  "action": "AdsCommitTransaction",                              "layer": "L1" },
+        { "from": "L2",       "to": "L4",      "action": "TxLog::commit → fsync; release locks; pop frame",   "layer": "L4" },
+        { "from": "Host app", "to": "L1 ABI",  "action": "(alt path) AdsRollbackTransaction",                 "layer": "L1" },
+        { "from": "L2",       "to": "L4",      "action": "TxLog::rollback → replay undo chain in reverse",    "layer": "L4" }
+      ],
+      "files_touched": ["src/engine/tx_log.cpp", "src/engine/connection.cpp"],
+      "notes": "Crash recovery on next connect: TxLog::recover replays winners, undoes losers via the LSN tail."
+    },
+    {
+      "id": "wire-session",
+      "title": "Wire-protocol session opcodes (TCP/TLS)",
+      "category": "protocol",
+      "summary": "Concrete on-the-wire opcode sequence for a one-table read session. Every frame is `BE u32 length` + `u8 opcode` + payload.",
+      "actors": ["Client (ace64.dll RemoteConnection)", "Server (openads_serverd)"],
+      "trigger": "AdsConnect60(\"tcp://host:6262/data\") followed by AdsOpenTable + walk + AdsCloseTable",
+      "steps": [
+        { "from": "Client", "to": "Server", "action": "Hello (0x01)",                              "layer": "wire" },
+        { "from": "Server", "to": "Client", "action": "HelloAck (0x02) — banner \"openads/<ver>\"", "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "Connect (0x10) {dir, user, pw}",            "layer": "wire" },
+        { "from": "Server", "to": "Client", "action": "ConnectAck (0x11) — \"connected:<dir>\"",   "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "OpenTable (0x20) {table, index}",            "layer": "wire" },
+        { "from": "Server", "to": "Client", "action": "OpenTableAck (0x21) — wire table-id",        "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "DescribeTable (0x62) — schema in one round-trip (M12.14)", "layer": "wire" },
+        { "from": "Server", "to": "Client", "action": "DescribeTableAck (0x63) — column list",      "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "Fetch (0x32) {start, count} — batched rows (M12.11)", "layer": "wire" },
+        { "from": "Server", "to": "Client", "action": "FetchAck (0x33) — row matrix",                "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "Skip (0x42) ±N  /  GotoTop (0x40)",           "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "GetField (0x44) at cursor",                   "layer": "wire" },
+        { "from": "Server", "to": "Client", "action": "GetFieldAck (0x45) — column bytes",           "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "CloseTable (0x22) → CloseTableAck (0x23)",    "layer": "wire" },
+        { "from": "Client", "to": "Server", "action": "Disconnect (0x12) — server closes socket",    "layer": "wire" }
+      ],
+      "files_touched": ["src/network/protocol.cpp", "src/network/server.cpp", "src/network/remote_connection.cpp", "docs/wire-protocol.md"],
+      "notes": "TCP_NODELAY enabled since M12.20 (rc18) — wire is strict ping-pong, Nagle accumulation was pure latency tax."
+    }
+  ]
+}

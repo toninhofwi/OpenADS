@@ -1,0 +1,234 @@
+---
+title: Main flows
+layout: none
+parent: Home (EN)
+nav_order: 9
+permalink: /en/flows/
+---
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenADS — Main flows</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #1c2230;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #79c0ff;
+    --warn: #d29922;
+    --ok: #3fb950;
+    --pink: #f778ba;
+    --L1: #79c0ff;
+    --L2: #a5d6ff;
+    --L3: #f778ba;
+    --L4: #ffa657;
+    --L5: #7ee787;
+    --wire: #d2a8ff;
+    --http: #56d4dd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+                font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                font-size: 14px; line-height: 1.45; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { padding: 22px 28px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
+  header p  { margin: 0; color: var(--muted); font-size: 13px; }
+  header .meta { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  header .meta code { color: var(--accent2); }
+  main { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 96px); }
+  nav.flows-list { border-right: 1px solid var(--border); background: var(--panel);
+                   padding: 14px 0; overflow-y: auto; max-height: calc(100vh - 96px); position: sticky; top: 0; }
+  nav.flows-list h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+                      color: var(--muted); margin: 16px 18px 6px; }
+  nav.flows-list button { display: block; width: 100%; text-align: left; padding: 8px 18px;
+                          background: transparent; color: var(--text); border: none; border-left: 3px solid transparent;
+                          cursor: pointer; font: inherit; }
+  nav.flows-list button:hover  { background: var(--panel2); }
+  nav.flows-list button.active { background: var(--panel2); border-left-color: var(--accent); color: var(--accent2); }
+  nav.flows-list .cat { font-size: 11px; color: var(--muted); margin-left: 6px; }
+  section.flow { padding: 22px 28px; overflow-y: auto; max-height: calc(100vh - 96px); }
+  section.flow h2 { margin: 0 0 6px; font-size: 19px; }
+  section.flow .summary { color: var(--muted); margin: 0 0 18px; max-width: 900px; }
+  section.flow .trigger { background: var(--panel); border: 1px solid var(--border);
+                          padding: 8px 12px; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                          font-size: 12.5px; color: var(--accent2); margin-bottom: 18px; max-width: 900px; }
+  section.flow h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em;
+                    color: var(--muted); margin: 22px 0 10px; }
+  ol.steps { list-style: none; padding: 0; margin: 0; max-width: 1000px; }
+  ol.steps li { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+                padding: 10px 12px; margin: 0 0 8px; display: grid;
+                grid-template-columns: 24px minmax(120px, max-content) 24px minmax(120px, max-content) 1fr 50px;
+                gap: 10px; align-items: center; }
+  ol.steps li .n   { color: var(--muted); font-size: 11px; text-align: right; }
+  ol.steps li .from, ol.steps li .to { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                                       font-size: 12px; color: var(--accent2); }
+  ol.steps li .arrow { color: var(--muted); }
+  ol.steps li .action { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                        font-size: 12.5px; word-break: break-word; }
+  ol.steps li .layer { font-size: 10.5px; padding: 2px 6px; border-radius: 10px;
+                       background: var(--panel2); color: var(--muted); text-align: center; justify-self: end; }
+  ol.steps li.lyr-L1   { border-left: 3px solid var(--L1); }
+  ol.steps li.lyr-L2   { border-left: 3px solid var(--L2); }
+  ol.steps li.lyr-L3   { border-left: 3px solid var(--L3); }
+  ol.steps li.lyr-L4   { border-left: 3px solid var(--L4); }
+  ol.steps li.lyr-L5   { border-left: 3px solid var(--L5); }
+  ol.steps li.lyr-wire { border-left: 3px solid var(--wire); }
+  ol.steps li.lyr-http { border-left: 3px solid var(--http); }
+  ul.actors, ul.files { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px; max-width: 1000px; }
+  ul.actors li, ul.files li { background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+                              padding: 3px 10px; font-size: 12px; color: var(--muted);
+                              font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  ul.files li { border-radius: 4px; }
+  .notes { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--warn);
+           padding: 10px 14px; margin: 14px 0 0; border-radius: 4px; max-width: 1000px; color: var(--muted); }
+  details.layers { margin: 18px 28px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+  details.layers summary { padding: 10px 14px; cursor: pointer; font-size: 13px; color: var(--accent2); }
+  details.layers table { width: 100%; border-collapse: collapse; }
+  details.layers th, details.layers td { padding: 8px 14px; border-top: 1px solid var(--border); text-align: left; font-size: 12.5px; }
+  details.layers th { color: var(--muted); font-weight: 500; }
+  details.layers code { color: var(--accent2); }
+  footer { padding: 14px 28px; border-top: 1px solid var(--border); background: var(--panel);
+           color: var(--muted); font-size: 12px; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    nav.flows-list { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+    ol.steps li { grid-template-columns: 1fr; gap: 4px; }
+    ol.steps li .layer { justify-self: start; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>OpenADS — main flows</h1>
+  <p>End-to-end call paths through the five-layer engine, the TCP/TLS wire protocol, and the Studio HTTP console.</p>
+  <div class="meta">
+    Data source: <a href="../assets/flows.json"><code>docs/assets/flows.json</code></a> ·
+    See also: <a href="architecture/">Architecture</a> · <a href="wire-protocol/">Wire protocol</a> · <a href="studio-guide/">Studio</a>
+  </div>
+</header>
+
+<details class="layers">
+  <summary>Five-layer reference</summary>
+  <table>
+    <thead><tr><th>Layer</th><th>Owns</th></tr></thead>
+    <tbody id="layers-tbody"></tbody>
+  </table>
+</details>
+
+<main>
+  <nav class="flows-list" id="flows-list" aria-label="Flow index"></nav>
+  <section class="flow" id="flow-detail" aria-live="polite"></section>
+</main>
+
+<footer>
+  Generated against <span id="version-tag">v1.0.0-rc22</span> ·
+  Apache License 2.0 · OpenADS is an independent project, not affiliated with SAP SE.
+</footer>
+
+<script>
+(async function () {
+  const detail = document.getElementById('flow-detail');
+  const candidates = ['../assets/flows.json', '/OpenADS/assets/flows.json', '../../assets/flows.json'];
+  let data, lastErr;
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { cache: 'no-cache' });
+      if (!r.ok) { lastErr = new Error(url + ' → HTTP ' + r.status); continue; }
+      data = await r.json();
+      break;
+    } catch (e) { lastErr = e; }
+  }
+  if (!data) {
+    detail.innerHTML = '<h2>Could not load flow data</h2>' +
+      '<p class="summary">Open <a href="../assets/flows.json"><code>docs/assets/flows.json</code></a> directly. ' +
+      'When viewed from <code>file://</code>, the browser blocks fetch — use the rendered site at ' +
+      '<a href="https://fivetechsoft.github.io/OpenADS/en/flows/">fivetechsoft.github.io/OpenADS/en/flows/</a>.</p>' +
+      '<p class="summary">Last error: ' + (lastErr ? lastErr.message : 'unknown') + '</p>';
+    return;
+  }
+
+  document.getElementById('version-tag').textContent = data.generated_for;
+
+  const layersTbody = document.getElementById('layers-tbody');
+  data.layers.forEach(l => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td><code>' + l.id + '</code> <strong>' + l.name + '</strong></td><td>' + escapeHtml(l.owns) + '</td>';
+    layersTbody.appendChild(tr);
+  });
+
+  const list = document.getElementById('flows-list');
+
+  const categories = {};
+  data.flows.forEach(f => {
+    (categories[f.category] ||= []).push(f);
+  });
+  Object.keys(categories).forEach(cat => {
+    const h = document.createElement('h2');
+    h.textContent = cat;
+    list.appendChild(h);
+    categories[cat].forEach(f => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.id = f.id;
+      b.innerHTML = escapeHtml(f.title) + ' <span class="cat">' + escapeHtml(f.id) + '</span>';
+      b.addEventListener('click', () => render(f.id));
+      list.appendChild(b);
+    });
+  });
+
+  function render(id) {
+    const f = data.flows.find(x => x.id === id);
+    if (!f) return;
+    document.querySelectorAll('nav.flows-list button').forEach(el => {
+      el.classList.toggle('active', el.dataset.id === id);
+    });
+    if (history.replaceState) history.replaceState(null, '', '#' + id);
+    let html = '';
+    html += '<h2>' + escapeHtml(f.title) + '</h2>';
+    html += '<p class="summary">' + escapeHtml(f.summary) + '</p>';
+    if (f.trigger) html += '<div class="trigger">▶ ' + escapeHtml(f.trigger) + '</div>';
+    html += '<h3>Actors</h3><ul class="actors">';
+    f.actors.forEach(a => { html += '<li>' + escapeHtml(a) + '</li>'; });
+    html += '</ul>';
+    html += '<h3>Sequence</h3><ol class="steps">';
+    f.steps.forEach((s, i) => {
+      html += '<li class="lyr-' + escapeAttr(s.layer) + '">' +
+              '<span class="n">' + (i + 1) + '</span>' +
+              '<span class="from">' + escapeHtml(s.from) + '</span>' +
+              '<span class="arrow">→</span>' +
+              '<span class="to">' + escapeHtml(s.to) + '</span>' +
+              '<span class="action">' + escapeHtml(s.action) + '</span>' +
+              '<span class="layer">' + escapeHtml(s.layer) + '</span>' +
+              '</li>';
+    });
+    html += '</ol>';
+    if (f.files_touched && f.files_touched.length) {
+      html += '<h3>Files touched</h3><ul class="files">';
+      f.files_touched.forEach(p => { html += '<li>' + escapeHtml(p) + '</li>'; });
+      html += '</ul>';
+    }
+    if (f.notes) html += '<div class="notes">' + escapeHtml(f.notes) + '</div>';
+    detail.innerHTML = html;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+  function escapeAttr(s) { return escapeHtml(s).replace(/\s+/g, '-'); }
+
+  const initial = (location.hash || '').replace(/^#/, '') || data.flows[0].id;
+  render(initial);
+})();
+</script>
+</body>
+</html>

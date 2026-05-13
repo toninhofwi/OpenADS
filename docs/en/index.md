@@ -25,6 +25,11 @@ Current release: **v1.0.0-rc22**.
 - **[Wire protocol](wire-protocol/)** — formal spec of the
   OpenADS-native TCP / TLS wire (frame layout, every opcode,
   payload format, error semantics, versioning).
+- **[Main flows](flows/)** — interactive single-page sequence
+  walk-through of the eight canonical call paths (local DBF,
+  remote TCP, SQL pipeline, Studio HTTP, AOF/Rushmore, memo I/O,
+  transactions, wire-protocol opcodes), backed by
+  [`assets/flows.json`](../assets/flows.json).
 - **[Data Dictionary](data-dictionary/)** — clean-room `.add`
   text format + the `engine::DataDict` API + REST surface.
 - **[Studio (web console)](studio-guide/)** — administer an
