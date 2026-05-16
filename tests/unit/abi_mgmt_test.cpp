@@ -119,3 +119,22 @@ TEST_CASE("M9.25 AdsMg* reject an unknown handle") {
     UNSIGNED16 isz = sizeof(info);
     CHECK(AdsMgGetInstallInfo(0x1234, &info, &isz) != 0);
 }
+
+TEST_CASE("M9.25 AdsMgGetUserNames clamps to caller capacity") {
+    UNSIGNED8 srv[8] = "local";
+    UNSIGNED8 usr[2] = "u";
+    UNSIGNED8 pwd[2] = "p";
+    ADSHANDLE h = 0;
+    REQUIRE(AdsMgConnect(srv, usr, pwd, &h) == 0);
+
+    // Local mode reports exactly 1 user. Offer ZERO capacity: the
+    // call must still succeed, write nothing, and report the real
+    // count (1) back through pusCount.
+    ADS_MGMT_USER_INFO one;   // a 1-slot buffer we promise not to fill
+    UNSIGNED16 cnt = 0;       // capacity = 0 elements
+    UNSIGNED16 sz  = sizeof(ADS_MGMT_USER_INFO);
+    REQUIRE(AdsMgGetUserNames(h, nullptr, &one, &cnt, &sz) == 0);
+    CHECK(cnt == 1);          // real count written back
+
+    REQUIRE(AdsMgDisconnect(h) == 0);
+}

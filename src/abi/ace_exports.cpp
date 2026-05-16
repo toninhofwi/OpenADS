@@ -9868,6 +9868,11 @@ mg_collector_for(ADSHANDLE h) {
 
 // Copy a POD struct into the caller's buffer, clamped to *pusLen, and
 // write back the real struct size.
+// Raw struct memcpy is safe across THIS boundary — unlike the wire,
+// where a 32-bit client and 64-bit server may disagree on layout.
+// The caller (rddads / Harbour) and this DLL both consume the same
+// include/openads/ace.h ADS_MGMT_* definitions, so the layouts are
+// identical by construction. mg_wire handles the cross-ABI case.
 template <typename T>
 UNSIGNED32 emit_mg_struct(const T& src, void* pBuf, UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return openads::AE_INTERNAL_ERROR;
