@@ -74,6 +74,7 @@ add_executable(openads_unit_tests
     unit/abi_misc_impls_test.cpp
     unit/abi_mgmt_test.cpp
     unit/mg_collector_test.cpp
+    unit/mg_wire_test.cpp
     unit/abi_dd_crud_test.cpp
     unit/abi_restructure_test.cpp
     unit/abi_versioned_overloads_test.cpp
