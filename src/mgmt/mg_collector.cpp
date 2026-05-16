@@ -20,27 +20,30 @@ void put_field(UNSIGNED8* dst, std::size_t cap, const std::string& s) {
 
 }  // namespace
 
-MgCollector::MgCollector(MgSnapshot snapshot, const MgStats& stats)
-    : snapshot_(std::move(snapshot)),
-      packets_in_(stats.packets_in.load()),
-      packets_out_(stats.packets_out.load()),
-      bytes_in_(stats.bytes_in.load()),
-      bytes_out_(stats.bytes_out.load()),
-      disconnects_(stats.disconnects.load()),
-      partial_connects_(stats.partial_connects.load()),
-      operations_(stats.operations.load()),
-      logged_errors_(stats.logged_errors.load()),
-      max_users_(stats.max_users.load()),
-      max_connections_(stats.max_connections.load()),
-      max_workareas_(stats.max_workareas.load()),
-      max_tables_(stats.max_tables.load()),
-      max_indexes_(stats.max_indexes.load()),
-      max_locks_(stats.max_locks.load()) {
+void capture_mg_stats(MgSnapshot& snap, const MgStats& stats) {
     auto now  = std::chrono::system_clock::now();
     auto secs = std::chrono::duration_cast<std::chrono::seconds>(
                     now - stats.start_time).count();
-    uptime_seconds_ = secs < 0 ? 0 : secs;
+    snap.uptime_seconds   = secs < 0 ? 0 :
+        static_cast<std::uint64_t>(secs);
+    snap.packets_in       = stats.packets_in.load();
+    snap.packets_out      = stats.packets_out.load();
+    snap.bytes_in         = stats.bytes_in.load();
+    snap.bytes_out        = stats.bytes_out.load();
+    snap.disconnects      = stats.disconnects.load();
+    snap.partial_connects = stats.partial_connects.load();
+    snap.operations       = stats.operations.load();
+    snap.logged_errors    = stats.logged_errors.load();
+    snap.max_users        = stats.max_users.load();
+    snap.max_connections  = stats.max_connections.load();
+    snap.max_workareas    = stats.max_workareas.load();
+    snap.max_tables       = stats.max_tables.load();
+    snap.max_indexes      = stats.max_indexes.load();
+    snap.max_locks        = stats.max_locks.load();
 }
+
+MgCollector::MgCollector(MgSnapshot snapshot)
+    : snapshot_(std::move(snapshot)) {}
 
 ADS_MGMT_INSTALL_INFO MgCollector::install_info() const {
     ADS_MGMT_INSTALL_INFO info;
@@ -59,10 +62,10 @@ ADS_MGMT_ACTIVITY_INFO MgCollector::activity_info() const {
     ADS_MGMT_ACTIVITY_INFO a;
     std::memset(&a, 0, sizeof(a));
 
-    a.ulOperations   = static_cast<UNSIGNED32>(operations_);
-    a.ulLoggedErrors = static_cast<UNSIGNED32>(logged_errors_);
+    a.ulOperations   = static_cast<UNSIGNED32>(snapshot_.operations);
+    a.ulLoggedErrors = static_cast<UNSIGNED32>(snapshot_.logged_errors);
 
-    long long up = uptime_seconds_;
+    long long up = static_cast<long long>(snapshot_.uptime_seconds);
     a.stUpTime.usDays    = static_cast<UNSIGNED16>(up / 86400);
     a.stUpTime.usHours   = static_cast<UNSIGNED16>((up % 86400) / 3600);
     a.stUpTime.usMinutes = static_cast<UNSIGNED16>((up % 3600) / 60);
@@ -77,12 +80,12 @@ ADS_MGMT_ACTIVITY_INFO MgCollector::activity_info() const {
     };
 
     UNSIGNED32 nusers = static_cast<UNSIGNED32>(snapshot_.user_list.size());
-    a.stUsers        = usage(nusers, max_users_);
-    a.stConnections  = usage(snapshot_.connections, max_connections_);
-    a.stWorkAreas    = usage(snapshot_.workareas, max_workareas_);
-    a.stTables       = usage(snapshot_.tables, max_tables_);
-    a.stIndexes      = usage(snapshot_.indexes, max_indexes_);
-    a.stLocks        = usage(snapshot_.locks, max_locks_);
+    a.stUsers        = usage(nusers, snapshot_.max_users);
+    a.stConnections  = usage(snapshot_.connections, snapshot_.max_connections);
+    a.stWorkAreas    = usage(snapshot_.workareas, snapshot_.max_workareas);
+    a.stTables       = usage(snapshot_.tables, snapshot_.max_tables);
+    a.stIndexes      = usage(snapshot_.indexes, snapshot_.max_indexes);
+    a.stLocks        = usage(snapshot_.locks, snapshot_.max_locks);
     a.stWorkerThreads = usage(snapshot_.worker_threads, 0);
     // TPS* elem usage left zero — transaction-processing internals are
     // not exposed.
@@ -93,9 +96,9 @@ ADS_MGMT_COMM_STATS MgCollector::comm_stats() const {
     ADS_MGMT_COMM_STATS s;
     std::memset(&s, 0, sizeof(s));
     s.ulTotalPackets      = static_cast<UNSIGNED32>(
-        packets_in_ + packets_out_);
-    s.ulDisconnectedUsers = static_cast<UNSIGNED32>(disconnects_);
-    s.ulPartialConnects   = static_cast<UNSIGNED32>(partial_connects_);
+        snapshot_.packets_in + snapshot_.packets_out);
+    s.ulDisconnectedUsers = static_cast<UNSIGNED32>(snapshot_.disconnects);
+    s.ulPartialConnects   = static_cast<UNSIGNED32>(snapshot_.partial_connects);
     // dPercentCheckSums, ulCheckSumFailures, ulRcvPktOutOfSeq,
     // ulRcvReqOutOfSeq, ulNotLoggedIn, ulInvalidPackets,
     // ulRecvFromErrors, ulSendToErrors — no analogue in OpenADS'

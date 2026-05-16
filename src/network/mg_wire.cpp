@@ -111,6 +111,21 @@ std::string encode_mg_snapshot(const mgmt::MgSnapshot& s) {
     put_u16(b, s.server_type);
     put_u64(b, s.rss_bytes);
     put_u16(b, s.server_port);
+    put_u64(b, s.uptime_seconds);
+    put_u64(b, s.packets_in);
+    put_u64(b, s.packets_out);
+    put_u64(b, s.bytes_in);
+    put_u64(b, s.bytes_out);
+    put_u64(b, s.disconnects);
+    put_u64(b, s.partial_connects);
+    put_u64(b, s.operations);
+    put_u64(b, s.logged_errors);
+    put_u32(b, s.max_users);
+    put_u32(b, s.max_connections);
+    put_u32(b, s.max_workareas);
+    put_u32(b, s.max_tables);
+    put_u32(b, s.max_indexes);
+    put_u32(b, s.max_locks);
 
     put_u32(b, static_cast<std::uint32_t>(s.user_list.size()));
     for (const auto& u : s.user_list) {
@@ -165,6 +180,21 @@ util::Result<mgmt::MgSnapshot> decode_mg_snapshot(
     s.server_type    = r.u16();
     s.rss_bytes      = r.u64();
     s.server_port    = r.u16();
+    s.uptime_seconds   = r.u64();
+    s.packets_in       = r.u64();
+    s.packets_out      = r.u64();
+    s.bytes_in         = r.u64();
+    s.bytes_out        = r.u64();
+    s.disconnects      = r.u64();
+    s.partial_connects = r.u64();
+    s.operations       = r.u64();
+    s.logged_errors    = r.u64();
+    s.max_users        = r.u32();
+    s.max_connections  = r.u32();
+    s.max_workareas    = r.u32();
+    s.max_tables       = r.u32();
+    s.max_indexes      = r.u32();
+    s.max_locks        = r.u32();
 
     std::uint32_t nu = r.u32();
     for (std::uint32_t i = 0; r.ok && i < nu; ++i) {

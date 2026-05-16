@@ -8,13 +8,21 @@
 
 namespace openads::mgmt {
 
-// Formats a raw MgSnapshot + MgStats into the SAP-canonical
-// ADS_MGMT_* structs declared in include/openads/ace.h. Pure: holds
-// copies of its inputs and never touches global state, so it is
-// trivially unit-testable with a fabricated snapshot.
+// Copy the live MgStats counters (uptime origin, cumulative comm
+// totals, high-water marks) into a MgSnapshot. Called by whichever
+// process builds the snapshot — server or local DLL — so the
+// cumulative telemetry travels the wire alongside the live counts.
+void capture_mg_stats(MgSnapshot& snap, const MgStats& stats);
+
+// Formats a raw MgSnapshot into the SAP-canonical ADS_MGMT_* structs
+// declared in include/openads/ace.h. Pure: holds a copy of the
+// snapshot and never touches global state, so it is trivially
+// unit-testable with a fabricated snapshot. The snapshot carries
+// everything — live counts AND the captured MgStats values — so a
+// remote caller formats the server's telemetry, not its own.
 class MgCollector {
 public:
-    MgCollector(MgSnapshot snapshot, const MgStats& stats);
+    explicit MgCollector(MgSnapshot snapshot);
 
     ADS_MGMT_INSTALL_INFO   install_info() const;
     ADS_MGMT_ACTIVITY_INFO  activity_info() const;
@@ -37,23 +45,7 @@ public:
     const MgSnapshot& snapshot() const { return snapshot_; }
 
 private:
-    MgSnapshot    snapshot_;
-    // Plain copies of the counters captured at construction time.
-    std::uint64_t packets_in_;
-    std::uint64_t packets_out_;
-    std::uint64_t bytes_in_;
-    std::uint64_t bytes_out_;
-    std::uint64_t disconnects_;
-    std::uint64_t partial_connects_;
-    std::uint64_t operations_;
-    std::uint64_t logged_errors_;
-    std::uint32_t max_users_;
-    std::uint32_t max_connections_;
-    std::uint32_t max_workareas_;
-    std::uint32_t max_tables_;
-    std::uint32_t max_indexes_;
-    std::uint32_t max_locks_;
-    long long     uptime_seconds_;
+    MgSnapshot snapshot_;
 };
 
 }  // namespace openads::mgmt

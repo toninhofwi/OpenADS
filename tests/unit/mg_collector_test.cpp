@@ -21,8 +21,7 @@ std::string c_str_of(const UNSIGNED8* p, std::size_t cap) {
 
 TEST_CASE("MgCollector::install_info reports the product string") {
     MgSnapshot snap;
-    MgStats    stats;
-    MgCollector c(snap, stats);
+    MgCollector c(snap);
 
     ADS_MGMT_INSTALL_INFO info = c.install_info();
     CHECK(c_str_of(info.aucVersionStr, sizeof(info.aucVersionStr))
@@ -34,20 +33,18 @@ TEST_CASE("MgCollector::install_info reports the product string") {
 
 TEST_CASE("MgCollector::activity_info maps counts and uptime") {
     MgSnapshot snap;
-    snap.connections    = 3;
-    snap.workareas      = 7;
-    snap.tables         = 5;
-    snap.indexes        = 2;
-    snap.locks          = 1;
-    snap.worker_threads = 4;
+    snap.connections     = 3;
+    snap.workareas       = 7;
+    snap.tables          = 5;
+    snap.indexes         = 2;
+    snap.locks           = 1;
+    snap.worker_threads  = 4;
     snap.user_list.resize(3);   // 3 users
+    snap.max_connections = 9;
+    snap.operations      = 120;
+    snap.logged_errors   = 2;
 
-    MgStats stats;
-    stats.max_connections.store(9);
-    stats.operations.store(120);
-    stats.logged_errors.store(2);
-
-    MgCollector c(snap, stats);
+    MgCollector c(snap);
     ADS_MGMT_ACTIVITY_INFO a = c.activity_info();
 
     CHECK(a.ulOperations              == 120);
@@ -62,15 +59,25 @@ TEST_CASE("MgCollector::activity_info maps counts and uptime") {
     CHECK(a.stUsers.ulInUse           == 3);
 }
 
+TEST_CASE("MgCollector::activity_info splits uptime seconds") {
+    MgSnapshot snap;
+    snap.uptime_seconds = 90061;   // 1d 1h 1m 1s
+    MgCollector c(snap);
+    ADS_MGMT_ACTIVITY_INFO a = c.activity_info();
+    CHECK(a.stUpTime.usDays    == 1);
+    CHECK(a.stUpTime.usHours   == 1);
+    CHECK(a.stUpTime.usMinutes == 1);
+    CHECK(a.stUpTime.usSeconds == 1);
+}
+
 TEST_CASE("MgCollector::comm_stats reports real packet totals only") {
     MgSnapshot snap;
-    MgStats    stats;
-    stats.packets_in.store(40);
-    stats.packets_out.store(60);
-    stats.disconnects.store(2);
-    stats.partial_connects.store(1);
+    snap.packets_in       = 40;
+    snap.packets_out      = 60;
+    snap.disconnects      = 2;
+    snap.partial_connects = 1;
 
-    MgCollector c(snap, stats);
+    MgCollector c(snap);
     ADS_MGMT_COMM_STATS s = c.comm_stats();
 
     CHECK(s.ulTotalPackets      == 100);   // in + out
@@ -87,9 +94,8 @@ TEST_CASE("MgCollector::config_params echoes live counts") {
     snap.connections = 3;
     snap.tables      = 5;
     snap.worker_threads = 4;
-    MgStats stats;
 
-    MgCollector c(snap, stats);
+    MgCollector c(snap);
     ADS_MGMT_CONFIG_PARAMS p = c.config_params();
     CHECK(p.ulNumConnections  == 3);
     CHECK(p.ulNumTables       == 5);
@@ -121,8 +127,7 @@ TEST_CASE("MgCollector list accessors map snapshot vectors") {
     lk.user = "alice"; lk.conn_no = 1; lk.recno = 42;
     snap.lock_list.push_back(lk);
 
-    MgStats stats;
-    MgCollector c(snap, stats);
+    MgCollector c(snap);
 
     auto users = c.user_names();
     REQUIRE(users.size() == 1);
@@ -156,8 +161,7 @@ TEST_CASE("MgCollector list accessors map snapshot vectors") {
 TEST_CASE("MgCollector::config_memory reports the snapshot RSS total") {
     MgSnapshot snap;
     snap.rss_bytes = 1048576;
-    MgStats stats;
-    MgCollector c(snap, stats);
+    MgCollector c(snap);
     CHECK(c.config_memory().ulTotalConfigMem
               == doctest::Approx(1048576.0));
 }
@@ -165,9 +169,31 @@ TEST_CASE("MgCollector::config_memory reports the snapshot RSS total") {
 TEST_CASE("MgCollector::config_params reports the server port") {
     MgSnapshot snap;
     snap.server_port = 16262;
-    MgStats stats;
-    MgCollector c(snap, stats);
+    MgCollector c(snap);
     auto p = c.config_params();
     CHECK(p.usSendIPPort    == 16262);
     CHECK(p.usReceiveIPPort == 16262);
+}
+
+TEST_CASE("capture_mg_stats folds MgStats counters into the snapshot") {
+    MgStats stats;
+    stats.operations.store(7);
+    stats.packets_in.store(11);
+    stats.packets_out.store(13);
+    stats.disconnects.store(3);
+    stats.max_connections.store(5);
+
+    MgSnapshot snap;
+    openads::mgmt::capture_mg_stats(snap, stats);
+
+    CHECK(snap.operations      == 7);
+    CHECK(snap.packets_in      == 11);
+    CHECK(snap.packets_out     == 13);
+    CHECK(snap.disconnects     == 3);
+    CHECK(snap.max_connections == 5);
+
+    // A MgCollector built from that snapshot surfaces the values.
+    MgCollector c(snap);
+    CHECK(c.comm_stats().ulTotalPackets == 24);
+    CHECK(c.activity_info().ulOperations == 7);
 }

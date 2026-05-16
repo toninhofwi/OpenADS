@@ -3,6 +3,7 @@
 #include "engine/aof_eval.h"
 #include "engine/aof_expr.h"
 #include "engine/table.h"
+#include "mgmt/mg_collector.h"
 #include "mgmt/mg_stats.h"
 #include "network/mg_wire.h"
 #include "platform/proc.h"
@@ -162,6 +163,9 @@ mgmt::MgSnapshot Server::build_mg_snapshot() const {
         ++conn_no;
     }
     snap.users = static_cast<std::uint32_t>(snap.user_list.size());
+    // Fold in this server's cumulative MgStats (uptime, comm totals,
+    // high-water marks) so it travels the wire with the live counts.
+    mgmt::capture_mg_stats(snap, mgmt::process_mg_stats());
     return snap;
 }
 

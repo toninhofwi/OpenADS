@@ -9826,6 +9826,8 @@ fetch_mg_snapshot(const MgBackend& be) {
         u.conn_no = 1;
         snap.user_list.push_back(u);
         snap.rss_bytes = openads::platform::process_rss_bytes();
+        openads::mgmt::capture_mg_stats(
+            snap, openads::mgmt::process_mg_stats());
         return snap;
     }
     // Remote mode: open a socket, ship one MgRequest, read the reply.
@@ -9886,8 +9888,7 @@ mg_collector_for(ADSHANDLE h) {
         return openads::util::Error{
             static_cast<std::int32_t>(openads::AE_NO_CONNECTION),
             0, "mg telemetry fetch failed", ""};
-    return openads::mgmt::MgCollector(snap.value(),
-                                      openads::mgmt::process_mg_stats());
+    return openads::mgmt::MgCollector(snap.value());
 }
 
 // Copy a POD struct into the caller's buffer, clamped to *pusLen, and

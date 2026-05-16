@@ -63,6 +63,25 @@ struct MgSnapshot {
     std::uint64_t rss_bytes       = 0;   // RSS of the reporting process
     std::uint16_t server_port     = 0;   // listener port (0 = local)
 
+    // Cumulative / historical telemetry — captured from the reporting
+    // process's MgStats so it travels the wire with the live counts
+    // (remote callers must not substitute their own MgStats).
+    std::uint64_t uptime_seconds   = 0;
+    std::uint64_t packets_in       = 0;
+    std::uint64_t packets_out      = 0;
+    std::uint64_t bytes_in         = 0;
+    std::uint64_t bytes_out        = 0;
+    std::uint64_t disconnects      = 0;
+    std::uint64_t partial_connects = 0;
+    std::uint64_t operations       = 0;
+    std::uint64_t logged_errors    = 0;
+    std::uint32_t max_users        = 0;
+    std::uint32_t max_connections  = 0;
+    std::uint32_t max_workareas    = 0;
+    std::uint32_t max_tables       = 0;
+    std::uint32_t max_indexes      = 0;
+    std::uint32_t max_locks        = 0;
+
     std::vector<MgUser>   user_list;
     std::vector<MgTable>  table_list;
     std::vector<MgIndex>  index_list;
