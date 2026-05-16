@@ -55,7 +55,7 @@ final class AceLibrary
             UNSIGNED16* pusType);
         UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
             UNSIGNED8* pucBuf, UNSIGNED32* pulLen, UNSIGNED16 usOption);
-        UNSIGNED32 AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
+        UNSIGNED32 AdsSetField(ADSHANDLE hObj, UNSIGNED8* pucFldId,
             UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
 
         UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable);
