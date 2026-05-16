@@ -9858,10 +9858,15 @@ openads::util::Result<openads::mgmt::MgCollector>
 mg_collector_for(ADSHANDLE h) {
     const MgBackend* be = lookup_mg(h);
     if (be == nullptr)
-        return openads::util::Error{1, 0, "invalid mgmt handle", ""};
+        return openads::util::Error{
+            static_cast<std::int32_t>(
+                openads::AE_INVALID_CONNECTION_HANDLE),
+            0, "invalid mgmt handle", ""};
     auto snap = fetch_mg_snapshot(*be);
     if (!snap.has_value())
-        return snap.error();
+        return openads::util::Error{
+            static_cast<std::int32_t>(openads::AE_NO_CONNECTION),
+            0, "mg telemetry fetch failed", ""};
     return openads::mgmt::MgCollector(snap.value(),
                                       openads::mgmt::process_mg_stats());
 }
@@ -9958,6 +9963,27 @@ UNSIGNED32 AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* /*pucUser*/,
         }
     }
 
+    if (be.remote) {
+        // Validate the server is reachable up front with a MgConnect
+        // handshake, so a down server fails here (AE_NO_CONNECTION)
+        // rather than later with a misleading handle error.
+        openads::network::network_init();
+        auto probe = openads::network::connect_tcp(be.host, be.port);
+        if (!probe.has_value()) return openads::AE_NO_CONNECTION;
+        openads::network::Socket ps = probe.value();
+        openads::network::Frame hello;
+        hello.opcode = openads::network::Opcode::MgConnect;
+        if (!openads::network::write_frame(ps, hello).has_value()) {
+            openads::network::sock_close(ps);
+            return openads::AE_NO_CONNECTION;
+        }
+        auto hack = openads::network::read_frame(ps);
+        openads::network::sock_close(ps);
+        if (!hack.has_value() ||
+            hack.value().opcode != openads::network::Opcode::MgConnectAck)
+            return openads::AE_NO_CONNECTION;
+    }
+
     std::lock_guard<std::mutex> g(g_mg_mu);
     ADSHANDLE h = g_mg_next++;
     g_mg_handles.emplace(h, std::move(be));
@@ -9972,31 +9998,31 @@ UNSIGNED32 AdsMgDisconnect(ADSHANDLE hMgmt) {
 }
 UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
     auto c = mg_collector_for(h);
-    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     return emit_mg_struct(c.value().activity_info(), p, l);
 }
 UNSIGNED32 AdsMgGetCommStats(ADSHANDLE h, void* p, UNSIGNED16* l) {
     auto c = mg_collector_for(h);
-    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     return emit_mg_struct(c.value().comm_stats(), p, l);
 }
 UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE h, void* pv, UNSIGNED16* lv,
                                void* pm, UNSIGNED16* lm) {
     auto c = mg_collector_for(h);
-    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     UNSIGNED32 rc = emit_mg_struct(c.value().config_params(), pv, lv);
     if (rc != openads::AE_SUCCESS) return rc;
     return emit_mg_struct(c.value().config_memory(), pm, lm);
 }
 UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
     auto c = mg_collector_for(h);
-    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     return emit_mg_struct(c.value().install_info(), p, l);
 }
 UNSIGNED32 AdsMgGetLockOwner(ADSHANDLE h, UNSIGNED8* /*t*/, UNSIGNED32 ulRec,
                               void* p, UNSIGNED16* l, UNSIGNED16* lt) {
     auto col = mg_collector_for(h);
-    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     if (lt) *lt = ADS_MGMT_RECORD_LOCK;
     return emit_mg_struct(col.value().lock_owner(ulRec), p, l);
 }
@@ -10004,44 +10030,44 @@ UNSIGNED32 AdsMgGetLocks(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
                           UNSIGNED16 /*o*/, void* p, UNSIGNED16* c,
                           UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
-    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().locks(), p, c, sz);
 }
 UNSIGNED32 AdsMgGetOpenIndexes(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
                                 UNSIGNED16 /*o*/, void* p, UNSIGNED16* c,
                                 UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
-    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().open_indexes(), p, c, sz);
 }
 UNSIGNED32 AdsMgGetOpenTables(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
                                void* p, UNSIGNED16* c, UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
-    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().open_tables(), p, c, sz);
 }
 UNSIGNED32 AdsMgGetOpenTables2(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
                                 void* p, UNSIGNED16* c, UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
-    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().open_tables(), p, c, sz);
 }
 UNSIGNED32 AdsMgGetServerType(ADSHANDLE h, UNSIGNED16* p) {
     auto c = mg_collector_for(h);
-    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     if (p) *p = c.value().server_type();
     return openads::AE_SUCCESS;
 }
 UNSIGNED32 AdsMgGetUserNames(ADSHANDLE h, UNSIGNED8* /*pucFile*/, void* p,
                               UNSIGNED16* c, UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
-    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().user_names(), p, c, sz);
 }
 UNSIGNED32 AdsMgGetWorkerThreadActivity(ADSHANDLE h, void* p, UNSIGNED16* c,
                                          UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
-    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().worker_thread_activity(), p, c, sz);
 }
 UNSIGNED32 AdsMgKillUser(ADSHANDLE h, UNSIGNED8* /*pucUser*/,
