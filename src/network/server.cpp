@@ -168,12 +168,20 @@ std::uint64_t Server::register_session(const SessionInfo& info) {
     SessionInfo si = info;
     si.id = id;
     sessions_info_.emplace(id, std::move(si));
+    // M9.25 — raise the connection high-water mark under info_mu_.
+    openads::mgmt::MgStats::bump_max(
+        openads::mgmt::process_mg_stats().max_connections,
+        static_cast<std::uint32_t>(sessions_info_.size()));
     return id;
 }
 
 void Server::unregister_session(std::uint64_t id) {
     std::lock_guard<std::mutex> lk(info_mu_);
     sessions_info_.erase(id);
+    // M9.25 — count one disconnect per terminated session. This runs
+    // exactly once per session via session_loop's SessionGuard dtor.
+    openads::mgmt::process_mg_stats()
+        .disconnects.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Server::touch_session(std::uint64_t id, bool inbound, bool outbound) {
@@ -256,6 +264,9 @@ util::Result<void> Server::start(const std::string& host,
         return p.error();
     }
     port_ = p.value();
+    // M9.25 — fix the telemetry uptime origin at server start.
+    openads::mgmt::process_mg_stats().start_time =
+        std::chrono::system_clock::now();
     running_.store(true);
     accept_thread_ = std::thread([this]() { this->accept_loop(); });
     return {};
@@ -704,6 +715,14 @@ void Server::session_loop(Socket s) {
         if (!fr) break;                       // connection closed
         this->touch_session(sid, true, false);
         const Frame& f = fr.value();
+        {
+            // M9.25 — inbound comm telemetry. +5 accounts for the
+            // 4-byte length prefix + 1-byte opcode of the wire framing.
+            auto& mgst = openads::mgmt::process_mg_stats();
+            mgst.packets_in.fetch_add(1, std::memory_order_relaxed);
+            mgst.bytes_in.fetch_add(f.payload.size() + 5,
+                                    std::memory_order_relaxed);
+        }
         Frame reply;
         switch (f.opcode) {
             case Opcode::Hello: {
@@ -1971,6 +1990,9 @@ void Server::session_loop(Socket s) {
             }
         }
         if (auto wr = write_frame(s, reply); !wr) break;
+        // M9.25 — outbound comm telemetry.
+        openads::mgmt::process_mg_stats()
+            .packets_out.fetch_add(1, std::memory_order_relaxed);
         this->touch_session(sid, false, true);
     }
     cleanup();
