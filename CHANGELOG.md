@@ -5,6 +5,41 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.0-rc27 — 2026-05-17
+
+- **`AdsGetField` pads CHARACTER fields to the declared width.**
+  Reported by Pritpal Bedi: a Harbour `mini_xbrowse /ads` (ADSCDX
+  → OpenADS) showed every text column truncated — `Charlie` as
+  `Charl`, `Barcelona` as `Barcel` — while the native DBFCDX run
+  rendered them full. Root cause: `AdsGetField` returned CHARACTER
+  values with trailing spaces stripped (`make_string` in
+  `dbf_common.cpp` rtrims, and `decode_field` used it for the
+  Character branch). DBF/xbase CHAR fields are fixed-width
+  space-padded; `FieldGet` of a `C(20)` field must return 20
+  characters. With the trimmed value, xbrowse auto-sized each
+  column to the current row's value length and clipped every
+  other row. `AdsGetField` now re-pads CHARACTER values to the
+  field's declared width on the way out — both the local and the
+  remote (wire) read paths. The engine's internal decode is left
+  trimming, so SQL comparisons, index keys and AOF filters are
+  untouched; verified by `tests/smoke/harbour/fieldlenprobe.prg`
+  (ADSCDX now matches the DBFCDX baseline) and `idxprobe.prg`
+  (index walk still `SORTED=YES`, full suite 397/397).
+- **`tools/harbour_patch/rddads-compat.patch` applies again.**
+  Reported by Pritpal Bedi: `git apply` rejected the patch with
+  `patch failed: contrib/rddads/rddads.h:67`. A prior edit had
+  dropped the blank context line after `#include "ace.h"`, so the
+  hunk carried five context lines while its header still declared
+  six. The missing line is restored; verified `git apply` applies
+  cleanly to a pristine Harbour `contrib/rddads` tree.
+- **PHP binding — result-fetch and index seek.** `bindings/php`
+  gains `Cursor::fetchAssoc()` / `fetchNum()` (single-row fetch,
+  `null` past the last row) and `Table::seek()` (index key seek
+  via `AdsGetIndexHandle` + `AdsSeek`). 37 PHPUnit tests.
+- **CI** — the release workflow gains a macOS Intel (x64) build
+  leg, so releases ship a `macos-x64` archive alongside
+  `macos-arm64`.
+
 ## 1.0.0-rc26 — 2026-05-16
 
 - **PHP binding — `bindings/php`.** Reinaldo Crespo asked whether a

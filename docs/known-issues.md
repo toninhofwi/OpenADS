@@ -6,7 +6,7 @@ nav_order: 9
 
 # Known issues — current
 
-Status as of **v1.0.0-rc26** (2026-05-16). The historical M3-era
+Status as of **v1.0.0-rc27** (2026-05-17). The historical M3-era
 compat-breaking CDX / NTX list that lived here is closed and now
 only survives in `git log`.
 
@@ -59,7 +59,7 @@ stunnel / SSH tunnel — see [TLS deployment](en/tls-deployment/)
 for the recipes. A dedicated `OPENADS_WITH_OPENSSL=ON` CMake
 option is on the roadmap.
 
-## Closed in v1.0.0-rc1 .. rc26
+## Closed in v1.0.0-rc1 .. rc27
 
 See `CHANGELOG.md` for the full per-release breakdown. The big
 ones since the M3-era list:
@@ -93,7 +93,15 @@ ones since the M3-era list:
 - **PHP binding** — shipped in v1.0.0-rc26; `bindings/php`
   (`openads/openads-php`) is a pure-PHP FFI package wrapping the
   ACE library, with a modern OOP API. The same release fixed the
-  SQL parser's missing `''` string-escape handling.
+  SQL parser's missing `''` string-escape handling. rc27 added
+  `Cursor::fetchAssoc/fetchNum` and `Table::seek`.
+- **`AdsGetField` CHARACTER padding** — shipped in v1.0.0-rc27;
+  CHAR fields were returned with trailing spaces stripped, so
+  Harbour `mini_xbrowse /ads` auto-sized and truncated text
+  columns. `AdsGetField` now pads CHAR values to the declared
+  field width. The same release restored
+  `tools/harbour_patch/rddads-compat.patch` (a dropped context
+  line had broken `git apply`).
 
 ## Reporting
 
