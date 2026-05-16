@@ -5,6 +5,43 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.0-rc25 — 2026-05-16
+
+- **Index correctness sweep.** Three bugs that broke CDX/NTX
+  ordered access from Harbour `rddads` and X#'s `ADSRDD`:
+
+  - **`AdsCreateIndex61` decoded the wrong option bit.** `ace.h`
+    sets `ADS_UNIQUE 0x01`, `ADS_DESCENDING 0x02`, `ADS_CUSTOM
+    0x04`, `ADS_COMPOUND 0x08`. The descending flag was read as
+    `ulOptions & 0x08` — that bit is `ADS_COMPOUND`, which both
+    `rddads` and `ADSRDD` set for every CDX/NTX tag. Every order
+    built descending: `AdsGotoTop` landed on the last key and
+    `SKIP` walked backward. A stale comment and the
+    `abi_create_index61` test had the bit values swapped the same
+    way, so the bug was self-consistent and hidden. Now decoded
+    with the named `ace.h` constants; `AdsCreateIndex90` delegates
+    to 61 and is covered too.
+  - **`ALIAS->FIELD` qualifiers in index expressions.** Harbour
+    `INDEX ON CUST->NAME` passes the literal text `"CUST->NAME"`
+    to the RDD. `evaluate_index_expr` could not parse it — the
+    tokenizer dropped `-` and `>`, so the alias parsed as an
+    unknown identifier and every key evaluated blank, degenerating
+    the index to record order. `strip_alias_qualifiers()` now
+    removes any `<ident>->` qualifier (bare and nested, e.g.
+    `UPPER(CUST->NAME)`) before evaluation.
+  - **`AE_NO_CURRENT_RECORD` (5026) for not-positioned reads.**
+    Reported by Pritpal Bedi: a Harbour `TBrowse` over an `ADSCDX`
+    table failed mid-paint with `ADSCDX/5000 table not positioned
+    on a record`. `Table::read_field` returned the generic 5000
+    (`AE_INTERNAL_ERROR`) for not-positioned reads; `rddads`
+    special-cases 5026 as the graceful read-past-EOF path and
+    raises every other code as a hard error. `table.cpp` now
+    returns the SAP-canonical 5026.
+
+  Verified: `idxprobe.prg` index walk matches the DBFCDX baseline,
+  `posprobe.prg` goes from 6 `ADSCDX/5000` raises to 0, full suite
+  395/395.
+
 ## 1.0.0-rc24 — 2026-05-16
 
 - **`AdsMg*` server-telemetry subsystem.** Reported by Pritpal Bedi
