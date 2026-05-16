@@ -9841,6 +9841,82 @@ fetch_mg_snapshot(const MgBackend& be) {
 }  // namespace
 }  // extern "C++"
 
+// Mgmt accessor helpers. These return C++ types (Result<>, MgCollector,
+// templates), so they live in their own C++-linkage block.
+extern "C++" {
+namespace {
+
+// Resolve a mgmt handle to its backend; nullptr if unknown.
+const MgBackend* lookup_mg(ADSHANDLE h) {
+    std::lock_guard<std::mutex> g(g_mg_mu);
+    auto it = g_mg_handles.find(h);
+    return it == g_mg_handles.end() ? nullptr : &it->second;
+}
+
+// Build a MgCollector for a handle, or return an error.
+openads::util::Result<openads::mgmt::MgCollector>
+mg_collector_for(ADSHANDLE h) {
+    const MgBackend* be = lookup_mg(h);
+    if (be == nullptr)
+        return openads::util::Error{1, 0, "invalid mgmt handle", ""};
+    auto snap = fetch_mg_snapshot(*be);
+    if (!snap.has_value())
+        return snap.error();
+    return openads::mgmt::MgCollector(snap.value(),
+                                      openads::mgmt::process_mg_stats());
+}
+
+// Copy a POD struct into the caller's buffer, clamped to *pusLen, and
+// write back the real struct size.
+template <typename T>
+UNSIGNED32 emit_mg_struct(const T& src, void* pBuf, UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return openads::AE_INTERNAL_ERROR;
+    UNSIGNED16 cap = *pusLen;
+    UNSIGNED16 n = static_cast<UNSIGNED16>(
+        sizeof(T) < cap ? sizeof(T) : cap);
+    if (pBuf != nullptr && n > 0) std::memcpy(pBuf, &src, n);
+    *pusLen = static_cast<UNSIGNED16>(sizeof(T));
+    return openads::AE_SUCCESS;
+}
+
+// Copy a vector of POD structs into the caller's array buffer.
+// *pusCount in: capacity (#elements); out: actual element count.
+template <typename T>
+UNSIGNED32 emit_mg_array(const std::vector<T>& src, void* pBuf,
+                         UNSIGNED16* pusCount, UNSIGNED16* pusSize) {
+    if (pusCount == nullptr) return openads::AE_INTERNAL_ERROR;
+    UNSIGNED16 cap = *pusCount;
+    UNSIGNED16 n = static_cast<UNSIGNED16>(
+        src.size() < cap ? src.size() : cap);
+    if (pBuf != nullptr && n > 0)
+        std::memcpy(pBuf, src.data(),
+                    static_cast<std::size_t>(n) * sizeof(T));
+    *pusCount = static_cast<UNSIGNED16>(src.size());
+    if (pusSize != nullptr) *pusSize = static_cast<UNSIGNED16>(sizeof(T));
+    return openads::AE_SUCCESS;
+}
+
+// Ship a fire-and-forget MgRequest mutator to a remote server.
+bool send_mg_mutator(const MgBackend& be,
+                     openads::network::MgRequestKind kind,
+                     std::uint16_t arg) {
+    openads::network::network_init();
+    auto sock = openads::network::connect_tcp(be.host, be.port);
+    if (!sock.has_value()) return false;
+    openads::network::Socket s = sock.value();
+    openads::network::Frame req;
+    req.opcode = openads::network::Opcode::MgRequest;
+    std::string body = openads::network::encode_mg_request(kind, arg);
+    req.payload.assign(body.begin(), body.end());
+    bool ok = openads::network::write_frame(s, req).has_value();
+    if (ok) (void)openads::network::read_frame(s);  // drain the ack
+    openads::network::sock_close(s);
+    return ok;
+}
+
+}  // namespace
+}  // extern "C++"
+
 // AdsMg* stubs are implemented elsewhere. Kept tests/unit/abi_mgmt_test.cpp's
 // existing pattern: zero-fill caller's buffer, return AE_SUCCESS so apps
 // proceed without special-casing local-mode mgmt absence.
@@ -9889,49 +9965,100 @@ UNSIGNED32 AdsMgDisconnect(ADSHANDLE hMgmt) {
     g_mg_handles.erase(hMgmt);
     return openads::AE_SUCCESS;
 }
-static inline void mg_zero_(void* p, UNSIGNED16* l) {
-    if (p && l && *l > 0) std::memset(p, 0, *l);
+UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
+    auto c = mg_collector_for(h);
+    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_struct(c.value().activity_info(), p, l);
 }
-UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetCommStats(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE, void* pv, UNSIGNED16* lv,
-                               void* pm, UNSIGNED16* lm)
-    { mg_zero_(pv, lv); mg_zero_(pm, lm); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetLockOwner(ADSHANDLE, UNSIGNED8*, UNSIGNED32, void* p,
-                              UNSIGNED16* l, UNSIGNED16* lt) {
-    if (l && p) {
-        // l is sizeof(struct), zero just up to that size.
-        std::memset(p, 0, *l);
-    }
-    if (lt) *lt = 0;
+UNSIGNED32 AdsMgGetCommStats(ADSHANDLE h, void* p, UNSIGNED16* l) {
+    auto c = mg_collector_for(h);
+    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_struct(c.value().comm_stats(), p, l);
+}
+UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE h, void* pv, UNSIGNED16* lv,
+                               void* pm, UNSIGNED16* lm) {
+    auto c = mg_collector_for(h);
+    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    UNSIGNED32 rc = emit_mg_struct(c.value().config_params(), pv, lv);
+    if (rc != openads::AE_SUCCESS) return rc;
+    return emit_mg_struct(c.value().config_memory(), pm, lm);
+}
+UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
+    auto c = mg_collector_for(h);
+    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_struct(c.value().install_info(), p, l);
+}
+UNSIGNED32 AdsMgGetLockOwner(ADSHANDLE h, UNSIGNED8* /*t*/, UNSIGNED32 ulRec,
+                              void* p, UNSIGNED16* l, UNSIGNED16* lt) {
+    auto col = mg_collector_for(h);
+    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (lt) *lt = ADS_MGMT_RECORD_LOCK;
+    return emit_mg_struct(col.value().lock_owner(ulRec), p, l);
+}
+UNSIGNED32 AdsMgGetLocks(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
+                          UNSIGNED16 /*o*/, void* p, UNSIGNED16* c,
+                          UNSIGNED16* sz) {
+    auto col = mg_collector_for(h);
+    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_array(col.value().locks(), p, c, sz);
+}
+UNSIGNED32 AdsMgGetOpenIndexes(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
+                                UNSIGNED16 /*o*/, void* p, UNSIGNED16* c,
+                                UNSIGNED16* sz) {
+    auto col = mg_collector_for(h);
+    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_array(col.value().open_indexes(), p, c, sz);
+}
+UNSIGNED32 AdsMgGetOpenTables(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
+                               void* p, UNSIGNED16* c, UNSIGNED16* sz) {
+    auto col = mg_collector_for(h);
+    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_array(col.value().open_tables(), p, c, sz);
+}
+UNSIGNED32 AdsMgGetOpenTables2(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
+                                void* p, UNSIGNED16* c, UNSIGNED16* sz) {
+    auto col = mg_collector_for(h);
+    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_array(col.value().open_tables(), p, c, sz);
+}
+UNSIGNED32 AdsMgGetServerType(ADSHANDLE h, UNSIGNED16* p) {
+    auto c = mg_collector_for(h);
+    if (!c.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (p) *p = c.value().server_type();
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsMgGetLocks(ADSHANDLE, UNSIGNED8*, UNSIGNED8*, UNSIGNED16,
-                          void*, UNSIGNED16* c, UNSIGNED16*)
-    { if (c) *c = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetOpenIndexes(ADSHANDLE, UNSIGNED8*, UNSIGNED8*, UNSIGNED16,
-                                void*, UNSIGNED16* c, UNSIGNED16*)
-    { if (c) *c = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetOpenTables(ADSHANDLE, UNSIGNED8*, UNSIGNED16, void*,
-                               UNSIGNED16* c, UNSIGNED16*)
-    { if (c) *c = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetOpenTables2(ADSHANDLE, UNSIGNED8*, UNSIGNED16, void*,
-                                UNSIGNED16* c, UNSIGNED16*)
-    { if (c) *c = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetServerType(ADSHANDLE, UNSIGNED16* p)
-    { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetUserNames(ADSHANDLE, UNSIGNED8*, void*, UNSIGNED16* c,
-                              UNSIGNED16*)
-    { if (c) *c = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetWorkerThreadActivity(ADSHANDLE, void*, UNSIGNED16* c,
-                                         UNSIGNED16*)
-    { if (c) *c = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgKillUser(ADSHANDLE, UNSIGNED8*, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsMgResetCommStats(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsMgGetUserNames(ADSHANDLE h, UNSIGNED8* /*pucFile*/, void* p,
+                              UNSIGNED16* c, UNSIGNED16* sz) {
+    auto col = mg_collector_for(h);
+    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_array(col.value().user_names(), p, c, sz);
+}
+UNSIGNED32 AdsMgGetWorkerThreadActivity(ADSHANDLE h, void* p, UNSIGNED16* c,
+                                         UNSIGNED16* sz) {
+    auto col = mg_collector_for(h);
+    if (!col.has_value()) return openads::AE_INVALID_CONNECTION_HANDLE;
+    return emit_mg_array(col.value().worker_thread_activity(), p, c, sz);
+}
+UNSIGNED32 AdsMgKillUser(ADSHANDLE h, UNSIGNED8* /*pucUser*/,
+                         UNSIGNED16 usConnNo) {
+    const MgBackend* be = lookup_mg(h);
+    if (be == nullptr) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!be->remote) return openads::AE_SUCCESS;   // no-op local
+    return send_mg_mutator(*be,
+               openads::network::MgRequestKind::KillUser, usConnNo)
+        ? openads::AE_SUCCESS : openads::AE_NO_CONNECTION;
+}
+UNSIGNED32 AdsMgResetCommStats(ADSHANDLE h) {
+    const MgBackend* be = lookup_mg(h);
+    if (be == nullptr) return openads::AE_INVALID_CONNECTION_HANDLE;
+    if (!be->remote) {
+        openads::mgmt::process_mg_stats().reset_comm();
+        return openads::AE_SUCCESS;
+    }
+    return send_mg_mutator(*be,
+               openads::network::MgRequestKind::ResetCommStats, 0)
+        ? openads::AE_SUCCESS : openads::AE_NO_CONNECTION;
+}
 
 // All AdsDD* helpers (AddIndexFile, AddUserToGroup, CreateLink,
 // CreateRefIntegrity, CreateUser, DeleteUser, DropLink,
@@ -10245,7 +10372,10 @@ UNSIGNED32 AdsCopyTableStructure(ADSHANDLE, UNSIGNED8*)
 UNSIGNED32 AdsGetRecordCRC(ADSHANDLE, UNSIGNED32* p, UNSIGNED32)
     { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
 UNSIGNED32 AdsInitRawKey(ADSHANDLE) { return ok(); }
-UNSIGNED32 AdsMgDumpInternalTables(ADSHANDLE) { return ok(); }
+UNSIGNED32 AdsMgDumpInternalTables(ADSHANDLE h) {
+    return lookup_mg(h) ? openads::AE_SUCCESS
+                        : openads::AE_INVALID_CONNECTION_HANDLE;
+}
 UNSIGNED32 AdsClearSQLAbortFunc(void) { return ok(); }
 UNSIGNED32 AdsClearSQLParams(ADSHANDLE) { return ok(); }
 UNSIGNED32 AdsStmtClearTablePasswords(ADSHANDLE) { return ok(); }
