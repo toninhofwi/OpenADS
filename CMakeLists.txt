@@ -143,6 +143,7 @@ add_subdirectory(src)
 add_subdirectory(tools/serverd)
 add_subdirectory(tools/bench)
 add_subdirectory(tools/stress)
+add_subdirectory(tools/mgprobe)
 
 if(OPENADS_BUILD_TESTS)
     enable_testing()
