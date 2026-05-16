@@ -9,6 +9,8 @@ use PHPUnit\Framework\TestCase;
 
 final class ParameterBinderTest extends TestCase
 {
+    // --- original tests ---------------------------------------------------
+
     public function testPositionalParams(): void
     {
         $sql = ParameterBinder::bind('SELECT * FROM t WHERE id = ? AND n = ?', [5, 'ab']);
@@ -50,5 +52,66 @@ final class ParameterBinderTest extends TestCase
     {
         $this->expectException(QueryException::class);
         ParameterBinder::bind('WHERE id = ?', [new \stdClass()]);
+    }
+
+    // --- Fix 1: INF / NAN produce invalid SQL ----------------------------
+
+    public function testInfThrowsQueryException(): void
+    {
+        $this->expectException(QueryException::class);
+        $this->expectExceptionMessage('non-finite float');
+        ParameterBinder::bind('VALUES (?)', [INF]);
+    }
+
+    public function testNanThrowsQueryException(): void
+    {
+        $this->expectException(QueryException::class);
+        $this->expectExceptionMessage('non-finite float');
+        ParameterBinder::bind('VALUES (?)', [NAN]);
+    }
+
+    // --- Fix 2: empty $params skips placeholder validation ----------------
+
+    public function testEmptyParamsNoPlaceholderReturnsUnchanged(): void
+    {
+        // No placeholders, no params — must return the SQL untouched.
+        $sql = ParameterBinder::bind('SELECT 1', []);
+        self::assertSame('SELECT 1', $sql);
+    }
+
+    public function testEmptyParamsWithPlaceholderThrows(): void
+    {
+        // Placeholder present but no params — must throw, not silently return '?'.
+        $this->expectException(QueryException::class);
+        ParameterBinder::bind('WHERE id = ?', []);
+    }
+
+    // --- Fix 3: named-param re-substitution corrupts data ----------------
+
+    public function testNamedParamValueContainingOtherToken(): void
+    {
+        // ':city' value contains ':co' — single-pass must not re-substitute.
+        $sql = ParameterBinder::bind(
+            'WHERE city = :city AND co = :co',
+            [':city' => 'Mex:co City', ':co' => 'MX']
+        );
+        self::assertSame("WHERE city = 'Mex:co City' AND co = 'MX'", $sql);
+    }
+
+    // --- Fix 4: non-string / empty-string named keys ---------------------
+
+    public function testEmptyStringNamedKeyThrows(): void
+    {
+        $this->expectException(QueryException::class);
+        $this->expectExceptionMessage('non-empty strings');
+        ParameterBinder::bind('WHERE x = :x', ['' => 1]);
+    }
+
+    public function testIntegerKeyInMixedArrayThrows(): void
+    {
+        // A string key is present so isNamed() returns true; integer key 0 must throw.
+        $this->expectException(QueryException::class);
+        $this->expectExceptionMessage('non-empty strings');
+        ParameterBinder::bind('WHERE x = :x', [0 => 1, ':x' => 2]);
     }
 }

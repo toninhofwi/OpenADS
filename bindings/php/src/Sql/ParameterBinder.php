@@ -10,14 +10,15 @@ use OpenADS\Exception\QueryException;
  * has no host-variable binding, so this is where values become
  * literals — and the only place injection is defended against.
  * A statement uses positional `?` OR named `:name`, not both.
+ *
+ * LIMITATION: a literal `?` or `:name` that appears inside a quoted
+ * string in the SQL template is not supported — it will be treated as
+ * a placeholder, the same restriction as PDO emulated prepares.
  */
 final class ParameterBinder
 {
     public static function bind(string $sql, array $params): string
     {
-        if ($params === []) {
-            return $sql;
-        }
         return self::isNamed($params)
             ? self::bindNamed($sql, $params)
             : self::bindPositional($sql, array_values($params));
@@ -50,13 +51,25 @@ final class ParameterBinder
 
     private static function bindNamed(string $sql, array $params): string
     {
-        // Longest names first so :ab does not partial-match :abc.
-        uksort($params, static fn ($a, $b) => strlen((string) $b) <=> strlen((string) $a));
+        $tokens = [];           // token => value
         foreach ($params as $name => $value) {
+            if (!is_string($name) || $name === '') {
+                throw new QueryException('named parameter keys must be non-empty strings');
+            }
             $token = ($name[0] === ':') ? $name : ':' . $name;
-            $sql   = str_replace($token, self::quote($value), $sql);
+            $tokens[$token] = $value;
         }
-        return $sql;
+        // Longest token first so :abc wins over :ab in the alternation.
+        uksort($tokens, static fn ($a, $b) => strlen((string) $b) <=> strlen((string) $a));
+        $pattern = '/' . implode('|', array_map(
+            static fn ($t) => preg_quote((string) $t, '/'),
+            array_keys($tokens)
+        )) . '/';
+        return preg_replace_callback(
+            $pattern,
+            static fn (array $m): string => self::quote($tokens[$m[0]]),
+            $sql
+        );
     }
 
     /** Render one PHP value as a safe SQL literal. */
@@ -67,6 +80,9 @@ final class ParameterBinder
         }
         if (is_bool($value)) {
             return $value ? '.T.' : '.F.';
+        }
+        if (is_float($value) && !is_finite($value)) {
+            throw new QueryException('non-finite float cannot be a SQL parameter');
         }
         if (is_int($value) || is_float($value)) {
             return (string) $value;
