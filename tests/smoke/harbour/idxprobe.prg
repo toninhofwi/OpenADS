@@ -24,10 +24,14 @@ PROCEDURE Main( cMode )
    StageDbf( cDir, cDbf, aNames )
 
    IF lAds
-      AdsSetServerType( 1 )
-      AdsSetFileType( 2 )
+      AdsSetFileType( 2 )        // ADS_CDX / FoxPro
+      AdsSetServerType( 1 )      // ADS_LOCAL_SERVER
+      IF ! AdsConnect( cDir )
+         ? "AdsConnect failed for " + cDir
+         RETURN
+      ENDIF
       RddSetDefault( "ADSCDX" )
-      USE ( cDbf ) VIA "ADSCDX" ALIAS T SHARED NEW
+      USE ( "idx" ) VIA "ADSCDX" ALIAS T SHARED NEW
    ELSE
       RddSetDefault( "DBFCDX" )
       USE ( cDbf ) ALIAS T SHARED NEW
