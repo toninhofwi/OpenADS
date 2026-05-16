@@ -103,7 +103,9 @@ final class AceLibrary
         if (PHP_OS_FAMILY === 'Windows') {
             return $is64 ? 'ace64.dll' : 'ace32.dll';
         }
-        return 'libace.so';
+        // CMake sets OUTPUT_NAME ace64/ace32, so the POSIX shared
+        // object is libace64.so / libace32.so — not libace.so.
+        return $is64 ? 'libace64.so' : 'libace32.so';
     }
 
     public function ffi(): FFI

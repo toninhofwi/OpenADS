@@ -9,7 +9,8 @@ extension — no compiled C code, install with Composer.
 - PHP 8.1 or newer
 - `ext-ffi` enabled (`ffi.enable=1` in `php.ini`)
 - An OpenADS ACE library reachable on the host:
-  `ace64.dll` / `ace32.dll` (Windows) or `libace.so` (Linux/macOS).
+  `ace64.dll` / `ace32.dll` (Windows) or `libace64.so` /
+  `libace32.so` (Linux/macOS).
   Point `OPENADS_ACE_LIB` at it, or place it on the system
   library path.
 
