@@ -91,10 +91,10 @@ final class Connection
     /** Allocate a NUL-terminated C string buffer for $s. */
     public static function cstr(FFI $ffi, string $s): FFI\CData
     {
-        $len = strlen($s) + 1;
-        $buf = $ffi->new("UNSIGNED8[$len]", false);
-        FFI::memcpy($buf, $s, strlen($s));
-        $buf[strlen($s)] = 0;
+        $n   = strlen($s);
+        $buf = $ffi->new('UNSIGNED8[' . ($n + 1) . ']');
+        FFI::memcpy($buf, $s, $n);
+        $buf[$n] = 0;
         return $buf;
     }
 }
