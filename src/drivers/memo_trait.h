@@ -35,6 +35,14 @@ public:
     virtual util::Result<std::string>
         read(std::uint32_t block_no) = 0;
 
+    // ADM-specific overload: data_len is taken from the 9-byte in-record
+    // reference since ADM blocks carry no per-block length header.
+    // Default delegates to read(block_no) so FPT/DBT are unaffected.
+    virtual util::Result<std::string>
+        read(std::uint32_t block_no, std::uint32_t /*data_len*/) {
+        return read(block_no);
+    }
+
     // Read just the block's type tag (byte-stream is unchanged).
     // Default is Text; FPT-backed stores override to inspect the
     // actual on-disk header byte.

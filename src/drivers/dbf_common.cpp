@@ -192,6 +192,28 @@ void write_f64_le(std::uint8_t* p, double v) {
     write_i64_le(p, static_cast<std::int64_t>(u));
 }
 
+// ADT Julian Day Number ↔ calendar (Fliegel-Van Flandern algorithm).
+void jdn_to_ymd(std::uint32_t jdn, int& y, int& m, int& d) {
+    std::int64_t l = static_cast<std::int64_t>(jdn) + 68569;
+    std::int64_t n = (4 * l) / 146097;
+    l -= (146097 * n + 3) / 4;
+    std::int64_t i = (4000 * (l + 1)) / 1461001;
+    l -= (1461 * i) / 4 - 31;
+    std::int64_t j = (80 * l) / 2447;
+    d = static_cast<int>(l - (2447 * j) / 80);
+    l = j / 11;
+    m = static_cast<int>(j + 2 - 12 * l);
+    y = static_cast<int>(100 * (n - 49) + i + l);
+}
+
+std::uint32_t ymd_to_jdn(int y, int m, int d) {
+    std::int64_t a  = (14 - m) / 12;
+    std::int64_t yy = y + 4800 - a;
+    std::int64_t mm = m + 12 * a - 3;
+    return static_cast<std::uint32_t>(
+        d + (153 * mm + 2) / 5 + 365 * yy + yy / 4 - yy / 100 + yy / 400 - 32045);
+}
+
 } // namespace
 
 util::Result<DbfFieldValue> decode_field(const DbfField& field,
@@ -294,6 +316,96 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
                 reinterpret_cast<const char*>(p), actual);
             break;
         }
+        case DbfFieldType::ShortInt: {
+            // ADT type 12: 2-byte signed int16 LE.
+            if (field.length < 2) { v.as_string = make_string(p, field.length); break; }
+            auto n = static_cast<std::int16_t>(
+                         static_cast<std::uint16_t>(p[0]) |
+                        (static_cast<std::uint16_t>(p[1]) << 8));
+            v.as_double = static_cast<double>(n);
+            char tmp[16];
+            std::snprintf(tmp, sizeof(tmp), "%d", static_cast<int>(n));
+            v.as_string = tmp;
+            break;
+        }
+        case DbfFieldType::Binary:
+            // ADT type 6: 9-byte block ref into .adm store; resolved at driver layer.
+            v.as_string.clear();
+            break;
+
+        case DbfFieldType::CiCharacter:
+            // ADT type 20: same wire encoding as Character; CI only in index comparisons.
+            v.as_string = make_string(p, field.length);
+            break;
+
+        case DbfFieldType::AutoInc: {
+            // ADT type 15: 4-byte unsigned int32 LE, read-only counter.
+            if (field.length < 4) { v.as_string = make_string(p, field.length); break; }
+            std::uint32_t n = static_cast<std::uint32_t>(p[0])        |
+                             (static_cast<std::uint32_t>(p[1]) <<  8) |
+                             (static_cast<std::uint32_t>(p[2]) << 16) |
+                             (static_cast<std::uint32_t>(p[3]) << 24);
+            v.as_double = static_cast<double>(n);
+            char tmp[16];
+            std::snprintf(tmp, sizeof(tmp), "%u", static_cast<unsigned>(n));
+            v.as_string = tmp;
+            break;
+        }
+        case DbfFieldType::Time: {
+            // ADT type 13: 4-byte uint32 milliseconds since midnight → "HH:MM:SS.mmm".
+            if (field.length < 4) { v.as_string = make_string(p, field.length); break; }
+            std::uint32_t ms = static_cast<std::uint32_t>(p[0])        |
+                              (static_cast<std::uint32_t>(p[1]) <<  8) |
+                              (static_cast<std::uint32_t>(p[2]) << 16) |
+                              (static_cast<std::uint32_t>(p[3]) << 24);
+            v.as_double = static_cast<double>(ms);
+            unsigned hh   = ms / 3600000u;
+            unsigned mmv  = (ms % 3600000u) / 60000u;
+            unsigned ss   = (ms % 60000u)   / 1000u;
+            unsigned ms3  =  ms % 1000u;
+            char tmp[16];
+            std::snprintf(tmp, sizeof(tmp), "%02u:%02u:%02u.%03u", hh, mmv, ss, ms3);
+            v.as_string = tmp;
+            break;
+        }
+        case DbfFieldType::AdtDate: {
+            // ADT type 3: 4-byte uint32 Julian Day Number → "YYYYMMDD". JDN 0 = null.
+            if (field.length < 4) { v.as_string = make_string(p, field.length); break; }
+            std::uint32_t jdn = static_cast<std::uint32_t>(p[0])        |
+                               (static_cast<std::uint32_t>(p[1]) <<  8) |
+                               (static_cast<std::uint32_t>(p[2]) << 16) |
+                               (static_cast<std::uint32_t>(p[3]) << 24);
+            if (jdn == 0) { v.is_null = true; break; }
+            int y, mo, d;
+            jdn_to_ymd(jdn, y, mo, d);
+            char tmp[12];
+            std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d", y, mo, d);
+            v.as_string = tmp;
+            break;
+        }
+        case DbfFieldType::AdtTimestamp: {
+            // ADT type 14: 4-byte JDN + 4-byte ms-since-midnight → "YYYYMMDDHHMMSS".
+            if (field.length < 8) { v.as_string = make_string(p, field.length); break; }
+            std::uint32_t jdn = static_cast<std::uint32_t>(p[0])        |
+                               (static_cast<std::uint32_t>(p[1]) <<  8) |
+                               (static_cast<std::uint32_t>(p[2]) << 16) |
+                               (static_cast<std::uint32_t>(p[3]) << 24);
+            std::uint32_t ms  = static_cast<std::uint32_t>(p[4])        |
+                               (static_cast<std::uint32_t>(p[5]) <<  8) |
+                               (static_cast<std::uint32_t>(p[6]) << 16) |
+                               (static_cast<std::uint32_t>(p[7]) << 24);
+            if (jdn == 0 && ms == 0) { v.is_null = true; break; }
+            int y, mo, d;
+            jdn_to_ymd(jdn, y, mo, d);
+            unsigned hh  = ms / 3600000u;
+            unsigned mmv = (ms % 3600000u) / 60000u;
+            unsigned ss  = (ms % 60000u)   / 1000u;
+            char tmp[20];
+            std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d%02u%02u%02u",
+                          y, mo, d, hh, mmv, ss);
+            v.as_string = tmp;
+            break;
+        }
         case DbfFieldType::Unknown:
             v.as_string = make_string(p, field.length);
             break;
@@ -319,6 +431,40 @@ util::Result<void> encode_field_string(const DbfField& f,
         return util::Error{5000, 0, "field range past record buffer", ""};
     }
     std::uint8_t* dst = rec + f.record_offset;
+
+    // ADT binary-encoded date/timestamp: parse string and write raw LE.
+    if (f.type == DbfFieldType::AdtDate && f.length >= 4 && value.size() >= 8) {
+        int y  = std::stoi(value.substr(0, 4));
+        int mo = std::stoi(value.substr(4, 2));
+        int d  = std::stoi(value.substr(6, 2));
+        std::uint32_t jdn = ymd_to_jdn(y, mo, d);
+        dst[0] = static_cast<std::uint8_t>( jdn        & 0xFF);
+        dst[1] = static_cast<std::uint8_t>((jdn >>  8) & 0xFF);
+        dst[2] = static_cast<std::uint8_t>((jdn >> 16) & 0xFF);
+        dst[3] = static_cast<std::uint8_t>((jdn >> 24) & 0xFF);
+        return {};
+    }
+    if (f.type == DbfFieldType::AdtTimestamp && f.length >= 8 && value.size() >= 14) {
+        int y   = std::stoi(value.substr(0, 4));
+        int mo  = std::stoi(value.substr(4, 2));
+        int d   = std::stoi(value.substr(6, 2));
+        int hh  = std::stoi(value.substr(8, 2));
+        int mmv = std::stoi(value.substr(10, 2));
+        int ss  = std::stoi(value.substr(12, 2));
+        std::uint32_t jdn = ymd_to_jdn(y, mo, d);
+        std::uint32_t ms  = static_cast<std::uint32_t>(
+                                hh * 3600000 + mmv * 60000 + ss * 1000);
+        dst[0] = static_cast<std::uint8_t>( jdn        & 0xFF);
+        dst[1] = static_cast<std::uint8_t>((jdn >>  8) & 0xFF);
+        dst[2] = static_cast<std::uint8_t>((jdn >> 16) & 0xFF);
+        dst[3] = static_cast<std::uint8_t>((jdn >> 24) & 0xFF);
+        dst[4] = static_cast<std::uint8_t>( ms         & 0xFF);
+        dst[5] = static_cast<std::uint8_t>((ms  >>  8) & 0xFF);
+        dst[6] = static_cast<std::uint8_t>((ms  >> 16) & 0xFF);
+        dst[7] = static_cast<std::uint8_t>((ms  >> 24) & 0xFF);
+        return {};
+    }
+
     std::size_t n = std::min<std::size_t>(value.size(), f.length);
     std::memcpy(dst, value.data(), n);
     // M11.1 — VFP V / Q pad the unused tail with NUL so callers can
@@ -361,6 +507,25 @@ util::Result<void> encode_field_double(const DbfField& f,
         case DbfFieldType::Double:
             if (f.length >= 8) {
                 write_f64_le(dst, value);
+                return {};
+            }
+            break;
+        case DbfFieldType::ShortInt:
+            if (f.length >= 2) {
+                auto sv = static_cast<std::int16_t>(value);
+                dst[0] = static_cast<std::uint8_t>( sv        & 0xFF);
+                dst[1] = static_cast<std::uint8_t>((sv >>  8) & 0xFF);
+                return {};
+            }
+            break;
+        case DbfFieldType::AutoInc:
+        case DbfFieldType::Time:
+            if (f.length >= 4) {
+                auto uv = static_cast<std::uint32_t>(value);
+                dst[0] = static_cast<std::uint8_t>( uv        & 0xFF);
+                dst[1] = static_cast<std::uint8_t>((uv >>  8) & 0xFF);
+                dst[2] = static_cast<std::uint8_t>((uv >> 16) & 0xFF);
+                dst[3] = static_cast<std::uint8_t>((uv >> 24) & 0xFF);
                 return {};
             }
             break;

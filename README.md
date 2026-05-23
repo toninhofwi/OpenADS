@@ -100,6 +100,7 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **v1.0.0-rc28** | 2026-05-22 | **ADT / ADM support (M4 ADT) — read + write SAP Advantage native tables.** OpenADS can now open `.adt` files produced by the original Advantage Client Engine and write records back; `.adm` memo stores auto-attach when the table carries `Memo` or `Binary` fields. Full 13-type field vocabulary: CHAR, CICHAR (case-insensitive, maps to `ADS_CISTRING` = 25), LOGICAL, DATE (4-byte Julian Day Number), DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY. ADM uses 256-byte fixed blocks with no per-block header; the 9-byte in-record reference (`block_no LE` + `data_len LE` + `0x00`) is resolved transparently by the engine. Record prefix: `0x04` = active / `0x05` = deleted, normalised to DBF convention on read and restored on write; null-bitmap bytes (1–4) are zeroed on `AppendBlank` rather than space-filled. `AdsCreateTable` with `ADS_ADT` still creates a DBF (ADT creation deferred); ADI index files are not yet implemented. Verified against `f:\pmsys\data\landlords.adt` (13 fields, 7 records, CICHAR key, ADM memo round-trip "SEC 8 preferred") via `tests/unit/abi_adt_smoke_test.cpp` (skipped on machines without the fixture). Suite 398 / 398. |
 | **v1.0.0-rc27** | 2026-05-17 | **`AdsGetField` pads CHARACTER fields to the declared width.** Reported by Pritpal Bedi — a Harbour `mini_xbrowse /ads` truncated every text column (`Charlie`→`Charl`, `Barcelona`→`Barcel`) where native DBFCDX showed them full. `AdsGetField` returned CHAR values rtrim'd (`make_string` strips trailing spaces); DBF CHAR is fixed-width space-padded, so xbrowse auto-sized columns to the trimmed value and clipped the rest. `AdsGetField` now re-pads CHARACTER values to the declared field width on both the local and remote read paths; the engine's internal decode stays trimmed so SQL / index keys / AOF are untouched (verified `fieldlenprobe.prg` matches the DBFCDX baseline, `idxprobe.prg` index walk still `SORTED=YES`, suite 397/397). Also: `tools/harbour_patch/rddads-compat.patch` applies again (a dropped blank context line had made `git apply` reject the `rddads.h` hunk); PHP binding gains `Cursor::fetchAssoc/fetchNum` + `Table::seek`; the release workflow adds a macOS Intel (x64) build leg. |
 | **v1.0.0-rc26** | 2026-05-16 | **PHP binding — `bindings/php`.** Asked by Reinaldo Crespo (the old proprietary Advantage PHP extension died around PHP 5.2 and was never modernised), OpenADS now ships `openads/openads-php` — a pure-PHP Composer package, no compiled C, that loads `ace64.dll` / `ace32.dll` / `libace*.so` through `ext-ffi` and wraps it in a modern OOP API (`Connection`, `Statement`, `Cursor`, `Table`, `Record`; PHP 8.1+). One code path covers local data-dir and `tcp://` / `tls://` remote — `AdsConnect60` dispatches on the URI. `Statement::query()` takes `?` / `:name` parameters; `ParameterBinder` substitutes them client-side with per-type quoting (ACE has no host-variable binding) as the anti-injection boundary. Pinned by 31 PHPUnit tests (21 unit + 10 integration vs a live engine) and a CI leg that builds ACE and runs the suite. Also fixes the SQL parser's `read_string_literal`, which decoded no escape — the ANSI doubled-quote escape (`'O''Brien'`) raised error 7200, breaking any SQL client inserting a string with an apostrophe; `''` now decodes to a single `'`. |
 | **v1.0.0-rc25** | 2026-05-16 | Index correctness sweep. `AdsCreateIndex61` decoded the descending flag as `ulOptions & 0x08` — that bit is `ADS_COMPOUND`, which `rddads` and X#'s `ADSRDD` set on every CDX/NTX tag, so every order built descending (`AdsGotoTop` hit the last key, `SKIP` walked backward); now decoded with the named `ace.h` constants. `ALIAS->FIELD` index keys (`INDEX ON CUST->NAME`, passed as literal text) were unparseable — the tokenizer dropped `-`/`>` and every key evaluated blank; `strip_alias_qualifiers()` removes the `<ident>->` qualifier first. Not-positioned reads now return the SAP-canonical `AE_NO_CURRENT_RECORD` (5026) instead of generic 5000, so a Harbour `TBrowse` over `ADSCDX` no longer fails mid-paint with `ADSCDX/5000 table not positioned`. Verified: `idxprobe.prg` matches the DBFCDX baseline, full suite 395/395. |
@@ -431,6 +432,16 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   deletion flag, durable flush, dynamic table creation
   (`AdsCreateTable` parses rddads' `NAME,Type,Len,Dec;…` field-def
   syntax).
+- **ADT read/write** — SAP Advantage native `.adt` tables and `.adm`
+  memo stores produced by Advantage Client Engine are byte-compatible
+  with OpenADS. All 13 ADT field types are supported: CHAR, CICHAR
+  (maps to `ADS_CISTRING`), LOGICAL, DATE (Julian Day Number), DOUBLE,
+  INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY.
+  ADM memos (256-byte fixed blocks) auto-attach when a table carries
+  Memo or Binary fields; the 9-byte in-record reference is resolved
+  transparently. **Not yet supported:** ADT table creation via
+  `AdsCreateTable(ADS_ADT)` (creates DBF format); ADI index files;
+  SAP proprietary ADT encryption.
 - **DBF maintenance** — `AdsZapTable` empties a DBF + clears every
   bound index in lockstep; `AdsPackTable` compacts deleted records
   out of the DBF (Clipper semantics: leaves indexes stale, caller
@@ -694,6 +705,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.52-done` | SQL multi-row `INSERT INTO t (cols) VALUES (...), (...), ...` — appends one record per tuple. |
 | `m10.53-done` | SQL `NULLIF(a,b)` / `COALESCE(a,b,...)` / `IFNULL(expr,default)` — null-handling helpers in projection (empty string = NULL by convention). |
 | `m10.54-done` | SQL aggregate `<agg>(...) FILTER (WHERE <expr>)` — per-slot row filter; CountStar with FILTER uses the filtered count, others always do. |
+| `m4-adt-done` | **ADT / ADM read+write** — `AdtDriver` (`.adt`) + `AdmMemo` (`.adm`) implement the full IDriver / IMemoStore interfaces. All 13 ADT field type codes supported (CHAR, CICHAR, LOGICAL, DATE/JDN, DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY). ADM auto-attaches on `AdsOpenTable` when Memo/Binary fields are present; `Connection::open_table` extends the existing `has_memo_field` scan to include Binary. `AdsCreateTable(ADS_ADT)` still creates a DBF; ADI index files deferred to a later milestone. |
 | `m12.2-done`  | Phase 2 TCP socket layer — `network/socket.{h,_win32.cpp,_posix.cpp}`. listen / accept / connect / send / recv / close + ephemeral-port binding. Win32 links ws2_32. |
 | `m12.3-done`  | Phase 2 server skeleton — `network/server` spawns an accept thread + per-connection session thread. Dispatches Hello → HelloAck (version), Connect → ConnectAck (data_dir echo), Disconnect → close, others → Error frame. recv_exact / read_frame / write_frame helpers exposed for M12.4 / M12.5. |
 | `m12.4-done`  | Phase 2 remote read-only table ops — server proxies OpenTable / GotoTop / Skip / GetField / GetRecordCount / AtEOF / CloseTable. Per-session engine::Connection + 32-bit table-id map. |
@@ -710,17 +722,19 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 
 #### Still planned for 0.3.x
 
-- **M11.5 ADT** (proprietary table format) — depends on a
-  clean-room specification of the ADT on-disk layout. None is
-  publicly available; the only known route is reverse-
-  engineering SAP-owned binaries, which violates the project's
-  clean-room policy and the Advantage SDK / ACE EULA. Not
-  implementable until a clean-room spec exists.
 - **VFP** NULL-bitmap extension — the `0x32` autoinc / null-flag
   header byte stays deferred. Autoinc (M10.11) and V / Q types
   (M11.1) are real today.
-- **ADM** memo format — pairs with ADT, same gating as ADT.
-- **ADI** index format — proprietary B+tree variant; same gating.
+- **ADI index files** — the proprietary SAP B+tree index format that
+  pairs with `.adt` tables. `AdsOpenIndex` on a `.adi` file will fail
+  (no driver exists). `.adt` tables are fully usable today via CDX or
+  NTX sidecar indexes; ADI support requires a clean-room
+  specification of the on-disk layout.
+- **ADT table creation** — `AdsCreateTable` with `ADS_ADT` currently
+  falls back to DBF format. Creating a native `.adt` file is deferred.
+- **ADT encryption** — SAP's proprietary per-record encryption for
+  `.adt` files is not implemented. OpenADS' own AES-256-CTR encryption
+  (M11.2) applies to DBF files only.
 - **Phase 2 server hardening** (M12.6+) — remote write ops
   (Insert / Update / Delete via wire), remote SQL exec
   (`AdsExecuteSQLDirect` over the wire), remote index ops

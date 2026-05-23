@@ -1,5 +1,6 @@
 #include "session/connection.h"
 
+#include "drivers/adm/adm_memo.h"
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/dbt/dbt_memo.h"
 #include "drivers/fpt/fpt_memo.h"
@@ -94,11 +95,12 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
         }
     }
 
-    // Auto-attach a memo store if the table has M-fields.
+    // Auto-attach a memo store if the table has M-fields or Binary fields.
     bool has_memo_field = false;
     for (std::uint16_t i = 0; i < holder->field_count(); ++i) {
-        if (holder->field_descriptor(i).type ==
-            openads::drivers::DbfFieldType::Memo) {
+        auto ftype = holder->field_descriptor(i).type;
+        if (ftype == openads::drivers::DbfFieldType::Memo ||
+            ftype == openads::drivers::DbfFieldType::Binary) {
             has_memo_field = true;
             break;
         }
@@ -108,7 +110,16 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
         auto memo_open_mode =
             (mode == engine::OpenMode::Read) ? openads::drivers::MemoOpenMode::ReadOnly
                                              : openads::drivers::MemoOpenMode::Shared;
-        if (type == engine::TableType::Ntx) {
+        if (type == engine::TableType::Adt) {
+            stem.replace_extension(".adm");
+            std::error_code ec;
+            if (fs::exists(stem, ec)) {
+                auto m = std::make_unique<openads::drivers::adm::AdmMemo>();
+                if (m->open(stem.string(), memo_open_mode)) {
+                    holder->attach_memo(std::move(m));
+                }
+            }
+        } else if (type == engine::TableType::Ntx) {
             stem.replace_extension(".dbt");
             std::error_code ec;
             if (fs::exists(stem, ec)) {

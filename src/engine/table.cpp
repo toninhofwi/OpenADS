@@ -2,6 +2,7 @@
 
 #include "engine/index_expr.h"
 
+#include "drivers/adt/adt_driver.h"
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/ntx/ntx_driver.h"
 
@@ -41,9 +42,11 @@ util::Result<Table> Table::open(const std::string& path,
             drv = std::make_unique<drivers::ntx::NtxDriver>();
             break;
         case TableType::Adt:
+            drv = std::make_unique<drivers::adt::AdtDriver>();
+            break;
         case TableType::Vfp:
             return util::Error{5004, 0,
-                               "table type not yet supported in M3", path};
+                               "VFP table type not yet supported", path};
     }
     drivers::DriverOpenMode dmode = drivers::DriverOpenMode::ReadOnly;
     switch (mode) {
@@ -490,8 +493,33 @@ Table::read_field(std::uint16_t field_index) {
     auto v = drivers::decode_field(f, record_buf_.data(), record_buf_.size());
     if (!v) return v.error();
 
-    // For M-type fields, the record stores a 10-byte ASCII block number
-    // referencing the memo store. Resolve it here.
+    // ADT binary memo/binary reference (9 bytes in record):
+    //   uint32 LE block_no | uint32 LE data_len | 0x00
+    // Detected by field.length == 9 which is exclusive to ADT memo refs
+    // (DBF memo fields are always 10-byte ASCII).
+    if ((f.type == drivers::DbfFieldType::Memo ||
+         f.type == drivers::DbfFieldType::Binary) &&
+        f.length == 9 && memo_) {
+        const std::uint8_t* ref = record_buf_.data() + f.record_offset;
+        std::uint32_t block_no = static_cast<std::uint32_t>(ref[0])        |
+                                (static_cast<std::uint32_t>(ref[1]) <<  8) |
+                                (static_cast<std::uint32_t>(ref[2]) << 16) |
+                                (static_cast<std::uint32_t>(ref[3]) << 24);
+        std::uint32_t data_len = static_cast<std::uint32_t>(ref[4])        |
+                                (static_cast<std::uint32_t>(ref[5]) <<  8) |
+                                (static_cast<std::uint32_t>(ref[6]) << 16) |
+                                (static_cast<std::uint32_t>(ref[7]) << 24);
+        if (block_no != 0 && data_len != 0) {
+            auto mr = memo_->read(block_no, data_len);
+            if (!mr) return mr.error();
+            drivers::DbfFieldValue out;
+            out.as_string = std::move(mr).value();
+            return out;
+        }
+        return v;
+    }
+
+    // DBF ASCII memo reference: 10-byte decimal block number.
     if (f.type == drivers::DbfFieldType::Memo && memo_) {
         std::string raw(reinterpret_cast<const char*>(
             record_buf_.data() + f.record_offset), f.length);

@@ -45,6 +45,14 @@ enum class DbfFieldType {
     Double,     // VFP B
     Varchar,    // VFP V — variable-length character; M11.1
     Varbinary,  // VFP Q — variable-length binary; M11.1
+    // ADT-native types (M4)
+    ShortInt,       // ADT type 12: 2-byte int16 LE
+    Binary,         // ADT type  6: binary/image blob (9-byte in-record ref)
+    CiCharacter,    // ADT type 20: case-insensitive char (same wire encoding as Character)
+    AutoInc,        // ADT type 15: 4-byte uint32 auto-increment, read-only via ADS
+    Time,           // ADT type 13: 4-byte uint32 milliseconds since midnight
+    AdtDate,        // ADT type  3: 4-byte uint32 Julian Day Number
+    AdtTimestamp,   // ADT type 14: 4-byte JDN + 4-byte ms-since-midnight (8 bytes total)
     Unknown
 };
 
@@ -52,7 +60,7 @@ struct DbfField {
     std::string   name;
     DbfFieldType  type          = DbfFieldType::Unknown;
     char          raw_type      = '\0';
-    std::uint8_t  length        = 0;
+    std::uint16_t length        = 0;  // widened to uint16 for ADT fields up to 65535 bytes
     std::uint8_t  decimals      = 0;
     std::uint16_t record_offset = 0; // includes the leading deletion byte
     // VFP autoinc (M10.11). `autoinc` is true when the field-descriptor's

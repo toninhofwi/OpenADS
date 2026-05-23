@@ -29,6 +29,7 @@
 #include "drivers/ntx/ntx_index.h"
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/cdx/cdx_index.h"
+#include "drivers/adi/adi_index.h"
 #include "drivers/fpt/fpt_memo.h"
 #include "platform/proc.h"
 #include "platform/time.h"
@@ -136,7 +137,15 @@ UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
         case DbfFieldType::Double:    return ADS_DOUBLE;        // 10
         case DbfFieldType::Varchar:   return ADS_STRING;        // M11.1
         case DbfFieldType::Varbinary: return ADS_RAW;           // M11.1
-        case DbfFieldType::Unknown:   return ADS_FIELD_TYPE_UNKNOWN;
+        // ADT-native types (M4)
+        case DbfFieldType::ShortInt:     return ADS_SHORTINT;   // 12
+        case DbfFieldType::Binary:       return ADS_BINARY;     //  6
+        case DbfFieldType::CiCharacter:  return ADS_CISTRING;   // 25
+        case DbfFieldType::AutoInc:      return ADS_AUTOINC;    // 15
+        case DbfFieldType::Time:         return ADS_TIME;       // 13
+        case DbfFieldType::AdtDate:      return ADS_DATE;       //  3
+        case DbfFieldType::AdtTimestamp: return ADS_TIMESTAMP;  // 14
+        case DbfFieldType::Unknown:      return ADS_FIELD_TYPE_UNKNOWN;
     }
     return ADS_FIELD_TYPE_UNKNOWN;
 }
@@ -301,6 +310,16 @@ std::string pad_char_field(std::string s, std::size_t width) {
     return s;
 }
 
+} // namespace
+
+// RCB 2026-05-22 17:03 — set_stmt_param is defined later in the file alongside
+// SqlStatement and stmt_map.  AdsSetString / AdsSetDouble / AdsSetLogical all
+// call it before that definition is reached, so a forward declaration is needed
+// here to satisfy the compiler.  It must be inside a namespace{} block to match
+// the anonymous-namespace linkage of the definition; a file-scope static and an
+// anonymous-namespace function are distinct symbols as far as MSVC is concerned.
+namespace {
+bool set_stmt_param(ADSHANDLE h, const char* pname, std::string literal);
 } // namespace
 
 // M9.16: chunked AdsSetBinary keeps a per-(table, field) accumulator;
@@ -514,6 +533,17 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
             std::vector<UNSIGNED8> b(cdxs.size() + 1);
             std::memcpy(b.data(), cdxs.data(), cdxs.size());
             // Up to 64 tag handles is plenty for a production CDX.
+            ADSHANDLE arr[64] = {0};
+            UNSIGNED16 alen = 64;
+            (void)AdsOpenIndex(gh, b.data(), arr, &alen);
+        }
+    } else if (tp.extension() == ".adt" || tp.extension() == ".ADT") {
+        fs::path adi = tp; adi.replace_extension(".adi");
+        std::error_code ec;
+        if (fs::exists(adi, ec)) {
+            std::string adis = adi.string();
+            std::vector<UNSIGNED8> b(adis.size() + 1);
+            std::memcpy(b.data(), adis.data(), adis.size());
             ADSHANDLE arr[64] = {0};
             UNSIGNED16 alen = 64;
             (void)AdsOpenIndex(gh, b.data(), arr, &alen);
@@ -1911,6 +1941,24 @@ UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
 
 UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucValue, UNSIGNED32 ulLen) {
+    // RCB 2026-05-22 17:03 — AdsSet* previously had no awareness of statement
+    // handles.  get_table() only queries the HandleRegistry for HandleKind::Table
+    // and returns nullptr for anything else, so calls against a prepared statement
+    // handle always failed with [5000] unknown table.  We check set_stmt_param
+    // first; if the handle is in stmt_map the value is stored as a quoted SQL
+    // string literal and we return immediately without touching the table path.
+    // Single quotes inside the value are doubled to produce a valid SQL literal.
+    if (pucField != nullptr) {
+        std::string val(pucValue ? reinterpret_cast<const char*>(pucValue) : "",
+                        pucValue ? static_cast<std::size_t>(ulLen) : 0u);
+        std::string escaped;
+        escaped.reserve(val.size() + 2);
+        for (char c : val) { escaped += c; if (c == '\'') escaped += c; }
+        if (set_stmt_param(hTable,
+                           reinterpret_cast<const char*>(pucField),
+                           "'" + escaped + "'"))
+            return ok();
+    }
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
         std::string fname(reinterpret_cast<const char*>(pucField));
@@ -1937,6 +1985,14 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16 bValue) {
+    // RCB 2026-05-22 17:03 — same statement-handle gap as AdsSetString.
+    // Logical fields in DBF are stored as 'T'/'F' but the SQL parser accepts
+    // 1 and 0 in INSERT/UPDATE VALUES, so we emit those as the literal.
+    if (pucField != nullptr)
+        if (set_stmt_param(hTable,
+                           reinterpret_cast<const char*>(pucField),
+                           bValue ? "1" : "0"))
+            return ok();
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
@@ -1950,6 +2006,19 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
                         double dValue) {
+    // RCB 2026-05-22 17:03 — same statement-handle gap as AdsSetString.
+    // AdsSetLongLong also routes through here (it casts to double before calling
+    // us), so fixing this one covers both numeric bind types.  We use a char
+    // buffer with snprintf rather than std::to_string to avoid locale-dependent
+    // decimal separators that would break the SQL parser.
+    if (pucField != nullptr) {
+        char nbuf[64];
+        std::snprintf(nbuf, sizeof(nbuf), "%.17g", dValue);
+        if (set_stmt_param(hTable,
+                           reinterpret_cast<const char*>(pucField),
+                           std::string(nbuf)))
+            return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
@@ -2471,6 +2540,9 @@ make_index_for(const std::string& path) {
     if (path_ends_with_ci(path, ".cdx")) {
         return std::make_unique<openads::drivers::cdx::CdxIndex>();
     }
+    if (path_ends_with_ci(path, ".adi")) {
+        return std::make_unique<openads::drivers::adi::AdiIndex>();
+    }
     return std::make_unique<openads::drivers::ntx::NtxIndex>();
 }
 
@@ -2598,11 +2670,16 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     }
     bool table_has_active = act.find(t) != act.end();
 
-    // Enumerate tags. CDX exposes list_tags; NTX has only its single
+    // Enumerate tags. CDX/ADI expose list_tags; NTX has only its single
     // tag, which open() reports via name().
     std::vector<std::string> tags;
+    bool is_adi = path_ends_with_ci(path, ".adi");
     if (path_ends_with_ci(path, ".cdx")) {
         auto r = openads::drivers::cdx::CdxIndex::list_tags(path);
+        if (!r) return fail(r.error());
+        tags = std::move(r).value();
+    } else if (is_adi) {
+        auto r = openads::drivers::adi::AdiIndex::list_tags(path);
         if (!r) return fail(r.error());
         tags = std::move(r).value();
     }
@@ -2631,7 +2708,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         return ok();
     }
 
-    // CDX with one or more tags: open each by name. The first tag's
+    // CDX / ADI with one or more tags: open each by name. The first tag's
     // IIndex moves into Table::order_ (becomes default order) only
     // when the table doesn't already have an active order; the rest
     // (and the first tag in the additive case) park as extra views.
@@ -2640,11 +2717,23 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     UNSIGNED16 count = 0;
     for (const auto& name : tags) {
         if (count >= cap) break;
-        auto sub = std::make_unique<openads::drivers::cdx::CdxIndex>();
-        if (auto r = sub->open_named(path,
-                          openads::drivers::IndexOpenMode::Shared,
-                          name); !r) {
-            return fail(r.error());
+        std::unique_ptr<openads::drivers::IIndex> sub;
+        if (is_adi) {
+            auto idx = std::make_unique<openads::drivers::adi::AdiIndex>();
+            if (auto r = idx->open_named(path,
+                              openads::drivers::IndexOpenMode::Shared,
+                              name); !r) {
+                return fail(r.error());
+            }
+            sub = std::move(idx);
+        } else {
+            auto idx = std::make_unique<openads::drivers::cdx::CdxIndex>();
+            if (auto r = idx->open_named(path,
+                              openads::drivers::IndexOpenMode::Shared,
+                              name); !r) {
+                return fail(r.error());
+            }
+            sub = std::move(idx);
         }
         ADSHANDLE h = next_index_handle();
         if (!table_has_active) {
@@ -5015,6 +5104,15 @@ struct SqlStatement {
     Connection*                            conn   = nullptr;
     openads::network::RemoteConnection*    remote = nullptr;
     std::string                            sql;
+    // RCB 2026-05-22 17:03 — The original struct stored only the raw SQL string.
+    // AdsSet* functions never had a place to write named parameter values because
+    // no parameter map existed here.  AdsPrepareSQL and AdsExecuteSQL had no
+    // substitution step, so calling bindXxx() on a prepared statement always
+    // fell through to get_table(), which knows nothing about statement handles,
+    // and returned [5000] unknown table.  Adding params here gives AdsSet* a
+    // place to store :name -> SQL-literal pairs that AdsExecuteSQL can substitute
+    // before handing the final SQL to the parser.
+    std::unordered_map<std::string, std::string> params;
 };
 
 std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>>& stmt_map() {
@@ -5025,6 +5123,23 @@ std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>>& stmt_map() {
 ADSHANDLE next_stmt_handle() {
     static std::uint64_t n = 0x60000000ULL;
     return ++n;
+}
+
+// RCB 2026-05-22 17:03 — Statement handles live in stmt_map() which is a plain
+// unordered_map keyed on the handle value (starting at 0x60000000).  They are
+// completely invisible to get_table(), which queries the separate HandleRegistry
+// for HandleKind::Table.  This helper is the single check point: if h is in
+// stmt_map we store the value as a SQL literal string against the parameter name
+// and return true so the caller skips the table path entirely.  The parameter
+// name may arrive with or without a leading colon depending on the caller.
+bool set_stmt_param(ADSHANDLE h, const char* pname, std::string literal) {
+    auto& m = stmt_map();
+    auto it = m.find(h);
+    if (it == m.end()) return false;
+    std::string key(pname ? pname : "");
+    if (!key.empty() && key[0] == ':') key.erase(0, 1);
+    it->second->params[key] = std::move(literal);
+    return true;
 }
 
 } // namespace
@@ -5075,9 +5190,27 @@ UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
     if (it->second->sql.empty()) {
         return fail(openads::AE_PARSE_ERROR, "no prepared SQL");
     }
-    UNSIGNED8 buf[2048];
-    std::size_t n = std::min<std::size_t>(it->second->sql.size(), sizeof(buf) - 1);
-    std::memcpy(buf, it->second->sql.data(), n);
+    // RCB 2026-05-22 17:03 — The original code copied the raw prepared SQL
+    // directly into the buffer and executed it, so :name placeholders were
+    // passed to the parser verbatim and caused a parse error.  Now that
+    // AdsSet* stores literal values in SqlStatement::params we do a simple
+    // token replacement here before the SQL reaches the parser.  Each key in
+    // params is the bare name without the colon; we search for ":name" in the
+    // SQL and replace every occurrence with the stored literal.  We use a
+    // std::string for the working copy so we are not constrained by a fixed
+    // buffer size, then copy the result into buf for AdsExecuteSQLDirect.
+    std::string sql = it->second->sql;
+    for (auto& kv : it->second->params) {
+        std::string placeholder = ":" + kv.first;
+        std::size_t pos = 0;
+        while ((pos = sql.find(placeholder, pos)) != std::string::npos) {
+            sql.replace(pos, placeholder.size(), kv.second);
+            pos += kv.second.size();
+        }
+    }
+    UNSIGNED8 buf[4096];
+    std::size_t n = std::min<std::size_t>(sql.size(), sizeof(buf) - 1);
+    std::memcpy(buf, sql.data(), n);
     buf[n] = '\0';
     return AdsExecuteSQLDirect(hStatement, buf, phCursor);
 }
