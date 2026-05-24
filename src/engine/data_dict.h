@@ -2,6 +2,8 @@
 
 #include "util/result.h"
 
+#include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -9,23 +11,23 @@
 
 namespace openads::engine {
 
-// Data Dictionary — clean-room OpenADS-native text format. Round-
-// trips with itself only; the proprietary ADS `.add` binary stays
-// unimplemented until a clean-room specification is available.
+// Data Dictionary — supports two on-disk formats:
 //
-// Format v1 (M10.1) extends v0's `TABLE alias=path` rows with the
-// per-entity rows below. Unknown rows on load are preserved when
-// the format version changes; comments (`# ...`) round-trip too.
+//   Text format (OpenADS-native, v1):
+//     # OpenADS Data Dictionary v1
+//     TABLE     <alias>=<relative_path>
+//     INDEX     <table_alias>=<index_path>[\t<comment>]
+//     USER      <name>
+//     MEMBER    <user>=<group>
+//     LINK      <alias>=<path>[\t<user>[\t<pwd>]]
+//     RI        <name>=<parent>;<child>;<tag>;<opt_update>;<opt_delete>;<fail_tbl>
+//     DBPROP    <key>=<value>
+//     USERPROP  <user>;<key>=<value>
 //
-//   # OpenADS Data Dictionary v1
-//   TABLE     <alias>=<relative_path>
-//   INDEX     <table_alias>=<index_path>[\t<comment>]
-//   USER      <name>
-//   MEMBER    <user>=<group>
-//   LINK      <alias>=<path>[\t<user>[\t<pwd>]]
-//   RI        <name>=<parent>;<child>;<tag>;<opt_update>;<opt_delete>;<fail_tbl>
-//   DBPROP    <key>=<value>
-//   USERPROP  <user>;<key>=<value>
+//   Binary format (ADS proprietary .add):
+//     Detected by "ADS Data Dictionary\0" magic at offset 0.
+//     Full round-trip: loaded records are preserved verbatim; Table,
+//     Index, and User mutations add/delete binary records in-place.
 
 class DataDict {
 public:
@@ -121,8 +123,30 @@ public:
     const std::string& path() const noexcept { return path_; }
 
 private:
+    // In-memory representation of one binary .add record.
+    struct BinaryRecord {
+        bool active = true;
+        std::uint32_t obj_id = 0;
+        std::uint32_t parent_id = 0;
+        std::string obj_type;           // up to 10 chars (trimmed)
+        std::string obj_name;           // up to 200 chars (trimmed)
+        std::string property;           // raw VarChar bytes (may include \0)
+        bool prop_null = true;          // true → stored as 0xFFFF
+        std::array<std::uint8_t, 9> more_property{};
+        std::uint32_t info1 = 0;
+        std::uint32_t info2 = 0;
+        std::array<std::uint8_t, 9> comment{};
+    };
+
     util::Result<void> load_();
     util::Result<void> load_add_binary_(const std::string& buf);
+    util::Result<void> save_add_binary_();
+
+    std::uint32_t binary_alloc_id_();           // consume + advance next ObjID
+    std::uint32_t binary_obj_id_of_(const std::string& obj_type,
+                                    const std::string& name) const;
+    static std::string serialize_binary_rec_(const BinaryRecord& r,
+                                             std::uint32_t rec_len);
 
     std::string                                  path_;
     std::unordered_map<std::string, std::string> tables_;
@@ -138,6 +162,13 @@ private:
     std::unordered_map<std::string,
                        std::unordered_map<std::string, std::string>>
                                                  user_props_;
+
+    // Binary format state (populated only when binary_format_ == true).
+    bool binary_format_ = false;
+    std::string binary_hdr_;            // raw hdr_len bytes, updated in-place
+    std::uint32_t binary_hdr_len_ = 0;
+    std::uint32_t binary_rec_len_ = 0;
+    std::vector<BinaryRecord> binary_recs_;  // all records, active + deleted
 };
 
 } // namespace openads::engine

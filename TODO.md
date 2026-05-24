@@ -24,12 +24,13 @@ Check off completed work and commit the file update so it stays current.
 
 ### Open
 
-- [ ] **Guard mutations on binary-format DDs** (highest priority).
-      `save()` currently overwrites with OpenADS text format when a
-      binary `.add` was loaded. This silently corrupts any real ADS DD
-      (e.g. pmsys.add) if any mutation ABI call is made through
-      OpenADS. Options: (a) mark binary DDs read-only and return
-      `AE_DD_CANNOT_MODIFY` on mutations, or (b) implement binary write.
+- [x] **Binary `.add` write support** — full round-trip mutations on
+      ADS proprietary Data Dictionary files. `save_add_binary_()` serializes
+      all records back in exact binary layout (524-byte records, 2200-byte
+      header updated in-place). `add_table`, `remove_table`, `add_index_file`,
+      `remove_index_file`, `create_user`, `delete_user` all dispatch through
+      the binary path when `binary_format_` is set. 4 round-trip tests added
+      to `tests/unit/data_dict_test.cpp`. (2026-05-24)
 
 - [x] **`AdsDDGetTableProperty` / `AdsDDSetTableProperty`**.
       Exported. Handles: RELATIVE_PATH (211), TABLE_PATH (205),
