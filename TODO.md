@@ -66,6 +66,74 @@ Check off completed work and commit the file update so it stays current.
 
 ---
 
+## VFP driver
+
+### Open
+
+- [ ] **VFP table support** (DBF `0x30` / `0x31`).
+      `table.cpp:49` returns an error for VFP-typed DBF files. Was in
+      the original M4 plan but deferred. Needs a `VfpDriver` that
+      handles the `_NullFlags` system field for NULL bitmap and the VFP
+      autoinc field type.
+
+---
+
+## SQL engine
+
+### Open
+
+- [ ] **`CONTAINS` / `LIKE` in join-cursor and aggregate `WHERE`**.
+      Both the join-cursor compile path and the aggregate `FILTER`
+      compile path only handle `Cmp / AND / OR / NOT` — anything else
+      returns `AE_FUNCTION_NOT_AVAILABLE`. `CONTAINS` and `LIKE` are
+      the most common missing operators.
+
+- [ ] **`CASE WHEN` conditions beyond `Cmp/AND/OR/NOT`**.
+      Same restriction in the `CASE WHEN` condition compiler. In
+      practice this means CASE expressions can only branch on simple
+      comparisons today.
+
+- [ ] **FTS query-time token lookup**.
+      `AdsCreateFTSIndex` builds the `.fts` inverted-index file, but
+      the comment in `ace_exports.cpp` notes "Search support (token
+      lookup at query time) is a follow-up milestone." `AdsFTSSearch`
+      exists and works; the gap is wiring it to `WHERE CONTAINS(col,
+      expr)` inside the SQL engine so full-text predicates can be used
+      in ordinary SELECT statements.
+
+---
+
+## Encryption
+
+### Open
+
+- [ ] **`AdsDecryptTable` / `AdsEncryptRecord` / `AdsDecryptRecord`**.
+      All three are stubbed `AE_FUNCTION_NOT_AVAILABLE` pending ADS
+      encryption-mode reverse-engineering. `AdsEncryptTable` (OpenADS
+      format) works; the ADS-original per-record format does not.
+
+- [ ] **Key derivation hardening**.
+      `Connection::set_encryption_password` zero-pads the password to
+      32 bytes (noted in `connection.cpp:510`). Should use PBKDF2 or
+      Argon2 once a SHA-256 implementation is in the tree. Low urgency
+      for local-use scenarios; critical before any multi-user deployment
+      that stores encrypted tables long-term.
+
+---
+
+## Transactions
+
+### Open
+
+- [ ] **WAL crash recovery**.
+      The engine has `TxLog` / `LsnMap` infrastructure and the WAL
+      file is written, but the M5 comment in `ace_exports.cpp` says
+      "in-memory; WAL persistence pending." A clean crash-recovery path
+      (replay uncommitted WAL on next open, discard partial writes) has
+      not been tested end-to-end.
+
+---
+
 ## ABI completeness
 
 ### Open
@@ -74,11 +142,27 @@ Check off completed work and commit the file update so it stays current.
       used by Harbour/X# `ADSRDD.prg` server-side query path.
       Client-side fallback handles every common case; these are
       nice-to-have for completeness.
+      (`AdsEvalLogicalExpr`, `AdsEvalNumericExpr`, `AdsEvalStringExpr`
+      all return `AE_FUNCTION_NOT_AVAILABLE`.)
 
 - [ ] **`AdsStmt*` helpers** — used by the X# SQL surface.
 
 - [ ] **`AdsRestructureTable` type conversion** — rename + retype is
       deferred; apps that need it can issue DELETE + ADD for now.
+
+- [ ] **`AdsContinue`** (LOCATE/CONTINUE loop).
+      Returns `AE_FUNCTION_NOT_AVAILABLE`; X# runs LOCATE itself but
+      Harbour apps calling `CONTINUE` directly will fail.
+
+- [ ] **Table-management stubs**.
+      `AdsCopyTableContent`, `AdsCloneTable`, `AdsCopyTableStructure`
+      all return `AE_FUNCTION_NOT_AVAILABLE`. Needed by migration tools
+      and some DD-aware GUI clients.
+
+- [ ] **Enumeration stubs**.
+      `AdsGetAllTables`, `AdsGetAllIndexes`, `AdsGetFTSIndexes` return
+      zero-count stubs. DD-aware GUI tools (Studio, ADS Data Architect
+      equivalents) call these to populate their object trees.
 
 ---
 
