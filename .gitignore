@@ -22,6 +22,9 @@ Makefile
 # Claude Code local
 .claude/
 
+# SQL engine temp tables (aggregate result scratch files)
+tests/fixtures/**/_agg_*.dbf
+
 # Smoke-test build artefacts (third-party RDD harnesses)
 tests/smoke/harbour/smoke.exe
 tests/smoke/harbour/smoke_out.txt

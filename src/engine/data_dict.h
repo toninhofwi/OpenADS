@@ -122,6 +122,7 @@ public:
 
 private:
     util::Result<void> load_();
+    util::Result<void> load_add_binary_(const std::string& buf);
 
     std::string                                  path_;
     std::unordered_map<std::string, std::string> tables_;

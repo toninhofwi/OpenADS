@@ -11,6 +11,18 @@ namespace openads::engine {
 
 namespace {
 
+static inline uint32_t le32(const std::string& b, std::size_t off) {
+    return static_cast<uint8_t>(b[off])
+         | (static_cast<uint8_t>(b[off+1]) << 8)
+         | (static_cast<uint8_t>(b[off+2]) << 16)
+         | (static_cast<uint8_t>(b[off+3]) << 24);
+}
+
+static inline uint16_t le16(const std::string& b, std::size_t off) {
+    return static_cast<uint8_t>(b[off])
+         | (static_cast<uint8_t>(b[off+1]) << 8);
+}
+
 std::string trim(std::string s) {
     auto is_ws = [](char c) {
         return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -56,6 +68,67 @@ std::vector<std::string> split_tabs(const std::string& s) {
 }
 }  // namespace
 
+util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
+    // ADS Data Dictionary binary format:
+    //   sig "ADS Data Dictionary\0" (20 bytes)
+    //   hdr_len uint32 LE at 0x20  — total header including field descriptors
+    //   rec_len  uint32 LE at 0x24 — bytes per record
+    //   Records start at hdr_len; each record:
+    //     [0]      status 0x04=active, 0x05=deleted
+    //     [1..4]   null bitmap (4 bytes)
+    //     [13..22] Object Type  — CHAR(10) space-padded
+    //     [23..222]Object Name  — CHAR(200) space-padded
+    //     [223..]  Property     — uint16 LE length prefix + data
+    if (buf.size() < 40)
+        return util::Error{5000, 0, "ADD file too small", path_};
+
+    uint32_t hdr_len = le32(buf, 0x20);
+    uint32_t rec_len  = le32(buf, 0x24);
+
+    if (rec_len == 0 || hdr_len > buf.size())
+        return util::Error{5000, 0, "ADD header corrupt", path_};
+
+    std::size_t total = (buf.size() - hdr_len) / rec_len;
+    for (std::size_t i = 0; i < total; ++i) {
+        std::size_t base = hdr_len + i * rec_len;
+        if (base + rec_len > buf.size()) break;
+
+        if (static_cast<uint8_t>(buf[base]) != 0x04) continue;  // deleted/free
+
+        // Object Type: CHAR(10) at offset 13
+        std::string obj_type = buf.substr(base + 13, 10);
+        {
+            auto p = obj_type.find_last_not_of(" \0", std::string::npos, 2);
+            obj_type = (p == std::string::npos) ? "" : obj_type.substr(0, p + 1);
+        }
+
+        if (obj_type != "Table") continue;
+
+        // Object Name: CHAR(200) at offset 23 — the alias
+        std::string alias = buf.substr(base + 23, 200);
+        {
+            auto p = alias.find_last_not_of(" \0", std::string::npos, 2);
+            alias = (p == std::string::npos) ? "" : alias.substr(0, p + 1);
+        }
+        if (alias.empty()) continue;
+
+        // Property: uint16 LE length at offset 223, then path bytes
+        if (base + 223 + 2 > buf.size()) continue;
+        uint16_t plen = le16(buf, base + 223);
+        if (plen == 0xFFFFu || plen == 0 ||
+            base + 225 + plen > buf.size()) continue;
+
+        std::string path = buf.substr(base + 225, plen);
+        // Strip embedded null terminator (the length includes it)
+        auto nul = path.find('\0');
+        if (nul != std::string::npos) path.resize(nul);
+        if (path.empty()) continue;
+
+        tables_[alias] = path;
+    }
+    return {};
+}
+
 util::Result<void> DataDict::load_() {
     auto fres = platform::File::open(path_, platform::OpenMode::ReadOnly);
     if (!fres) return fres.error();
@@ -67,6 +140,14 @@ util::Result<void> DataDict::load_() {
         auto rd = file.read_at(0, buf.data(), buf.size());
         if (!rd) return rd.error();
     }
+
+    // Detect ADS proprietary binary format by its fixed signature.
+    if (buf.size() >= 20 &&
+        buf.compare(0, 19, "ADS Data Dictionary") == 0 &&
+        static_cast<uint8_t>(buf[19]) == 0x00) {
+        return load_add_binary_(buf);
+    }
+
     std::istringstream ss(buf);
     std::string line;
     auto starts_with = [](const std::string& s, const char* k) {
