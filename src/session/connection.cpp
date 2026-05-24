@@ -73,9 +73,20 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     if (dd_.has_value()) effective = dd_->resolve(relative_path);
     fs::path full = fs::path(data_dir_) / effective;
     // Auto-append .dbf when the caller (typically rddads / Clipper)
-    // passed a bare table alias without an extension.
+    // passed a bare table alias without an extension.  If .dbf does not
+    // exist but .adt does, open as ADT (e.g. SQL SELECT FROM <alias>
+    // against an ADT-only data directory).
     if (!full.has_extension()) {
         full.replace_extension(".dbf");
+        std::error_code ec;
+        if (!fs::exists(full, ec)) {
+            fs::path adt_cand = full;
+            adt_cand.replace_extension(".adt");
+            if (fs::exists(adt_cand, ec)) {
+                full = adt_cand;
+                type = engine::TableType::Adt;
+            }
+        }
     }
     auto resolved = platform::resolve_case_insensitive(full.string());
 

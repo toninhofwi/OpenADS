@@ -53,6 +53,7 @@ enum class DbfFieldType {
     Time,           // ADT type 13: 4-byte uint32 milliseconds since midnight
     AdtDate,        // ADT type  3: 4-byte uint32 Julian Day Number
     AdtTimestamp,   // ADT type 14: 4-byte JDN + 4-byte ms-since-midnight (8 bytes total)
+    AdtMoney,       // ADT type 18: 8-byte IEEE754 LE double (NOT VFP int64/10000)
     Unknown
 };
 

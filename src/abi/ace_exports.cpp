@@ -146,6 +146,7 @@ UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
         case DbfFieldType::Time:         return ADS_TIME;       // 13
         case DbfFieldType::AdtDate:      return ADS_DATE;       //  3
         case DbfFieldType::AdtTimestamp: return ADS_TIMESTAMP;  // 14
+        case DbfFieldType::AdtMoney:     return ADS_MONEY;      // 18
         case DbfFieldType::Unknown:      return ADS_FIELD_TYPE_UNKNOWN;
     }
     return ADS_FIELD_TYPE_UNKNOWN;
@@ -538,17 +539,6 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
             UNSIGNED16 alen = 64;
             (void)AdsOpenIndex(gh, b.data(), arr, &alen);
         }
-    } else if (tp.extension() == ".adt" || tp.extension() == ".ADT") {
-        fs::path adi = tp; adi.replace_extension(".adi");
-        std::error_code ec;
-        if (fs::exists(adi, ec)) {
-            std::string adis = adi.string();
-            std::vector<UNSIGNED8> b(adis.size() + 1);
-            std::memcpy(b.data(), adis.data(), adis.size());
-            ADSHANDLE arr[64] = {0};
-            UNSIGNED16 alen = 64;
-            (void)AdsOpenIndex(gh, b.data(), arr, &alen);
-        }
     }
     return ok();
 }
@@ -683,7 +673,7 @@ DbfTypeSpec dbf_type_for(const std::string& name) {
             default:  break;
         }
     }
-    if (eq("Character") || eq("Char") || eq("CICHARACTER"))
+    if (eq("Character") || eq("Char"))
         return {'C', 0, 0, false};
     if (eq("Numeric") || eq("Long") || eq("Number"))
         return {'N', 0, 0, false};
@@ -694,13 +684,26 @@ DbfTypeSpec dbf_type_for(const std::string& name) {
     if (eq("Memo") || eq("NMemo"))
         return {'M', 10, 0, true};
     if (eq("Binary") || eq("Image"))
-        return {'M', 10, 0, true};
-    if (eq("Integer") || eq("ShortInt") || eq("LongLong"))
+        return {'Q', 10, 0, true};
+    if (eq("Integer") || eq("LongLong"))
         return {'N', 0, 0, false};
-    if (eq("Double") || eq("Money") || eq("CurDouble"))
+    if (eq("Double") || eq("CurDouble"))
         return {'N', 0, 0, false};
-    if (eq("Time") || eq("Timestamp") || eq("ModTime"))
+    if (eq("ModTime"))
         return {'C', 23, 0, false};   // store as ISO-8601 string for now
+    // ── ADT-specific type names: use sentinel chars handled by adt_spec_for ──
+    if (eq("CICHARACTER") || eq("CiCharacter") || eq("CICHAR"))
+        return {'W', 0, 0, false};    // ADT type 20: case-insensitive char
+    if (eq("ShortInt"))
+        return {'S', 2, 0, false};    // ADT type 12: 2-byte int16
+    if (eq("Money") || eq("Currency"))
+        return {'$', 8, 0, false};    // ADT type 18: 8-byte IEEE754 double
+    if (eq("Timestamp"))
+        return {'P', 8, 0, false};    // ADT type 14: 8-byte JDN+ms
+    if (eq("AutoInc"))
+        return {'A', 4, 0, false};    // ADT type 15: 4-byte uint32 auto-increment
+    if (eq("Time"))
+        return {'Z', 4, 0, false};    // ADT type 13: 4-byte ms since midnight
     return {'C', 0, 0, false};        // unknown -> Character
 }
 
@@ -773,17 +776,25 @@ struct AdtFieldSpec {
 
 AdtFieldSpec adt_spec_for(const FieldOut& f) {
     switch (f.type) {
-        case 'L': return {1,  1,          0,     false};  // LOGICAL
-        case 'D': return {3,  4,          0,     false};  // DATE (JDN uint32)
-        case 'M': return {5,  9,          0,     true };  // MEMO  (9-byte ref)
-        case 'Q': return {6,  9,          0,     true };  // BINARY (9-byte ref)
+        case 'L': return { 1, 1,          0,     false};  // LOGICAL
+        case 'D': return { 3, 4,          0,     false};  // DATE (JDN uint32)
+        case 'M': return { 5, 9,          0,     true };  // MEMO  (9-byte ref)
+        case 'Q': return { 6, 9,          0,     true };  // BINARY (9-byte ref)
         case 'N':
             if (f.dec > 0) return {10, 8, f.dec, false}; // DOUBLE
-            return             {11, 4, 0,     false};     // INTEGER
+            return              {11, 4, 0,     false};     // INTEGER
+        // ADT-specific sentinels from dbf_type_for:
+        case 'W': return {20, static_cast<std::uint16_t>(f.length ? f.length : 10u),
+                          0, false};                       // CICHARACTER
+        case 'S': return {12, 2,          0,     false};  // SHORTINT
+        case '$': return {18, 8,          0,     false};  // MONEY (IEEE754 double)
+        case 'P': return {14, 8,          0,     false};  // TIMESTAMP (JDN+ms)
+        case 'A': return {15, 4,          0,     false};  // AUTOINC
+        case 'Z': return {13, 4,          0,     false};  // TIME (ms since midnight)
         case 'C':
         default:
-            return {4, static_cast<std::uint16_t>(f.length ? f.length : 10u),
-                    0, false};                            // CHAR
+            return { 4, static_cast<std::uint16_t>(f.length ? f.length : 10u),
+                    0, false};                             // CHAR
     }
 }
 
@@ -7854,8 +7865,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         for (std::size_t i = 0; i < slots.size(); ++i) {
             std::array<std::uint8_t, 32> fd{};
             char fn[16];
-            std::snprintf(fn, sizeof(fn), "COL%u",
-                          static_cast<unsigned>((i + 1) & 0xFFFFFu));
+            if (!slots[i].def.alias.empty()) {
+                std::snprintf(fn, sizeof(fn), "%s", slots[i].def.alias.c_str());
+            } else {
+                std::snprintf(fn, sizeof(fn), "COL%u",
+                              static_cast<unsigned>((i + 1) & 0xFFFFFu));
+            }
             std::size_t fn_len = std::strlen(fn);
             std::memcpy(fd.data(), fn, fn_len > 11 ? 11 : fn_len);
             fd[11] = 'C'; fd[16] = 30;

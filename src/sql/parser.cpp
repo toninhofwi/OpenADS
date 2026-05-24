@@ -926,6 +926,9 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                             "expected ')' to close FILTER", sql};
                     }
                 }
+                if (c.match_keyword("AS")) {
+                    agg.alias = c.read_identifier();
+                }
                 stmt.aggregates.push_back(std::move(agg));
             } else {
                 if (aggregate_mode) {

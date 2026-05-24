@@ -112,6 +112,7 @@ add_executable(openads_unit_tests
     unit/abi_adt_smoke_test.cpp
     unit/abi_adt_create_test.cpp
     unit/abi_adi_smoke_test.cpp
+    unit/abi_adt_sql_test.cpp
 )
 
 # M11.4 — side DLL with stored procedures used by abi_aep_test.

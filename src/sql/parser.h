@@ -80,6 +80,7 @@ enum class AggregateKind { CountStar, Count, Sum, Avg, Min, Max };
 struct Aggregate {
     AggregateKind kind;
     std::string   column;   // empty for CountStar
+    std::string   alias;    // optional AS <name>
     // M10.54 — optional `FILTER (WHERE <expr>)` on an aggregate
     // call. Per-row filter; rows that fail are skipped from this
     // aggregate's accumulation. shared_ptr to keep Aggregate
