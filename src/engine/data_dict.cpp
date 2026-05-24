@@ -490,6 +490,13 @@ bool DataDict::is_member_of(const std::string& user,
     return it->second.find(group) != it->second.end();
 }
 
+const std::unordered_set<std::string>&
+DataDict::groups_of(const std::string& user) const {
+    static const std::unordered_set<std::string> empty;
+    auto it = memberships_.find(user);
+    return it == memberships_.end() ? empty : it->second;
+}
+
 util::Result<void>
 DataDict::create_link(const std::string& alias, const std::string& path,
                       const std::string& user, const std::string& pwd) {

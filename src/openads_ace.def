@@ -130,6 +130,7 @@ EXPORTS
     AdsDDRemoveUserFromGroup
     AdsDDSetDatabaseProperty
     AdsDDSetTableProperty
+    AdsDDSetUserProperty
     AdsDeleteCustomKey
     AdsDeleteFile
     AdsEvalAOF

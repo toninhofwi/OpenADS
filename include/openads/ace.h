@@ -567,6 +567,11 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_DD_MAX_FAILED_ATTEMPTS           21
 #define ADS_DD_USER_DEFINED_PROP             22
 
+// User-object property codes (1101-1103).
+#define ADS_DD_USER_PASSWORD              1101
+#define ADS_DD_USER_GROUP_MEMBERSHIP      1102
+#define ADS_DD_USER_BAD_LOGINS            1103
+
 // Table-object property codes (200-216).
 #define ADS_DD_TABLE_VALIDATION_EXPR         200
 #define ADS_DD_TABLE_VALIDATION_MSG          201
@@ -1095,6 +1100,11 @@ UNSIGNED32 ENTRYPOINT AdsDDRemoveUserFromGroup(ADSHANDLE hConnect,
                                              UNSIGNED8* pucGroup,
                                              UNSIGNED8* pucUser);
 UNSIGNED32 ENTRYPOINT AdsDDSetDatabaseProperty(ADSHANDLE hConnect,
+                                             UNSIGNED16 usProp,
+                                             void* pvBuf,
+                                             UNSIGNED16 usLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetUserProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucUser,
                                              UNSIGNED16 usProp,
                                              void* pvBuf,
                                              UNSIGNED16 usLen);

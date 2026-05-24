@@ -39,10 +39,14 @@ Check off completed work and commit the file update so it stays current.
       boolean properties. Set returns AE_FUNCTION_NOT_AVAILABLE.
       5 unit tests in `tests/unit/abi_dd_table_prop_test.cpp`. (2026-05-24)
 
-- [ ] **`AdsDDSetUserProperty`** property-code mapping.
-      The thunk calls `set_user_property` with a raw `usProp` numeric
-      code. Verify the code ↔ key mapping is consistent with what
-      Harbour / X# actually sends (cross-check against rddads source).
+- [x] **`AdsDDSetUserProperty`** — implemented and exported.
+      Property code dispatch: 1102 (GROUP_MEMBERSHIP) → `add_user_to_group`;
+      1103 (BAD_LOGINS) → read-only no-op; all other codes (including
+      1101 PASSWORD, 1 COMMENT) stored as `"prop_N"` string properties,
+      symmetrical with `AdsDDGetUserProperty`. `AdsDDCreateUser` now
+      stores password (`prop_1101`), description (`prop_1`), and optional
+      group membership. 7 tests in `tests/unit/abi_dd_user_prop_test.cpp`.
+      Cross-checked against `f:\harbour3.2-bcc7.3\contrib\rddads\`. (2026-05-24)
 
 - [ ] **ADI level-2 page navigation** (deferred).
       Causes error 6106 on tables with large/complex index files
@@ -50,10 +54,10 @@ Check off completed work and commit the file update so it stays current.
       (dense leaf) already work; only the intermediate level is missing.
       See format notes in `src/drivers/adi/adi_driver.cpp`.
 
-- [ ] **ADS proprietary ADT encryption**.
-      Different from OpenADS M11.2 AES encryption. Format not yet
-      reverse-engineered. Tables with the encryption flag set will open
-      but return garbled field values.
+- [ ] **ADS proprietary ADT encryption** — out of scope for now.
+      We use our own AES encryption (M11.2). ADS-original per-table
+      encryption format not reversed; tables with that flag will open
+      but return garbled values. Deferred indefinitely.
 
 ---
 
@@ -113,10 +117,9 @@ Check off completed work and commit the file update so it stays current.
 
 ### Open
 
-- [ ] **`AdsDecryptTable` / `AdsEncryptRecord` / `AdsDecryptRecord`**.
-      All three are stubbed `AE_FUNCTION_NOT_AVAILABLE` pending ADS
-      encryption-mode reverse-engineering. `AdsEncryptTable` (OpenADS
-      format) works; the ADS-original per-record format does not.
+- [ ] **`AdsDecryptTable` / `AdsEncryptRecord` / `AdsDecryptRecord`** — out of scope.
+      We use our own encryption model (M11.2 AES). ADS-original per-record
+      encryption format not reversed. Stubs return `AE_FUNCTION_NOT_AVAILABLE`.
 
 - [ ] **Key derivation hardening**.
       `Connection::set_encryption_password` zero-pads the password to

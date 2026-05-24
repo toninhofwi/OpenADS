@@ -73,6 +73,7 @@ public:
     }
     bool is_member_of(const std::string& user,
                       const std::string& group) const;
+    const std::unordered_set<std::string>& groups_of(const std::string& user) const;
 
     // ---- LINK (M10.1) ----------------------------------------------------
     struct LinkEntry {

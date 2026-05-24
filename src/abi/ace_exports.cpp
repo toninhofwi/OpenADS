@@ -3666,14 +3666,26 @@ UNSIGNED32 AdsDDRemoveIndexFile(ADSHANDLE hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* /*pucGroup*/,
-                           UNSIGNED8* pucUser, UNSIGNED8* /*pucPwd*/,
-                           UNSIGNED8* /*pucDesc*/) {
+UNSIGNED32 AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* pucGroup,
+                           UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
+                           UNSIGNED8* pucDesc) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto user = openads::abi::to_internal(pucUser, 0);
     auto r = dd->create_user(user);
     if (!r) return fail(r.error());
+    if (pucPwd && pucPwd[0] != '\0') {
+        auto pwd = openads::abi::to_internal(pucPwd, 0);
+        dd->set_user_property(user, "prop_1101", pwd);
+    }
+    if (pucDesc && pucDesc[0] != '\0') {
+        auto desc = openads::abi::to_internal(pucDesc, 0);
+        dd->set_user_property(user, "prop_1", desc);
+    }
+    if (pucGroup && pucGroup[0] != '\0') {
+        auto grp = openads::abi::to_internal(pucGroup, 0);
+        dd->add_user_to_group(user, grp);
+    }
     return ok();
 }
 
@@ -3819,12 +3831,69 @@ UNSIGNED32 AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
     if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
     if (dd == nullptr) { *pusLen = 0; return ok(); }
     auto user = openads::abi::to_internal(pucUser, 0);
+
+    // ADS_DD_USER_BAD_LOGINS (1103) — always 0, returned as uint16.
+    if (usProp == 1103) {
+        UNSIGNED16 zero = 0;
+        UNSIGNED16 n = std::min<UNSIGNED16>(cap, sizeof(UNSIGNED16));
+        if (pBuf && n > 0) std::memcpy(pBuf, &zero, n);
+        *pusLen = sizeof(UNSIGNED16);
+        return ok();
+    }
+    // ADS_DD_USER_GROUP_MEMBERSHIP (1102) — comma-separated group list.
+    if (usProp == 1102) {
+        std::string groups;
+        for (const auto& g : dd->groups_of(user)) {
+            if (!groups.empty()) groups += ',';
+            groups += g;
+        }
+        UNSIGNED16 n = static_cast<UNSIGNED16>(
+            std::min<std::size_t>(groups.size(), cap));
+        if (pBuf && n > 0) std::memcpy(pBuf, groups.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(groups.size());
+        return ok();
+    }
+
     std::string key = "prop_" + std::to_string(static_cast<unsigned>(usProp));
     auto val = dd->get_user_property(user, key);
     UNSIGNED16 n = static_cast<UNSIGNED16>(
         std::min<std::size_t>(val.size(), cap));
     if (pBuf != nullptr && n > 0) std::memcpy(pBuf, val.data(), n);
     *pusLen = static_cast<UNSIGNED16>(val.size());
+    return ok();
+}
+
+UNSIGNED32 AdsDDSetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
+                                UNSIGNED16 usProp, void* pvBuf,
+                                UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto user = openads::abi::to_internal(pucUser, 0);
+    if (!dd->has_user(user))
+        return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND), user.c_str());
+
+    // ADS_DD_USER_BAD_LOGINS (1103) — read-only counter, silently ignore sets.
+    if (usProp == 1103) return ok();
+
+    // ADS_DD_USER_GROUP_MEMBERSHIP (1102) — add user to the named group.
+    if (usProp == 1102) {
+        if (pvBuf == nullptr || usLen == 0) return ok();
+        std::string grp(reinterpret_cast<const char*>(pvBuf), usLen);
+        if (!grp.empty() && grp.back() == '\0') grp.pop_back();
+        if (grp.empty()) return ok();
+        auto r = dd->add_user_to_group(user, grp);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+
+    // All other codes (including 1 for comment, 1101 for password): store as
+    // string property keyed by "prop_N" so Get/Set round-trip symmetrically.
+    std::string val;
+    if (pvBuf != nullptr && usLen > 0)
+        val.assign(reinterpret_cast<const char*>(pvBuf), usLen);
+    std::string key = "prop_" + std::to_string(static_cast<unsigned>(usProp));
+    auto r = dd->set_user_property(user, key, val);
+    if (!r) return fail(r.error());
     return ok();
 }
 
