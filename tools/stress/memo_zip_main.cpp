@@ -7,6 +7,7 @@
 #include "drivers/fpt/fpt_memo.h"
 #include "openads/ace.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>

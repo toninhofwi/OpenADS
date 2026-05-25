@@ -13,6 +13,7 @@
 #include "openads/ace.h"
 #include "openads/error.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
