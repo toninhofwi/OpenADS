@@ -52,6 +52,10 @@ struct EvalReport {
 // keep their position must save and restore it themselves.
 util::Result<Bitmap> evaluate(const Node& n, Table& t);
 
+// Evaluate `n` against the table's current cursor position only.
+// The table is not repositioned; read_field() is called as-is.
+bool evaluate_record(const Node& n, Table& t);
+
 // M-AOF.4 — same contract as evaluate(), but routes individual
 // leaves through CDX / NTX index range scans whenever an open
 // index's key expression matches the leaf's field. Reports the

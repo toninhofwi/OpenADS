@@ -6901,22 +6901,41 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                     hits.begin(), hits.end());
                         }
                     }
-                    return Pred{[f, op, lit, is_num, num, contains_hits]
+                    std::string lit2 = w.literal2;
+                    double num2 = w.number2;
+                    return Pred{[f, op, lit, lit2, is_num, num, num2, contains_hits]
                                 (openads::engine::Table& t) {
                         if (op == openads::sql::WhereOp::Contains) {
                             if (!contains_hits) return false;
                             return contains_hits->find(t.recno()) !=
                                    contains_hits->end();
                         }
+                        auto v = t.read_field(f);
+                        if (!v) return false;
+                        if (op == openads::sql::WhereOp::IsNull ||
+                            op == openads::sql::WhereOp::IsNotNull) {
+                            bool null_ish = t.is_field_null(f);
+                            if (!null_ish) {
+                                auto sv = v.value().as_string;
+                                while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                                null_ish = sv.empty();
+                            }
+                            return op == openads::sql::WhereOp::IsNull
+                                ? null_ish : !null_ish;
+                        }
+                        if (op == openads::sql::WhereOp::Between) {
+                            if (is_num) {
+                                double d = v.value().as_double;
+                                return d >= num && d <= num2;
+                            }
+                            auto& sv = v.value().as_string;
+                            return sv.compare(lit) >= 0 && sv.compare(lit2) <= 0;
+                        }
                         if (op == openads::sql::WhereOp::Like) {
-                            auto v = t.read_field(f);
-                            if (!v) return false;
                             auto sv = v.value().as_string;
                             while (!sv.empty() && sv.back() == ' ') sv.pop_back();
                             return sql_like_match(sv, lit);
                         }
-                        auto v = t.read_field(f);
-                        if (!v) return false;
                         int cmp = 0;
                         if (is_num) {
                             double d = v.value().as_double;
@@ -6936,9 +6955,26 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         }
                     }};
                 }
+                if (node.kind == Kind::In) {
+                    std::int32_t fidx = ctbl->field_index(node.in_clause.column);
+                    if (fidx < 0) return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        node.in_clause.column.c_str(), ""};
+                    std::uint16_t fi = static_cast<std::uint16_t>(fidx);
+                    auto set = std::make_shared<std::unordered_set<std::string>>(
+                        node.in_clause.literals.begin(),
+                        node.in_clause.literals.end());
+                    return Pred{[fi, set](openads::engine::Table& t) {
+                        auto v = t.read_field(fi);
+                        if (!v) return false;
+                        auto sv = v.value().as_string;
+                        while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                        return set->count(sv) > 0;
+                    }};
+                }
                 return openads::util::Error{
                     openads::AE_FUNCTION_NOT_AVAILABLE, 0,
-                    "join cursor WHERE supports Cmp/AND/OR/NOT only", ""};
+                    "join cursor WHERE supports Cmp/AND/OR/NOT/IN only", ""};
             };
             auto compiled = compile(*parsed.value().where);
             if (!compiled) return fail(compiled.error());
@@ -7975,10 +8011,27 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                    (openads::engine::Table& t)
                                    { return !p(t); }};
                 }
+                if (n.kind == K::In) {
+                    std::int32_t fidx = tbl->field_index(n.in_clause.column);
+                    if (fidx < 0) return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        n.in_clause.column.c_str(), ""};
+                    std::uint16_t fi2 = static_cast<std::uint16_t>(fidx);
+                    auto set = std::make_shared<std::unordered_set<std::string>>(
+                        n.in_clause.literals.begin(),
+                        n.in_clause.literals.end());
+                    return AggPred{[fi2, set](openads::engine::Table& t) {
+                        auto v = t.read_field(fi2);
+                        if (!v) return false;
+                        auto sv = v.value().as_string;
+                        while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                        return set->count(sv) > 0;
+                    }};
+                }
                 if (n.kind != K::Cmp) {
                     return openads::util::Error{
                         openads::AE_FUNCTION_NOT_AVAILABLE, 0,
-                        "aggregate FILTER supports Cmp/AND/OR/NOT only", ""};
+                        "aggregate FILTER supports Cmp/AND/OR/NOT/IN only", ""};
                 }
                 const auto& w = n.cmp;
                 std::int32_t fi = tbl->field_index(w.column);
@@ -7987,8 +8040,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::uint16_t f = static_cast<std::uint16_t>(fi);
                 openads::sql::WhereOp op = w.op;
                 std::string lit = w.literal;
+                std::string lit2 = w.literal2;
                 bool is_num = w.is_numeric;
                 double num = w.number;
+                double num2 = w.number2;
                 std::shared_ptr<std::unordered_set<std::uint32_t>> contains_hits;
                 if (op == openads::sql::WhereOp::Contains) {
                     namespace fs = std::filesystem;
@@ -8004,22 +8059,39 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                 hits.begin(), hits.end());
                     }
                 }
-                return AggPred{[f, op, lit, is_num, num, contains_hits]
+                return AggPred{[f, op, lit, lit2, is_num, num, num2, contains_hits]
                                (openads::engine::Table& t) {
                     if (op == openads::sql::WhereOp::Contains) {
                         if (!contains_hits) return false;
                         return contains_hits->find(t.recno()) !=
                                contains_hits->end();
                     }
+                    auto v = t.read_field(f);
+                    if (!v) return false;
+                    if (op == openads::sql::WhereOp::IsNull ||
+                        op == openads::sql::WhereOp::IsNotNull) {
+                        bool null_ish = t.is_field_null(f);
+                        if (!null_ish) {
+                            auto sv = v.value().as_string;
+                            while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                            null_ish = sv.empty();
+                        }
+                        return op == openads::sql::WhereOp::IsNull
+                            ? null_ish : !null_ish;
+                    }
+                    if (op == openads::sql::WhereOp::Between) {
+                        if (is_num) {
+                            double d = v.value().as_double;
+                            return d >= num && d <= num2;
+                        }
+                        auto& sv = v.value().as_string;
+                        return sv.compare(lit) >= 0 && sv.compare(lit2) <= 0;
+                    }
                     if (op == openads::sql::WhereOp::Like) {
-                        auto v = t.read_field(f);
-                        if (!v) return false;
                         auto sv = v.value().as_string;
                         while (!sv.empty() && sv.back() == ' ') sv.pop_back();
                         return sql_like_match(sv, lit);
                     }
-                    auto v = t.read_field(f);
-                    if (!v) return false;
                     int cmp = 0;
                     if (is_num) {
                         double d = v.value().as_double;
@@ -9296,10 +9368,27 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                 (openads::engine::Table& t)
                                 { return !p(t); }};
             }
+            if (node.kind == K::In) {
+                std::int32_t fidx = tbl->field_index(node.in_clause.column);
+                if (fidx < 0) return openads::util::Error{
+                    openads::AE_COLUMN_NOT_FOUND, 0,
+                    node.in_clause.column.c_str(), ""};
+                std::uint16_t fi2 = static_cast<std::uint16_t>(fidx);
+                auto set = std::make_shared<std::unordered_set<std::string>>(
+                    node.in_clause.literals.begin(),
+                    node.in_clause.literals.end());
+                return CondPred{[fi2, set](openads::engine::Table& t) {
+                    auto v = t.read_field(fi2);
+                    if (!v) return false;
+                    auto sv = v.value().as_string;
+                    while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                    return set->count(sv) > 0;
+                }};
+            }
             if (node.kind != K::Cmp) {
                 return openads::util::Error{
                     openads::AE_FUNCTION_NOT_AVAILABLE, 0,
-                    "CASE WHEN supports Cmp / AND / OR / NOT only", ""};
+                    "CASE WHEN supports Cmp / AND / OR / NOT / IN only", ""};
             }
             const auto& w = node.cmp;
             std::int32_t fi = tbl->field_index(w.column);
@@ -9336,6 +9425,17 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 }
                 auto v = t.read_field(f);
                 if (!v) return false;
+                if (op == openads::sql::WhereOp::IsNull ||
+                    op == openads::sql::WhereOp::IsNotNull) {
+                    bool null_ish = t.is_field_null(f);
+                    if (!null_ish) {
+                        auto sv = v.value().as_string;
+                        while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                        null_ish = sv.empty();
+                    }
+                    return op == openads::sql::WhereOp::IsNull
+                        ? null_ish : !null_ish;
+                }
                 if (op == openads::sql::WhereOp::Between) {
                     if (is_num) {
                         double d = v.value().as_double;
@@ -10967,14 +11067,65 @@ UNSIGNED32 AdsEvalTestExpr(ADSHANDLE /*hTable*/, UNSIGNED8* /*pucExpr*/,
     if (pusType) *pusType = 0;
     return ok();                                 // treat any expr as syntactically valid
 }
-UNSIGNED32 AdsEvalLogicalExpr(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
-    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsEvalNumericExpr(ADSHANDLE, UNSIGNED8*, double* p)
-    { if (p) *p = 0.0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsEvalStringExpr(ADSHANDLE, UNSIGNED8* /*expr*/, UNSIGNED8* p,
-                             UNSIGNED16* l)
-    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; }
-      return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsEvalLogicalExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
+                              UNSIGNED16* pbResult) {
+    if (pbResult) *pbResult = 0;
+    if (!pucExpr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::string expr = reinterpret_cast<const char*>(pucExpr);
+    auto ast = openads::engine::aof::parse(expr);
+    if (!ast) return fail(ast.error());
+    if (pbResult)
+        *pbResult = openads::engine::aof::evaluate_record(*ast.value(), *t) ? 1 : 0;
+    return ok();
+}
+UNSIGNED32 AdsEvalNumericExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr, double* pdResult) {
+    if (pdResult) *pdResult = 0.0;
+    if (!pucExpr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::string expr = reinterpret_cast<const char*>(pucExpr);
+    std::int32_t fi = t->field_index(expr);
+    if (fi >= 0) {
+        auto v = t->read_field(static_cast<std::uint16_t>(fi));
+        if (v && pdResult) *pdResult = v.value().as_double;
+        return ok();
+    }
+    try {
+        std::size_t pos = 0;
+        double d = std::stod(expr, &pos);
+        if (pos == expr.size() && pdResult) *pdResult = d;
+        return ok();
+    } catch (...) {}
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "cannot evaluate numeric expr");
+}
+UNSIGNED32 AdsEvalStringExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
+                             UNSIGNED8* pucResult, UNSIGNED16* pusLen) {
+    if (!pucExpr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::string expr = reinterpret_cast<const char*>(pucExpr);
+    std::string result;
+    std::int32_t fi = t->field_index(expr);
+    if (fi >= 0) {
+        auto v = t->read_field(static_cast<std::uint16_t>(fi));
+        if (v) result = v.value().as_string;
+    } else {
+        result = expr;
+    }
+    if (pusLen) {
+        std::uint16_t cap = *pusLen;
+        std::uint16_t rlen = static_cast<std::uint16_t>(result.size());
+        if (pucResult && cap > 0) {
+            std::uint16_t copy = (rlen < cap - 1) ? rlen : cap - 1;
+            std::memcpy(pucResult, result.data(), copy);
+            pucResult[copy] = 0;
+        }
+        *pusLen = rlen;
+    }
+    return ok();
+}
 UNSIGNED32 AdsFindConnection(UNSIGNED8* /*pucServer*/, ADSHANDLE* phConnect) {
     if (phConnect) *phConnect = 0;
     return fail(openads::AE_NO_CONNECTION, "no connection for path");

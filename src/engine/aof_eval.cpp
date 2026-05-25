@@ -150,6 +150,10 @@ bool eval_node(const Node& n, Table& t) {
 
 } // namespace
 
+bool evaluate_record(const Node& n, Table& t) {
+    return eval_node(n, t);
+}
+
 util::Result<Bitmap> evaluate(const Node& n, Table& t) {
     auto rc = t.record_count();
     Bitmap bm;
