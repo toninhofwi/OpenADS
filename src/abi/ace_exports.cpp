@@ -11118,7 +11118,8 @@ UNSIGNED32 AdsEvalStringExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
         std::uint16_t cap = *pusLen;
         std::uint16_t rlen = static_cast<std::uint16_t>(result.size());
         if (pucResult && cap > 0) {
-            std::uint16_t copy = (rlen < cap - 1) ? rlen : cap - 1;
+            auto cap1 = static_cast<std::uint16_t>(cap - 1u);
+            std::uint16_t copy = rlen < cap1 ? rlen : cap1;
             std::memcpy(pucResult, result.data(), copy);
             pucResult[copy] = 0;
         }

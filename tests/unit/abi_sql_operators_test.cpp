@@ -54,8 +54,8 @@ void write_dbf(const fs::path& path,
             const auto& v = row[i];
             std::uint8_t L = schema[i].second.second;
             for (std::uint8_t k = 0; k < L; ++k)
-                file.push_back(k < v.size()
-                    ? static_cast<std::uint8_t>(v[k]) : ' ');
+                file.push_back(static_cast<std::uint8_t>(
+                    k < v.size() ? v[k] : ' '));
         }
     }
     file.push_back(0x1A);
@@ -73,7 +73,7 @@ double run_agg_double(ADSHANDLE hConn, const char* sql, const char* col) {
     REQUIRE(AdsExecuteSQLDirect(hStmt, q.data(), &hCur) == 0);
     REQUIRE(AdsGotoTop(hCur) == 0);
     UNSIGNED8 buf[64] = {};
-    UNSIGNED32 cap = sizeof(buf) - 1;
+    UNSIGNED32 cap = static_cast<UNSIGNED32>(sizeof(buf) - 1);
     std::vector<UNSIGNED8> cn(std::strlen(col) + 1);
     std::memcpy(cn.data(), col, cn.size());
     REQUIRE(AdsGetField(hCur, cn.data(), buf, &cap, 0) == 0);
@@ -284,14 +284,14 @@ TEST_CASE("AdsEvalStringExpr reads field value or returns literal string") {
 
     // Field read — as_string strips trailing spaces → "Alice" (5 chars).
     UNSIGNED8 field[] = "NAME";
-    len = sizeof(buf);
+    len = static_cast<UNSIGNED16>(sizeof(buf));
     REQUIRE(AdsEvalStringExpr(hT, field, buf, &len) == 0);
     CHECK(len == 5);
     CHECK(std::string(reinterpret_cast<char*>(buf)) == "Alice");
 
     // Non-field literal — returned as-is.
     UNSIGNED8 lit[] = "Hello";
-    len = sizeof(buf);
+    len = static_cast<UNSIGNED16>(sizeof(buf));
     REQUIRE(AdsEvalStringExpr(hT, lit, buf, &len) == 0);
     CHECK(len == 5);
     CHECK(std::string(reinterpret_cast<char*>(buf)) == "Hello");
