@@ -108,18 +108,16 @@ Check off completed work and commit the file update so it stays current.
       hit set by `shared_ptr`). 3 new tests in
       `tests/unit/abi_sql_contains_test.cpp`. (2026-05-24)
 
-- [ ] **`CASE WHEN` conditions beyond `Cmp/AND/OR/NOT`**.
-      Same restriction in the `CASE WHEN` condition compiler. In
-      practice this means CASE expressions can only branch on simple
-      comparisons today.
+- [x] **`CASE WHEN` conditions beyond `Cmp/AND/OR/NOT`**.
+      Fixed: `compile_cond` lambda in `ace_exports.cpp` now handles
+      `Kind::In` (literal list), `IsNull`/`IsNotNull`, and `Between`
+      in addition to the existing `Cmp/AND/OR/NOT`. (2026-05-25)
 
-- [ ] **FTS query-time token lookup**.
-      `AdsCreateFTSIndex` builds the `.fts` inverted-index file, but
-      the comment in `ace_exports.cpp` notes "Search support (token
-      lookup at query time) is a follow-up milestone." `AdsFTSSearch`
-      exists and works; the gap is wiring it to `WHERE CONTAINS(col,
-      expr)` inside the SQL engine so full-text predicates can be used
-      in ordinary SELECT statements.
+- [x] **FTS query-time token lookup**.
+      Already wired: `CONTAINS(col, expr)` is handled in all four
+      SQL compile lambdas (main SELECT WHERE, join-cursor, aggregate
+      FILTER, CASE WHEN). Token lookup hits the `.fts` inverted index
+      at compile time and captures the record set. (2026-05-24)
 
 ---
 
@@ -157,12 +155,12 @@ Check off completed work and commit the file update so it stays current.
 
 ### Open
 
-- [ ] **`AdsEval*Expr` family** — server-side expression evaluation
+- [x] **`AdsEval*Expr` family** — server-side expression evaluation
       used by Harbour/X# `ADSRDD.prg` server-side query path.
-      Client-side fallback handles every common case; these are
-      nice-to-have for completeness.
-      (`AdsEvalLogicalExpr`, `AdsEvalNumericExpr`, `AdsEvalStringExpr`
-      all return `AE_FUNCTION_NOT_AVAILABLE`.)
+      Implemented: `AdsEvalLogicalExpr` (AOF boolean expression at
+      current record via `aof::evaluate_record`), `AdsEvalNumericExpr`
+      (field read or numeric literal parse), `AdsEvalStringExpr`
+      (field read or string literal passthrough). (2026-05-25)
 
 - [ ] **`AdsStmt*` helpers** — used by the X# SQL surface.
 
