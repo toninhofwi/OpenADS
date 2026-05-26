@@ -6553,7 +6553,7 @@ UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
 // the system.* virtual tables from the connection's DataDict state.
 // `sys_name` is the part after "system." (already lower-cased by the caller).
 // Returns the basename of the temp file, or "" if the name is unknown.
-static std::string build_system_dbf(Connection* c, std::string sys_name) {
+extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_name) {
     for (auto& ch : sys_name) ch = static_cast<char>(
         std::tolower(static_cast<unsigned char>(ch)));
 
@@ -6834,7 +6834,7 @@ static std::string build_system_dbf(Connection* c, std::string sys_name) {
 
 // Dispatch for ADS built-in sp_* stored procedures. Returns true and sets *prc
 // if the name was recognized; caller falls through to the DLL path otherwise.
-static bool dispatch_sp_builtin(
+extern "C++" static bool dispatch_sp_builtin(
         Connection* c,
         const std::string& uname,
         const std::vector<openads::sql::ExecuteProcedureArg>& args,
