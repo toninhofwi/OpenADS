@@ -6888,8 +6888,9 @@ static bool dispatch_sp_builtin(
         for (auto& ch : upr) ch = static_cast<char>(
             std::toupper(static_cast<unsigned char>(ch)));
         std::string key;
-        if      (upr == "PASSWORD")   key = "prop_1101";
+        if      (upr == "USER_PASSWORD" || upr == "PASSWORD") key = "prop_1101";
         else if (upr == "COMMENT")    key = "prop_1";
+        else if (upr == "ENABLE_INTERNET") key = "prop_1104";
         else if (upr == "BAD_LOGINS") { *prc = ok(); return true; }  // read-only
         else                           key = "prop_" + arg(1);
         if (auto r = dd->set_user_property(arg(0), key, arg(2)); !r) { *prc = fail(r.error()); return true; }
@@ -6936,12 +6937,14 @@ static bool dispatch_sp_builtin(
         for (auto& ch : upr) ch = static_cast<char>(
             std::toupper(static_cast<unsigned char>(ch)));
         std::string key;
-        if      (upr == "REQUIRED")        key = "required";
-        else if (upr == "DEFAULT")         key = "default";
-        else if (upr == "VALIDATION_RULE") key = "rule";
-        else if (upr == "VALIDATION_MSG")  key = "msg";
-        else if (upr == "COMMENT")         key = "comment";
-        else                                key = arg(2);
+        if      (upr == "FIELD_CAN_BE_NULL" || upr == "REQUIRED")          key = "required";
+        else if (upr == "FIELD_DEFAULT_VALUE" || upr == "DEFAULT")         key = "default";
+        else if (upr == "FIELD_VALIDATION_RULE" || upr == "VALIDATION_RULE") key = "rule";
+        else if (upr == "FIELD_VALIDATION_MSG" || upr == "VALIDATION_MSG") key = "msg";
+        else if (upr == "FIELD_MAX_VALUE")                                  key = "max";
+        else if (upr == "FIELD_MIN_VALUE")                                  key = "min";
+        else if (upr == "COMMENT")                                          key = "comment";
+        else                                                                 key = arg(2);
         if (auto r = dd->set_field_property(arg(0), arg(1), key, arg(3)); !r) { *prc = fail(r.error()); return true; }
         *prc = ok(); return true;
     }
@@ -6980,13 +6983,20 @@ static bool dispatch_sp_builtin(
         for (auto& ch : upr) ch = static_cast<char>(
             std::toupper(static_cast<unsigned char>(ch)));
         std::string key;
-        if      (upr == "ADMIN_PASSWORD")     key = "prop_1101";
-        else if (upr == "COMMENT")            key = "prop_1";
-        else if (upr == "DEFAULT_TABLE_PATH") key = "prop_3";
-        else if (upr == "LOG_IN_REQUIRED")    key = "prop_5";
-        else if (upr == "ENCRYPT_NEW_TABLE")  key = "prop_10";
-        else if (upr == "MAX_FAILED_ATTEMPTS")key = "prop_11";
-        else                                   key = arg(0);
+        if      (upr == "ADMIN_PASSWORD")          key = "prop_1101";
+        else if (upr == "COMMENT")                key = "prop_1";
+        else if (upr == "DEFAULT_TABLE_PATH")     key = "prop_3";
+        else if (upr == "LOG_IN_REQUIRED")        key = "prop_5";
+        else if (upr == "ENABLE_INTERNET")        key = "prop_6";
+        else if (upr == "INTERNET_SECURITY_LEVEL")key = "prop_7";
+        else if (upr == "VERIFY_ACCESS_RIGHTS")   key = "prop_8";
+        else if (upr == "ENCRYPT_NEW_TABLE")      key = "prop_10";
+        else if (upr == "MAX_FAILED_ATTEMPTS")    key = "prop_11";
+        else if (upr == "TEMP_TABLE_PATH")        key = "prop_12";
+        else if (upr == "ENCRYPT_TABLE_PASSWORD") key = "prop_13";
+        else if (upr == "VERSION_MAJOR")          key = "prop_14";
+        else if (upr == "VERSION_MINOR")          key = "prop_15";
+        else                                       key = arg(0);
         if (auto r = dd->set_db_property(key, arg(1)); !r) { *prc = fail(r.error()); return true; }
         *prc = ok(); return true;
     }
