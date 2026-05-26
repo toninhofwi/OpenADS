@@ -874,6 +874,29 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
         }
     }
     auto name = openads::abi::to_internal(pucName, 0);
+    // View alias expansion: if the requested name matches a DD view, execute
+    // the view's SQL and return the resulting cursor as the table handle.
+    if (conn->has_dd()) {
+        std::string uname = name;
+        for (auto& ch : uname) ch = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch)));
+        for (const auto& kv : conn->dd()->views()) {
+            std::string vn = kv.first;
+            for (auto& ch : vn) ch = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(ch)));
+            if (vn == uname) {
+                ADSHANDLE stmt_h = 0;
+                UNSIGNED32 rc = AdsCreateSQLStatement(hConnect, &stmt_h);
+                if (rc != 0) return rc;
+                const std::string& vsql = kv.second.sql;
+                std::vector<UNSIGNED8> sqlbuf(vsql.size() + 1);
+                std::memcpy(sqlbuf.data(), vsql.data(), vsql.size());
+                rc = AdsExecuteSQLDirect(stmt_h, sqlbuf.data(), phTable);
+                AdsCloseSQLStatement(stmt_h);
+                return rc;
+            }
+        }
+    }
     // Per-table ACL check: when usCheckRights is non-zero and the connection
     // has an authenticated user with a DD ACL for this table, verify the
     // user holds at least read (1) for ADS_READONLY opens, write (2) otherwise.
@@ -6526,6 +6549,251 @@ UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
     return AdsExecuteSQLDirect(hStatement, buf, phCursor);
 }
 
+// Build a read-only temp DBF in c->data_dir() that materialises one of
+// the system.* virtual tables from the connection's DataDict state.
+// `sys_name` is the part after "system." (already lower-cased by the caller).
+// Returns the basename of the temp file, or "" if the name is unknown.
+static std::string build_system_dbf(Connection* c, std::string sys_name) {
+    for (auto& ch : sys_name) ch = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(ch)));
+
+    auto* dd = c->dd();
+    if (!dd) return "";
+
+    namespace fs = std::filesystem;
+
+    struct Col {
+        const char*   colname;
+        char          type;      // 'C', 'N', 'L'
+        std::uint8_t  length;
+        std::uint8_t  decimals;
+    };
+
+    auto build = [&](const std::vector<Col>& cols,
+                     const std::vector<std::vector<std::string>>& rows)
+                     -> std::string {
+        auto nf    = static_cast<std::uint16_t>(cols.size());
+        auto hlen  = static_cast<std::uint16_t>(32 + 32 * nf + 1);
+        std::uint32_t rlen = 1;
+        for (const auto& col : cols) rlen += col.length;
+        if (rlen > 0xFFFF) return "";
+
+        std::vector<std::uint8_t> file;
+        std::array<std::uint8_t, 32> hdr{};
+        hdr[0] = 0x03;
+        stamp_dbf_header_today(hdr.data());
+        auto nr = static_cast<std::uint32_t>(rows.size());
+        hdr[4] = static_cast<std::uint8_t>( nr        & 0xFFu);
+        hdr[5] = static_cast<std::uint8_t>((nr >>  8) & 0xFFu);
+        hdr[6] = static_cast<std::uint8_t>((nr >> 16) & 0xFFu);
+        hdr[7] = static_cast<std::uint8_t>((nr >> 24) & 0xFFu);
+        hdr[8]  = static_cast<std::uint8_t>( hlen       & 0xFFu);
+        hdr[9]  = static_cast<std::uint8_t>((hlen >> 8) & 0xFFu);
+        hdr[10] = static_cast<std::uint8_t>( rlen       & 0xFFu);
+        hdr[11] = static_cast<std::uint8_t>((rlen >> 8) & 0xFFu);
+        file.insert(file.end(), hdr.begin(), hdr.end());
+
+        for (const auto& col : cols) {
+            std::array<std::uint8_t, 32> fd{};
+            std::size_t n = std::strlen(col.colname);
+            std::memcpy(fd.data(), col.colname, n > 10 ? 10 : n);
+            fd[11] = static_cast<std::uint8_t>(col.type);
+            fd[16] = col.length;
+            fd[17] = col.decimals;
+            file.insert(file.end(), fd.begin(), fd.end());
+        }
+        file.push_back(0x0D);
+
+        for (const auto& row : rows) {
+            file.push_back(' ');
+            for (std::size_t ci = 0; ci < cols.size(); ++ci) {
+                const std::string& val = ci < row.size() ? row[ci] : "";
+                std::uint8_t len = cols[ci].length;
+                std::vector<std::uint8_t> cell(len, ' ');
+                char t = cols[ci].type;
+                if (t == 'L') {
+                    cell[0] = (val == "1" || val == "T" || val == "t") ? 'T' : 'F';
+                } else if (t == 'N') {
+                    std::string s = val.empty() ? "0" : val;
+                    if (s.size() > len) s.resize(len);
+                    std::size_t pad = len - s.size();
+                    std::memcpy(cell.data() + pad, s.data(), s.size());
+                } else {
+                    std::size_t n2 = std::min<std::size_t>(val.size(), len);
+                    std::memcpy(cell.data(), val.data(), n2);
+                }
+                file.insert(file.end(), cell.begin(), cell.end());
+            }
+        }
+        file.push_back(0x1A);
+
+        char nb[64];
+        std::snprintf(nb, sizeof(nb), "_sys_%llx.dbf",
+            static_cast<unsigned long long>(
+                openads::platform::monotonic_nanos()));
+        fs::path tmp = fs::path(c->data_dir()) / nb;
+        {
+            std::ofstream out(tmp, std::ios::binary);
+            if (!out) return "";
+            out.write(reinterpret_cast<const char*>(file.data()),
+                      static_cast<std::streamsize>(file.size()));
+        }
+        return nb;
+    };
+
+    // Derive table type (DBF or ADT) from the stored path extension.
+    auto ttype_from_path = [](const std::string& path) -> std::string {
+        auto dot = path.rfind('.');
+        if (dot == std::string::npos) return "DBF";
+        std::string ext = path.substr(dot + 1);
+        for (auto& ch : ext) ch = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(ch)));
+        return (ext == "adt") ? "ADT" : "DBF";
+    };
+
+    if (sys_name == "tables") {
+        const std::vector<Col> cols = {
+            {"TABLE_NAME", 'C', 200, 0},
+            {"TABLE_TYPE", 'C',  10, 0},
+            {"TABLE_PATH", 'C', 250, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->tables())
+            rows.push_back({kv.first, ttype_from_path(kv.second), kv.second});
+        return build(cols, rows);
+    }
+    if (sys_name == "indexes") {
+        const std::vector<Col> cols = {
+            {"TABLE_NAME", 'C', 200, 0},
+            {"INDEX_FILE", 'C', 250, 0},
+            {"COMMENT",    'C', 200, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& e : dd->indexes())
+            rows.push_back({e.table_alias, e.index_path, e.comment});
+        return build(cols, rows);
+    }
+    if (sys_name == "users") {
+        const std::vector<Col> cols = {{"USER_NAME", 'C', 200, 0}};
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& u : dd->users())
+            rows.push_back({u});
+        return build(cols, rows);
+    }
+    if (sys_name == "usergroups") {
+        const std::vector<Col> cols = {
+            {"USER_NAME",  'C', 200, 0},
+            {"GROUP_NAME", 'C', 200, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->memberships())
+            for (const auto& grp : kv.second)
+                rows.push_back({kv.first, grp});
+        return build(cols, rows);
+    }
+    if (sys_name == "permissions") {
+        const std::vector<Col> cols = {
+            {"TABLE_NAME", 'C', 200, 0},
+            {"PRINCIPAL",  'C', 200, 0},
+            {"LEVEL",      'N',   2, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& tkv : dd->table_perms())
+            for (const auto& pkv : tkv.second)
+                rows.push_back({tkv.first, pkv.first,
+                                std::to_string(pkv.second)});
+        return build(cols, rows);
+    }
+    if (sys_name == "relations") {
+        const std::vector<Col> cols = {
+            {"RI_NAME",    'C', 200, 0},
+            {"PARENT",     'C', 200, 0},
+            {"CHILD",      'C', 200, 0},
+            {"TAG",        'C', 200, 0},
+            {"UPDATE_OPT", 'C',  10, 0},
+            {"DELETE_OPT", 'C',  10, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->ri())
+            rows.push_back({kv.second.name, kv.second.parent,
+                            kv.second.child, kv.second.tag,
+                            kv.second.update_opt, kv.second.delete_opt});
+        return build(cols, rows);
+    }
+    if (sys_name == "links") {
+        const std::vector<Col> cols = {
+            {"LINK_NAME", 'C', 200, 0},
+            {"LINK_PATH", 'C', 250, 0},
+            {"LINK_USER", 'C', 200, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->links())
+            rows.push_back({kv.second.alias, kv.second.path, kv.second.user});
+        return build(cols, rows);
+    }
+    if (sys_name == "triggers") {
+        const std::vector<Col> cols = {
+            {"TRIG_NAME",    'C', 200, 0},
+            {"TABLE_NAME",   'C', 200, 0},
+            {"EVENT_MASK",   'N',  10, 0},
+            {"CONTAINER",    'C', 250, 0},
+            {"PROC",         'C', 200, 0},
+            {"PRIORITY",     'N',  10, 0},
+            {"ENABLED",      'L',   1, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->triggers()) {
+            const auto& e = kv.second;
+            rows.push_back({e.name, e.table_alias,
+                            std::to_string(e.event_mask),
+                            e.container, e.procedure,
+                            std::to_string(e.priority),
+                            e.enabled ? "T" : "F"});
+        }
+        return build(cols, rows);
+    }
+    if (sys_name == "storedprocedures") {
+        const std::vector<Col> cols = {
+            {"PROC_NAME",  'C', 200, 0},
+            {"CONTAINER",  'C', 250, 0},
+            {"PROCEDURE",  'C', 200, 0},
+            {"INPUT",      'C', 250, 0},
+            {"OUTPUT",     'C', 250, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->procs()) {
+            const auto& e = kv.second;
+            rows.push_back({e.name, e.container, e.procedure,
+                            e.input_params, e.output_params});
+        }
+        return build(cols, rows);
+    }
+    if (sys_name == "views") {
+        const std::vector<Col> cols = {
+            {"VIEW_NAME", 'C', 200, 0},
+            {"VIEW_SQL",  'C', 250, 0},
+            {"COMMENT",   'C', 200, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->views()) {
+            const auto& e = kv.second;
+            rows.push_back({e.name, e.sql, e.comment});
+        }
+        return build(cols, rows);
+    }
+    if (sys_name == "dictionary") {
+        const std::vector<Col> cols = {
+            {"PROP_NAME",  'C', 200, 0},
+            {"PROP_VALUE", 'C', 250, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->db_props())
+            rows.push_back({kv.first, kv.second});
+        return build(cols, rows);
+    }
+    return "";
+}
+
 UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                ADSHANDLE* phCursor) {
     if (phCursor == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -6565,6 +6833,31 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     Connection* c = it->second->conn;
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);
+
+    // Open a table by name, transparently resolving "system.*" virtual tables
+    // to temp DBF files materialized from DD state.
+    auto open_or_sys = [c](const std::string& tname,
+                            openads::engine::TableType  ttype,
+                            openads::engine::OpenMode   omode,
+                            openads::engine::LockingMode lmode)
+        -> openads::util::Result<Handle> {
+        std::string resolved = tname;
+        if (tname.size() > 7) {
+            std::string px = tname.substr(0, 7);
+            for (auto& ch : px) ch = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(ch)));
+            if (px == "system.") {
+                resolved = build_system_dbf(c, tname.substr(7));
+                if (resolved.empty())
+                    return openads::util::Error{
+                        openads::AE_NO_FILE_FOUND, 0, tname, ""};
+                ttype = openads::engine::TableType::Cdx;
+                omode = openads::engine::OpenMode::Read;
+                lmode = openads::engine::LockingMode::Compatible;
+            }
+        }
+        return c->open_table(resolved, ttype, omode, lmode);
+    };
 
     // Per-table ACL check for SQL statements when check_rights is set.
     if (it->second->check_rights != 0 && c->has_dd() && !c->username().empty()) {
@@ -7626,13 +7919,15 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
 
-        auto lh = c->open_table(parsed.value().table,
-                                openads::engine::TableType::Cdx,
-                                openads::engine::OpenMode::Read);
+        auto lh = open_or_sys(parsed.value().table,
+                              openads::engine::TableType::Cdx,
+                              openads::engine::OpenMode::Read,
+                              openads::engine::LockingMode::Compatible);
         if (!lh) return fail(lh.error());
-        auto rh = c->open_table(j.table,
-                                openads::engine::TableType::Cdx,
-                                openads::engine::OpenMode::Read);
+        auto rh = open_or_sys(j.table,
+                              openads::engine::TableType::Cdx,
+                              openads::engine::OpenMode::Read,
+                              openads::engine::LockingMode::Compatible);
         if (!rh) {
             c->close_table(lh.value());
             return fail(rh.error());
@@ -8578,10 +8873,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Handle table_handle = 0;
     if (!tbl) {
-        auto th = c->open_table(parsed.value().table,
-                                stmt_table_type(*it->second),
-                                stmt_open_mode(*it->second, false),
-                                stmt_locking_mode(*it->second));
+        auto th = open_or_sys(parsed.value().table,
+                              stmt_table_type(*it->second),
+                              stmt_open_mode(*it->second, false),
+                              stmt_locking_mode(*it->second));
         if (!th) return fail(th.error());
         table_handle = th.value();
         tbl = c->lookup_table(table_handle);

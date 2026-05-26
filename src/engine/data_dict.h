@@ -76,6 +76,9 @@ public:
     bool is_member_of(const std::string& user,
                       const std::string& group) const;
     const std::unordered_set<std::string>& groups_of(const std::string& user) const;
+    const std::unordered_set<std::string>& users() const noexcept { return users_; }
+    const std::unordered_map<std::string, std::unordered_set<std::string>>&
+        memberships() const noexcept { return memberships_; }
 
     // ---- LINK (M10.1) ----------------------------------------------------
     struct LinkEntry {
@@ -200,6 +203,8 @@ public:
     util::Result<void> set_db_property(const std::string& key,
                                        const std::string& value);
     std::string get_db_property(const std::string& key) const;
+    const std::unordered_map<std::string, std::string>&
+        db_props() const noexcept { return db_props_; }
     util::Result<void> set_user_property(const std::string& user,
                                          const std::string& key,
                                          const std::string& value);

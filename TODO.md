@@ -132,12 +132,17 @@ Check off completed work and commit the file update so it stays current.
       → `AdsExecuteSQLDirect` deferred (see system.* SQL item below).
       5 tests in `tests/unit/abi_dd_proc_view_test.cpp`. (2026-05-26)
 
-- [ ] **`system.*` SQL virtual tables** — `SELECT * FROM system.tables`
-      and the other 15 system table aliases. The SQL engine's FROM
-      clause resolver needs a special path for the `system.` prefix
-      that builds an in-memory cursor from `DataDict` state rather
-      than opening a real file. Also covers: `AdsOpenTable` with a
-      view alias expands to `AdsExecuteSQLDirect(view.sql)`.
+- [x] **`system.*` SQL virtual tables** — `SELECT * FROM system.tables`
+      and 10 other aliases: `system.indexes`, `system.users`,
+      `system.usergroups`, `system.permissions`, `system.relations`,
+      `system.links`, `system.triggers`, `system.storedprocedures`,
+      `system.views`, `system.dictionary`. Each builds an in-memory
+      temp DBF from `DataDict` state and opens it as a read-only cursor.
+      `AdsOpenTable` view-alias expansion: opening a DD view name
+      executes the view's SQL via `AdsExecuteSQLDirect` and returns the
+      cursor. Both DBF and ADT table types are reflected in
+      `system.tables.TABLE_TYPE`. 9 tests in
+      `tests/unit/abi_sql_system_tables_test.cpp`. (2026-05-26)
 
 - [x] **`AdsDDGetIndexProperty` / `AdsDDSetIndexProperty`** — per-index
       metadata read from open index bindings. Properties: file name
