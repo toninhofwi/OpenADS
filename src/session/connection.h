@@ -115,6 +115,10 @@ public:
     void       set_collation(Collation c) noexcept { collation_ = c; }
     Collation  collation() const noexcept { return collation_; }
 
+    // DD authentication — set after credential validation in AdsConnect60.
+    void               set_username(std::string name) { username_ = std::move(name); }
+    const std::string& username() const noexcept { return username_; }
+
 private:
     util::Result<void> recover_orphan_tx_();
 
@@ -145,6 +149,8 @@ private:
     // M11.7 — string compare collation (default = byte-exact).
     Collation                                                  collation_ =
         Collation::Binary;
+    // Authenticated username (empty = anonymous / unauthenticated).
+    std::string                                                username_;
 
 public:
     ~Connection();

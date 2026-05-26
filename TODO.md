@@ -76,15 +76,13 @@ Check off completed work and commit the file update so it stays current.
       at navigation time. For now, parent key updates are not checked;
       RESTRICT/CASCADE/SETNULL/SETDEFAULT for `update_opt` are unimplemented.
 
-- [ ] **DD authentication for local connections**.
-      `AdsConnect60` for local paths ignores `pucUser`/`pucPwd` (line 416
-      in `ace_exports.cpp`). The DD stores passwords as `prop_1101` under
-      each user, but they are never consulted. Need to: (a) look up the
-      user record in the DD after `Connection::open`, (b) compare the
-      supplied password against the stored `prop_1101` value, (c) return
-      `AE_INVALID_USERNAME` / `AE_INVALID_PASSWORD` on mismatch, and
-      (d) attach the authenticated username to the `Connection` so
-      per-table permission checks can reference it.
+- [x] **DD authentication for local connections**.
+      `AdsConnect60` checks the DD's `ADS_DD_LOG_IN_REQUIRED` property
+      (`prop_5`). When set, the supplied `pucUser`/`pucPwd` are validated
+      against the DD: unknown user or password mismatch both return
+      `AE_LOGIN_FAILED` (7077). On success the authenticated username is
+      stored on `Connection::username_` for future permission checks.
+      6 tests in `tests/unit/abi_dd_auth_test.cpp`. (2026-05-25)
 
 - [ ] **Per-table access control / permission checking**.
       `ADS_DD_TABLE_PERMISSION_LEVEL` (property 216) always returns 0;

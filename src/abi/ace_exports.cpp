@@ -610,6 +610,29 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     if (!opened) return fail(opened.error());
     auto holder = std::make_unique<Connection>(std::move(opened).value());
     Connection* raw = holder.get();
+    // DD authentication: if the DD has LOG_IN_REQUIRED set, validate
+    // the supplied credentials before registering the connection.
+    if (raw->has_dd()) {
+        auto* dd = raw->dd();
+        std::string login_req = dd->get_db_property("prop_5");
+        bool require_login = (!login_req.empty() && login_req != "0");
+        std::string user = pucUser ? openads::abi::to_internal(pucUser, 0)
+                                   : std::string();
+        std::string pwd  = pucPwd  ? openads::abi::to_internal(pucPwd, 0)
+                                   : std::string();
+        if (require_login) {
+            if (user.empty())
+                return fail(openads::AE_LOGIN_FAILED,
+                            "login required but no username supplied");
+            if (!dd->has_user(user))
+                return fail(openads::AE_LOGIN_FAILED, "unknown user");
+            std::string stored = dd->get_user_property(user, "prop_1101");
+            if (stored != pwd)
+                return fail(openads::AE_LOGIN_FAILED, "invalid password");
+        }
+        if (!user.empty())
+            raw->set_username(user);
+    }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Handle h = s.registry.register_object(HandleKind::Connection, raw);
