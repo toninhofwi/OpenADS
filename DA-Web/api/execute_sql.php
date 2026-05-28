@@ -26,8 +26,10 @@ if (!isset($_SESSION['connections'][$ddName])) {
 $c = $_SESSION['connections'][$ddName];
 
 try {
-    $conn = new AdsConnection();
-    $conn->connect($c['path'], $c['username'], $c['password']);
+    $opts = ['path' => $c['path']];
+    if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
+    if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+    $conn = AdsConnection::connect($opts);
 
     $upperSql = ltrim(strtoupper($sql));
     $isSelect = str_starts_with($upperSql, 'SELECT') || str_starts_with($upperSql, 'WITH');

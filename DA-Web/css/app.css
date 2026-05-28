@@ -187,11 +187,12 @@ html, body {
 }
 .tab-panel.active { display: flex; flex-direction: column; }
 
-/* Table data panel */
+/* Table data panel — overflow:hidden lets Tabulator own its scroll via height:100% */
 .data-panel {
   flex: 1;
-  overflow: auto;
-  padding: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* SQL editor panel */
@@ -243,13 +244,18 @@ html, body {
   height: 24px;
   line-height: 24px;
 }
-#tree-container .jstree-default .jstree-anchor:hover { background: #313244; border-radius: 3px; }
-#tree-container .jstree-default .jstree-clicked {
-  background: #313244 !important;
+#tree-container .jstree-default .jstree-anchor:hover {
+  background: #89b4fa;
+  color: #1e1e2e;
   border-radius: 3px;
 }
-#tree-container .jstree-default .jstree-wholerow-clicked { background: #313244 !important; }
-#tree-container .jstree-default .jstree-wholerow-hovered { background: #2a2a3e !important; }
+#tree-container .jstree-default .jstree-clicked {
+  background: #74c7ec !important;
+  color: #1e1e2e !important;
+  border-radius: 3px;
+}
+#tree-container .jstree-default .jstree-wholerow-clicked { background: #74c7ec !important; }
+#tree-container .jstree-default .jstree-wholerow-hovered { background: #89b4fa !important; }
 
 /* Custom icons using text fallback (works without an icon font) */
 .jstree-icon-dd-open::before    { content: "🗄"; font-style: normal; }
@@ -518,7 +524,19 @@ html, body {
   color: #7f849c !important;
 }
 
-.tabulator .tabulator-paginator { color: #cdd6f4 !important; }
+/* footer inner row: our btn-bar on left, paginator pushed right */
+.tabulator .tabulator-footer-contents {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  width: 100%;
+  padding: 2px 4px !important;
+}
+.tabulator .tabulator-footer .tabulator-paginator {
+  margin-left: auto !important;
+  color: #cdd6f4 !important;
+}
+.tabulator .tabulator-page-counter { color: #7f849c !important; white-space: nowrap; }
 
 .tabulator-page {
   background: #313244 !important;
@@ -527,3 +545,79 @@ html, body {
   border-radius: 3px !important;
 }
 .tabulator-page.active { background: #89b4fa !important; color: #1e1e2e !important; }
+
+.tabulator .tabulator-row.tabulator-selected,
+.tabulator .tabulator-row.tabulator-selected.tabulator-row-even {
+  background: #74c7ec !important;
+  color: #1e1e2e !important;
+}
+.tabulator .tabulator-row.tabulator-selected .tabulator-cell,
+.tabulator .tabulator-row.tabulator-selected.tabulator-row-even .tabulator-cell {
+  background: #74c7ec !important;
+  color: #1e1e2e !important;
+}
+.tabulator .tabulator-row.tabulator-selected:hover,
+.tabulator .tabulator-row.tabulator-selected:hover .tabulator-cell {
+  background: #89b4fa !important;
+  color: #1e1e2e !important;
+}
+
+/* ── Table grid toolbar (prepended inside .tabulator-paginator) ───────────── */
+.tbl-btn-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+.tbl-btn {
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+  min-width: 26px;
+  text-align: center;
+  user-select: none;
+}
+.tbl-btn:hover { background: #45475a; color: #cdd6f4; }
+.tbl-btn.tbl-btn-confirm { color: #a6e3a1; border-color: #a6e3a1; }
+.tbl-btn.tbl-btn-confirm:hover { background: #a6e3a1; color: #1e1e2e; }
+.tbl-btn-sep { width: 1px; background: #45475a; height: 16px; margin: 0 3px; flex-shrink: 0; }
+
+/* ── SQL script list (Open SQL Script modal) ──────────────────────────────── */
+.script-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #313244;
+  font-size: 13px;
+}
+.script-row:last-child { border-bottom: none; }
+.script-row:hover { background: #313244; }
+.script-name {
+  flex: 1;
+  color: #cdd6f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btn-sm {
+  padding: 2px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.script-del-btn {
+  background: none;
+  border: none;
+  color: #7f849c;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.script-del-btn:hover { color: #f38ba8; }

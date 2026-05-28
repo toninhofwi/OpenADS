@@ -29,8 +29,10 @@ if ($action === 'connect') {
     }
 
     try {
-        $conn = new AdsConnection();
-        $conn->connect($path, $username, $password);
+        $opts = ['path' => $path];
+        if ($username !== '') $opts['user']     = $username;
+        if ($password !== '') $opts['password'] = $password;
+        $conn = AdsConnection::connect($opts);
         $conn->close();
     } catch (AdsException $e) {
         http_response_code(401);

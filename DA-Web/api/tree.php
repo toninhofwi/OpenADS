@@ -21,9 +21,10 @@ function loadDicts(string $file): array {
 function getConn(string $ddName): ?AdsConnection {
     if (!isset($_SESSION['connections'][$ddName])) return null;
     $c = $_SESSION['connections'][$ddName];
-    $conn = new AdsConnection();
-    $conn->connect($c['path'], $c['username'], $c['password']);
-    return $conn;
+    $opts = ['path' => $c['path']];
+    if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
+    if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+    return AdsConnection::connect($opts);
 }
 
 $action = $_GET['action'] ?? '';
@@ -80,9 +81,9 @@ if ($action === 'dd_children') {
         if ($conn === null) { echo json_encode([]); exit; }
         $nodes = [];
         try {
-            $stmt = $conn->query("SELECT Name FROM system.tables ORDER BY Name");
+            $stmt = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
             while ($row = $stmt->fetchAssoc()) {
-                $t = $row['Name'];
+                $t = $row['TABLE_NAME'];
                 $nodes[] = [
                     'id'      => "tbl_{$ddName}_{$t}",
                     'text'    => $t,
@@ -104,6 +105,7 @@ if ($action === 'dd_children') {
         ['id' => "cat_{$ddName}_tables",     'text' => 'Tables',            'icon' => 'jstree-icon-tables'],
         ['id' => "cat_{$ddName}_views",      'text' => 'Views',             'icon' => 'jstree-icon-views'],
         ['id' => "cat_{$ddName}_procs",      'text' => 'Stored Procedures', 'icon' => 'jstree-icon-procs'],
+        ['id' => "cat_{$ddName}_functions",  'text' => 'Functions',         'icon' => 'jstree-icon-procs'],
         ['id' => "cat_{$ddName}_triggers",   'text' => 'Triggers',          'icon' => 'jstree-icon-triggers'],
         ['id' => "cat_{$ddName}_users",      'text' => 'Users',             'icon' => 'jstree-icon-users'],
         ['id' => "cat_{$ddName}_groups",     'text' => 'Groups',            'icon' => 'jstree-icon-groups'],
@@ -131,9 +133,9 @@ if ($action === 'category_children') {
     try {
         switch ($cat) {
             case 'tables':
-                $stmt = $conn->query("SELECT Name FROM system.tables ORDER BY Name");
+                $stmt = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
                 while ($row = $stmt->fetchAssoc()) {
-                    $t = $row['Name'];
+                    $t = $row['TABLE_NAME'];
                     $nodes[] = [
                         'id'      => "tbl_{$ddName}_{$t}",
                         'text'    => $t,
@@ -145,9 +147,9 @@ if ($action === 'category_children') {
                 break;
 
             case 'views':
-                $stmt = $conn->query("SELECT Name FROM system.views ORDER BY Name");
+                $stmt = $conn->query("SELECT VIEW_NAME FROM system.views ORDER BY VIEW_NAME");
                 while ($row = $stmt->fetchAssoc()) {
-                    $v = $row['Name'];
+                    $v = $row['VIEW_NAME'];
                     $nodes[] = ['id' => "view_{$ddName}_{$v}", 'text' => $v,
                                 'icon' => 'jstree-icon-view', 'children' => false,
                                 'a_attr' => ['data-dd' => $ddName, 'data-type' => 'view', 'data-name' => $v]];
@@ -155,19 +157,24 @@ if ($action === 'category_children') {
                 break;
 
             case 'procs':
-                $stmt = $conn->query("SELECT Name FROM system.storedprocedures ORDER BY Name");
-                while ($row = $stmt->fetchAssoc()) {
-                    $p = $row['Name'];
-                    $nodes[] = ['id' => "proc_{$ddName}_{$p}", 'text' => $p,
+            case 'functions':
+                $stmt = $conn->query("SELECT PROC_NAME FROM system.storedprocedures");
+                $pnames = [];
+                while ($row = $stmt->fetchAssoc()) { $pnames[] = $row['PROC_NAME']; }
+                sort($pnames);
+                $itype = ($cat === 'functions') ? 'function' : 'proc';
+                $iprefix = ($cat === 'functions') ? 'fn' : 'proc';
+                foreach ($pnames as $p) {
+                    $nodes[] = ['id' => "{$iprefix}_{$ddName}_{$p}", 'text' => $p,
                                 'icon' => 'jstree-icon-proc', 'children' => false,
-                                'a_attr' => ['data-dd' => $ddName, 'data-type' => 'proc', 'data-name' => $p]];
+                                'a_attr' => ['data-dd' => $ddName, 'data-type' => $itype, 'data-name' => $p]];
                 }
                 break;
 
             case 'triggers':
-                $stmt = $conn->query("SELECT Name FROM system.triggers ORDER BY Name");
+                $stmt = $conn->query("SELECT TRIG_NAME FROM system.triggers ORDER BY TRIG_NAME");
                 while ($row = $stmt->fetchAssoc()) {
-                    $tr = $row['Name'];
+                    $tr = $row['TRIG_NAME'];
                     $nodes[] = ['id' => "trg_{$ddName}_{$tr}", 'text' => $tr,
                                 'icon' => 'jstree-icon-trigger', 'children' => false,
                                 'a_attr' => ['data-dd' => $ddName, 'data-type' => 'trigger', 'data-name' => $tr]];
@@ -175,9 +182,9 @@ if ($action === 'category_children') {
                 break;
 
             case 'users':
-                $stmt = $conn->query("SELECT Name FROM system.users ORDER BY Name");
+                $stmt = $conn->query("SELECT USER_NAME FROM system.users ORDER BY USER_NAME");
                 while ($row = $stmt->fetchAssoc()) {
-                    $u = $row['Name'];
+                    $u = $row['USER_NAME'];
                     $nodes[] = ['id' => "usr_{$ddName}_{$u}", 'text' => $u,
                                 'icon' => 'jstree-icon-user', 'children' => false,
                                 'a_attr' => ['data-dd' => $ddName, 'data-type' => 'user', 'data-name' => $u]];
@@ -185,9 +192,12 @@ if ($action === 'category_children') {
                 break;
 
             case 'groups':
-                $stmt = $conn->query("SELECT Name FROM system.usergroups ORDER BY Name");
+                $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroups ORDER BY GROUP_NAME");
+                $seen = [];
                 while ($row = $stmt->fetchAssoc()) {
-                    $g = $row['Name'];
+                    $g = $row['GROUP_NAME'];
+                    if (isset($seen[$g])) continue;
+                    $seen[$g] = true;
                     $nodes[] = ['id' => "grp_{$ddName}_{$g}", 'text' => $g,
                                 'icon' => 'jstree-icon-group', 'children' => false,
                                 'a_attr' => ['data-dd' => $ddName, 'data-type' => 'group', 'data-name' => $g]];
@@ -195,9 +205,9 @@ if ($action === 'category_children') {
                 break;
 
             case 'ri':
-                $stmt = $conn->query("SELECT Name FROM system.referentialintegrity ORDER BY Name");
+                $stmt = $conn->query("SELECT RI_NAME FROM system.relations ORDER BY RI_NAME");
                 while ($row = $stmt->fetchAssoc()) {
-                    $r = $row['Name'];
+                    $r = $row['RI_NAME'];
                     $nodes[] = ['id' => "ri_{$ddName}_{$r}", 'text' => $r,
                                 'icon' => 'jstree-icon-ri', 'children' => false,
                                 'a_attr' => ['data-dd' => $ddName, 'data-type' => 'ri', 'data-name' => $r]];
@@ -205,17 +215,19 @@ if ($action === 'category_children') {
                 break;
 
             case 'links':
-                $stmt = $conn->query("SELECT Name FROM system.links ORDER BY Name");
+                $stmt = $conn->query("SELECT LINK_NAME FROM system.links ORDER BY LINK_NAME");
                 while ($row = $stmt->fetchAssoc()) {
-                    $l = $row['Name'];
+                    $l = $row['LINK_NAME'];
                     $nodes[] = ['id' => "lnk_{$ddName}_{$l}", 'text' => $l,
                                 'icon' => 'jstree-icon-link', 'children' => false,
                                 'a_attr' => ['data-dd' => $ddName, 'data-type' => 'link', 'data-name' => $l]];
                 }
                 break;
         }
-    } catch (AdsException $e) {
-        // return empty on error — tree just shows no children
+    } catch (Throwable $e) {
+        $nodes = [['id' => "err_{$ddName}_{$cat}", 'text' => '⚠ ' . $e->getMessage(),
+                   'icon' => 'jstree-icon-error', 'children' => false,
+                   'a_attr' => ['data-type' => 'error']]];
     } finally {
         $conn->close();
     }
@@ -233,20 +245,20 @@ if ($action === 'table_children') {
 
     $nodes = [];
     try {
-        // Fields sub-node
+        // Fields sub-node — leaf; click opens a metadata tab
         $nodes[] = [
             'id'       => "fields_{$ddName}_{$table}",
             'text'     => 'Fields',
             'icon'     => 'jstree-icon-fields',
-            'children' => true,
+            'children' => false,
             'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'fields', 'data-table' => $table],
         ];
-        // Indexes sub-node
+        // Indexes sub-node — leaf; click opens a metadata tab
         $nodes[] = [
             'id'       => "indexes_{$ddName}_{$table}",
             'text'     => 'Indexes',
             'icon'     => 'jstree-icon-indexes',
-            'children' => true,
+            'children' => false,
             'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'indexes', 'data-table' => $table],
         ];
     } finally {

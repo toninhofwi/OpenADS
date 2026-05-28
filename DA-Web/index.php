@@ -276,6 +276,59 @@
   </div>
 </div>
 
+<!-- ── Modal: Delete row confirmation ────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-del-confirm" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <span>Delete Row</span>
+      <span class="modal-close" onclick="document.getElementById('modal-del-confirm').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0;line-height:1.6;">Are you sure you want to delete the selected row?<br>
+      <span style="color:#f38ba8;font-size:12px;">This action cannot be undone.</span></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="del-confirm-cancel">Cancel</button>
+      <button class="btn btn-danger" id="del-confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: SQL Save script ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-sql-save" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <span>Save SQL Script</span>
+      <span class="modal-close" onclick="document.getElementById('modal-sql-save').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="sql-save-err" class="modal-err"></div>
+      <div class="form-group">
+        <label for="sql-save-name">Script name <span class="req">*</span></label>
+        <input type="text" id="sql-save-name" placeholder="e.g. Active leases" autocomplete="off">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="sql-save-cancel">Cancel</button>
+      <button class="btn btn-primary" id="sql-save-ok">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: SQL Open script ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-sql-open" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header" style="display:flex;align-items:center;gap:8px;">
+      <span style="flex:1">Open SQL Script</span>
+      <button class="btn btn-sm" id="sql-open-all" title="Open every saved script as a separate tab">Open All</button>
+      <span class="modal-close" onclick="document.getElementById('modal-sql-open').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div id="sql-scripts-list" style="max-height:360px;overflow-y:auto;"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Application JS (loaded last so DOM is ready) -->
 <script src="js/app.js"></script>
 </body>

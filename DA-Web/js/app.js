@@ -11,6 +11,13 @@
     selectedDD: null,  // DD of the currently highlighted tree node
   };
 
+  // Per-table-tab state: tabId → { tbl, dd, table, rowIdx, pendingRow, confirmBtn }
+  const tblState = {};
+
+  // Context holders for async modals
+  let pendingDeleteTabId = null;
+  let pendingSqlSaveTabId = null;
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   async function apiFetch(url, options = {}) {
     const res = await fetch(url, options);
@@ -153,6 +160,10 @@
         if (!connected) openConnectModal(dd);
       } else if (type === 'table') {
         openTableTab(dd, tbl);
+      } else if (type === 'fields') {
+        openMetaTab(dd, tbl, 'fields');
+      } else if (type === 'indexes') {
+        openMetaTab(dd, tbl, 'indexes');
       }
     });
 
@@ -189,15 +200,57 @@
     loadTableData(id, dd, table);
   }
 
-  function openSqlTab(dd = null) {
-    const targetDD = dd || state.selectedDD;
+  function openMetaTab(dd, table, kind) {
+    const metaKey = `${dd}.${table}.${kind}`;
+    const existing = state.tabs.find(t => t.type === 'meta' && t.metaKey === metaKey);
+    if (existing) { activateTab(existing.id); return; }
     const id = 'tab-' + (state.nextTabId++);
-    const title = targetDD ? `SQL – ${targetDD}` : 'SQL';
-    state.tabs.push({ id, title, type: 'sql', dd: targetDD });
+    const title = `${table} ${kind === 'fields' ? 'Fields' : 'Indexes'}`;
+    state.tabs.push({ id, title, type: 'meta', dd, table, kind, metaKey });
     renderTabs();
     activateTab(id);
-    // Focus the textarea after the panel is in the DOM
-    setTimeout(() => document.getElementById('sql-text-' + id)?.focus(), 80);
+    loadMetaData(id, dd, table, kind);
+  }
+
+  function loadMetaData(tabId, dd, table, kind) {
+    const container = document.getElementById('meta-' + tabId);
+    if (!container) return;
+    fetch(`api/table_meta.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}&kind=${encodeURIComponent(kind)}`)
+      .then(r => r.json())
+      .then(resp => {
+        if (resp.error) {
+          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+        container.innerHTML = `<div id="meta-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+        /* global Tabulator */
+        new Tabulator('#meta-tbl-' + tabId, {
+          data: resp.data,
+          autoColumns: true,
+          layout: 'fitDataFill',
+          pagination: 'local',
+          paginationSize: 200,
+          paginationCounter: 'rows',
+          height: '100%',
+          placeholder: '(no data)',
+        });
+      })
+      .catch(err => {
+        if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
+  }
+
+  function openSqlTab(dd = null, sql = '', scriptName = '') {
+    const targetDD = dd || state.selectedDD;
+    const id = 'tab-' + (state.nextTabId++);
+    const title = scriptName || (targetDD ? `SQL – ${targetDD}` : 'SQL');
+    state.tabs.push({ id, title, type: 'sql', dd: targetDD, initialSql: sql });
+    renderTabs();
+    activateTab(id);
+    setTimeout(() => {
+      const ta = document.getElementById('sql-text-' + id);
+      if (ta) { if (sql) ta.value = sql; ta.focus(); }
+    }, 80);
   }
 
   function renderTabs() {
@@ -229,7 +282,9 @@
         panel.className = 'tab-panel' + (tab.id === state.activeTabId ? ' active' : '');
         panel.dataset.tabId = tab.id;
         if (tab.type === 'table') {
-          panel.innerHTML = `<div class="data-panel" id="data-${tab.id}"><div class="alert alert-info">Loading…</div></div>`;
+          panel.innerHTML = `<div class="data-panel" id="data-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'meta') {
+          panel.innerHTML = `<div class="data-panel" id="meta-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'sql') {
           panel.innerHTML = buildSqlPanel(tab.id, tab.dd);
           bindSqlPanel(tab.id, tab);
@@ -251,6 +306,7 @@
 
   function closeTab(id) {
     state.tabs = state.tabs.filter(t => t.id !== id);
+    delete tblState[id];
     if (state.activeTabId === id) {
       state.activeTabId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
     }
@@ -269,27 +325,157 @@
       .then(r => r.json())
       .then(resp => {
         if (resp.error) {
-          container.innerHTML = `<div class="alert alert-error">${escHtml(resp.error)}</div>`;
+          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
           return;
         }
-        container.innerHTML = `<div id="tabulator-${tabId}"></div>`;
+        container.innerHTML = `<div id="tabulator-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
         /* global Tabulator */
-        new Tabulator('#tabulator-' + tabId, {
+        const tbl = new Tabulator('#tabulator-' + tabId, {
           data: resp.data,
           autoColumns: true,
+          autoColumnsDefinitions: function (defs) {
+            return defs.map(def => ({
+              ...def,
+              editor: 'input',
+              editable: function (cell) {
+                const inst = tblState[tabId];
+                return !!(inst && inst.pendingRow && cell.getRow() === inst.pendingRow);
+              },
+            }));
+          },
           layout: 'fitDataFill',
           pagination: 'local',
           paginationSize: 50,
-          paginationSizeSelector: [25, 50, 100, 200],
+          paginationSizeSelector: [25, 50, 100, 200, 500],
+          paginationCounter: 'rows',
+          selectable: 1,
           movableColumns: true,
           resizableRows: false,
           placeholder: '(no rows)',
           height: '100%',
+          rowClick: function (e, row) {
+            const inst = tblState[tabId];
+            if (!inst) return;
+            inst.tbl.deselectRow();
+            row.select();
+            inst.rowIdx = inst.tbl.getRows().indexOf(row);
+          },
+        });
+
+        tbl.on('tableBuilt', function () {
+          const bar = document.createElement('div');
+          bar.className = 'tbl-btn-bar';
+          bar.innerHTML = `
+            <button class="tbl-btn" data-act="refresh" title="Refresh">&#x27F3;</button>
+            <button class="tbl-btn" data-act="top"     title="First record">&#x2912;</button>
+            <button class="tbl-btn" data-act="bottom"  title="Last record">&#x2913;</button>
+            <button class="tbl-btn" data-act="up"      title="Previous record">&#9650;</button>
+            <button class="tbl-btn" data-act="down"    title="Next record">&#9660;</button>
+            <span class="tbl-btn-sep"></span>
+            <button class="tbl-btn" data-act="add"    title="Add row">&#xff0b;</button>
+            <button class="tbl-btn" data-act="delete" title="Delete row">&#x2715;</button>
+            <button class="tbl-btn tbl-btn-confirm" data-act="confirm" title="Confirm" disabled>&#x2714;</button>
+            <span class="tbl-btn-sep"></span>`;
+          bar.addEventListener('click', e => {
+            const btn = e.target.closest('[data-act]');
+            if (btn) handleTblAction(btn.dataset.act, tabId);
+          });
+          const paginator = document.querySelector('#tabulator-' + tabId + ' .tabulator-paginator');
+          if (paginator) paginator.prepend(bar);
+          tblState[tabId] = {
+            tbl, dd, table, rowIdx: -1, pendingRow: null,
+            confirmBtn: bar.querySelector('[data-act="confirm"]'),
+          };
         });
       })
       .catch(err => {
-        if (container) container.innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`;
+        if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
       });
+  }
+
+  // Navigate to a row by its 0-based index in the full dataset.
+  // Tabulator's scrollToRow handles page navigation automatically.
+  function navigateToRow(inst, idx) {
+    const rows = inst.tbl.getRows();
+    if (!rows.length) return;
+    idx = Math.max(0, Math.min(idx, rows.length - 1));
+    inst.rowIdx = idx;
+    const row = rows[idx];
+    inst.tbl.deselectRow();
+    inst.tbl.selectRow(row);
+    inst.tbl.scrollToRow(row, 'top', false);
+  }
+
+  function handleTblAction(act, tabId) {
+    const inst = tblState[tabId];
+    if (!inst) return;
+    const { tbl, dd, table } = inst;
+
+    switch (act) {
+      case 'refresh':
+        fetch(`api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`)
+          .then(r => r.json())
+          .then(resp => {
+            if (!resp.error) { tbl.replaceData(resp.data); inst.rowIdx = -1; }
+          })
+          .catch(() => {});
+        break;
+      case 'top':
+        navigateToRow(inst, 0);
+        break;
+      case 'bottom':
+        navigateToRow(inst, tbl.getRows().length - 1);
+        break;
+      case 'up':
+        navigateToRow(inst, inst.rowIdx <= 0 ? 0 : inst.rowIdx - 1);
+        break;
+      case 'down': {
+        const total = tbl.getRows().length;
+        navigateToRow(inst, inst.rowIdx < 0 ? 0 : Math.min(inst.rowIdx + 1, total - 1));
+        break;
+      }
+
+      case 'add': {
+        if (inst.pendingRow) return; // already an unsaved row
+        tbl.addRow({}, false).then(row => {
+          inst.pendingRow = row;
+          if (inst.confirmBtn) inst.confirmBtn.disabled = false;
+          tbl.scrollToRow(row, 'bottom', false);
+          setTimeout(() => {
+            const cells = row.getCells();
+            if (cells.length) cells[0].edit();
+          }, 60);
+        });
+        break;
+      }
+
+      case 'delete': {
+        if (inst.rowIdx < 0) { setStatus('Select a row to delete'); return; }
+        pendingDeleteTabId = tabId;
+        openModal('modal-del-confirm');
+        break;
+      }
+
+      case 'confirm': {
+        if (!inst.pendingRow) return;
+        const rowData = inst.pendingRow.getData();
+        apiFetch('api/row_ops.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'insert', dd, table, row: rowData }),
+        }).then(() => {
+          tbl.deleteRow(inst.pendingRow);
+          inst.pendingRow = null;
+          if (inst.confirmBtn) inst.confirmBtn.disabled = true;
+          // Refresh from server to get auto-assigned field values
+          return fetch(`api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`)
+            .then(r => r.json())
+            .then(r2 => { if (!r2.error) tbl.replaceData(r2.data); });
+        }).then(() => setStatus('Row inserted'))
+          .catch(err => setStatus(`Insert failed: ${err.message}`));
+        break;
+      }
+    }
   }
 
   // ── SQL panel ──────────────────────────────────────────────────────────────
@@ -309,6 +495,8 @@
             <option value="">— database —</option>
             ${ddOptions}
           </select>
+          <button class="btn" id="sql-open-btn-${tabId}" title="Open saved script">&#128194; Open</button>
+          <button class="btn" id="sql-save-btn-${tabId}" title="Save script">&#128190; Save</button>
           <button class="btn btn-primary" id="sql-run-${tabId}" title="Execute (F5 / F9)">&#9654; Execute</button>
           <button class="btn" id="sql-clear-${tabId}" title="Clear editor">Clear</button>
           <span style="font-size:11px;color:#45475a;margin-left:10px;white-space:nowrap;">
@@ -379,10 +567,27 @@
     setTimeout(() => {
       const runBtn   = document.getElementById('sql-run-' + tabId);
       const clearBtn = document.getElementById('sql-clear-' + tabId);
+      const openBtn  = document.getElementById('sql-open-btn-' + tabId);
+      const saveBtn  = document.getElementById('sql-save-btn-' + tabId);
       const textarea = document.getElementById('sql-text-' + tabId);
       const results  = document.getElementById('sql-results-' + tabId);
       const msgEl    = document.getElementById('sql-msg-' + tabId);
       if (!runBtn || !textarea) return;
+
+      openBtn?.addEventListener('click', () => openSqlOpenModal());
+
+      saveBtn?.addEventListener('click', () => {
+        const errEl = document.getElementById('sql-save-err');
+        if (errEl) errEl.textContent = '';
+        // Pre-fill name from tab title if it looks like a script name
+        const tabMeta = state.tabs.find(t => t.id === tabId);
+        const pre = (tabMeta && !tabMeta.title.startsWith('SQL')) ? tabMeta.title : '';
+        const nameInput = document.getElementById('sql-save-name');
+        if (nameInput) nameInput.value = pre;
+        pendingSqlSaveTabId = tabId;
+        openModal('modal-sql-save');
+        setTimeout(() => nameInput?.focus(), 50);
+      });
 
       // ▶ Execute button — run all text
       runBtn.addEventListener('click', () => {
@@ -605,6 +810,117 @@
       setStatus(`Disconnect failed: ${err.message}`);
     }
   }
+
+  // ── Delete row confirmation modal ──────────────────────────────────────────
+  document.getElementById('del-confirm-cancel').addEventListener('click', () => {
+    closeModal('modal-del-confirm');
+    pendingDeleteTabId = null;
+  });
+
+  document.getElementById('del-confirm-ok').addEventListener('click', async () => {
+    const tabId = pendingDeleteTabId;
+    closeModal('modal-del-confirm');
+    pendingDeleteTabId = null;
+    const inst = tblState[tabId];
+    if (!inst || inst.rowIdx < 0) return;
+    const rows = inst.tbl.getRows();
+    const row  = rows[inst.rowIdx];
+    if (!row) return;
+    try {
+      await apiFetch('api/row_ops.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', dd: inst.dd, table: inst.table, orig: row.getData() }),
+      });
+      inst.tbl.deleteRow(row);
+      inst.rowIdx = -1;
+      setStatus('Row deleted');
+    } catch (err) {
+      setStatus(`Delete failed: ${err.message}`);
+    }
+  });
+
+  // ── SQL script Save / Open ─────────────────────────────────────────────────
+  document.getElementById('sql-save-cancel').addEventListener('click', () => {
+    closeModal('modal-sql-save');
+    pendingSqlSaveTabId = null;
+  });
+
+  document.getElementById('sql-save-ok').addEventListener('click', async () => {
+    const name  = document.getElementById('sql-save-name').value.trim();
+    const errEl = document.getElementById('sql-save-err');
+    errEl.textContent = '';
+    if (!name) { errEl.textContent = 'Script name is required'; return; }
+    const tabId = pendingSqlSaveTabId;
+    const sql   = document.getElementById('sql-text-' + tabId)?.value ?? '';
+    try {
+      await apiFetch('api/sql_scripts.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save', name, sql }),
+      });
+      closeModal('modal-sql-save');
+      pendingSqlSaveTabId = null;
+      setStatus(`Script '${name}' saved`);
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  });
+
+  document.getElementById('sql-save-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('sql-save-ok').click();
+  });
+
+  async function openSqlOpenModal() {
+    const list = document.getElementById('sql-scripts-list');
+    list.innerHTML = '<div style="padding:12px;color:#7f849c;">Loading…</div>';
+    openModal('modal-sql-open');
+    try {
+      const scripts = await apiFetch('api/sql_scripts.php');
+      const names = Object.keys(scripts);
+      if (!names.length) {
+        list.innerHTML = '<div style="padding:12px;color:#7f849c;">No saved scripts yet.</div>';
+        return;
+      }
+      list.innerHTML = names.map(n => `
+        <div class="script-row">
+          <span class="script-name">${escHtml(n)}</span>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button class="btn btn-sm script-load" data-name="${escAttr(n)}">Load</button>
+            <button class="btn btn-sm btn-danger script-del"  data-name="${escAttr(n)}" title="Delete script">&#x2715;</button>
+          </div>
+        </div>`).join('');
+
+      list.querySelectorAll('.script-load').forEach(btn => {
+        btn.addEventListener('click', () => {
+          openSqlTab(state.selectedDD, scripts[btn.dataset.name], btn.dataset.name);
+          closeModal('modal-sql-open');
+        });
+      });
+      list.querySelectorAll('.script-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await apiFetch('api/sql_scripts.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete', name: btn.dataset.name }),
+          });
+          btn.closest('.script-row').remove();
+          if (!list.querySelector('.script-row'))
+            list.innerHTML = '<div style="padding:12px;color:#7f849c;">No saved scripts yet.</div>';
+        });
+      });
+
+      document.getElementById('sql-open-all').onclick = () => {
+        names.forEach(n => openSqlTab(state.selectedDD, scripts[n], n));
+        closeModal('modal-sql-open');
+      };
+    } catch (err) {
+      list.innerHTML = `<div style="padding:12px;color:#f38ba8;">${escHtml(err.message)}</div>`;
+    }
+  }
+
+  document.getElementById('modal-sql-open').querySelector('.modal-close')
+    .addEventListener('click', () => closeModal('modal-sql-open'));
 
   // ── About modal ────────────────────────────────────────────────────────────
   function openAboutModal() {

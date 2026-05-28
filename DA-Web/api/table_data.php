@@ -31,10 +31,12 @@ if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $table)) {
 }
 
 try {
-    $conn = new AdsConnection();
-    $conn->connect($c['path'], $c['username'], $c['password']);
+    $opts = ['path' => $c['path']];
+    if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
+    if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+    $conn = AdsConnection::connect($opts);
 
-    $stmt = $conn->query("SELECT TOP 2000 * FROM " . $table);
+    $stmt = $conn->query("SELECT * FROM " . $table . " LIMIT 2000");
     $rows = $stmt->fetchAll();
     $stmt->close();
     $conn->close();
