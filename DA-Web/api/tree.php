@@ -157,17 +157,22 @@ if ($action === 'category_children') {
                 break;
 
             case 'procs':
-            case 'functions':
-                $stmt = $conn->query("SELECT PROC_NAME FROM system.storedprocedures");
-                $pnames = [];
-                while ($row = $stmt->fetchAssoc()) { $pnames[] = $row['PROC_NAME']; }
-                sort($pnames);
-                $itype = ($cat === 'functions') ? 'function' : 'proc';
-                $iprefix = ($cat === 'functions') ? 'fn' : 'proc';
-                foreach ($pnames as $p) {
-                    $nodes[] = ['id' => "{$iprefix}_{$ddName}_{$p}", 'text' => $p,
+                $stmt = $conn->query("SELECT PROC_NAME FROM system.storedprocedures ORDER BY PROC_NAME");
+                while ($row = $stmt->fetchAssoc()) {
+                    $p = $row['PROC_NAME'];
+                    $nodes[] = ['id' => "proc_{$ddName}_{$p}", 'text' => $p,
                                 'icon' => 'jstree-icon-proc', 'children' => false,
-                                'a_attr' => ['data-dd' => $ddName, 'data-type' => $itype, 'data-name' => $p]];
+                                'a_attr' => ['data-dd' => $ddName, 'data-type' => 'proc', 'data-name' => $p]];
+                }
+                break;
+
+            case 'functions':
+                $stmt = $conn->query("SELECT FUNC_NAME FROM system.functions ORDER BY FUNC_NAME");
+                while ($row = $stmt->fetchAssoc()) {
+                    $p = $row['FUNC_NAME'];
+                    $nodes[] = ['id' => "fn_{$ddName}_{$p}", 'text' => $p,
+                                'icon' => 'jstree-icon-proc', 'children' => false,
+                                'a_attr' => ['data-dd' => $ddName, 'data-type' => 'function', 'data-name' => $p]];
                 }
                 break;
 

@@ -458,6 +458,41 @@ UNSIGNED32 AdsDDSetTriggerProperty   (ADSHANDLE   hConnect,
                                       UNSIGNED16  usPropertyID,
                                       void*       pvProperty,
                                       UNSIGNED16  usPropertyLen);
+// SAP ACE API name aliases
+UNSIGNED32 AdsDDAddProcedure         (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED8*  pucContainer,
+                                      UNSIGNED8*  pucProcName,
+                                      UNSIGNED32  ulInvokeOption,
+                                      UNSIGNED8*  pucInParams,
+                                      UNSIGNED8*  pucOutParams,
+                                      UNSIGNED8*  pucComments);
+UNSIGNED32 AdsDDRemoveProcedure      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName);
+UNSIGNED32 AdsDDGetProcedureProperty (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetProcedureProperty (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDRemoveTrigger        (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName);
+UNSIGNED32 AdsDDFindFirstObject      (ADSHANDLE   hObject,
+                                      UNSIGNED16  usFindObjectType,
+                                      UNSIGNED8*  pucParentName,
+                                      UNSIGNED8*  pucObjectName,
+                                      UNSIGNED16* pusObjectNameLen,
+                                      ADSHANDLE*  phFindHandle);
+UNSIGNED32 AdsDDFindNextObject       (ADSHANDLE   hObject,
+                                      ADSHANDLE   hFindHandle,
+                                      UNSIGNED8*  pucObjectName,
+                                      UNSIGNED16* pusObjectNameLen);
+UNSIGNED32 AdsDDFindClose            (ADSHANDLE   hObject,
+                                      ADSHANDLE   hFindHandle);
 UNSIGNED32 AdsDDCreateRefIntegrity   (ADSHANDLE   hConnect,
                                       UNSIGNED8*  pucName,
                                       UNSIGNED8*  pucFailTable,
@@ -814,6 +849,23 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 // View property codes (701-702).
 #define ADS_DD_VIEW_STMT                     701
 #define ADS_DD_VIEW_COMMENT                  702
+
+// SAP ACE property constant aliases — SAP ace.h uses different names for some
+// of these constants.  Only the names that differ from OpenADS are defined here.
+#ifndef ADS_DD_PROC_DLL_NAME
+#  define ADS_DD_PROC_DLL_NAME           ADS_DD_PROC_CONTAINER   /* 603 */
+#  define ADS_DD_PROC_DLL_FUNCTION_NAME  ADS_DD_PROC_PROC_NAME   /* 604 */
+#  define ADS_DD_PROC_INVOKE_OPTION      604  /* not stored; ignored on set */
+#  define ADS_DD_PROC_SCRIPT             ADS_DD_PROC_COMMENT     /* 605 */
+#endif
+#ifndef ADS_DD_TRIG_EVENT_TYPE
+#  define ADS_DD_TRIG_TABLEID            ADS_DD_TRIGGER_TABLE    /* 501 */
+#  define ADS_DD_TRIG_EVENT_TYPE         ADS_DD_TRIGGER_EVENT    /* 502 */
+#  define ADS_DD_TRIG_CONTAINER          ADS_DD_TRIGGER_CONTAINER /* 503 */
+#  define ADS_DD_TRIG_FUNCTION_NAME      ADS_DD_TRIGGER_PROC_NAME /* 504 */
+#  define ADS_DD_TRIG_PRIORITY           ADS_DD_TRIGGER_PRIORITY  /* 506 */
+#  define ADS_DD_TRIG_TABLENAME          ADS_DD_TRIGGER_TABLE     /* 501 */
+#endif
 
 // Note: SAP's ace.h uses the ADS_MGMT_* names for management-info
 // struct typedefs (declared further below), not for numeric
@@ -1417,6 +1469,41 @@ UNSIGNED32 ENTRYPOINT AdsDDSetProcProperty  (ADSHANDLE hConnect,
                                              UNSIGNED16 usProp,
                                              void*      pvBuf,
                                              UNSIGNED16 usLen);
+// SAP ACE API name aliases
+UNSIGNED32 ENTRYPOINT AdsDDAddProcedure     (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED8* pucContainer,
+                                             UNSIGNED8* pucProcName,
+                                             UNSIGNED32 ulInvokeOption,
+                                             UNSIGNED8* pucInParams,
+                                             UNSIGNED8* pucOutParams,
+                                             UNSIGNED8* pucComments);
+UNSIGNED32 ENTRYPOINT AdsDDRemoveProcedure  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName);
+UNSIGNED32 ENTRYPOINT AdsDDGetProcedureProperty(ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetProcedureProperty(ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16 usLen);
+UNSIGNED32 ENTRYPOINT AdsDDRemoveTrigger    (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName);
+UNSIGNED32 ENTRYPOINT AdsDDFindFirstObject  (ADSHANDLE hObject,
+                                             UNSIGNED16 usFindObjectType,
+                                             UNSIGNED8* pucParentName,
+                                             UNSIGNED8* pucObjectName,
+                                             UNSIGNED16* pusObjectNameLen,
+                                             ADSHANDLE* phFindHandle);
+UNSIGNED32 ENTRYPOINT AdsDDFindNextObject   (ADSHANDLE hObject,
+                                             ADSHANDLE hFindHandle,
+                                             UNSIGNED8* pucObjectName,
+                                             UNSIGNED16* pusObjectNameLen);
+UNSIGNED32 ENTRYPOINT AdsDDFindClose        (ADSHANDLE hObject,
+                                             ADSHANDLE hFindHandle);
 
 UNSIGNED32 ENTRYPOINT AdsDDCreateView       (ADSHANDLE hConnect,
                                              UNSIGNED8* pucName,

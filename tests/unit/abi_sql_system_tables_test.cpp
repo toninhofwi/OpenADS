@@ -279,6 +279,30 @@ TEST_CASE("system.storedprocedures lists DD procs") {
 }
 
 // ---------------------------------------------------------------------------
+// system.functions
+// ---------------------------------------------------------------------------
+
+TEST_CASE("system.functions returns empty result set with FUNC_NAME column") {
+    const auto dir = fs::temp_directory_path() / "openads_systbl_func";
+    std::error_code ec; fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf0(dir / "t.dbf");
+    write_dd(dir / "test.add", "TABLE t=t.dbf\n");
+
+    UNSIGNED8 addpath[512];
+    auto ap = (dir / "test.add").string();
+    std::memcpy(addpath, ap.c_str(), ap.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(addpath, 1, nullptr, nullptr, 0, &hConn) == 0);
+
+    // Must not return error 5018 (AE_NO_FILE_FOUND) — just an empty set.
+    CHECK(sql_count(hConn, "SELECT * FROM system.functions") == 0);
+
+    AdsDisconnect(hConn);
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
 // system.views
 // ---------------------------------------------------------------------------
 

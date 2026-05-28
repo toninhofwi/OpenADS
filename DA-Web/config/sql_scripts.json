@@ -1,1 +1,3 @@
-{}
+{
+    "Tests.sql": "SELECT * FROM system.dictionary ; \nSELECT * FROM system.storedprocedures; \nSELECT * FROM system.functions ; \nSELECT * FROM system.tables ; \nSELECT now() FROM system.iota ; \nSELECT * FROM system.indexes;\nSELECT * FROM system.triggers;\nSELECT * FROM system.users;\nSELECT * FROM system.usergroups ;\nSELECT * FROM system.usergroupmembers; \nSELECT * FROM system.permissions ;\n"
+}

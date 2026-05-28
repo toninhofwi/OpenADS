@@ -366,3 +366,13 @@ EXPORTS
     AdsSetTimeStamp
     AdsGetDate
 
+    ; SAP ACE API name aliases — Add/Remove variants used by SAP-built clients.
+    AdsDDAddProcedure
+    AdsDDRemoveProcedure
+    AdsDDGetProcedureProperty
+    AdsDDSetProcedureProperty
+    AdsDDRemoveTrigger
+    AdsDDFindFirstObject
+    AdsDDFindNextObject
+    AdsDDFindClose
+

@@ -4806,12 +4806,22 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     };
 
     switch (usProp) {
-        case ADS_DD_TRIGGER_TABLE:     return put_str(e.table_alias);
-        case ADS_DD_TRIGGER_EVENT:     return put_u32(e.event_mask);
-        case ADS_DD_TRIGGER_CONTAINER: return put_str(e.container);
-        case ADS_DD_TRIGGER_PROC_NAME: return put_str(e.procedure);
+        case ADS_DD_TRIGGER_TABLE:
+        case 1408: /* ADS_DD_TRIG_TABLENAME (SAP ACE) */
+            return put_str(e.table_alias);
+        case ADS_DD_TRIGGER_EVENT:
+        case 1401: /* ADS_DD_TRIG_EVENT_TYPE (SAP ACE) */
+            return put_u32(e.event_mask);
+        case ADS_DD_TRIGGER_CONTAINER:
+        case 1404: /* ADS_DD_TRIG_CONTAINER (SAP ACE) */
+            return put_str(e.container);
+        case ADS_DD_TRIGGER_PROC_NAME:
+        case 1405: /* ADS_DD_TRIG_FUNCTION_NAME (SAP ACE) */
+            return put_str(e.procedure);
         case ADS_DD_TRIGGER_ENABLED:   return put_u32(e.enabled ? 1u : 0u);
-        case ADS_DD_TRIGGER_PRIORITY:  return put_u32(e.priority);
+        case ADS_DD_TRIGGER_PRIORITY:
+        case 1406: /* ADS_DD_TRIG_PRIORITY (SAP ACE) */
+            return put_u32(e.priority);
         case ADS_DD_TRIGGER_COMMENT:   return put_str(e.comment);
         default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
     }
@@ -4829,9 +4839,15 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     std::string val = pBuf && usLen > 0
         ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
     switch (usProp) {
-        case ADS_DD_TRIGGER_TABLE:     e.table_alias = val; break;
-        case ADS_DD_TRIGGER_CONTAINER: e.container   = val; break;
-        case ADS_DD_TRIGGER_PROC_NAME: e.procedure   = val; break;
+        case ADS_DD_TRIGGER_TABLE:
+        case 1408: /* ADS_DD_TRIG_TABLENAME (SAP ACE) */
+            e.table_alias = val; break;
+        case ADS_DD_TRIGGER_CONTAINER:
+        case 1404: /* ADS_DD_TRIG_CONTAINER (SAP ACE) */
+            e.container   = val; break;
+        case ADS_DD_TRIGGER_PROC_NAME:
+        case 1405: /* ADS_DD_TRIG_FUNCTION_NAME (SAP ACE) */
+            e.procedure   = val; break;
         case ADS_DD_TRIGGER_COMMENT:   e.comment     = val; break;
         case ADS_DD_TRIGGER_ENABLED:
             if (pBuf && usLen >= 4) {
@@ -4841,6 +4857,7 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
             }
             break;
         case ADS_DD_TRIGGER_PRIORITY:
+        case 1406: /* ADS_DD_TRIG_PRIORITY (SAP ACE) */
             if (pBuf && usLen >= 4) {
                 auto* b = static_cast<const std::uint8_t*>(pBuf);
                 e.priority = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
@@ -4910,11 +4927,21 @@ UNSIGNED32 AdsDDGetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         return ok();
     };
     switch (usProp) {
-        case ADS_DD_PROC_INPUT:     return put_str(e.input_params);
-        case ADS_DD_PROC_OUTPUT:    return put_str(e.output_params);
-        case ADS_DD_PROC_CONTAINER: return put_str(e.container);
-        case ADS_DD_PROC_PROC_NAME: return put_str(e.procedure);
-        case ADS_DD_PROC_COMMENT:   return put_str(e.comment);
+        case ADS_DD_PROC_INPUT:
+        case 800: /* ADS_DD_PROC_INPUT (SAP ACE) */
+            return put_str(e.input_params);
+        case ADS_DD_PROC_OUTPUT:
+        case 801: /* ADS_DD_PROC_OUTPUT (SAP ACE) */
+            return put_str(e.output_params);
+        case ADS_DD_PROC_CONTAINER:
+        case 802: /* ADS_DD_PROC_DLL_NAME (SAP ACE) */
+            return put_str(e.container);
+        case ADS_DD_PROC_PROC_NAME:
+        case 803: /* ADS_DD_PROC_DLL_FUNCTION_NAME (SAP ACE) */
+            return put_str(e.procedure);
+        case ADS_DD_PROC_COMMENT:
+        case 805: /* ADS_DD_PROC_SCRIPT (SAP ACE) */
+            return put_str(e.comment);
         default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
     }
 }
@@ -4931,11 +4958,21 @@ UNSIGNED32 AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     std::string val = pBuf && usLen > 0
         ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
     switch (usProp) {
-        case ADS_DD_PROC_INPUT:     e.input_params  = val; break;
-        case ADS_DD_PROC_OUTPUT:    e.output_params = val; break;
-        case ADS_DD_PROC_CONTAINER: e.container     = val; break;
-        case ADS_DD_PROC_PROC_NAME: e.procedure     = val; break;
-        case ADS_DD_PROC_COMMENT:   e.comment       = val; break;
+        case ADS_DD_PROC_INPUT:
+        case 800: /* ADS_DD_PROC_INPUT (SAP ACE) */
+            e.input_params  = val; break;
+        case ADS_DD_PROC_OUTPUT:
+        case 801: /* ADS_DD_PROC_OUTPUT (SAP ACE) */
+            e.output_params = val; break;
+        case ADS_DD_PROC_CONTAINER:
+        case 802: /* ADS_DD_PROC_DLL_NAME (SAP ACE) */
+            e.container     = val; break;
+        case ADS_DD_PROC_PROC_NAME:
+        case 803: /* ADS_DD_PROC_DLL_FUNCTION_NAME (SAP ACE) */
+            e.procedure     = val; break;
+        case ADS_DD_PROC_COMMENT:
+        case 805: /* ADS_DD_PROC_SCRIPT (SAP ACE) */
+            e.comment       = val; break;
         default: return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
     }
     auto r = dd->save();
@@ -6807,6 +6844,21 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
             rows.push_back({e.name, e.container, e.procedure,
                             e.input_params, e.output_params});
         }
+        return build(cols, rows);
+    }
+    if (sys_name == "functions") {
+        // User-defined scalar functions (UDFs) are a distinct DD object type
+        // (ADS_DD_FUNCTION_OBJECT) separate from stored procedures. OpenADS
+        // does not yet implement UDFs, so this always returns an empty result
+        // set with columns compatible with SAP ADS system.functions.
+        const std::vector<Col> cols = {
+            {"FUNC_NAME",    'C', 200, 0},
+            {"CONTAINER",    'C', 250, 0},
+            {"PROCEDURE",    'C', 200, 0},
+            {"RETURN_TYPE",  'C',  50, 0},
+            {"COMMENT",      'C', 200, 0},
+        };
+        const std::vector<std::vector<std::string>> rows;
         return build(cols, rows);
     }
     if (sys_name == "views") {
@@ -13102,6 +13154,72 @@ UNSIGNED32 AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
                                 pucBuf, &cap, 0);
     if (pusLen) *pusLen = static_cast<UNSIGNED16>(cap);
     return rc;
+}
+
+// ---------------------------------------------------------------------------
+// SAP ACE API name aliases — binaries compiled against ace64.dll use these
+// names.  OpenADS uses Create/Drop internally; SAP ACE uses Add/Remove.
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDAddProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
+                              UNSIGNED8* pucContainer, UNSIGNED8* pucProcName,
+                              UNSIGNED32 /*ulInvokeOption*/,
+                              UNSIGNED8* pucInParams, UNSIGNED8* pucOutParams,
+                              UNSIGNED8* pucComments) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    openads::engine::DataDict::ProcEntry e;
+    e.name          = openads::abi::to_internal(pucName,      0);
+    e.container     = pucContainer ? openads::abi::to_internal(pucContainer, 0) : "";
+    e.procedure     = pucProcName  ? openads::abi::to_internal(pucProcName,  0) : "";
+    e.input_params  = pucInParams  ? openads::abi::to_internal(pucInParams,  0) : "";
+    e.output_params = pucOutParams ? openads::abi::to_internal(pucOutParams, 0) : "";
+    e.comment       = pucComments  ? openads::abi::to_internal(pucComments,  0) : "";
+    if (e.name.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "proc name empty");
+    auto r = dd->create_proc(e);
+    if (!r) return fail(r.error());
+    return ok();
+}
+UNSIGNED32 AdsDDRemoveProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    return AdsDDDropProcedure(hConn, pucName);
+}
+UNSIGNED32 AdsDDGetProcedureProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                      UNSIGNED16 usProp, void* pBuf,
+                                      UNSIGNED16* pusLen) {
+    return AdsDDGetProcProperty(hConn, pucName, usProp, pBuf, pusLen);
+}
+UNSIGNED32 AdsDDSetProcedureProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                      UNSIGNED16 usProp, void* pBuf,
+                                      UNSIGNED16 usLen) {
+    return AdsDDSetProcProperty(hConn, pucName, usProp, pBuf, usLen);
+}
+UNSIGNED32 AdsDDRemoveTrigger(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    return AdsDDDropTrigger(hConn, pucName);
+}
+
+// AdsDDFindFirstObject / FindNextObject / FindClose — stubs
+// OpenADS does not implement the find-handle enumeration pattern; callers
+// that need object lists should query the system.* virtual tables instead.
+UNSIGNED32 AdsDDFindFirstObject(ADSHANDLE /*hObject*/,
+                                 UNSIGNED16 /*usFindObjectType*/,
+                                 UNSIGNED8*  /*pucParentName*/,
+                                 UNSIGNED8*  /*pucObjectName*/,
+                                 UNSIGNED16* pusObjectNameLen,
+                                 ADSHANDLE*  phFindHandle) {
+    if (pusObjectNameLen) *pusObjectNameLen = 0;
+    if (phFindHandle)     *phFindHandle     = 0;
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "AdsDDFindFirstObject");
+}
+UNSIGNED32 AdsDDFindNextObject(ADSHANDLE /*hObject*/,
+                                ADSHANDLE  /*hFindHandle*/,
+                                UNSIGNED8*  /*pucObjectName*/,
+                                UNSIGNED16* pusObjectNameLen) {
+    if (pusObjectNameLen) *pusObjectNameLen = 0;
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "AdsDDFindNextObject");
+}
+UNSIGNED32 AdsDDFindClose(ADSHANDLE /*hObject*/, ADSHANDLE /*hFindHandle*/) {
+    return ok();
 }
 
 } // extern "C"
