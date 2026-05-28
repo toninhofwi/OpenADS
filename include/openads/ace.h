@@ -423,9 +423,11 @@ UNSIGNED32 AdsDDSetViewProperty      (ADSHANDLE   hConnect,
 UNSIGNED32 AdsDDCreateProcedure      (ADSHANDLE   hConnect,
                                       UNSIGNED8*  pucName,
                                       UNSIGNED8*  pucContainer,
-                                      UNSIGNED8*  pucProcedure,
-                                      UNSIGNED8*  pucInputParams,
-                                      UNSIGNED8*  pucOutputParams);
+                                      UNSIGNED8*  pucProcName,
+                                      UNSIGNED32  ulInvokeOption,
+                                      UNSIGNED8*  pucInParams,
+                                      UNSIGNED8*  pucOutParams,
+                                      UNSIGNED8*  pucComments);
 UNSIGNED32 AdsDDDropProcedure        (ADSHANDLE   hConnect,
                                       UNSIGNED8*  pucName);
 UNSIGNED32 AdsDDGetProcProperty      (ADSHANDLE   hConnect,
@@ -434,6 +436,16 @@ UNSIGNED32 AdsDDGetProcProperty      (ADSHANDLE   hConnect,
                                       void*       pvProperty,
                                       UNSIGNED16* pusPropertyLen);
 UNSIGNED32 AdsDDSetProcProperty      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDGetRefIntegrityProperty(ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetRefIntegrityProperty(ADSHANDLE  hConnect,
                                       UNSIGNED8*  pucName,
                                       UNSIGNED16  usPropertyID,
                                       void*       pvProperty,
@@ -829,6 +841,15 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_AFTER_UPDATE                     0x0008
 #define ADS_BEFORE_DELETE                    0x0010
 #define ADS_AFTER_DELETE                     0x0020
+
+// RI property codes (401-407).
+#define ADS_DD_RI_PARENT                     401
+#define ADS_DD_RI_CHILD                      402
+#define ADS_DD_RI_PARENT_TAG                 403
+#define ADS_DD_RI_CHILD_TAG                  404
+#define ADS_DD_RI_UPDATE_RULE                405
+#define ADS_DD_RI_DELETE_RULE                406
+#define ADS_DD_RI_FAIL_TABLE                 407
 
 // Trigger-object property codes (501-508).
 #define ADS_DD_TRIGGER_TABLE                 501
@@ -1454,9 +1475,11 @@ UNSIGNED32 ENTRYPOINT AdsDDSetTriggerProperty(ADSHANDLE hConnect,
 UNSIGNED32 ENTRYPOINT AdsDDCreateProcedure  (ADSHANDLE hConnect,
                                              UNSIGNED8* pucName,
                                              UNSIGNED8* pucContainer,
-                                             UNSIGNED8* pucProcedure,
-                                             UNSIGNED8* pucInput,
-                                             UNSIGNED8* pucOutput);
+                                             UNSIGNED8* pucProcName,
+                                             UNSIGNED32 ulInvokeOption,
+                                             UNSIGNED8* pucInParams,
+                                             UNSIGNED8* pucOutParams,
+                                             UNSIGNED8* pucComments);
 UNSIGNED32 ENTRYPOINT AdsDDDropProcedure    (ADSHANDLE hConnect,
                                              UNSIGNED8* pucName);
 UNSIGNED32 ENTRYPOINT AdsDDGetProcProperty  (ADSHANDLE hConnect,
@@ -1465,6 +1488,16 @@ UNSIGNED32 ENTRYPOINT AdsDDGetProcProperty  (ADSHANDLE hConnect,
                                              void*      pvBuf,
                                              UNSIGNED16* pusLen);
 UNSIGNED32 ENTRYPOINT AdsDDSetProcProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16 usLen);
+UNSIGNED32 ENTRYPOINT AdsDDGetRefIntegrityProperty(ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetRefIntegrityProperty(ADSHANDLE hConnect,
                                              UNSIGNED8* pucName,
                                              UNSIGNED16 usProp,
                                              void*      pvBuf,

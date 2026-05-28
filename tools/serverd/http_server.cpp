@@ -689,7 +689,8 @@ json dd_view(const std::string& dir, const std::string& name) {
             {"name",        kv.second.name},
             {"parent",      kv.second.parent},
             {"child",       kv.second.child},
-            {"tag",         kv.second.tag},
+            {"parent_tag",  kv.second.parent_tag},
+            {"child_tag",   kv.second.child_tag},
             {"update_opt",  kv.second.update_opt},
             {"delete_opt",  kv.second.delete_opt},
             {"fail_table",  kv.second.fail_table}

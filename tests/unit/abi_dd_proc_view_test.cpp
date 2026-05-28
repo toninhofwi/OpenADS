@@ -74,7 +74,7 @@ TEST_CASE("AdsDDCreateProcedure + AdsDDGetProcProperty round-trip") {
     UNSIGNED8 output[32]    = "result:C";
 
     REQUIRE(AdsDDCreateProcedure(f.hConn, name, container, proc,
-                                  input, output) == 0);
+                                  0, input, output, nullptr) == 0);
 
     char buf[128]; UNSIGNED16 len = sizeof(buf);
 
@@ -103,7 +103,7 @@ TEST_CASE("AdsDDSetProcProperty — update comment") {
 
     UNSIGNED8 name[32] = "sp_audit";
     REQUIRE(AdsDDCreateProcedure(f.hConn, name, nullptr, nullptr,
-                                  nullptr, nullptr) == 0);
+                                  0, nullptr, nullptr, nullptr) == 0);
 
     const char* cmt = "audit log proc";
     REQUIRE(AdsDDSetProcProperty(f.hConn, name, ADS_DD_PROC_COMMENT,
@@ -121,7 +121,7 @@ TEST_CASE("AdsDDDropProcedure — removes procedure") {
 
     UNSIGNED8 name[32] = "sp_drop_me";
     REQUIRE(AdsDDCreateProcedure(f.hConn, name, nullptr, nullptr,
-                                  nullptr, nullptr) == 0);
+                                  0, nullptr, nullptr, nullptr) == 0);
     REQUIRE(AdsDDDropProcedure(f.hConn, name) == 0);
 
     char buf[64]; UNSIGNED16 len = sizeof(buf);
@@ -147,7 +147,7 @@ TEST_CASE("AdsDDCreateProcedure — persists across DD reopen") {
         UNSIGNED8 name[32] = "sp_calc";
         UNSIGNED8 container[32] = "calc.dll";
         REQUIRE(AdsDDCreateProcedure(hConn, name, container, nullptr,
-                                      nullptr, nullptr) == 0);
+                                      0, nullptr, nullptr, nullptr) == 0);
         AdsDisconnect(hConn);
     }
 

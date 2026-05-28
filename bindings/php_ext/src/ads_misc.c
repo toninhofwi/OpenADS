@@ -729,7 +729,6 @@ PHP_METHOD(AdsDictionary, createProcedure)
     char *procedure;    size_t procedure_len;
     char *input   = ""; size_t input_len   = 0;
     char *output  = ""; size_t output_len  = 0;
-    /* comment param accepted but not forwarded; OpenADS has no comment arg */
     char *comment = ""; size_t comment_len = 0;
 
     ZEND_PARSE_PARAMETERS_START(3, 6)
@@ -750,8 +749,10 @@ PHP_METHOD(AdsDictionary, createProcedure)
         (UNSIGNED8 *)name,
         (UNSIGNED8 *)container,
         (UNSIGNED8 *)procedure,
+        0,                      /* ulInvokeOption — not stored */
         (UNSIGNED8 *)input,
-        (UNSIGNED8 *)output);
+        (UNSIGNED8 *)output,
+        (UNSIGNED8 *)comment);
     ADS_CHECK_RC(ulRet, "AdsDictionary::createProcedure");
 }
 

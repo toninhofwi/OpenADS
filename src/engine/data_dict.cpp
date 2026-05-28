@@ -12,6 +12,36 @@ namespace openads::engine {
 
 namespace {
 
+// Split a string on NUL bytes (used for binary-record property encoding).
+static std::vector<std::string> split_nul(const std::string& s) {
+    std::vector<std::string> parts;
+    std::size_t pos = 0;
+    while (pos <= s.size()) {
+        auto next = s.find('\0', pos);
+        if (next == std::string::npos) {
+            parts.push_back(s.substr(pos));
+            break;
+        }
+        parts.push_back(s.substr(pos, next - pos));
+        pos = next + 1;
+    }
+    return parts;
+}
+
+// Join strings with NUL separators, capped at max_len bytes total.
+static std::string join_nul(std::initializer_list<std::string> parts,
+                              std::size_t max_len = 273) {
+    std::string result;
+    bool first = true;
+    for (const auto& p : parts) {
+        if (!first) result += '\0';
+        first = false;
+        result += p;
+        if (result.size() >= max_len) { result.resize(max_len); break; }
+    }
+    return result;
+}
+
 static inline uint32_t le32(const std::string& b, std::size_t off) {
     return static_cast<uint32_t>(
         static_cast<uint32_t>(static_cast<uint8_t>(b[off]))
@@ -192,6 +222,59 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         } else if ((rec.obj_type == "User" || rec.obj_type == "Group") &&
                    !rec.obj_name.empty()) {
             users_.insert(rec.obj_name);
+
+        } else if (rec.obj_type == "Procedure" && !rec.obj_name.empty() &&
+                   !rec.prop_null) {
+            auto parts = split_nul(rec.property);
+            while (parts.size() < 5) parts.emplace_back();
+            ProcEntry e;
+            e.name          = rec.obj_name;
+            e.container     = parts[0];
+            e.procedure     = parts[1];
+            e.input_params  = parts[2];
+            e.output_params = parts[3];
+            e.comment       = parts[4];
+            procs_[e.name] = std::move(e);
+
+        } else if (rec.obj_type == "Trigger" && !rec.obj_name.empty() &&
+                   !rec.prop_null) {
+            auto parts = split_nul(rec.property);
+            while (parts.size() < 7) parts.emplace_back();
+            TriggerEntry e;
+            e.name        = rec.obj_name;
+            e.table_alias = parts[0];
+            try { e.event_mask = static_cast<uint32_t>(std::stoul(parts[1])); } catch (...) {}
+            try { e.priority   = static_cast<uint32_t>(std::stoul(parts[2])); } catch (...) {}
+            e.enabled   = (parts[3] != "0");
+            e.container = parts[4];
+            e.procedure = parts[5];
+            e.comment   = parts[6];
+            triggers_[e.name] = std::move(e);
+
+        } else if (rec.obj_type == "Relation" && !rec.obj_name.empty() &&
+                   !rec.prop_null) {
+            auto parts = split_nul(rec.property);
+            while (parts.size() < 7) parts.emplace_back();
+            RiEntry e;
+            e.name       = rec.obj_name;
+            e.parent     = parts[0];
+            e.child      = parts[1];
+            e.parent_tag = parts[2];
+            e.child_tag  = parts[3];
+            e.update_opt = parts[4];
+            e.delete_opt = parts[5];
+            e.fail_table = parts[6];
+            ri_[e.name] = std::move(e);
+
+        } else if (rec.obj_type == "View" && !rec.obj_name.empty() &&
+                   !rec.prop_null) {
+            auto parts = split_nul(rec.property);
+            while (parts.size() < 2) parts.emplace_back();
+            ViewEntry e;
+            e.name    = rec.obj_name;
+            e.comment = parts[0];
+            e.sql     = parts[1];
+            views_[e.name] = std::move(e);
         }
     }
     return {};
@@ -287,7 +370,8 @@ util::Result<void> DataDict::load_() {
             if (eq == std::string::npos) continue;
             std::string name = trim(body.substr(0, eq));
             std::string rest = body.substr(eq + 1);
-            // parent;child;tag;update_opt;delete_opt;fail_table
+            // v2: parent;child;parent_tag;child_tag;update_opt;delete_opt;fail_table
+            // v1: parent;child;tag;update_opt;delete_opt;fail_table  (no child_tag)
             std::vector<std::string> parts;
             std::string cur;
             for (char c : rest) {
@@ -295,15 +379,27 @@ util::Result<void> DataDict::load_() {
                 else cur.push_back(c);
             }
             parts.push_back(cur);
-            while (parts.size() < 6) parts.emplace_back();
+            std::size_t nfields = parts.size();
+            while (parts.size() < 7) parts.emplace_back();
             RiEntry e;
-            e.name        = name;
-            e.parent      = parts[0];
-            e.child       = parts[1];
-            e.tag         = parts[2];
-            e.update_opt  = parts[3];
-            e.delete_opt  = parts[4];
-            e.fail_table  = parts[5];
+            e.name = name;
+            e.parent = parts[0];
+            e.child  = parts[1];
+            if (nfields >= 7) {
+                // v2 format: parent;child;parent_tag;child_tag;update_opt;delete_opt;fail_table
+                e.parent_tag = parts[2];
+                e.child_tag  = parts[3];
+                e.update_opt = parts[4];
+                e.delete_opt = parts[5];
+                e.fail_table = parts[6];
+            } else {
+                // v1 format: parent;child;tag;update_opt;delete_opt;fail_table
+                e.parent_tag = parts[2];
+                e.child_tag  = "";
+                e.update_opt = parts[3];
+                e.delete_opt = parts[4];
+                e.fail_table = parts[5];
+            }
             ri_[name] = std::move(e);
 
         } else if (starts_with(line, "DBPROP ")) {
@@ -626,15 +722,41 @@ DataDict::modify_link(const std::string& alias, const std::string& path,
 }
 
 util::Result<void> DataDict::create_ri(const RiEntry& e) {
-    if (e.name.empty()) {
+    if (e.name.empty())
         return util::Error{5000, 0, "DD RI name empty", ""};
-    }
     ri_[e.name] = e;
+    if (binary_format_) {
+        auto prop = join_nul({e.parent, e.child, e.parent_tag, e.child_tag,
+                               e.update_opt, e.delete_opt, e.fail_table});
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Relation" && r.obj_name == e.name) {
+                r.property = prop; r.prop_null = false;
+                return save();
+            }
+        }
+        BinaryRecord r;
+        r.active    = true;
+        r.obj_id    = binary_alloc_id_();
+        r.parent_id = binary_obj_id_of_("Database", "Database");
+        if (r.parent_id == 0) r.parent_id = 1;
+        r.obj_type  = "Relation";
+        r.obj_name  = e.name;
+        r.property  = prop;
+        r.prop_null = false;
+        binary_recs_.push_back(std::move(r));
+    }
     return save();
 }
 
 util::Result<void> DataDict::remove_ri(const std::string& name) {
     ri_.erase(name);
+    if (binary_format_) {
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Relation" && r.obj_name == name) {
+                r.active = false; break;
+            }
+        }
+    }
     return save();
 }
 
@@ -737,11 +859,40 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
     if (e.name.empty() || e.table_alias.empty())
         return util::Error{5000, 0, "DD trigger name/table empty", ""};
     triggers_[e.name] = e;
+    if (binary_format_) {
+        auto prop = join_nul({e.table_alias, std::to_string(e.event_mask),
+                               std::to_string(e.priority),
+                               e.enabled ? "1" : "0",
+                               e.container, e.procedure, e.comment});
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Trigger" && r.obj_name == e.name) {
+                r.property = prop; r.prop_null = false;
+                return save();
+            }
+        }
+        BinaryRecord r;
+        r.active    = true;
+        r.obj_id    = binary_alloc_id_();
+        r.parent_id = binary_obj_id_of_("Database", "Database");
+        if (r.parent_id == 0) r.parent_id = 1;
+        r.obj_type  = "Trigger";
+        r.obj_name  = e.name;
+        r.property  = prop;
+        r.prop_null = false;
+        binary_recs_.push_back(std::move(r));
+    }
     return save();
 }
 
 util::Result<void> DataDict::drop_trigger(const std::string& name) {
     triggers_.erase(name);
+    if (binary_format_) {
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Trigger" && r.obj_name == name) {
+                r.active = false; break;
+            }
+        }
+    }
     return save();
 }
 
@@ -753,11 +904,38 @@ util::Result<void> DataDict::create_proc(const ProcEntry& e) {
     if (e.name.empty())
         return util::Error{5000, 0, "DD proc name empty", ""};
     procs_[e.name] = e;
+    if (binary_format_) {
+        auto prop = join_nul({e.container, e.procedure,
+                               e.input_params, e.output_params, e.comment});
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Procedure" && r.obj_name == e.name) {
+                r.property = prop; r.prop_null = false;
+                return save();
+            }
+        }
+        BinaryRecord r;
+        r.active    = true;
+        r.obj_id    = binary_alloc_id_();
+        r.parent_id = binary_obj_id_of_("Database", "Database");
+        if (r.parent_id == 0) r.parent_id = 1;
+        r.obj_type  = "Procedure";
+        r.obj_name  = e.name;
+        r.property  = prop;
+        r.prop_null = false;
+        binary_recs_.push_back(std::move(r));
+    }
     return save();
 }
 
 util::Result<void> DataDict::drop_proc(const std::string& name) {
     procs_.erase(name);
+    if (binary_format_) {
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Procedure" && r.obj_name == name) {
+                r.active = false; break;
+            }
+        }
+    }
     return save();
 }
 
@@ -769,11 +947,37 @@ util::Result<void> DataDict::create_view(const ViewEntry& e) {
     if (e.name.empty())
         return util::Error{5000, 0, "DD view name empty", ""};
     views_[e.name] = e;
+    if (binary_format_) {
+        auto prop = join_nul({e.comment, e.sql});
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "View" && r.obj_name == e.name) {
+                r.property = prop; r.prop_null = false;
+                return save();
+            }
+        }
+        BinaryRecord r;
+        r.active    = true;
+        r.obj_id    = binary_alloc_id_();
+        r.parent_id = binary_obj_id_of_("Database", "Database");
+        if (r.parent_id == 0) r.parent_id = 1;
+        r.obj_type  = "View";
+        r.obj_name  = e.name;
+        r.property  = prop;
+        r.prop_null = false;
+        binary_recs_.push_back(std::move(r));
+    }
     return save();
 }
 
 util::Result<void> DataDict::drop_view(const std::string& name) {
     views_.erase(name);
+    if (binary_format_) {
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "View" && r.obj_name == name) {
+                r.active = false; break;
+            }
+        }
+    }
     return save();
 }
 
@@ -843,6 +1047,46 @@ std::string DataDict::serialize_binary_rec_(const BinaryRecord& r,
 }
 
 util::Result<void> DataDict::save_add_binary_() {
+    // Regenerate property fields for mutable object types so that
+    // AdsDDSet*Property mutations are reflected even without re-creating.
+    for (auto& r : binary_recs_) {
+        if (!r.active) continue;
+        if (r.obj_type == "Procedure") {
+            auto it = procs_.find(r.obj_name);
+            if (it != procs_.end()) {
+                const auto& e = it->second;
+                r.property  = join_nul({e.container, e.procedure,
+                                         e.input_params, e.output_params, e.comment});
+                r.prop_null = false;
+            }
+        } else if (r.obj_type == "Trigger") {
+            auto it = triggers_.find(r.obj_name);
+            if (it != triggers_.end()) {
+                const auto& e = it->second;
+                r.property  = join_nul({e.table_alias, std::to_string(e.event_mask),
+                                         std::to_string(e.priority),
+                                         e.enabled ? "1" : "0",
+                                         e.container, e.procedure, e.comment});
+                r.prop_null = false;
+            }
+        } else if (r.obj_type == "Relation") {
+            auto it = ri_.find(r.obj_name);
+            if (it != ri_.end()) {
+                const auto& e = it->second;
+                r.property  = join_nul({e.parent, e.child, e.parent_tag, e.child_tag,
+                                         e.update_opt, e.delete_opt, e.fail_table});
+                r.prop_null = false;
+            }
+        } else if (r.obj_type == "View") {
+            auto it = views_.find(r.obj_name);
+            if (it != views_.end()) {
+                const auto& e = it->second;
+                r.property  = join_nul({e.comment, e.sql});
+                r.prop_null = false;
+            }
+        }
+    }
+
     auto total = static_cast<uint32_t>(binary_recs_.size());
     put_le32(binary_hdr_, 0x18, total);
 
@@ -936,7 +1180,8 @@ util::Result<void> DataDict::save() {
     for (auto& n : sorted_keys(ri_)) {
         const auto& e = ri_.at(n);
         out += "RI " + n + "=" + e.parent + ";" + e.child + ";" +
-               e.tag + ";" + e.update_opt + ";" + e.delete_opt + ";" +
+               e.parent_tag + ";" + e.child_tag + ";" +
+               e.update_opt + ";" + e.delete_opt + ";" +
                e.fail_table + "\n";
     }
     for (auto& k : sorted_keys(db_props_)) {

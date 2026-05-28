@@ -303,6 +303,109 @@ TEST_CASE("system.functions returns empty result set with FUNC_NAME column") {
 }
 
 // ---------------------------------------------------------------------------
+// system.referentialintegrity (SAP alias for system.relations)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("system.referentialintegrity lists RI rules and matches system.relations") {
+    const auto dir = fs::temp_directory_path() / "openads_systbl_ri";
+    std::error_code ec; fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf0(dir / "t.dbf");
+    write_dd(dir / "test.add",
+             "TABLE t=t.dbf\n"
+             "RI myrule=parent;child;pidx;cidx;1;2;fail\n");
+
+    UNSIGNED8 addpath[512];
+    auto ap = (dir / "test.add").string();
+    std::memcpy(addpath, ap.c_str(), ap.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(addpath, 1, nullptr, nullptr, 0, &hConn) == 0);
+
+    CHECK(sql_count(hConn, "SELECT * FROM system.referentialintegrity") == 1);
+    CHECK(sql_count(hConn, "SELECT * FROM system.relations") == 1);
+
+    auto names = sql_col1(hConn, "SELECT * FROM system.referentialintegrity",
+                          "RI_NAME");
+    REQUIRE(names.size() == 1u);
+    CHECK(names[0] == "myrule");
+
+    AdsDisconnect(hConn);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AdsDDGetRefIntegrityProperty returns RI fields") {
+    const auto dir = fs::temp_directory_path() / "openads_ri_prop";
+    std::error_code ec; fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf0(dir / "t.dbf");
+    write_dd(dir / "test.add",
+             "TABLE t=t.dbf\n"
+             "RI myrule=Parent;Child;PTag;CTag;1;2;FailTbl\n");
+
+    UNSIGNED8 addpath[512];
+    auto ap = (dir / "test.add").string();
+    std::memcpy(addpath, ap.c_str(), ap.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(addpath, 1, nullptr, nullptr, 0, &hConn) == 0);
+
+    char buf[512]; UNSIGNED16 len;
+    UNSIGNED8 rname[] = "myrule";
+    len = sizeof(buf) - 1;
+    REQUIRE(AdsDDGetRefIntegrityProperty(hConn, rname,
+        ADS_DD_RI_PARENT, buf, &len) == 0);
+    buf[len] = '\0';
+    CHECK(std::string(buf) == "Parent");
+
+    len = sizeof(buf) - 1;
+    REQUIRE(AdsDDGetRefIntegrityProperty(hConn, rname,
+        ADS_DD_RI_PARENT_TAG, buf, &len) == 0);
+    buf[len] = '\0';
+    CHECK(std::string(buf) == "PTag");
+
+    len = sizeof(buf) - 1;
+    REQUIRE(AdsDDGetRefIntegrityProperty(hConn, rname,
+        ADS_DD_RI_CHILD_TAG, buf, &len) == 0);
+    buf[len] = '\0';
+    CHECK(std::string(buf) == "CTag");
+
+    AdsDisconnect(hConn);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AdsDDCreateProcedure stores comment via 8-param signature") {
+    const auto dir = fs::temp_directory_path() / "openads_proc_comment";
+    std::error_code ec; fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf0(dir / "t.dbf");
+    write_dd(dir / "test.add", "TABLE t=t.dbf\n");
+
+    UNSIGNED8 addpath[512];
+    auto ap = (dir / "test.add").string();
+    std::memcpy(addpath, ap.c_str(), ap.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(addpath, 1, nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 pname[]  = "myproc";
+    UNSIGNED8 pcontr[] = "mylib.dll";
+    UNSIGNED8 pfunc[]  = "MyFunc";
+    UNSIGNED8 pin[]    = "@x INT";
+    UNSIGNED8 pout[]   = "@y INT";
+    UNSIGNED8 pcmt[]   = "does things";
+    REQUIRE(AdsDDCreateProcedure(hConn, pname, pcontr, pfunc,
+                                  0, pin, pout, pcmt) == 0);
+
+    char buf[512]; UNSIGNED16 len;
+    len = sizeof(buf) - 1;
+    REQUIRE(AdsDDGetProcProperty(hConn, pname, ADS_DD_PROC_COMMENT,
+                                  buf, &len) == 0);
+    buf[len] = '\0';
+    CHECK(std::string(buf) == "does things");
+
+    AdsDisconnect(hConn);
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
 // system.views
 // ---------------------------------------------------------------------------
 

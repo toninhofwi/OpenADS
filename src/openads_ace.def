@@ -366,6 +366,10 @@ EXPORTS
     AdsSetTimeStamp
     AdsGetDate
 
+    ; RI property get/set.
+    AdsDDGetRefIntegrityProperty
+    AdsDDSetRefIntegrityProperty
+
     ; SAP ACE API name aliases — Add/Remove variants used by SAP-built clients.
     AdsDDAddProcedure
     AdsDDRemoveProcedure

@@ -411,9 +411,9 @@ openads::util::Result<void> ri_check_insert(Connection* conn, Table& child) {
 
     for (auto& [rname, rule] : dd->ri()) {
         if (rule.child != child_alias) continue;
-        // rule.tag is the parent index tag name; by convention (single-field
+        // rule.parent_tag is the parent index tag name; by convention (single-field
         // PK/FK) the same name identifies the FK field in the child.
-        std::string fk_val = ri_trim(ri_read_field(child, rule.tag));
+        std::string fk_val = ri_trim(ri_read_field(child, rule.parent_tag));
         if (fk_val.empty()) continue;   // NULL / blank FK → skip
 
         auto ph = conn->open_table(rule.parent,
@@ -425,7 +425,7 @@ openads::util::Result<void> ri_check_insert(Connection* conn, Table& child) {
                 "RI: cannot open parent table '" + rule.parent + "'", rname};
         }
         Table* parent = conn->lookup_table(ph.value());
-        bool found = parent && ri_scan(*parent, rule.tag, fk_val, nullptr);
+        bool found = parent && ri_scan(*parent, rule.parent_tag, fk_val, nullptr);
         conn->close_table(ph.value());
         if (!found) {
             return openads::util::Error{
@@ -449,7 +449,7 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
 
     for (auto& [rname, rule] : dd->ri()) {
         if (rule.parent != parent_alias) continue;
-        std::string pk_val = ri_trim(ri_read_field(parent, rule.tag));
+        std::string pk_val = ri_trim(ri_read_field(parent, rule.parent_tag));
         if (pk_val.empty()) continue;
 
         unsigned del_opt = ADS_DD_RI_RESTRICT;
@@ -470,7 +470,7 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
         if (!child) { conn->close_table(ch.value()); continue; }
 
         if (del_opt == ADS_DD_RI_RESTRICT) {
-            bool any = ri_scan(*child, rule.tag, pk_val, nullptr);
+            bool any = ri_scan(*child, rule.parent_tag, pk_val, nullptr);
             conn->close_table(ch.value());
             if (any) {
                 return openads::util::Error{
@@ -481,7 +481,7 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
         } else {
             // Collect matching recnos first, then apply action.
             std::vector<std::uint32_t> matches;
-            ri_scan(*child, rule.tag, pk_val, &matches);
+            ri_scan(*child, rule.parent_tag, pk_val, &matches);
             in_ri_check() = true;
             for (std::uint32_t rec : matches) {
                 if (auto gr = child->goto_record(rec); !gr) continue;
@@ -489,7 +489,7 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
                     (void)child->mark_deleted();
                 } else {
                     // SETNULL / SETDEFAULT: blank the FK field.
-                    auto fi = child->field_index(rule.tag);
+                    auto fi = child->field_index(rule.parent_tag);
                     if (fi >= 0) {
                         auto fi16 = static_cast<std::uint16_t>(fi);
                         std::uint32_t flen =
@@ -537,7 +537,7 @@ void snapshot_ri_pks(Table* t) {
     snap.clear();
     for (auto& [rname, rule] : dd->ri()) {
         if (rule.parent != alias) continue;
-        snap[rule.tag] = ri_trim(ri_read_field(*t, rule.tag));
+        snap[rule.parent_tag] = ri_trim(ri_read_field(*t, rule.parent_tag));
     }
 }
 
@@ -563,12 +563,12 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
         if (upd_opt == 0) continue;
 
         // New PK value is in the dirty buffer.
-        std::string new_pk = ri_trim(ri_read_field(parent, rule.tag));
+        std::string new_pk = ri_trim(ri_read_field(parent, rule.parent_tag));
 
         // Old PK value was snapshotted at navigation time.
         auto sit = pk_snapshots().find(&parent);
         if (sit == pk_snapshots().end()) continue;
-        auto fit = sit->second.find(rule.tag);
+        auto fit = sit->second.find(rule.parent_tag);
         if (fit == sit->second.end()) continue;
         std::string old_pk = fit->second;
 
@@ -587,12 +587,12 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
         if (!child) { conn->close_table(ch.value()); continue; }
 
         if (upd_opt == ADS_DD_RI_RESTRICT) {
-            bool any = ri_scan(*child, rule.tag, old_pk, nullptr);
+            bool any = ri_scan(*child, rule.parent_tag, old_pk, nullptr);
             conn->close_table(ch.value());
             if (any) {
                 // Restore parent's old PK to disk. set_field wrote the new
                 // value immediately (writeback_record_), so we must undo it.
-                auto rfi = parent.field_index(rule.tag);
+                auto rfi = parent.field_index(rule.parent_tag);
                 if (rfi >= 0) {
                     auto rfi16 = static_cast<std::uint16_t>(rfi);
                     std::uint32_t rflen = parent.field_descriptor(rfi16).length;
@@ -608,9 +608,9 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
             }
         } else {
             std::vector<std::uint32_t> matches;
-            ri_scan(*child, rule.tag, old_pk, &matches);
+            ri_scan(*child, rule.parent_tag, old_pk, &matches);
             in_ri_check() = true;
-            auto fi = child->field_index(rule.tag);
+            auto fi = child->field_index(rule.parent_tag);
             if (fi >= 0) {
                 auto fi16 = static_cast<std::uint16_t>(fi);
                 std::uint32_t flen = child->field_descriptor(fi16).length;
@@ -4276,15 +4276,13 @@ UNSIGNED32 AdsDDCreateRefIntegrity(ADSHANDLE hConn,
     if (dd == nullptr) return ok();
     openads::engine::DataDict::RiEntry e;
     e.name        = openads::abi::to_internal(pucName,   0);
-    e.parent      = pucParent ? openads::abi::to_internal(pucParent, 0) : std::string();
-    e.child       = pucChild  ? openads::abi::to_internal(pucChild,  0) : std::string();
-    // rddads passes parent + child tag names separately; the engine
-    // currently tracks one combined tag, so we record the parent's.
-    (void)pucChildTag;
-    e.tag         = pucParentTag ? openads::abi::to_internal(pucParentTag, 0) : std::string();
+    e.parent      = pucParent    ? openads::abi::to_internal(pucParent,    0) : std::string();
+    e.child       = pucChild     ? openads::abi::to_internal(pucChild,     0) : std::string();
+    e.parent_tag  = pucParentTag ? openads::abi::to_internal(pucParentTag, 0) : std::string();
+    e.child_tag   = pucChildTag  ? openads::abi::to_internal(pucChildTag,  0) : std::string();
     e.update_opt  = std::to_string(static_cast<unsigned>(usUpdate));
     e.delete_opt  = std::to_string(static_cast<unsigned>(usDelete));
-    e.fail_table  = pucFail   ? openads::abi::to_internal(pucFail,   0) : std::string();
+    e.fail_table  = pucFail      ? openads::abi::to_internal(pucFail,      0) : std::string();
     auto r = dd->create_ri(e);
     if (!r) return fail(r.error());
     return ok();
@@ -4877,17 +4875,20 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
 
 UNSIGNED32 AdsDDCreateProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
                                  UNSIGNED8* pucContainer,
-                                 UNSIGNED8* pucProcedure,
-                                 UNSIGNED8* pucInput,
-                                 UNSIGNED8* pucOutput) {
+                                 UNSIGNED8* pucProcName,
+                                 UNSIGNED32 /*ulInvokeOption*/,
+                                 UNSIGNED8* pucInParams,
+                                 UNSIGNED8* pucOutParams,
+                                 UNSIGNED8* pucComments) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     openads::engine::DataDict::ProcEntry e;
     e.name          = openads::abi::to_internal(pucName, 0);
     e.container     = pucContainer ? openads::abi::to_internal(pucContainer, 0) : "";
-    e.procedure     = pucProcedure ? openads::abi::to_internal(pucProcedure, 0) : "";
-    e.input_params  = pucInput     ? openads::abi::to_internal(pucInput,     0) : "";
-    e.output_params = pucOutput    ? openads::abi::to_internal(pucOutput,    0) : "";
+    e.procedure     = pucProcName  ? openads::abi::to_internal(pucProcName,  0) : "";
+    e.input_params  = pucInParams  ? openads::abi::to_internal(pucInParams,  0) : "";
+    e.output_params = pucOutParams ? openads::abi::to_internal(pucOutParams, 0) : "";
+    e.comment       = pucComments  ? openads::abi::to_internal(pucComments,  0) : "";
     if (e.name.empty())
         return fail(openads::AE_INTERNAL_ERROR, "proc name empty");
     auto r = dd->create_proc(e);
@@ -5051,6 +5052,97 @@ UNSIGNED32 AdsDDSetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     switch (usProp) {
         case ADS_DD_VIEW_STMT:    e.sql     = val; break;
         case ADS_DD_VIEW_COMMENT: e.comment = val; break;
+        default: return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+    auto r = dd->save();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+// ---------------------------------------------------------------------------
+// AdsDDGetRefIntegrityProperty / AdsDDSetRefIntegrityProperty
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDGetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                         UNSIGNED16 usProp, void* pBuf,
+                                         UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto* dd = dd_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    auto name = openads::abi::to_internal(pucName, 0);
+    const auto& ri = dd->ri();
+    auto it = ri.find(name);
+    if (it == ri.end()) {
+        *pusLen = 0;
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    }
+    const auto& e = it->second;
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    auto put_u32 = [&](std::uint32_t v) -> UNSIGNED32 {
+        if (pBuf != nullptr && cap >= 4) {
+            auto* b = static_cast<std::uint8_t*>(pBuf);
+            b[0]=v&0xFF; b[1]=(v>>8)&0xFF; b[2]=(v>>16)&0xFF; b[3]=(v>>24)&0xFF;
+        }
+        *pusLen = 4; return ok();
+    };
+    switch (usProp) {
+        case ADS_DD_RI_PARENT:      return put_str(e.parent);
+        case ADS_DD_RI_CHILD:       return put_str(e.child);
+        case ADS_DD_RI_PARENT_TAG:  return put_str(e.parent_tag);
+        case ADS_DD_RI_CHILD_TAG:   return put_str(e.child_tag);
+        case ADS_DD_RI_UPDATE_RULE: {
+            try { return put_u32(static_cast<std::uint32_t>(std::stoul(e.update_opt))); }
+            catch (...) { return put_u32(0); }
+        }
+        case ADS_DD_RI_DELETE_RULE: {
+            try { return put_u32(static_cast<std::uint32_t>(std::stoul(e.delete_opt))); }
+            catch (...) { return put_u32(0); }
+        }
+        case ADS_DD_RI_FAIL_TABLE:  return put_str(e.fail_table);
+        default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+}
+
+UNSIGNED32 AdsDDSetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                         UNSIGNED16 usProp, void* pBuf,
+                                         UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    auto& ri = dd->ri();
+    auto it = ri.find(name);
+    if (it == ri.end())
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto& e = it->second;
+    std::string val = pBuf && usLen > 0
+        ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
+    switch (usProp) {
+        case ADS_DD_RI_PARENT:      e.parent     = val; break;
+        case ADS_DD_RI_CHILD:       e.child      = val; break;
+        case ADS_DD_RI_PARENT_TAG:  e.parent_tag = val; break;
+        case ADS_DD_RI_CHILD_TAG:   e.child_tag  = val; break;
+        case ADS_DD_RI_UPDATE_RULE:
+            if (pBuf && usLen >= 4) {
+                auto* b = static_cast<const std::uint8_t*>(pBuf);
+                std::uint32_t v = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
+                e.update_opt = std::to_string(v);
+            }
+            break;
+        case ADS_DD_RI_DELETE_RULE:
+            if (pBuf && usLen >= 4) {
+                auto* b = static_cast<const std::uint8_t*>(pBuf);
+                std::uint32_t v = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
+                e.delete_opt = std::to_string(v);
+            }
+            break;
+        case ADS_DD_RI_FAIL_TABLE:  e.fail_table = val; break;
         default: return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
     }
     auto r = dd->save();
@@ -6787,15 +6879,40 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
             {"RI_NAME",    'C', 200, 0},
             {"PARENT",     'C', 200, 0},
             {"CHILD",      'C', 200, 0},
-            {"TAG",        'C', 200, 0},
+            {"PARENT_TAG", 'C', 200, 0},
+            {"CHILD_TAG",  'C', 200, 0},
             {"UPDATE_OPT", 'C',  10, 0},
             {"DELETE_OPT", 'C',  10, 0},
+            {"FAIL_TABLE", 'C', 200, 0},
         };
         std::vector<std::vector<std::string>> rows;
-        for (const auto& kv : dd->ri())
-            rows.push_back({kv.second.name, kv.second.parent,
-                            kv.second.child, kv.second.tag,
-                            kv.second.update_opt, kv.second.delete_opt});
+        for (const auto& kv : dd->ri()) {
+            const auto& e = kv.second;
+            rows.push_back({e.name, e.parent, e.child,
+                            e.parent_tag, e.child_tag,
+                            e.update_opt, e.delete_opt, e.fail_table});
+        }
+        return build(cols, rows);
+    }
+    if (sys_name == "referentialintegrity") {
+        // SAP-compatible alias for system.relations.
+        const std::vector<Col> cols = {
+            {"RI_NAME",      'C', 200, 0},
+            {"PARENT_TABLE", 'C', 200, 0},
+            {"CHILD_TABLE",  'C', 200, 0},
+            {"PARENT_TAG",   'C', 200, 0},
+            {"CHILD_TAG",    'C', 200, 0},
+            {"UPDATE_RULE",  'N',  10, 0},
+            {"DELETE_RULE",  'N',  10, 0},
+            {"FAIL_TABLE",   'C', 200, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->ri()) {
+            const auto& e = kv.second;
+            rows.push_back({e.name, e.parent, e.child,
+                            e.parent_tag, e.child_tag,
+                            e.update_opt, e.delete_opt, e.fail_table});
+        }
         return build(cols, rows);
     }
     if (sys_name == "links") {
@@ -7047,7 +7164,7 @@ extern "C++" static bool dispatch_sp_builtin(
         e.name       = arg(0);
         e.parent     = arg(1);
         e.child      = arg(2);
-        e.tag        = arg(3);
+        e.parent_tag = arg(3);
         e.update_opt = std::to_string(ri_int(4));
         e.delete_opt = std::to_string(ri_int(5));
         e.fail_table = arg(6);
@@ -13163,23 +13280,12 @@ UNSIGNED32 AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
 
 UNSIGNED32 AdsDDAddProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
                               UNSIGNED8* pucContainer, UNSIGNED8* pucProcName,
-                              UNSIGNED32 /*ulInvokeOption*/,
+                              UNSIGNED32 ulInvokeOption,
                               UNSIGNED8* pucInParams, UNSIGNED8* pucOutParams,
                               UNSIGNED8* pucComments) {
-    auto* dd = dd_from_handle(hConn);
-    if (dd == nullptr) return ok();
-    openads::engine::DataDict::ProcEntry e;
-    e.name          = openads::abi::to_internal(pucName,      0);
-    e.container     = pucContainer ? openads::abi::to_internal(pucContainer, 0) : "";
-    e.procedure     = pucProcName  ? openads::abi::to_internal(pucProcName,  0) : "";
-    e.input_params  = pucInParams  ? openads::abi::to_internal(pucInParams,  0) : "";
-    e.output_params = pucOutParams ? openads::abi::to_internal(pucOutParams, 0) : "";
-    e.comment       = pucComments  ? openads::abi::to_internal(pucComments,  0) : "";
-    if (e.name.empty())
-        return fail(openads::AE_INTERNAL_ERROR, "proc name empty");
-    auto r = dd->create_proc(e);
-    if (!r) return fail(r.error());
-    return ok();
+    return AdsDDCreateProcedure(hConn, pucName, pucContainer, pucProcName,
+                                ulInvokeOption, pucInParams, pucOutParams,
+                                pucComments);
 }
 UNSIGNED32 AdsDDRemoveProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return AdsDDDropProcedure(hConn, pucName);

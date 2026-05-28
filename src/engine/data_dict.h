@@ -112,7 +112,8 @@ public:
         std::string name;
         std::string parent;
         std::string child;
-        std::string tag;
+        std::string parent_tag;
+        std::string child_tag;
         std::string update_opt;
         std::string delete_opt;
         std::string fail_table;
@@ -121,6 +122,8 @@ public:
     util::Result<void> remove_ri(const std::string& name);
     const std::unordered_map<std::string, RiEntry>&
         ri() const noexcept { return ri_; }
+    std::unordered_map<std::string, RiEntry>&
+        ri()       noexcept { return ri_; }
 
     // ---- DB / user properties (M10.1) ----------------------------------
     // ---- Field properties (M-DD-FIELD) ----------------------------------
