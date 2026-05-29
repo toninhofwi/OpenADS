@@ -636,11 +636,25 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
 
 // Returns effective permission level (0-4) for the authenticated user on a
 // DD table alias. Returns 4 (full) when no ACL or no DD is present.
+// Legacy — kept for callers that only need a coarse level.
 int table_perm_level(Connection* conn, const std::string& alias) {
     if (!conn || !conn->has_dd()) return 4;
     auto* dd = conn->dd();
     if (!dd->has_table_acl(alias)) return 4;
     return dd->get_effective_permission(conn->username(), alias);
+}
+
+// Returns per-operation effective permissions for the connected user on object.
+// If no DD / no ACL defined → all ops open.
+openads::engine::DataDict::EffectiveOps
+eff_ops(Connection* conn, const std::string& object_name) {
+    openads::engine::DataDict::EffectiveOps full;
+    full.open = full.select_ = full.update_ =
+        full.insert_ = full.delete_ = full.execute_ = true;
+    if (!conn || !conn->has_dd()) return full;
+    auto* dd = conn->dd();
+    if (!dd->has_any_acl()) return full;
+    return dd->get_effective_ops(conn->username(), object_name);
 }
 
 // Resolve an AdsOpenTable name (alias, bare filename, or path) to a DD alias.
@@ -901,13 +915,14 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
     }
     // Per-table ACL check: when usCheckRights is non-zero and the connection
     // has an authenticated user with a DD ACL for this table, verify the
-    // user holds at least read (1) for ADS_READONLY opens, write (2) otherwise.
+    // Check per-operation permissions for the open mode requested.
     if (usCheckRights != 0 && conn->has_dd() && !conn->username().empty()) {
         std::string alias = name_to_alias(conn->dd(), name);
         if (!alias.empty()) {
-            int required = (usMode == ADS_READONLY) ? 1 : 2;
-            int eff = table_perm_level(conn, alias);
-            if (eff < required)
+            auto ops = eff_ops(conn, alias);
+            bool denied = (usMode == ADS_READONLY) ? !ops.select_
+                                                    : !ops.update_ && !ops.insert_;
+            if (denied)
                 return fail(openads::AE_ACCESS_DENIED, alias.c_str());
         }
     }
@@ -6850,28 +6865,168 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
             rows.push_back({u});
         return build(cols, rows);
     }
+    if (sys_name == "groups") {
+        const std::vector<Col> cols = {{"GROUP_NAME", 'C', 200, 0}};
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& g : dd->groups())
+            rows.push_back({g});
+        return build(cols, rows);
+    }
     if (sys_name == "usergroups") {
+        // Lists all defined groups (SAP: system.usergroups = group catalogue).
+        // Include both explicit group records AND groups referenced in memberships,
+        // so text-format DDs that only have MEMBER entries still list their groups.
+        const std::vector<Col> cols = {{"GROUP_NAME", 'C', 200, 0}};
+        std::unordered_set<std::string> seen;
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& g : dd->groups())
+            if (seen.insert(g).second) rows.push_back({g});
+        for (const auto& kv : dd->memberships())
+            for (const auto& g : kv.second)
+                if (seen.insert(g).second) rows.push_back({g});
+        return build(cols, rows);
+    }
+    if (sys_name == "usergroupmembers") {
+        // Lists which users belong to which group.
         const std::vector<Col> cols = {
-            {"USER_NAME",  'C', 200, 0},
             {"GROUP_NAME", 'C', 200, 0},
+            {"USER_NAME",  'C', 200, 0},
         };
         std::vector<std::vector<std::string>> rows;
         for (const auto& kv : dd->memberships())
             for (const auto& grp : kv.second)
-                rows.push_back({kv.first, grp});
+                rows.push_back({grp, kv.first});   // group, user
         return build(cols, rows);
     }
     if (sys_name == "permissions") {
+        // Columns match SAP system.permissions:
+        //   OBJECT_NAME, OBJECT_TYPE (numeric), GRANTEE
+        //   then 10 permission flag columns (0=denied, 1=granted, ""=N/A for type)
+        // Bitmask: bit0=SELECT bit1=UPDATE bit2=INSERT bit3=DELETE
+        //          bit4=EXECUTE bit5=ACCESS bit6=CREATE bit7=ALTER bit8=DROP bit31=INHERIT
+        // DBF field names: max 10 chars.
         const std::vector<Col> cols = {
-            {"TABLE_NAME", 'C', 200, 0},
-            {"PRINCIPAL",  'C', 200, 0},
-            {"LEVEL",      'N',   2, 0},
+            {"OBJ_NAME",  'C', 200, 0},
+            {"OBJ_TYPE",  'N',   3, 0},
+            {"GRANTEE",   'C', 200, 0},
+            {"SELECT",    'C',   1, 0},
+            {"UPDATE",    'C',   1, 0},
+            {"INSERT",    'C',   1, 0},
+            {"DELETE",    'C',   1, 0},
+            {"EXECUTE",   'C',   1, 0},
+            {"ACCESS",    'C',   1, 0},
+            {"INHERIT",   'C',   1, 0},
+            {"CREATE",    'C',   1, 0},
+            {"ALTER",     'C',   1, 0},
+            {"DROP",      'C',   1, 0},
+        };
+        // Helper: extract a single bit as "0"/"1", or "" if not applicable.
+        auto bit = [](uint32_t mask, int pos) -> std::string {
+            return ((mask >> pos) & 1u) ? "1" : "0";
+        };
+        // SAP ADS stores 0x80000000 as the standard "group write grant" bitmask.
+        // Bits 0-3 are all zero in this value, but SAP ACE interprets the flag as
+        // granting UPDATE(1)+INSERT(1)+DELETE(1) for group grantees on table objects.
+        // For user grantees the same value means INHERIT(1) from their group.
+        // This constant matches the behavior observed in SAP Data Architect output.
+        const uint32_t SAP_GROUP_WRITE_GRANT = 0x80000000u;
+        auto grp_dml = [SAP_GROUP_WRITE_GRANT](uint32_t mask, int pos) -> std::string {
+            // Bits 0-3: if they're explicitly set use them; otherwise treat the
+            // SAP_GROUP_WRITE_GRANT sentinel as UPDATE+INSERT+DELETE (bits 1-3).
+            uint32_t explicit_bits = mask & 0x0Fu;
+            if (explicit_bits != 0) return ((mask >> pos) & 1u) ? "1" : "0";
+            // SAP standard group write grant: UPDATE=1 INSERT=1 DELETE=1 SELECT=0
+            if (mask == SAP_GROUP_WRITE_GRANT && pos >= 1 && pos <= 3) return "1";
+            return "0";
         };
         std::vector<std::vector<std::string>> rows;
-        for (const auto& tkv : dd->table_perms())
-            for (const auto& pkv : tkv.second)
-                rows.push_back({tkv.first, pkv.first,
-                                std::to_string(pkv.second)});
+        for (const auto& pe : dd->permissions()) {
+            const auto& t = pe.object_type;
+            bool is_table  = (t == "Table");
+            bool is_exec   = (t == "StoredProc" || t == "Function");
+            bool is_obj_user = (t == "User"  || t == "Group");
+            bool is_db     = (t == "Database");
+            bool is_group  = pe.grantee_is_group;
+            uint32_t m = pe.bitmask;
+            bool show_inherit = !is_group && !is_obj_user;
+            bool show_dml   = is_group ? (is_table || is_db) : false;
+            bool show_exec  = is_group ? (is_exec  || is_db) : false;
+            // Execute for groups: SAP_GROUP_WRITE_GRANT → grant execute (1)
+            auto grp_exe = [&]() -> std::string {
+                if (!show_exec) return "";
+                uint32_t explicit_bits = m & 0x10u;
+                if (explicit_bits) return (m & 0x10u) ? "1" : "0";
+                return (m == SAP_GROUP_WRITE_GRANT) ? "1" : "0";
+            };
+            rows.push_back({
+                pe.object_name,
+                std::to_string(pe.object_type_code),
+                pe.grantee,
+                (show_dml)           ? grp_dml(m,0) : "",       // SELECT
+                (show_dml)           ? grp_dml(m,1) : "",       // UPDATE
+                (show_dml)           ? grp_dml(m,2) : "",       // INSERT
+                (show_dml)           ? grp_dml(m,3) : "",       // DELETE
+                show_exec            ? grp_exe()    : "",       // EXECUTE
+                (is_db && is_group)  ? bit(m,5)    : "",       // ACCESS
+                show_inherit         ? bit(m,31)   : "",       // INHERIT
+                (is_db && is_group)  ? bit(m,6)    : "",       // CREATE
+                (!is_obj_user && !is_exec) ? bit(m,7) : "",   // ALTER
+                (!is_obj_user)       ? bit(m,8)    : "",       // DROP
+            });
+        }
+        return build(cols, rows);
+    }
+    if (sys_name == "effectivepermissions") {
+        // Effective permissions for the connected user: direct grants OR-ed with
+        // every group the user belongs to.  Same columns as system.permissions.
+        // Only objects where an ACL entry exists are listed; objects without any
+        // ACL entry are open-access and are omitted (caller may infer full access).
+        const std::vector<Col> cols = {
+            {"OBJ_NAME",  'C', 200, 0},
+            {"OBJ_TYPE",  'N',   3, 0},
+            {"GRANTEE",   'C', 200, 0},
+            {"SELECT",    'C',   1, 0},
+            {"UPDATE",    'C',   1, 0},
+            {"INSERT",    'C',   1, 0},
+            {"DELETE",    'C',   1, 0},
+            {"EXECUTE",   'C',   1, 0},
+            {"ACCESS",    'C',   1, 0},
+            {"INHERIT",   'C',   1, 0},
+            {"CREATE",    'C',   1, 0},
+            {"ALTER",     'C',   1, 0},
+            {"DROP",      'C',   1, 0},
+        };
+        const std::string& user = c->username();
+        if (user.empty()) {
+            // No logged-in user — return empty (caller treats as open access).
+            return build(cols, {});
+        }
+        auto entries = dd->get_all_effective_perms(user);
+        std::vector<std::vector<std::string>> rows;
+        rows.reserve(entries.size());
+        auto b1 = [](bool v) -> std::string { return v ? "1" : "0"; };
+        for (const auto& e : entries) {
+            const auto& t = e.object_type;
+            bool is_table = (t == "Table");
+            bool is_exec  = (t == "StoredProc" || t == "Function");
+            bool is_db    = (t == "Database");
+            const auto& o = e.ops;
+            rows.push_back({
+                e.object_name,
+                std::to_string(e.object_type_code),
+                e.grantee,
+                (is_table || is_db) ? b1(o.select_)  : "",  // SELECT
+                (is_table || is_db) ? b1(o.update_)  : "",  // UPDATE
+                (is_table || is_db) ? b1(o.insert_)  : "",  // INSERT
+                (is_table || is_db) ? b1(o.delete_)  : "",  // DELETE
+                (is_exec  || is_db) ? b1(o.execute_) : "",  // EXECUTE
+                "",                                          // ACCESS
+                "",                                          // INHERIT (N/A for effective)
+                "",                                          // CREATE
+                "",                                          // ALTER
+                "",                                          // DROP
+            });
+        }
         return build(cols, rows);
     }
     if (sys_name == "relations") {
@@ -6951,7 +7106,7 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
         const std::vector<Col> cols = {
             {"PROC_NAME",  'C', 200, 0},
             {"CONTAINER",  'C', 250, 0},
-            {"PROCEDURE",  'C', 200, 0},
+            {"PROCEDURE",  'C', 255, 0},
             {"INPUT",      'C', 250, 0},
             {"OUTPUT",     'C', 250, 0},
         };
@@ -6964,18 +7119,21 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
         return build(cols, rows);
     }
     if (sys_name == "functions") {
-        // User-defined scalar functions (UDFs) are a distinct DD object type
-        // (ADS_DD_FUNCTION_OBJECT) separate from stored procedures. OpenADS
-        // does not yet implement UDFs, so this always returns an empty result
-        // set with columns compatible with SAP ADS system.functions.
+        // Column names capped at 10 chars (DBF field descriptor limit in build()).
         const std::vector<Col> cols = {
-            {"FUNC_NAME",    'C', 200, 0},
-            {"CONTAINER",    'C', 250, 0},
-            {"PROCEDURE",    'C', 200, 0},
-            {"RETURN_TYPE",  'C',  50, 0},
-            {"COMMENT",      'C', 200, 0},
+            {"FUNC_NAME",  'C', 200, 0},
+            {"CONTAINER",  'C', 250, 0},
+            {"RET_TYPE",   'C',  50, 0},
+            {"IN_PARAMS",  'C', 200, 0},
+            {"FUNC_BODY",  'C', 255, 0},
+            {"COMMENT",    'C', 200, 0},
         };
-        const std::vector<std::vector<std::string>> rows;
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->functions()) {
+            const auto& e = kv.second;
+            rows.push_back({e.name, e.container, e.return_type,
+                            e.input_params, e.implementation, e.comment});
+        }
         return build(cols, rows);
     }
     if (sys_name == "views") {
@@ -7278,27 +7436,48 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return c->open_table(resolved, ttype, omode, lmode);
     };
 
-    // Per-table ACL check for SQL statements when check_rights is set.
+    // Per-operation ACL check for SQL statements when check_rights is set.
     if (it->second->check_rights != 0 && c->has_dd() && !c->username().empty()) {
-        std::string tbl_name;
-        int required = 0;
+        std::string obj_name;
+        enum class SqlOp { None, Select, Insert, Update, Delete, Execute } op =
+            SqlOp::None;
+
         if (openads::sql::sql_is_insert(sql)) {
             if (auto p = openads::sql::parse_insert(sql))
-                { tbl_name = p.value().table; required = 2; }
+                { obj_name = p.value().table; op = SqlOp::Insert; }
         } else if (openads::sql::sql_is_update(sql)) {
             if (auto p = openads::sql::parse_update(sql))
-                { tbl_name = p.value().table; required = 2; }
+                { obj_name = p.value().table; op = SqlOp::Update; }
         } else if (openads::sql::sql_is_delete(sql)) {
             if (auto p = openads::sql::parse_delete(sql))
-                { tbl_name = p.value().table; required = 3; }
+                { obj_name = p.value().table; op = SqlOp::Delete; }
         } else {
-            if (auto p = openads::sql::parse_select(sql))
-                { tbl_name = p.value().table; required = 1; }
+            // SELECT or EXECUTE PROCEDURE
+            if (auto p = openads::sql::parse_select(sql)) {
+                obj_name = p.value().table;
+                // Detect "EXECUTE PROCEDURE sp_*" by checking table starts with "sp_"
+                // or whether the FROM target is a StoredProc/Function in the DD.
+                auto* dd = c->dd();
+                if (dd && dd->has_proc(obj_name))
+                    op = SqlOp::Execute;
+                else
+                    op = SqlOp::Select;
+            }
         }
-        if (!tbl_name.empty() && required > 0) {
-            int eff = table_perm_level(c, tbl_name);
-            if (eff < required)
-                return fail(openads::AE_ACCESS_DENIED, tbl_name.c_str());
+
+        if (!obj_name.empty() && op != SqlOp::None) {
+            auto ops = eff_ops(c, obj_name);
+            bool denied = false;
+            switch (op) {
+                case SqlOp::Select:  denied = !ops.select_;  break;
+                case SqlOp::Insert:  denied = !ops.insert_;  break;
+                case SqlOp::Update:  denied = !ops.update_;  break;
+                case SqlOp::Delete:  denied = !ops.delete_;  break;
+                case SqlOp::Execute: denied = !ops.execute_; break;
+                default: break;
+            }
+            if (denied)
+                return fail(openads::AE_ACCESS_DENIED, obj_name.c_str());
         }
     }
 
@@ -11062,13 +11241,25 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 o.fn_idx = static_cast<std::int32_t>(idx);
                 const auto& fc = parsed.value().fn_items[idx];
                 using K = openads::sql::ScalarFnKind;
-                bool single_col = (fc.kind == K::Upper ||
+                bool zero_arg   = (fc.kind == K::Now  || fc.kind == K::Today ||
+                                   fc.kind == K::Date || fc.kind == K::Time);
+                bool single_col = !zero_arg &&
+                                  (fc.kind == K::Upper ||
                                    fc.kind == K::Lower ||
                                    fc.kind == K::Len   ||
                                    fc.kind == K::Trim  ||
                                    fc.kind == K::Ltrim ||
                                    fc.kind == K::Rtrim);
-                if (single_col) {
+                if (zero_arg) {
+                    if (!fc.alias.empty()) o.name = fc.alias;
+                    else o.name = (fc.kind == K::Now)   ? "NOW"
+                                : (fc.kind == K::Today) ? "TODAY"
+                                : (fc.kind == K::Date)  ? "DATE"
+                                :                         "TIME";
+                    o.raw_type = 'C';
+                    o.length   = (fc.kind == K::Time) ? 8 : 19;
+                    // src_field stays -1; value produced at row-eval time
+                } else if (single_col) {
                     std::int32_t fi = tbl->field_index(fc.column);
                     if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
                                             fc.column.c_str());
@@ -11083,6 +11274,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             static_cast<std::uint16_t>(fi));
                         o.length = static_cast<std::uint8_t>(fd.length ? fd.length : 30);
                     }
+                } else if (fc.kind == K::Udf) {
+                    o.name     = fc.alias.empty() ? fc.fn_name : fc.alias;
+                    o.raw_type = 'C';
+                    o.length   = 50;
                 } else {
                     // M10.43 / M10.45 — multi-arg fns. Width = generous
                     // default; alias drives the column name; no
@@ -11483,6 +11678,27 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     }
                     using K = openads::sql::ScalarFnKind;
                     switch (fc.kind) {
+                        case K::Now:
+                        case K::Today:
+                        case K::Date:
+                        case K::Time: {
+                            std::time_t t = std::time(nullptr);
+                            std::tm tm_local{};
+#ifdef _WIN32
+                            localtime_s(&tm_local, &t);
+#else
+                            localtime_r(&t, &tm_local);
+#endif
+                            char buf[24];
+                            if (fc.kind == K::Time)
+                                std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm_local);
+                            else if (fc.kind == K::Date || fc.kind == K::Today)
+                                std::strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_local);
+                            else
+                                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_local);
+                            val = buf;
+                            break;
+                        }
                         case K::Upper:
                             for (auto& ch : raw)
                                 ch = static_cast<char>(std::toupper(
@@ -11506,6 +11722,152 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         case K::Trim:  val = trim_both(std::move(raw));  break;
                         case K::Ltrim: val = trim_left(std::move(raw));  break;
                         case K::Rtrim: val = trim_right(std::move(raw)); break;
+
+                        case K::Udf: {
+                            // Look up function in the DD (case-insensitive).
+                            if (!c->has_dd()) break;
+                            auto* dd2 = c->dd();
+                            std::string udf_impl, udf_params;
+                            {
+                                std::string fn_up = fc.fn_name;
+                                for (auto& ch2 : fn_up) ch2 = static_cast<char>(std::toupper((unsigned char)ch2));
+                                for (const auto& kv : dd2->functions()) {
+                                    std::string kv_up = kv.first;
+                                    for (auto& ch2 : kv_up) ch2 = static_cast<char>(std::toupper((unsigned char)ch2));
+                                    if (kv_up == fn_up) {
+                                        udf_impl   = kv.second.implementation;
+                                        udf_params = kv.second.input_params;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (udf_impl.empty()) break;
+
+                            // Parse parameter names: "name TYPE, name TYPE, ..."
+                            std::vector<std::string> pnames;
+                            {
+                                std::size_t ix = 0;
+                                while (ix < udf_params.size()) {
+                                    while (ix < udf_params.size() && std::isspace((unsigned char)udf_params[ix])) ++ix;
+                                    std::string pn;
+                                    while (ix < udf_params.size() &&
+                                           !std::isspace((unsigned char)udf_params[ix]) &&
+                                           udf_params[ix] != ',')
+                                        pn.push_back(udf_params[ix++]);
+                                    if (!pn.empty()) pnames.push_back(pn);
+                                    while (ix < udf_params.size() && udf_params[ix] != ',') ++ix;
+                                    if (ix < udf_params.size()) ++ix;
+                                }
+                            }
+
+                            // Extract function body: strip leading RETURN and trailing ;
+                            std::string body = udf_impl;
+                            {
+                                auto fp = body.find_first_not_of(" \t\r\n");
+                                if (fp != std::string::npos) body = body.substr(fp);
+                                if (body.size() >= 7) {
+                                    std::string pfx = body.substr(0, 7);
+                                    for (auto& ch2 : pfx) ch2 = static_cast<char>(std::toupper((unsigned char)ch2));
+                                    if (pfx == "RETURN ") body = body.substr(7);
+                                }
+                                auto lp = body.find_last_not_of(" \t\r\n;");
+                                if (lp != std::string::npos) body.resize(lp + 1);
+                            }
+
+                            // Substitute each parameter with its argument value.
+                            for (std::size_t pi = 0; pi < pnames.size() && pi < fc.args.size(); ++pi) {
+                                const auto& arg = fc.args[pi];
+                                std::string aval;
+                                if (!arg.is_column) {
+                                    if (arg.is_numeric) {
+                                        char argbuf[32];
+                                        if (arg.number == std::floor(arg.number) &&
+                                            std::abs(arg.number) < 1e15)
+                                            std::snprintf(argbuf, sizeof(argbuf), "%.0f", arg.number);
+                                        else
+                                            std::snprintf(argbuf, sizeof(argbuf), "%g", arg.number);
+                                        aval = argbuf;
+                                    } else {
+                                        aval = arg.text;
+                                    }
+                                }
+                                // Word-boundary replacement.
+                                const std::string& pn = pnames[pi];
+                                std::string rebuilt;
+                                for (std::size_t ii = 0; ii < body.size(); ) {
+                                    if (ii + pn.size() <= body.size()) {
+                                        bool ok = true;
+                                        for (std::size_t jj = 0; jj < pn.size(); ++jj) {
+                                            if (std::toupper((unsigned char)body[ii+jj]) !=
+                                                std::toupper((unsigned char)pn[jj]))
+                                                { ok = false; break; }
+                                        }
+                                        if (ok) {
+                                            char bch = ii > 0 ? body[ii-1] : 0;
+                                            char ach = ii + pn.size() < body.size()
+                                                      ? body[ii + pn.size()] : 0;
+                                            if ((!bch || (!std::isalnum((unsigned char)bch) && bch != '_')) &&
+                                                (!ach  || (!std::isalnum((unsigned char)ach)  && ach  != '_'))) {
+                                                rebuilt += aval;
+                                                ii += pn.size();
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    rebuilt.push_back(body[ii++]);
+                                }
+                                body = std::move(rebuilt);
+                            }
+
+                            // Evaluate the substituted expression.
+                            // Trim whitespace.
+                            auto ef = body.find_first_not_of(" \t\r\n");
+                            if (ef != std::string::npos) body = body.substr(ef);
+                            auto el = body.find_last_not_of(" \t\r\n");
+                            if (el != std::string::npos) body.resize(el + 1);
+
+                            std::string bu;
+                            for (char ch2 : body) bu.push_back(static_cast<char>(std::toupper((unsigned char)ch2)));
+
+                            // Strip CAST( ... AS SQL_DATE/SQL_TIMESTAMP ) wrapper.
+                            if (bu.rfind("CAST(", 0) == 0) {
+                                std::size_t asp = bu.rfind("AS SQL_DATE");
+                                if (asp == std::string::npos) asp = bu.rfind("AS SQL_TIMESTAMP");
+                                if (asp != std::string::npos) {
+                                    std::string inner = body.substr(5, asp - 5);
+                                    auto ilf = inner.find_first_not_of(" \t");
+                                    if (ilf != std::string::npos) inner = inner.substr(ilf);
+                                    auto ill = inner.find_last_not_of(" \t");
+                                    if (ill != std::string::npos) inner.resize(ill + 1);
+                                    body = std::move(inner);
+                                    bu.clear();
+                                    for (char ch2 : body) bu.push_back(static_cast<char>(std::toupper((unsigned char)ch2)));
+                                }
+                            }
+
+                            // Evaluate CREATETIMESTAMP(year, month, day, ...) → MM/DD/YYYY.
+                            if (bu.rfind("CREATETIMESTAMP(", 0) == 0) {
+                                std::size_t ci = 16;
+                                auto skip_sep = [&]() {
+                                    while (ci < body.size() &&
+                                           (body[ci]==' '||body[ci]==','||body[ci]=='\t')) ++ci;
+                                };
+                                auto read_int = [&]() -> int {
+                                    skip_sep();
+                                    int n = 0; bool neg = false;
+                                    if (ci < body.size() && body[ci] == '-') { neg = true; ++ci; }
+                                    while (ci < body.size() && std::isdigit((unsigned char)body[ci]))
+                                        n = n * 10 + (body[ci++] - '0');
+                                    return neg ? -n : n;
+                                };
+                                int yr = read_int(), mo = read_int(), dy = read_int();
+                                char dbuf[16];
+                                std::snprintf(dbuf, sizeof(dbuf), "%02d/%02d/%04d", mo, dy, yr);
+                                val = dbuf;
+                            }
+                            break;
+                        }
+
                         case K::Substr:
                         case K::Concat:
                         case K::Replace:

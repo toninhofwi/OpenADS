@@ -115,7 +115,9 @@ enum class ScalarFnKind {
     Upper, Lower, Len, Trim, Ltrim, Rtrim,
     Substr, Concat, Replace,
     DateDiff, DateAdd,
-    NullIf, Coalesce, IfNull       // M10.53
+    NullIf, Coalesce, IfNull,      // M10.53
+    Now, Today, Date, Time,        // zero-argument date/time functions
+    Udf                            // user-defined function call
 };
 
 struct ScalarFnArg {
@@ -131,6 +133,7 @@ struct ScalarFnCall {
     std::string              column;     // first arg when single-column form
     std::vector<ScalarFnArg> args;       // multi-arg form (M10.43+)
     std::string              alias;      // optional column alias
+    std::string              fn_name;    // Udf: original function name
 };
 
 // M10.47 / M10.49 / M10.50 — window function in a projection slot.

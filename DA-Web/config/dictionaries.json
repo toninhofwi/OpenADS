@@ -1,9 +1,16 @@
 [
     {
-        "name": "PmSys Test Data",
-        "path": "f:\\OpenADS\\tests\\fixtures\\adi\\pmsys.add",
-        "username": "",
+        "name": "Pmsys-TestData",
+        "path": "f:\\openads\\testdata\\pmsys\\pmsys.add",
+        "username": "adssys",
         "connType": "local",
         "entryType": "dd"
+    },
+    {
+        "name": "SAP test data",
+        "path": "f:\\openads\\testdata\\data2\\",
+        "username": "",
+        "connType": "local",
+        "entryType": "free"
     }
 ]

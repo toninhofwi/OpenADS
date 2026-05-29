@@ -178,6 +178,21 @@ public:
     std::unordered_map<std::string, ProcEntry>&
         procs()       noexcept { return procs_; }
 
+    // ---- User-defined functions (ADS binary "Function" type) ---------------
+    struct FunctionEntry {
+        std::string name;
+        std::string container;
+        std::string implementation;  // SQL body of the function
+        std::string input_params;
+        std::string return_type;
+        std::string comment;
+    };
+    bool has_function(const std::string& name) const noexcept {
+        return functions_.find(name) != functions_.end();
+    }
+    const std::unordered_map<std::string, FunctionEntry>&
+        functions() const noexcept { return functions_; }
+
     // ---- Views (M-DD-VIEW) ----------------------------------------------
     struct ViewEntry {
         std::string name;
@@ -194,14 +209,63 @@ public:
     std::unordered_map<std::string, ViewEntry>&
         views()       noexcept { return views_; }
 
-    // ---- Table permissions (M-ACL) ----------------------------------------
+    // ---- Permissions (M-ACL) -----------------------------------------------
+    // SAP binary info2 bitmask encoding:
+    //   bit 0  = SELECT    bit 1  = UPDATE    bit 2  = INSERT   bit 3  = DELETE
+    //   bit 4  = EXECUTE   bit 5  = ACCESS    bit 6  = CREATE
+    //   bit 7  = ALTER     bit 8  = DROP      bit 31 = INHERIT
+    // SAP object-type codes: 1=Table 3=Database 8=User 10=StoredProc 18=Function
+    struct PermissionEntry {
+        std::string  object_name;
+        std::string  object_type;    // "Table", "StoredProc", "Function", …
+        int          object_type_code = 0;
+        std::string  grantee;        // user or group name
+        bool         grantee_is_group = false;
+        uint32_t     bitmask = 0;    // raw info2 from binary record
+    };
+
+    // Per-operation effective permissions for a principal on one object.
+    // "No ACL defined for this object" → all ops allowed (open = true).
+    struct EffectiveOps {
+        bool select_  = false;
+        bool update_  = false;
+        bool insert_  = false;
+        bool delete_  = false;
+        bool execute_ = false;
+        bool open     = false;  // true when no ACL entry exists → full access
+        bool any() const noexcept {
+            return open || select_ || update_ || insert_ || delete_ || execute_;
+        }
+    };
+
+    // Compute effective per-operation permissions for username on a specific
+    // object (any type: Table, StoredProc, Function, …).  Takes direct user
+    // entries + contributions from every group the user belongs to.
+    EffectiveOps get_effective_ops(const std::string& username,
+                                    const std::string& object_name) const;
+
+    // True when the DD defines at least one ACL entry for any object.
+    // If false, all access is open and permission checks are skipped.
+    bool has_any_acl() const noexcept { return !permissions_.empty(); }
+
+    // Compute effective permissions for every object a username has access to
+    // (used to populate system.effectivepermissions).
+    struct EffectivePermEntry {
+        std::string object_name;
+        std::string object_type;
+        int         object_type_code = 0;
+        std::string grantee;
+        EffectiveOps ops;
+    };
+    std::vector<EffectivePermEntry>
+        get_all_effective_perms(const std::string& username) const;
+
     // level: 0=none, 1=read, 2=write, 3=delete, 4=full.
     // user_or_group may be a user name or a group name.
     util::Result<void> set_table_permission(const std::string& table,
                                              const std::string& user_or_group,
                                              int level);
-    // Effective level for username on table: max of direct user perm and
-    // any group memberships. Returns 4 (full) if no ACL is defined for table.
+    // Legacy coarse-grained effective level (0-4) kept for backward compat.
     int get_effective_permission(const std::string& username,
                                   const std::string& table) const;
     bool has_table_acl(const std::string& table) const noexcept {
@@ -209,6 +273,9 @@ public:
     }
     const std::unordered_map<std::string, std::unordered_map<std::string, int>>&
         table_perms() const noexcept { return table_perms_; }
+
+    const std::vector<PermissionEntry>&
+        permissions() const noexcept { return permissions_; }
 
     // ---- DB / user properties (M10.1) ----------------------------------
     util::Result<void> set_db_property(const std::string& key,
@@ -267,18 +334,21 @@ private:
     std::unordered_map<std::string,
                        std::unordered_map<std::string, std::string>>
                                                  user_props_;
-    // table → user_or_group → level (0=none … 4=full)
+    // table → user_or_group → level (0=none … 4=full) — for get_effective_permission()
     std::unordered_map<std::string,
                        std::unordered_map<std::string, int>>
                                                  table_perms_;
+    // All permission entries from binary records (Table, StoredProc, Function, …)
+    std::vector<PermissionEntry>                 permissions_;
     // table_alias → field_name → key → value (stored field props)
     std::unordered_map<std::string,
                        std::unordered_map<std::string,
                                           std::unordered_map<std::string, std::string>>>
                                                  field_props_;
-    std::unordered_map<std::string, TriggerEntry> triggers_;
-    std::unordered_map<std::string, ProcEntry>    procs_;
-    std::unordered_map<std::string, ViewEntry>    views_;
+    std::unordered_map<std::string, TriggerEntry>  triggers_;
+    std::unordered_map<std::string, ProcEntry>     procs_;
+    std::unordered_map<std::string, FunctionEntry> functions_;
+    std::unordered_map<std::string, ViewEntry>     views_;
 
     // Binary format state (populated only when binary_format_ == true).
     bool binary_format_ = false;

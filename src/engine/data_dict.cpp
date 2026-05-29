@@ -152,8 +152,64 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
     binary_rec_len_ = rec_len;
     binary_hdr_     = buf.substr(0, hdr_len);
 
+    // Pre-load companion .am memo file (holds overflow SP/function SQL bodies).
+    // Block_size = 8 bytes; byte_offset = block_num * 8.
+    std::string am_buf;
+    {
+        std::string am_path = path_;
+        auto dot = am_path.rfind('.');
+        if (dot != std::string::npos) {
+            am_path = am_path.substr(0, dot) + ".am";
+            auto amf_res = platform::File::open(am_path, platform::OpenMode::ReadOnly);
+            if (amf_res) {
+                auto am_file = std::move(amf_res).value();
+                auto sz_res = am_file.size();
+                if (sz_res && *sz_res > 0) {
+                    am_buf.resize(*sz_res);
+                    auto rr = am_file.read_at(0, am_buf.data(), *sz_res);
+                    if (rr && *rr < am_buf.size()) am_buf.resize(*rr);
+                }
+            }
+        }
+    }
+
+    // Append .am continuation bytes referenced by a record's more_property field.
+    // more_property layout (9 bytes): [4-byte LE block_num][4-byte LE data_len][0x00]
+    auto append_am = [&](std::string& field,
+                         const std::array<std::uint8_t, 9>& mp) {
+        auto am_block = static_cast<uint32_t>(mp[0])
+                      | (static_cast<uint32_t>(mp[1]) << 8)
+                      | (static_cast<uint32_t>(mp[2]) << 16)
+                      | (static_cast<uint32_t>(mp[3]) << 24);
+        auto am_len   = static_cast<uint32_t>(mp[4])
+                      | (static_cast<uint32_t>(mp[5]) << 8)
+                      | (static_cast<uint32_t>(mp[6]) << 16)
+                      | (static_cast<uint32_t>(mp[7]) << 24);
+        if (am_block == 0 || am_len == 0 || am_buf.empty()) return;
+        std::size_t am_off = static_cast<std::size_t>(am_block) * 8;
+        if (am_off >= am_buf.size()) return;
+        std::size_t readable = std::min<std::size_t>(am_len, am_buf.size() - am_off);
+        std::string cont = am_buf.substr(am_off, readable);
+        // Strip trailing garbage: scan backward to the last valid SQL byte
+        // (printable ASCII 0x20-0x7E or horizontal/vertical whitespace).
+        std::size_t lt = cont.size();
+        while (lt > 0) {
+            unsigned char uc = static_cast<unsigned char>(cont[lt - 1]);
+            if ((uc >= 0x20u && uc <= 0x7Eu) || uc == '\t' || uc == '\n' || uc == '\r') break;
+            --lt;
+        }
+        if (lt < cont.size()) cont.resize(lt);
+        auto l = cont.find_last_not_of(" \t\r\n");
+        if (l != std::string::npos) cont.resize(l + 1);
+        field += cont;
+    };
+
     std::size_t total = (buf.size() - hdr_len) / rec_len;
     binary_recs_.reserve(total);
+
+    // obj_id → (name, type) — built incrementally for in-pass lookups.
+    std::unordered_map<uint32_t, std::string> id_to_name;
+    std::unordered_map<uint32_t, std::string> id_to_type;
 
     for (std::size_t i = 0; i < total; ++i) {
         std::size_t base = hdr_len + i * rec_len;
@@ -194,6 +250,12 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         const BinaryRecord& rec = binary_recs_.back();
         if (!rec.active) continue;
 
+        // Maintain id lookup tables for cross-record references.
+        if (!rec.obj_name.empty()) {
+            id_to_name[rec.obj_id] = rec.obj_name;
+            id_to_type[rec.obj_id] = rec.obj_type;
+        }
+
         if (rec.obj_type == "Table" && !rec.obj_name.empty() &&
             !rec.prop_null && !rec.property.empty()) {
             // Strip embedded null terminator from stored path.
@@ -219,36 +281,111 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             if (!tbl_alias.empty() && !idx_path.empty())
                 indexes_.push_back({tbl_alias, idx_path, {}});
 
-        } else if ((rec.obj_type == "User" || rec.obj_type == "Group") &&
-                   !rec.obj_name.empty()) {
+        } else if (rec.obj_type == "User" && !rec.obj_name.empty()) {
             users_.insert(rec.obj_name);
 
-        } else if (rec.obj_type == "Procedure" && !rec.obj_name.empty() &&
-                   !rec.prop_null) {
-            auto parts = split_nul(rec.property);
-            while (parts.size() < 5) parts.emplace_back();
+        } else if (rec.obj_type == "Group" && !rec.obj_name.empty()) {
+            groups_.insert(rec.obj_name);
+
+        } else if ((rec.obj_type == "Procedure" || rec.obj_type == "StoredProc") &&
+                   !rec.obj_name.empty()) {
             ProcEntry e;
-            e.name          = rec.obj_name;
-            e.container     = parts[0];
-            e.procedure     = parts[1];
-            e.input_params  = parts[2];
-            e.output_params = parts[3];
-            e.comment       = parts[4];
+            e.name = rec.obj_name;
+
+            // Input params: the plen property field holds the param list (null-terminated).
+            if (!rec.prop_null && !rec.property.empty()) {
+                e.input_params = rec.property;
+                auto nul = e.input_params.find('\0');
+                if (nul != std::string::npos) e.input_params.resize(nul);
+            }
+
+            // SQL body: in the 273-byte property area beyond the plen bytes.
+            // Layout: [plen=inparams] [6×0xFF] [8 bytes binary] [spaces] [CRLF] [SQL] [NUL/end]
+            {
+                const std::size_t PS = base + 225;  // property data start in file
+                const std::size_t PL = 273;         // property area length
+                if (PS + PL <= buf.size()) {
+                    std::size_t pos = rec.prop_null ? 0u : static_cast<std::size_t>(plen);
+                    while (pos < PL && static_cast<uint8_t>(buf[PS + pos]) == 0xFF) ++pos;
+                    // Find CR LF that precedes the SQL body
+                    for (; pos + 1 < PL; ++pos) {
+                        if (static_cast<uint8_t>(buf[PS + pos])   == 0x0D &&
+                            static_cast<uint8_t>(buf[PS + pos+1]) == 0x0A) break;
+                    }
+                    if (pos + 1 < PL) {
+                        std::size_t end = PL;
+                        for (std::size_t j = pos; j < PL; ++j)
+                            if (buf[PS + j] == '\0') { end = j; break; }
+                        std::string body = buf.substr(PS + pos, end - pos);
+                        auto f = body.find_first_not_of(" \t\r\n");
+                        if (f != std::string::npos) body = body.substr(f);
+                        auto l = body.find_last_not_of(" \t\r\n");
+                        if (l != std::string::npos) body.resize(l + 1);
+                        e.procedure = std::move(body);
+                    }
+                }
+            }
+            append_am(e.procedure, rec.more_property);
             procs_[e.name] = std::move(e);
 
-        } else if (rec.obj_type == "Trigger" && !rec.obj_name.empty() &&
-                   !rec.prop_null) {
-            auto parts = split_nul(rec.property);
-            while (parts.size() < 7) parts.emplace_back();
+        } else if (rec.obj_type == "Function" && !rec.obj_name.empty()) {
+            FunctionEntry e;
+            e.name = rec.obj_name;
+
+            // Property area layout (273 bytes at base+225..base+497):
+            // [plen binary metadata] [6×0xFF] [le16+rettype\0] [le16+inparams\0] [le16+body]
+            {
+                const std::size_t PS = base + 225;
+                const std::size_t PL = 273;
+                if (PS + PL <= buf.size()) {
+                    std::size_t pos = rec.prop_null ? 0u : static_cast<std::size_t>(plen);
+                    while (pos < PL && static_cast<uint8_t>(buf[PS + pos]) == 0xFF) ++pos;
+
+                    // read_lstr: reads a length-prefixed string from the property area.
+                    // When the body's slen > remaining space the string is SPLIT:
+                    // the inline area holds the first (PL-pos) bytes; the .am file
+                    // holds the continuation.  Read as many bytes as fit.
+                    auto read_lstr = [&](std::string& out) {
+                        if (pos + 2 > PL) return;
+                        uint16_t slen =
+                            static_cast<uint8_t>(buf[PS + pos]) |
+                            (static_cast<uint16_t>(static_cast<uint8_t>(buf[PS + pos + 1])) << 8);
+                        pos += 2;
+                        if (slen == 0 || slen == 0xFFFF) return;
+                        std::size_t readable = std::min<std::size_t>(slen, PL - pos);
+                        if (readable == 0) return;
+                        out = buf.substr(PS + pos, readable);
+                        pos += readable;
+                        auto nul = out.find('\0');
+                        if (nul != std::string::npos) out.resize(nul);
+                    };
+
+                    read_lstr(e.return_type);
+                    read_lstr(e.input_params);
+                    read_lstr(e.implementation);
+                    auto f = e.implementation.find_first_not_of(" \t\r\n");
+                    if (f != std::string::npos) e.implementation = e.implementation.substr(f);
+                    auto l = e.implementation.find_last_not_of(" \t\r\n");
+                    if (l != std::string::npos) e.implementation.resize(l + 1);
+                }
+            }
+            append_am(e.implementation, rec.more_property);
+            functions_[e.name] = std::move(e);
+
+        } else if (rec.obj_type == "Trigger" && !rec.obj_name.empty()) {
+            // SAP binary format: property = 4-byte LE event_mask; table comes from parent_id.
             TriggerEntry e;
             e.name        = rec.obj_name;
-            e.table_alias = parts[0];
-            try { e.event_mask = static_cast<uint32_t>(std::stoul(parts[1])); } catch (...) {}
-            try { e.priority   = static_cast<uint32_t>(std::stoul(parts[2])); } catch (...) {}
-            e.enabled   = (parts[3] != "0");
-            e.container = parts[4];
-            e.procedure = parts[5];
-            e.comment   = parts[6];
+            e.table_alias = id_to_name.count(rec.parent_id) ? id_to_name.at(rec.parent_id) : "";
+            if (!rec.prop_null && rec.property.size() >= 4) {
+                e.event_mask = static_cast<uint32_t>(
+                    (static_cast<uint8_t>(rec.property[0]))       |
+                    (static_cast<uint8_t>(rec.property[1]) << 8)  |
+                    (static_cast<uint8_t>(rec.property[2]) << 16) |
+                    (static_cast<uint8_t>(rec.property[3]) << 24));
+            }
+            e.enabled   = true;
+            // Container and procedure are not stored in SAP binary triggers.
             triggers_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Relation" && !rec.obj_name.empty() &&
@@ -277,6 +414,75 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             views_[e.name] = std::move(e);
         }
     }
+
+    // SAP object-type string → numeric code used in system.permissions.
+    auto type_code = [](const std::string& t) -> int {
+        if (t == "Table")     return 1;
+        if (t == "Database")  return 3;
+        if (t == "User")      return 8;
+        if (t == "StoredProc")return 10;
+        if (t == "Function")  return 18;
+        if (t == "Group")     return 6;
+        if (t == "View")      return 12;
+        return 0;
+    };
+
+    // Second pass: Permission records (need full id_to_type map built above).
+    //   parent_id → principal (user or group)
+    //   info1     → target object ID
+    //   Permission targeting a Group → user-group membership
+    //   All others                   → ACL entry stored in permissions_
+    for (const auto& rec : binary_recs_) {
+        if (!rec.active || rec.obj_type != "Permission") continue;
+        auto principal_it = id_to_name.find(rec.parent_id);
+        if (principal_it == id_to_name.end()) continue;
+        const std::string& principal = principal_it->second;
+
+        auto target_type_it = id_to_type.find(rec.info1);
+        if (target_type_it == id_to_type.end()) continue;
+        const std::string& target_type = target_type_it->second;
+
+        auto target_name_it = id_to_name.find(rec.info1);
+        if (target_name_it == id_to_name.end()) continue;
+        const std::string& target_name = target_name_it->second;
+
+        if (target_type == "Group") {
+            // principal (User) is a member of target_name (Group).
+            memberships_[principal].insert(target_name);
+        } else {
+            // ACL entry: store full bitmask for system.permissions.
+            auto principal_type_it = id_to_type.find(rec.parent_id);
+            bool is_grp = (principal_type_it != id_to_type.end() &&
+                           principal_type_it->second == "Group");
+            PermissionEntry pe;
+            pe.object_name      = target_name;
+            pe.object_type      = target_type;
+            pe.object_type_code = type_code(target_type);
+            pe.grantee          = principal;
+            pe.grantee_is_group = is_grp;
+            pe.bitmask          = rec.info2;
+            permissions_.push_back(std::move(pe));
+
+            // Also maintain table_perms_ for get_effective_permission().
+            if (target_type == "Table") {
+                // bit 31 = INHERIT (use parent group's rights = full for compat)
+                // bits 0-3 = SELECT/UPDATE/INSERT/DELETE
+                int level;
+                if (rec.info2 & 0x80000000u) {
+                    level = 4;  // inherit → treat as full for backward compat
+                } else {
+                    uint32_t dml = rec.info2 & 0x0Fu;  // bits 0-3
+                    level = (dml == 0x0F) ? 4
+                          : (dml & 0x08)  ? 3   // delete
+                          : (dml & 0x02)  ? 2   // update
+                          : (dml & 0x01)  ? 1   // read
+                          : 0;
+                }
+                table_perms_[target_name][principal] = level;
+            }
+        }
+    }
+
     return {};
 }
 
@@ -801,8 +1007,155 @@ DataDict::set_table_permission(const std::string& table,
     if (table.empty() || user_or_group.empty())
         return util::Error{5000, 0, "TABLEPERM table/user empty", ""};
     table_perms_[table][user_or_group] = level;
+
+    // Mirror into permissions_ so system.permissions reflects GRANT/REVOKE.
+    // Encode level back to info2 bitmask bits 0-3 (SELECT/UPDATE/INSERT/DELETE).
+    uint32_t bitmask = 0;
+    if (level >= 1) bitmask |= 0x01u;  // SELECT
+    if (level >= 2) bitmask |= 0x02u;  // UPDATE
+    if (level >= 2) bitmask |= 0x04u;  // INSERT
+    if (level >= 3) bitmask |= 0x08u;  // DELETE
+    if (level >= 4) bitmask = 0x80000000u;  // full → INHERIT (SAP compat)
+
+    // Update existing entry or add new one.
+    for (auto& pe : permissions_) {
+        if (pe.object_name == table && pe.grantee == user_or_group &&
+            pe.object_type == "Table") {
+            pe.bitmask = bitmask;
+            return save();
+        }
+    }
+    PermissionEntry pe;
+    pe.object_name      = table;
+    pe.object_type      = "Table";
+    pe.object_type_code = 1;
+    pe.grantee          = user_or_group;
+    pe.grantee_is_group = (groups_.find(user_or_group) != groups_.end());
+    pe.bitmask          = bitmask;
+    permissions_.push_back(std::move(pe));
+
     return save();
 }
+
+// ---------------------------------------------------------------------------
+// Per-operation effective permissions
+// ---------------------------------------------------------------------------
+
+// Translate a stored info2 bitmask + grantee context to an EffectiveOps.
+// Groups:  0x80000000 = SAP standard write grant (upd+ins+del, no sel).
+//          Explicit bits 0-4 decoded directly.
+// Users:   0x80000000 = inherit (contributes nothing — groups cover it).
+//          Explicit bits decoded directly.
+static DataDict::EffectiveOps ops_from_bitmask(uint32_t mask, bool is_group) {
+    DataDict::EffectiveOps ops;
+    const uint32_t SAP_GRP_WRITE = 0x80000000u;
+    const uint32_t explicit_mask = 0x1Fu;          // bits 0-4
+
+    if (mask == SAP_GRP_WRITE) {
+        if (is_group) {
+            ops.update_  = true;
+            ops.insert_  = true;
+            ops.delete_  = true;
+        }
+        // user: inherit — no contribution here; groups will cover it
+    } else if (mask & explicit_mask) {
+        ops.select_  = (mask & 0x01u) != 0;
+        ops.update_  = (mask & 0x02u) != 0;
+        ops.insert_  = (mask & 0x04u) != 0;
+        ops.delete_  = (mask & 0x08u) != 0;
+        ops.execute_ = (mask & 0x10u) != 0;
+    }
+    return ops;
+}
+
+DataDict::EffectiveOps DataDict::get_effective_ops(
+        const std::string& username,
+        const std::string& object_name) const {
+
+    // Collect the set of principals to check: user + all their groups.
+    std::unordered_set<std::string> principals;
+    principals.insert(username);
+    auto mg = memberships_.find(username);
+    if (mg != memberships_.end())
+        for (const auto& g : mg->second)
+            principals.insert(g);
+
+    // Gather matching permission entries.
+    EffectiveOps result;
+    bool found_any = false;
+
+    for (const auto& pe : permissions_) {
+        if (pe.object_name != object_name) continue;
+        if (principals.find(pe.grantee) == principals.end()) continue;
+
+        found_any = true;
+        auto contrib = ops_from_bitmask(pe.bitmask, pe.grantee_is_group);
+        result.select_  |= contrib.select_;
+        result.update_  |= contrib.update_;
+        result.insert_  |= contrib.insert_;
+        result.delete_  |= contrib.delete_;
+        result.execute_ |= contrib.execute_;
+    }
+
+    if (!found_any) {
+        // No ACL entry for this principal set → full open access.
+        result.open     = true;
+        result.select_  = true;
+        result.update_  = true;
+        result.insert_  = true;
+        result.delete_  = true;
+        result.execute_ = true;
+    }
+    return result;
+}
+
+std::vector<DataDict::EffectivePermEntry>
+DataDict::get_all_effective_perms(const std::string& username) const {
+
+    // Build set of principals.
+    std::unordered_set<std::string> principals;
+    principals.insert(username);
+    auto mg = memberships_.find(username);
+    if (mg != memberships_.end())
+        for (const auto& g : mg->second)
+            principals.insert(g);
+
+    // Collect distinct objects visible to this user.
+    // object_name → accumulated EffectiveOps
+    std::unordered_map<std::string, EffectiveOps> acc;
+    std::unordered_map<std::string, std::string>  obj_type_map;
+    std::unordered_map<std::string, int>           obj_code_map;
+
+    for (const auto& pe : permissions_) {
+        if (principals.find(pe.grantee) == principals.end()) continue;
+        auto& eo = acc[pe.object_name];
+        auto contrib = ops_from_bitmask(pe.bitmask, pe.grantee_is_group);
+        eo.select_  |= contrib.select_;
+        eo.update_  |= contrib.update_;
+        eo.insert_  |= contrib.insert_;
+        eo.delete_  |= contrib.delete_;
+        eo.execute_ |= contrib.execute_;
+        obj_type_map[pe.object_name] = pe.object_type;
+        obj_code_map[pe.object_name] = pe.object_type_code;
+    }
+
+    std::vector<EffectivePermEntry> result;
+    result.reserve(acc.size());
+    for (auto& kv : acc) {
+        EffectivePermEntry e;
+        e.object_name      = kv.first;
+        e.object_type      = obj_type_map[kv.first];
+        e.object_type_code = obj_code_map[kv.first];
+        e.grantee          = username;
+        e.ops              = kv.second;
+        result.push_back(std::move(e));
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy coarse-grained effective permission (kept for backward compat)
+// ---------------------------------------------------------------------------
 
 int DataDict::get_effective_permission(const std::string& username,
                                         const std::string& table) const {
@@ -908,7 +1261,8 @@ util::Result<void> DataDict::create_proc(const ProcEntry& e) {
         auto prop = join_nul({e.container, e.procedure,
                                e.input_params, e.output_params, e.comment});
         for (auto& r : binary_recs_) {
-            if (r.active && r.obj_type == "Procedure" && r.obj_name == e.name) {
+            if (r.active && (r.obj_type == "Procedure" || r.obj_type == "StoredProc") &&
+                r.obj_name == e.name) {
                 r.property = prop; r.prop_null = false;
                 return save();
             }
@@ -918,7 +1272,7 @@ util::Result<void> DataDict::create_proc(const ProcEntry& e) {
         r.obj_id    = binary_alloc_id_();
         r.parent_id = binary_obj_id_of_("Database", "Database");
         if (r.parent_id == 0) r.parent_id = 1;
-        r.obj_type  = "Procedure";
+        r.obj_type  = "StoredProc";
         r.obj_name  = e.name;
         r.property  = prop;
         r.prop_null = false;
@@ -931,7 +1285,8 @@ util::Result<void> DataDict::drop_proc(const std::string& name) {
     procs_.erase(name);
     if (binary_format_) {
         for (auto& r : binary_recs_) {
-            if (r.active && r.obj_type == "Procedure" && r.obj_name == name) {
+            if (r.active && (r.obj_type == "Procedure" || r.obj_type == "StoredProc") &&
+                r.obj_name == name) {
                 r.active = false; break;
             }
         }
@@ -1051,7 +1406,7 @@ util::Result<void> DataDict::save_add_binary_() {
     // AdsDDSet*Property mutations are reflected even without re-creating.
     for (auto& r : binary_recs_) {
         if (!r.active) continue;
-        if (r.obj_type == "Procedure") {
+        if (r.obj_type == "Procedure" || r.obj_type == "StoredProc") {
             auto it = procs_.find(r.obj_name);
             if (it != procs_.end()) {
                 const auto& e = it->second;

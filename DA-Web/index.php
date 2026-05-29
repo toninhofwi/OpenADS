@@ -25,6 +25,12 @@
   <!-- Local vendor: Split.js -->
   <script src="vendor/split.js/split.min.js"></script>
 
+  <!-- Local vendor: Ace editor -->
+  <script src="vendor/ace/ace.js"></script>
+  <script src="vendor/ace/mode-sql.js"></script>
+  <script src="vendor/ace/theme-dracula.js"></script>
+  <script src="vendor/ace/ext-language_tools.js"></script>
+
   <!-- Application styles -->
   <link rel="stylesheet" href="css/app.css">
 </head>
@@ -265,7 +271,7 @@
       <p><strong>DA-Web</strong> — OpenADS Data Architect</p>
       <p style="margin-top:8px;color:#a6adc8;">Web-based replacement for SAP Data Architect.<br>
       Backend: PHP + php_openads native extension.<br>
-      Frontend: jsTree · Tabulator · Split.js · jQuery.</p>
+      Frontend: jsTree · Tabulator · Split.js · jQuery · Ace Editor.</p>
       <p style="margin-top:12px;color:#45475a;font-size:11px;">
         Part of the <a href="https://github.com/FiveTechSoft/OpenADS" style="color:#89b4fa">OpenADS</a> project.
       </p>
@@ -325,6 +331,44 @@
     </div>
     <div class="modal-body" style="padding:0">
       <div id="sql-scripts-list" style="max-height:360px;overflow-y:auto;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: Properties (edit DD / free-tables connection) ──────────────── -->
+<div class="modal-overlay" id="modal-props" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <span>Properties — <span id="props-title"></span></span>
+      <span class="modal-close" onclick="document.getElementById('modal-props').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="props-err" class="modal-err"></div>
+      <input type="hidden" id="props-name">
+      <input type="hidden" id="props-entry-type">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="props-name-display" disabled style="opacity:.6;cursor:default">
+      </div>
+      <div class="form-group">
+        <label for="props-path">Path <span class="req">*</span></label>
+        <input type="text" id="props-path" autocomplete="off">
+      </div>
+      <div class="form-group" id="props-user-row">
+        <label for="props-username">Default username</label>
+        <input type="text" id="props-username" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Connection type</label>
+        <div class="toggle-group" id="props-conn-type">
+          <button type="button" class="toggle-btn active" data-value="local">Local</button>
+          <button type="button" class="toggle-btn" data-value="remote">Remote</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="props-cancel">Cancel</button>
+      <button class="btn btn-primary" id="props-save">Save</button>
     </div>
   </div>
 </div>

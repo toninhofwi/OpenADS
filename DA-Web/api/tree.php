@@ -65,42 +65,41 @@ if ($action === 'roots') {
 if ($action === 'dd_children') {
     if ($ddName === '') { echo json_encode([]); exit; }
 
-    // Free-tables directories expand directly to a flat table list
     $dicts = loadDicts($configFile);
+    $entryType = 'dd';
     foreach ($dicts as $d) {
-        if ($d['name'] === $ddName && ($d['entryType'] ?? 'dd') === 'free') {
-            // Reuse category_children logic for 'tables' category
-            $_GET['cat'] = 'tables';
-            $cat = 'tables';
-            break;
-        }
+        if ($d['name'] === $ddName) { $entryType = $d['entryType'] ?? 'dd'; break; }
     }
-    // If this was a free-tables entry, fall through to category_children handler
-    if (isset($cat) && $cat === 'tables') {
-        $conn = getConn($ddName);
-        if ($conn === null) { echo json_encode([]); exit; }
+
+    // Free-tables directory: scan filesystem — no DD, no system.tables query.
+    if ($entryType === 'free') {
+        $c = $_SESSION['connections'][$ddName] ?? null;
+        if (!$c) { echo json_encode([]); exit; }
+
+        $dir   = rtrim($c['path'], '/\\');
         $nodes = [];
-        try {
-            $stmt = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
-            while ($row = $stmt->fetchAssoc()) {
-                $t = $row['TABLE_NAME'];
+        $seen  = [];
+        foreach (['*.adt', '*.ADT', '*.dbf', '*.DBF'] as $pat) {
+            foreach (glob($dir . DIRECTORY_SEPARATOR . $pat) ?: [] as $file) {
+                $base = strtoupper(pathinfo($file, PATHINFO_FILENAME));
+                // Skip ADS temp tables and already-listed names
+                if ($base === '' || $base[0] === '_' || isset($seen[$base])) continue;
+                $seen[$base] = true;
                 $nodes[] = [
-                    'id'      => "tbl_{$ddName}_{$t}",
-                    'text'    => $t,
-                    'icon'    => 'jstree-icon-table',
-                    'children'=> true,
-                    'a_attr'  => ['data-dd' => $ddName, 'data-type' => 'table', 'data-table' => $t],
+                    'id'       => "tbl_{$ddName}_{$base}",
+                    'text'     => $base,
+                    'icon'     => 'jstree-icon-table',
+                    'children' => false,
+                    'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'table', 'data-table' => $base],
                 ];
             }
-        } catch (AdsException $e) {
-            // empty
-        } finally {
-            $conn->close();
         }
+        usort($nodes, fn($a, $b) => strcmp($a['text'], $b['text']));
         echo json_encode($nodes);
         exit;
     }
 
+    // Data dictionary: return category nodes.
     $categories = [
         ['id' => "cat_{$ddName}_tables",     'text' => 'Tables',            'icon' => 'jstree-icon-tables'],
         ['id' => "cat_{$ddName}_views",      'text' => 'Views',             'icon' => 'jstree-icon-views'],

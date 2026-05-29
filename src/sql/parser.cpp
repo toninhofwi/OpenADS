@@ -785,6 +785,10 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
             // Single-arg: UPPER/LOWER/LEN/TRIM/LTRIM/RTRIM(col).
             // Multi-arg: SUBSTR(col,start,len), CONCAT(a,b),
             // REPLACE(col,old,new), DATEDIFF(a,b), DATEADD(col,n).
+            // Zero-arg: NOW(), TODAY(), DATE(), TIME().
+            bool is_zero_arg   = (upper == "NOW"   || upper == "TODAY" ||
+                                  upper == "DATE"  || upper == "TIME")
+                                  && c.peek_char('(');
             bool is_single_arg = (upper == "UPPER" || upper == "LOWER" ||
                                   upper == "LEN"   || upper == "TRIM"  ||
                                   upper == "LTRIM" || upper == "RTRIM") &&
@@ -794,6 +798,27 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                                   upper == "DATEADD"  || upper == "NULLIF"   ||
                                   upper == "COALESCE" || upper == "IFNULL")
                                   && c.peek_char('(');
+            if (is_zero_arg) {
+                if (aggregate_mode) {
+                    return util::Error{7200, 0,
+                        "mixing scalar fn + aggregates in SELECT not supported",
+                        sql};
+                }
+                c.match_char('('); c.match_char(')');
+                ScalarFnCall fn;
+                if      (upper == "NOW")   fn.kind = ScalarFnKind::Now;
+                else if (upper == "TODAY") fn.kind = ScalarFnKind::Today;
+                else if (upper == "DATE")  fn.kind = ScalarFnKind::Date;
+                else                       fn.kind = ScalarFnKind::Time;
+                if (c.match_keyword("AS")) fn.alias = c.read_identifier();
+                std::size_t fi = stmt.fn_items.size();
+                stmt.fn_items.push_back(std::move(fn));
+                char placeholder[32];
+                std::snprintf(placeholder, sizeof(placeholder), "$FN_%zu", fi);
+                stmt.projection.push_back(placeholder);
+                if (c.match_char(',')) continue;
+                break;
+            }
             if (is_single_arg || is_multi_arg) {
                 if (aggregate_mode) {
                     return util::Error{7200, 0,
@@ -869,6 +894,59 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                 char placeholder[32];
                 std::snprintf(placeholder, sizeof(placeholder),
                               "$FN_%zu", fi);
+                stmt.projection.push_back(placeholder);
+                if (c.match_char(',')) continue;
+                break;
+            }
+
+            // Unknown identifier followed by '(' → user-defined function call.
+            // Consume the argument list so the parser stays in sync.
+            if (!is_zero_arg && !is_single_arg && !is_multi_arg && !is_agg_call
+                && c.peek_char('(')) {
+                if (aggregate_mode) {
+                    return util::Error{7200, 0,
+                        "UDF calls cannot be mixed with aggregates", sql};
+                }
+                c.match_char('(');
+                ScalarFnCall fn;
+                fn.kind    = ScalarFnKind::Udf;
+                fn.fn_name = head;   // save original (case-preserved) name
+                // Consume arguments (comma-separated literals / identifiers)
+                if (!c.peek_char(')')) {
+                    for (;;) {
+                        ScalarFnArg arg;
+                        if (c.peek_char('\'')) {
+                            auto s = c.read_string_literal();
+                            if (!s) return s.error();
+                            arg.is_column  = false;
+                            arg.is_numeric = false;
+                            arg.text       = std::move(s).value();
+                        } else {
+                            auto n = c.read_numeric_literal();
+                            if (n) {
+                                arg.is_column  = false;
+                                arg.is_numeric = true;
+                                arg.number     = n.value();
+                            } else {
+                                std::string id = c.read_identifier();
+                                arg.is_column = true;
+                                arg.column    = std::move(id);
+                            }
+                        }
+                        fn.args.push_back(std::move(arg));
+                        if (c.match_char(',')) continue;
+                        break;
+                    }
+                }
+                if (!c.match_char(')')) {
+                    return util::Error{7200, 0,
+                        "expected ')' to close UDF argument list", sql};
+                }
+                if (c.match_keyword("AS")) fn.alias = c.read_identifier();
+                std::size_t fi = stmt.fn_items.size();
+                stmt.fn_items.push_back(std::move(fn));
+                char placeholder[32];
+                std::snprintf(placeholder, sizeof(placeholder), "$FN_%zu", fi);
                 stmt.projection.push_back(placeholder);
                 if (c.match_char(',')) continue;
                 break;

@@ -73,8 +73,18 @@ const drivers::DbfField& Table::field_descriptor(std::uint16_t idx) const {
 
 std::int32_t Table::field_index(const std::string& name) const noexcept {
     const auto& fs = driver_->fields();
+    // Case-insensitive: DBF field names are always uppercase in storage;
+    // SQL column names may arrive in any case.
     for (std::size_t i = 0; i < fs.size(); ++i) {
-        if (fs[i].name == name) return static_cast<std::int32_t>(i);
+        if (fs[i].name.size() != name.size()) continue;
+        bool eq = true;
+        for (std::size_t j = 0; j < name.size(); ++j) {
+            if (std::toupper(static_cast<unsigned char>(name[j])) !=
+                std::toupper(static_cast<unsigned char>(fs[i].name[j]))) {
+                eq = false; break;
+            }
+        }
+        if (eq) return static_cast<std::int32_t>(i);
     }
     return -1;
 }

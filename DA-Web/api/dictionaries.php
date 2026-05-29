@@ -58,6 +58,39 @@ if ($method === 'POST') {
         exit;
     }
 
+    if ($action === 'update') {
+        $name      = trim($body['name']      ?? '');
+        $path      = trim($body['path']      ?? '');
+        $username  = trim($body['username']  ?? '');
+        $connType  = trim($body['connType']  ?? 'local');
+        if ($name === '' || $path === '') {
+            http_response_code(400);
+            echo json_encode(['error' => 'name and path are required']);
+            exit;
+        }
+        if (!in_array($connType, ['local', 'remote'], true)) $connType = 'local';
+        $dicts = loadDicts($configFile);
+        $found = false;
+        foreach ($dicts as &$d) {
+            if ($d['name'] === $name) {
+                $d['path']     = $path;
+                $d['username'] = $username;
+                $d['connType'] = $connType;
+                $found = true;
+                break;
+            }
+        }
+        unset($d);
+        if (!$found) {
+            http_response_code(404);
+            echo json_encode(['error' => "Dictionary '$name' not found"]);
+            exit;
+        }
+        saveDicts($configFile, $dicts);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
     if ($action === 'remove') {
         $name = trim($body['name'] ?? '');
         if ($name === '') {
