@@ -175,7 +175,8 @@
             fetch(`api/tree.php?action=category_children&dd=${encodeURIComponent(dd)}&cat=${encodeURIComponent(cat)}`)
               .then(r => r.json()).then(cb).catch(() => cb([]));
           } else if (type === 'table') {
-            fetch(`api/tree.php?action=table_children&dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(tbl)}`)
+            const entry = a['data-entry'] || '';
+            fetch(`api/tree.php?action=table_children&dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(tbl)}&entry=${encodeURIComponent(entry)}`)
               .then(r => r.json()).then(cb).catch(() => cb([]));
           } else {
             cb([]);
@@ -203,8 +204,18 @@
         openMetaTab(dd, tbl, 'fields');
       } else if (type === 'indexes') {
         openMetaTab(dd, tbl, 'indexes');
+      } else if (type === 'table_triggers') {
+        openTableTriggersTab(dd, tbl);
+      } else if (type === 'gen_sql') {
+        openGenSqlTab(dd, tbl);
       } else if (type === 'function' || type === 'proc') {
         openObjectSourceTab(dd, type, a['data-name'] || data.node.text || '');
+      } else if (type === 'group') {
+        openGroupTab(dd, a['data-name'] || data.node.text || '');
+      } else if (type === 'user') {
+        openUserTab(dd, a['data-name'] || data.node.text || '');
+      } else if (type === 'ri') {
+        openRiTab(dd, a['data-name'] || data.node.text || '');
       }
     });
 
@@ -335,11 +346,491 @@
     const existing = state.tabs.find(t => t.type === 'meta' && t.metaKey === metaKey);
     if (existing) { activateTab(existing.id); return; }
     const id = 'tab-' + (state.nextTabId++);
-    const title = `${table} ${kind === 'fields' ? 'Fields' : 'Indexes'}`;
+    const kindTitle = kind === 'fields' ? 'Fields' : kind === 'indexes' ? 'Indexes' : 'Triggers';
+    const title = `${table} ${kindTitle}`;
     state.tabs.push({ id, title, type: 'meta', dd, table, kind, metaKey });
     renderTabs();
     activateTab(id);
     loadMetaData(id, dd, table, kind);
+  }
+
+  function openTableTriggersTab(dd, table) {
+    const metaKey = `${dd}.${table}.triggers`;
+    const existing = state.tabs.find(t => t.type === 'table_triggers' && t.metaKey === metaKey);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `${table} Triggers`, type: 'table_triggers', dd, table, metaKey });
+    renderTabs();
+    activateTab(id);
+    loadTriggerData(id, dd, table);
+  }
+
+  async function openGenSqlTab(dd, table) {
+    try {
+      const resp = await fetch(`api/gen_sql.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`);
+      const data = await resp.json();
+      if (data.error) { setStatus(`gen_sql error: ${data.error}`); return; }
+      openSqlTab(dd, data.sql || '', `${table} DDL`);
+    } catch (err) {
+      setStatus(`gen_sql: ${err.message}`);
+    }
+  }
+
+  // ── Group permissions tab ───────────────────────────────────────────────────
+  function openGroupTab(dd, groupName) {
+    const key = `${dd}.group.${groupName}`;
+    const existing = state.tabs.find(t => t.type === 'group' && t.metaKey === key);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `Group: ${groupName}`, type: 'group', dd, groupName, metaKey: key });
+    renderTabs();
+    activateTab(id);
+    loadGroupData(id, dd, groupName);
+  }
+
+  function loadGroupData(tabId, dd, groupName) {
+    const container = document.getElementById('group-' + tabId);
+    if (!container) return;
+    apiFetch(`api/group_meta.php?dd=${encodeURIComponent(dd)}&group=${encodeURIComponent(groupName)}`)
+      .then(resp => {
+        if (resp.error) {
+          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+        container.innerHTML =
+          `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+             <button class="btn btn-sm btn-primary" id="save-group-${tabId}">&#128190; Save Changes</button>
+             <span id="save-group-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+           </div>
+           <div id="group-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+        const grid = new Tabulator('#group-tbl-' + tabId, { /* global Tabulator */
+          data: resp.data,
+          layout: 'fitDataFill',
+          pagination: 'local', paginationSize: 200, height: 'calc(100% - 34px)',
+          placeholder: '(no objects)',
+          columns: [
+            { title: 'Object',   field: 'object',  widthGrow: 3, headerSort: true },
+            { title: 'Type',     field: 'type',    width: 100,   headerSort: false },
+            { title: 'Select',   field: 'canSelect', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
+            { title: 'Insert',   field: 'canInsert', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
+            { title: 'Update',   field: 'canUpdate', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
+            { title: 'Delete',   field: 'canDelete', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
+            { title: 'Execute',  field: 'canExec',   width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
+          ],
+        });
+
+        const saveBtn = document.getElementById('save-group-' + tabId);
+        const msgEl   = document.getElementById('save-group-msg-' + tabId);
+        saveBtn?.addEventListener('click', async () => {
+          if (msgEl) msgEl.textContent = 'Saving…';
+          try {
+            const r = await apiFetch('api/save_group_meta.php', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dd, group: groupName, rows: grid.getData() }),
+            });
+            if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : `Saved ${r.saved} permission(s)`;
+          } catch (err) {
+            if (msgEl) msgEl.textContent = `Error: ${err.message}`;
+          }
+        });
+      })
+      .catch(err => {
+        if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
+  }
+
+  // ── User groups tab ─────────────────────────────────────────────────────────
+  function openUserTab(dd, userName) {
+    const key = `${dd}.user.${userName}`;
+    const existing = state.tabs.find(t => t.type === 'user' && t.metaKey === key);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `User: ${userName}`, type: 'user', dd, userName, metaKey: key });
+    renderTabs();
+    activateTab(id);
+    loadUserData(id, dd, userName);
+  }
+
+  function loadUserData(tabId, dd, userName) {
+    const container = document.getElementById('user-' + tabId);
+    if (!container) return;
+    apiFetch(`api/user_groups.php?dd=${encodeURIComponent(dd)}&user=${encodeURIComponent(userName)}`)
+      .then(resp => {
+        if (resp.error) {
+          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+        container.innerHTML =
+          `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+             <button class="btn btn-sm" id="add-group-${tabId}">+ Add Group</button>
+             <button class="btn btn-sm" id="del-group-${tabId}">&#8722; Remove Selected</button>
+             <button class="btn btn-sm btn-primary" id="save-user-${tabId}">&#128190; Save Changes</button>
+             <span id="save-user-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+           </div>
+           <div id="user-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+        // Groups the user is NOT yet a member of (available to add)
+        const currentSet = new Set((resp.groups || []).map(g => g.toLowerCase()));
+        const available  = (resp.allGroups || []).filter(g => !currentSet.has(g.toLowerCase()));
+        const availValues = Object.fromEntries(available.map(g => [g, g]));
+
+        const grid = new Tabulator('#user-tbl-' + tabId, { /* global Tabulator */
+          data: resp.groups.map(g => ({ group: g })),
+          layout: 'fitDataFill',
+          selectable: 1,
+          height: 'calc(100% - 34px)',
+          placeholder: '(user is not a member of any groups)',
+          columns: [{ title: 'Group Name', field: 'group', widthGrow: 1, editor: 'select',
+            editorParams: { values: availValues, autocomplete: true, allowEmpty: true },
+            headerSort: true,
+            formatter: v => escHtml(v.getValue()),
+          }],
+        });
+
+        document.getElementById('add-group-' + tabId)?.addEventListener('click', () => {
+          // Rebuild available list based on current grid data
+          const inGrid = new Set(grid.getData().map(r => (r.group || '').toLowerCase()));
+          const opts = (resp.allGroups || []).filter(g => !inGrid.has(g.toLowerCase()));
+          if (opts.length === 0) return;
+          grid.addRow({ group: opts[0] }, false);
+        });
+        document.getElementById('del-group-' + tabId)?.addEventListener('click', () =>
+          grid.getSelectedRows().forEach(r => r.delete()));
+
+        const saveBtn = document.getElementById('save-user-' + tabId);
+        const msgEl   = document.getElementById('save-user-msg-' + tabId);
+        saveBtn?.addEventListener('click', async () => {
+          if (msgEl) msgEl.textContent = 'Saving…';
+          try {
+            const groups = grid.getData().map(r => r.group).filter(g => g.trim() !== '');
+            const r = await apiFetch('api/save_user_groups.php', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dd, user: userName, groups }),
+            });
+            if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : 'Saved';
+          } catch (err) {
+            if (msgEl) msgEl.textContent = `Error: ${err.message}`;
+          }
+        });
+      })
+      .catch(err => {
+        if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
+  }
+
+  // ── RI Object form tab ──────────────────────────────────────────────────────
+  function openRiTab(dd, riName) {
+    const key = `${dd}.ri.${riName}`;
+    const existing = state.tabs.find(t => t.type === 'ri' && t.metaKey === key);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `RI: ${riName}`, type: 'ri', dd, riName, metaKey: key });
+    renderTabs();
+    activateTab(id);
+    loadRiData(id, dd, riName);
+  }
+
+  function loadRiData(tabId, dd, riName) {
+    const container = document.getElementById('ri-' + tabId);
+    if (!container) return;
+    Promise.all([
+      apiFetch(`api/ri_meta.php?dd=${encodeURIComponent(dd)}&ri=${encodeURIComponent(riName)}`),
+      apiFetch(`api/ri_meta.php?dd=${encodeURIComponent(dd)}&action=tables`),
+    ]).then(([riResp, tablesResp]) => {
+      if (riResp.error) {
+        container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(riResp.error)}</div>`;
+        return;
+      }
+      const ri = riResp.ri || {};
+      const tables = tablesResp.tables || [];
+      const mkOpts = (list, sel) => list.map(t => `<option${t===sel?' selected':''}>${escHtml(t)}</option>`).join('');
+      const ruleOpts = (sel) => ['Restrict','Cascade','SetNull'].map(v => `<option${v===sel?' selected':''}>${v}</option>`).join('');
+
+      container.innerHTML = `
+        <div style="padding:16px;max-width:560px;display:flex;flex-direction:column;gap:14px;">
+          <h3 style="margin:0;color:#cdd6f4;">RI Object: ${escHtml(riName)}</h3>
+          <div style="display:grid;grid-template-columns:140px 1fr;gap:8px;align-items:center;">
+            <label>Parent Table</label>
+            <select id="ri-ptbl-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
+              ${mkOpts(tables, ri.parent)}
+            </select>
+            <label>Primary Key Tag</label>
+            <select id="ri-ptag-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
+              <option value="${escAttr(ri.parent_tag||'')}">${escHtml(ri.parent_tag||'')}</option>
+            </select>
+            <label>Child Table</label>
+            <select id="ri-ctbl-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
+              ${mkOpts(tables, ri.child)}
+            </select>
+            <label>Foreign Key Tag</label>
+            <select id="ri-ctag-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
+              <option value="${escAttr(ri.child_tag||'')}">${escHtml(ri.child_tag||'')}</option>
+            </select>
+            <label>Update Rule</label>
+            <select id="ri-urule-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
+              ${ruleOpts(ri.update_opt)}
+            </select>
+            <label>Delete Rule</label>
+            <select id="ri-drule-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
+              ${ruleOpts(ri.delete_opt)}
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn btn-primary" id="save-ri-${tabId}">&#128190; Save RI</button>
+            <button class="btn" id="del-ri-${tabId}" style="color:#f38ba8;">&#128465; Delete RI</button>
+            <span id="save-ri-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+          </div>
+        </div>`;
+
+      // Load index tags for a table and pre-select a specific tag
+      const loadTags = async (tableId, tagSelectId, selectValue = '') => {
+        const tbl = document.getElementById(tableId)?.value;
+        if (!tbl) return;
+        const tagSel = document.getElementById(tagSelectId);
+        if (!tagSel) return;
+        try {
+          const r = await apiFetch(`api/ri_meta.php?dd=${encodeURIComponent(dd)}&action=tags&table=${encodeURIComponent(tbl)}`);
+          const tags = r.tags || [];
+          tagSel.innerHTML = tags.map(t =>
+            `<option${t.toLowerCase() === selectValue.toLowerCase() ? ' selected' : ''}>${escHtml(t)}</option>`
+          ).join('');
+        } catch {}
+      };
+
+      document.getElementById('ri-ptbl-' + tabId)?.addEventListener('change', () => loadTags('ri-ptbl-' + tabId, 'ri-ptag-' + tabId));
+      document.getElementById('ri-ctbl-' + tabId)?.addEventListener('change', () => loadTags('ri-ctbl-' + tabId, 'ri-ctag-' + tabId));
+
+      // Populate tags immediately for the current parent and child tables
+      if (ri.parent) loadTags('ri-ptbl-' + tabId, 'ri-ptag-' + tabId, ri.parent_tag || '');
+      if (ri.child)  loadTags('ri-ctbl-' + tabId, 'ri-ctag-' + tabId, ri.child_tag  || '');
+
+      const msgEl = document.getElementById('save-ri-msg-' + tabId);
+      document.getElementById('save-ri-' + tabId)?.addEventListener('click', async () => {
+        if (msgEl) msgEl.textContent = 'Saving…';
+        const payload = {
+          dd, ri: riName,
+          parent: document.getElementById('ri-ptbl-'  + tabId)?.value || '',
+          parent_tag: document.getElementById('ri-ptag-'+ tabId)?.value || '',
+          child:  document.getElementById('ri-ctbl-'  + tabId)?.value || '',
+          child_tag:  document.getElementById('ri-ctag-'+ tabId)?.value || '',
+          update_opt: document.getElementById('ri-urule-'+ tabId)?.value || 'Restrict',
+          delete_opt: document.getElementById('ri-drule-'+ tabId)?.value || 'Restrict',
+        };
+        try {
+          const r = await apiFetch('api/save_ri.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'save', ...payload }),
+          });
+          if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : 'Saved';
+        } catch (err) { if (msgEl) msgEl.textContent = `Error: ${err.message}`; }
+      });
+
+      document.getElementById('del-ri-' + tabId)?.addEventListener('click', async () => {
+        if (!confirm(`Delete RI object "${riName}"?`)) return;
+        try {
+          const r = await apiFetch('api/save_ri.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete', dd, ri: riName }),
+          });
+          if (r.error) { if (msgEl) msgEl.textContent = `Error: ${r.error}`; return; }
+          closeTab(tabId);
+          refreshTree();
+        } catch (err) { if (msgEl) msgEl.textContent = `Error: ${err.message}`; }
+      });
+    }).catch(err => {
+      if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+    });
+  }
+
+  // ── Trigger tab: split grid (top) + ACE editor (bottom) ────────────────────
+  function buildTriggerPanel(tabId, tab) {
+    const dd = tab.dd || '';
+    const ddOpts = Array.from(state.openConnections).map(n =>
+      `<option value="${escAttr(n)}" ${n === dd ? 'selected' : ''}>${escHtml(n)}</option>`
+    ).join('');
+    return `
+      <div class="sql-panel" style="flex-direction:column;">
+        <div style="flex:0 0 auto;min-height:120px;max-height:45%;overflow:auto;border-bottom:2px solid #313244;" id="trig-grid-wrap-${tabId}">
+          <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+            <button class="btn btn-sm btn-primary" id="save-trig-${tabId}">&#128190; Save Changes</button>
+            <span id="trig-save-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+          </div>
+          <div id="trig-grid-${tabId}" style="width:100%;"></div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
+          <div class="sql-toolbar" style="flex:0 0 auto;">
+            <select id="sql-dd-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:3px 8px;border-radius:4px;font-size:12px;">
+              <option value="">— database —</option>
+              ${ddOpts}
+            </select>
+            <button class="btn btn-primary" id="sql-run-${tabId}" title="Execute (F5)">&#9654; Execute</button>
+            <span id="trig-label-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:8px;"></span>
+            <span id="sql-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:8px;"></span>
+          </div>
+          <div class="sql-editor-wrap" style="flex:1;min-height:0;">
+            <div id="sql-ace-${tabId}" class="sql-ace-editor" style="height:100%;"></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function bindTriggerPanel(tabId, tab) {
+    setTimeout(() => {
+      const editor = ace.edit('sql-ace-' + tabId);
+      editor.setTheme('ace/theme/dracula');
+      editor.session.setMode('ace/mode/sql');
+      editor.setOptions({
+        showPrintMargin: false, useWorker: false, fontSize: '13px',
+        fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
+        tabSize: 2, useSoftTabs: true, scrollPastEnd: 0.5,
+      });
+      editor.setValue('-- Select a trigger above to view its body.', -1);
+      state.aceEditors[tabId] = editor;
+
+      const runBtn = document.getElementById('sql-run-' + tabId);
+      runBtn?.addEventListener('click', () => doExecuteSql(tabId, editor.getValue().trim()));
+      editor.commands.addCommand({
+        name: 'executeAll', bindKey: { win: 'F5', mac: 'F5' },
+        exec: () => doExecuteSql(tabId, editor.getValue().trim()),
+      });
+    }, 60);
+  }
+
+  function loadTriggerData(tabId, dd, table) {
+    const gridEl = document.getElementById('trig-grid-' + tabId);
+    const labelEl = document.getElementById('trig-label-' + tabId);
+    if (!gridEl) return;
+
+    // Use trigger_body.php which reads directly from .add/.am binary for correct event/timing/body
+    apiFetch('api/trigger_body.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dd, table }),
+    }).then(resp => {
+      if (resp.error) {
+        gridEl.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+        return;
+      }
+      const triggers = resp.triggers || [];
+      /* global Tabulator */
+      const grid = new Tabulator('#trig-grid-' + tabId, {
+        data: triggers,
+        layout: 'fitDataFill',
+        selectable: 1,
+        placeholder: '(no triggers defined for this table)',
+        columns: [
+          { title: 'Name',     field: 'name',     widthGrow: 2, headerSort: false },
+          { title: 'Timing',   field: 'timing',   width: 130,   headerSort: false,
+            editor: 'select', editorParams: { values: { BEFORE: 'BEFORE', 'INSTEAD OF': 'INSTEAD OF', AFTER: 'AFTER' } } },
+          { title: 'Event',    field: 'event',    widthGrow: 1, headerSort: false,
+            editor: 'select', editorParams: { values: { INSERT: 'INSERT', UPDATE: 'UPDATE', DELETE: 'DELETE' } } },
+          { title: 'Enabled',  field: 'enabled',  width: 80,    headerSort: false,
+            editor: 'select', editorParams: { values: { Yes: 'Yes', No: 'No' } } },
+          { title: 'Priority', field: 'priority', width: 75,    headerSort: false },
+        ],
+      });
+
+      // Save button: saves tabulator row values + editor body for selected trigger
+      const saveMsgEl = document.getElementById('trig-save-msg-' + tabId);
+      document.getElementById('save-trig-' + tabId)?.addEventListener('click', async () => {
+        const editor = state.aceEditors[tabId];
+        const label  = document.getElementById('trig-label-' + tabId)?.textContent || '';
+        if (!label) { if (saveMsgEl) saveMsgEl.textContent = 'Select a trigger row first'; return; }
+        const row = grid.getData().find(r => r.name === label);
+        if (!row) { if (saveMsgEl) saveMsgEl.textContent = 'Trigger row not found'; return; }
+        if (saveMsgEl) saveMsgEl.textContent = 'Saving…';
+        try {
+          const body = editor ? editor.getValue() : '';
+          // Strip the "-- Trigger: ...\n-- timing event\n\n" header comment we prepend
+          const bodyLines = body.split('\n');
+          const sqlStart  = bodyLines.findIndex(l => !l.startsWith('-- '));
+          const sqlBody   = bodyLines.slice(sqlStart < 0 ? 0 : sqlStart).join('\n').trim();
+
+          const r = await apiFetch('api/save_trigger.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dd, table, name: row.name,
+              event: row.event, timing: row.timing, enabled: row.enabled, body: sqlBody }),
+          });
+          if (saveMsgEl) saveMsgEl.textContent = r.error ? `Error: ${r.error}` : `Saved ${row.name}`;
+        } catch (err) {
+          if (saveMsgEl) saveMsgEl.textContent = `Error: ${err.message}`;
+        }
+      });
+
+      const loadTrigBody = (d) => {
+        const editor = state.aceEditors[tabId];
+        if (!editor) return;
+        const body   = d.body || '';
+        const header = `-- Trigger: ${d.name}\n-- ${d.timing} ${d.event}\n\n`;
+        editor.setValue(header + (body || '-- (body not available)'), -1);
+        if (labelEl) labelEl.textContent = d.name;
+      };
+
+      grid.on('rowClick', (e, row) => loadTrigBody(row.getData()));
+
+      if (triggers.length >= 1) {
+        setTimeout(() => {
+          const firstRow = grid.getRows()[0];
+          if (firstRow) { firstRow.select(); loadTrigBody(firstRow.getData()); }
+        }, 200);
+      }
+    }).catch(err => {
+      if (gridEl) gridEl.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+    });
+  }
+
+  // ── ADS field type choices for the editor dropdown ─────────────────────────
+  const ADS_FIELD_TYPES = {
+    Character: 'Character', CICharacter: 'CICharacter', Varchar: 'Varchar',
+    Memo: 'Memo', Integer: 'Integer', ShortInt: 'ShortInt', AutoIncrement: 'AutoIncrement',
+    Numeric: 'Numeric', Float: 'Float', Double: 'Double', Money: 'Money',
+    Logical: 'Logical', Date: 'Date', DateTime: 'DateTime', Timestamp: 'Timestamp',
+    Blob: 'Blob', Binary: 'Binary',
+  };
+
+  function buildMetaColumns(kind) {
+    if (kind === 'fields') {
+      return [
+        { title: '#',        field: 'Order',    width: 42,  minWidth: 42,  headerSort: false, formatter: 'plaintext' },
+        { title: 'Field',    field: 'Field',    minWidth: 160, widthGrow: 2, headerSort: false, editor: 'input' },
+        { title: 'Type',     field: 'BaseType', minWidth: 160, widthGrow: 2, headerSort: false,
+          editor: 'select', editorParams: { values: ADS_FIELD_TYPES } },
+        { title: 'Size',     field: 'Size',     width: 60,  headerSort: false,
+          editor: 'number', editorParams: { min: 0 },
+          formatter: v => (v.getValue() > 0 ? v.getValue() : '') },
+        { title: 'Dec',      field: 'Decimals', width: 50,  headerSort: false,
+          editor: 'number', editorParams: { min: 0 },
+          formatter: v => (v.getValue() > 0 ? v.getValue() : '') },
+        { title: 'Required', field: 'Required', width: 90,  headerSort: false,
+          editor: 'select', editorParams: { values: { '': '—', True: 'Yes', False: 'No' } },
+          formatter: v => v.getValue() === 'True' ? 'Yes' : v.getValue() === 'False' ? 'No' : '' },
+        { title: 'Default',  field: 'Default',  minWidth: 100, widthGrow: 1.5, headerSort: false, editor: 'input' },
+        { title: 'Index',    field: 'Index',    width: 80,  headerSort: false,
+          editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes', Unique: 'Unique', Primary: 'Primary' } } },
+      ];
+    }
+    if (kind === 'indexes') {
+      return [
+        { title: 'Tag',        field: 'Tag',        widthGrow: 1.5, headerSort: false },
+        { title: 'Expression', field: 'Expression', widthGrow: 3,   headerSort: false, editor: 'input' },
+        { title: 'Descending', field: 'Descending', width: 100, headerSort: false,
+          editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
+        { title: 'Unique',     field: 'Unique',     width: 80,  headerSort: false,
+          editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
+        { title: 'Binary',     field: 'Binary',     width: 80,  headerSort: false,
+          editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
+        { title: 'Key Type',   field: 'KeyType',    width: 90,  headerSort: false },
+      ];
+    }
+    // triggers (plain meta view, editable columns for basic props)
+    return [
+      { title: 'Name',     field: 'Name',     widthGrow: 2, headerSort: false },
+      { title: 'Timing',   field: 'Timing',   width: 110, headerSort: false },
+      { title: 'Event',    field: 'Event',    widthGrow: 1, headerSort: false },
+      { title: 'Enabled',  field: 'Enabled',  width: 80,  headerSort: false },
+      { title: 'Priority', field: 'Priority', width: 80,  headerSort: false },
+    ];
   }
 
   function loadMetaData(tabId, dd, table, kind) {
@@ -352,18 +843,79 @@
           container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
           return;
         }
-        container.innerHTML = `<div id="meta-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+        const showSave = kind === 'fields' || kind === 'indexes';
+        const toolbarHtml = showSave
+          ? `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+               <button class="btn btn-sm btn-primary" id="save-meta-${tabId}">&#128190; Save Changes</button>
+               <span id="save-meta-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+             </div>`
+          : '';
+
+        container.innerHTML = toolbarHtml +
+          `<div id="meta-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
         /* global Tabulator */
-        new Tabulator('#meta-tbl-' + tabId, {
+        const grid = new Tabulator('#meta-tbl-' + tabId, {
           data: resp.data,
-          autoColumns: true,
+          columns: buildMetaColumns(kind),
           layout: 'fitDataFill',
           pagination: 'local',
           paginationSize: 200,
           paginationCounter: 'rows',
-          height: '100%',
+          height: showSave ? 'calc(100% - 34px)' : '100%',
           placeholder: '(no data)',
         });
+
+        if (kind === 'fields') {
+          const saveBtn = document.getElementById('save-meta-' + tabId);
+          const msgEl   = document.getElementById('save-meta-msg-' + tabId);
+          saveBtn?.addEventListener('click', async () => {
+            if (msgEl) msgEl.textContent = 'Saving…';
+            try {
+              const rows = grid.getData();
+              const resp2 = await apiFetch('api/save_meta.php', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ dd, table, rows }),
+              });
+              const errs = resp2.errors || [];
+              if (msgEl) msgEl.textContent = errs.length
+                ? `Saved ${resp2.saved}, errors: ${errs.join('; ')}`
+                : `Saved ${resp2.saved} property change(s)`;
+            } catch (err) {
+              if (msgEl) msgEl.textContent = `Error: ${err.message}`;
+            }
+          });
+        }
+
+        if (kind === 'indexes') {
+          const saveBtn = document.getElementById('save-meta-' + tabId);
+          const msgEl   = document.getElementById('save-meta-msg-' + tabId);
+          saveBtn?.addEventListener('click', async () => {
+            // Save each modified index row by re-creating the index
+            const rows = grid.getData();
+            const sel  = grid.getSelectedRows();
+            const targets = sel.length > 0 ? sel.map(r => r.getData()) : rows;
+            if (targets.length === 0) { if (msgEl) msgEl.textContent = 'No row selected'; return; }
+            if (msgEl) msgEl.textContent = 'Re-indexing…';
+            let ok = 0, errs = [];
+            for (const row of targets) {
+              try {
+                const r = await apiFetch('api/save_index.php', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ dd, table,
+                    tag: row.Tag, expression: row.Expression,
+                    descending: row.Descending, unique: row.Unique, binary: row.Binary }),
+                });
+                if (r.error) errs.push(`${row.Tag}: ${r.error}`); else ok++;
+              } catch (err) { errs.push(`${row.Tag}: ${err.message}`); }
+            }
+            if (msgEl) msgEl.textContent = errs.length
+              ? `${ok} saved, errors: ${errs.join('; ')}`
+              : `${ok} index(es) saved`;
+          });
+        }
       })
       .catch(err => {
         if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
@@ -376,6 +928,7 @@
     const title = scriptName || (targetDD ? `SQL – ${targetDD}` : 'SQL');
     const tabData = { id, title, type: 'sql', dd: targetDD, initialSql: sql };
     if (objMeta) Object.assign(tabData, objMeta);
+    else if (scriptName) tabData.scriptName = scriptName;
     state.tabs.push(tabData);
     renderTabs();
     activateTab(id);
@@ -414,6 +967,15 @@
           panel.innerHTML = `<div class="data-panel" id="data-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'meta') {
           panel.innerHTML = `<div class="data-panel" id="meta-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'table_triggers') {
+          panel.innerHTML = buildTriggerPanel(tab.id, tab);
+          bindTriggerPanel(tab.id, tab);
+        } else if (tab.type === 'group') {
+          panel.innerHTML = `<div class="data-panel" id="group-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'user') {
+          panel.innerHTML = `<div class="data-panel" id="user-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'ri') {
+          panel.innerHTML = `<div class="data-panel" id="ri-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'sql') {
           panel.innerHTML = buildSqlPanel(tab.id, tab);
           bindSqlPanel(tab.id, tab);
@@ -454,80 +1016,164 @@
   document.getElementById('new-tab-btn').addEventListener('click', () => openSqlTab());
 
   // ── Table data loading ─────────────────────────────────────────────────────
-  function loadTableData(tabId, dd, table) {
+  // ── Table data: load rows with optional index ordering and seek ────────────
+  // opts: { orderby, orderdir, seekVal }
+  async function loadTableData(tabId, dd, table, opts = {}) {
     const container = document.getElementById('data-' + tabId);
     if (!container) return;
 
-    fetch(`api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`)
-      .then(r => r.json())
-      .then(resp => {
-        if (resp.error) {
-          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
-          return;
-        }
-        container.innerHTML = `<div id="tabulator-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
-        /* global Tabulator */
-        const tbl = new Tabulator('#tabulator-' + tabId, {
-          data: resp.data,
-          autoColumns: true,
-          autoColumnsDefinitions: function (defs) {
-            return defs.map(def => ({
-              ...def,
-              editor: 'input',
-              editable: function (cell) {
-                const inst = tblState[tabId];
-                return !!(inst && inst.pendingRow && cell.getRow() === inst.pendingRow);
-              },
-            }));
-          },
-          layout: 'fitDataFill',
-          pagination: 'local',
-          paginationSize: 50,
-          paginationSizeSelector: [25, 50, 100, 200, 500],
-          paginationCounter: 'rows',
-          selectable: 1,
-          movableColumns: true,
-          resizableRows: false,
-          placeholder: '(no rows)',
-          height: '100%',
-          rowClick: function (e, row) {
-            const inst = tblState[tabId];
-            if (!inst) return;
-            inst.tbl.deselectRow();
-            row.select();
-            inst.rowIdx = inst.tbl.getRows().indexOf(row);
-          },
-        });
+    const { orderby = '', orderdir = 'ASC', seekVal = '' } = opts;
 
-        tbl.on('tableBuilt', function () {
-          const bar = document.createElement('div');
-          bar.className = 'tbl-btn-bar';
-          bar.innerHTML = `
-            <button class="tbl-btn" data-act="refresh" title="Refresh">&#x27F3;</button>
-            <button class="tbl-btn" data-act="top"     title="First record">&#x2912;</button>
-            <button class="tbl-btn" data-act="bottom"  title="Last record">&#x2913;</button>
-            <button class="tbl-btn" data-act="up"      title="Previous record">&#9650;</button>
-            <button class="tbl-btn" data-act="down"    title="Next record">&#9660;</button>
-            <span class="tbl-btn-sep"></span>
-            <button class="tbl-btn" data-act="add"    title="Add row">&#xff0b;</button>
-            <button class="tbl-btn" data-act="delete" title="Delete row">&#x2715;</button>
-            <button class="tbl-btn tbl-btn-confirm" data-act="confirm" title="Confirm" disabled>&#x2714;</button>
-            <span class="tbl-btn-sep"></span>`;
-          bar.addEventListener('click', e => {
-            const btn = e.target.closest('[data-act]');
-            if (btn) handleTblAction(btn.dataset.act, tabId);
-          });
-          const paginator = document.querySelector('#tabulator-' + tabId + ' .tabulator-paginator');
-          if (paginator) paginator.prepend(bar);
-          tblState[tabId] = {
-            tbl, dd, table, rowIdx: -1, pendingRow: null,
-            confirmBtn: bar.querySelector('[data-act="confirm"]'),
-          };
-        });
-      })
-      .catch(err => {
-        if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+    // Fetch index tags + table data in parallel
+    const tagsUrl = `api/table_meta.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}&kind=indexes`;
+    const dataUrl = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`
+      + (orderby ? `&orderby=${encodeURIComponent(orderby)}&orderdir=${encodeURIComponent(orderdir)}` : '');
+
+    let indexTags = [], resp;
+    try {
+      [indexTags, resp] = await Promise.all([
+        fetch(tagsUrl).then(r => r.json()).then(r => r.data || []).catch(() => []),
+        fetch(dataUrl).then(r => r.json()),
+      ]);
+    } catch (err) {
+      container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      return;
+    }
+
+    if (resp.error) {
+      container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+      return;
+    }
+
+    // Build seek toolbar
+    const idxOpts = ['<option value="">— Natural Order —</option>']
+      .concat(indexTags.map(t => {
+        const expr = t.Expression || t.Tag;
+        const sel  = expr === orderby ? ' selected' : '';
+        return `<option value="${escAttr(expr)}"${sel}>${escHtml(t.Tag)}</option>`;
+      })).join('');
+
+    container.innerHTML = `
+      <div id="seek-bar-${tabId}" style="flex:0 0 auto;display:flex;gap:6px;align-items:center;padding:4px 8px;background:#1e1e2e;border-bottom:1px solid #313244;">
+        <select id="idx-sel-${tabId}" style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 6px;border-radius:4px;font-size:12px;">
+          ${idxOpts}
+        </select>
+        <input id="seek-inp-${tabId}" type="text" placeholder="Seek to…" value="${escAttr(seekVal)}"
+          style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 8px;border-radius:4px;font-size:12px;width:180px;">
+        <button class="btn" id="seek-go-${tabId}" style="font-size:12px;padding:3px 10px;">Go</button>
+        <span id="seek-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+      </div>
+      <div id="tabulator-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+    /* global Tabulator */
+    const tbl = new Tabulator('#tabulator-' + tabId, {
+      data: resp.data,
+      autoColumns: true,
+      autoColumnsDefinitions: function (defs) {
+        return defs.map(def => ({
+          ...def,
+          editor: 'input',
+          editable: function (cell) {
+            const inst = tblState[tabId];
+            return !!(inst && inst.pendingRow && cell.getRow() === inst.pendingRow);
+          },
+        }));
+      },
+      layout: 'fitDataFill',
+      pagination: 'local',
+      paginationSize: 50,
+      paginationSizeSelector: [25, 50, 100, 200, 500],
+      paginationCounter: 'rows',
+      selectable: 1,
+      movableColumns: true,
+      resizableRows: false,
+      placeholder: '(no rows)',
+      height: '100%',
+      rowClick: function (e, row) {
+        const inst = tblState[tabId];
+        if (!inst) return;
+        inst.tbl.deselectRow();
+        row.select();
+        inst.rowIdx = inst.tbl.getRows().indexOf(row);
+      },
+    });
+
+    tbl.on('tableBuilt', function () {
+      // ── Navigation/edit button bar (in paginator) ─────────────────────
+      const bar = document.createElement('div');
+      bar.className = 'tbl-btn-bar';
+      bar.innerHTML = `
+        <button class="tbl-btn" data-act="refresh" title="Refresh">&#x27F3;</button>
+        <button class="tbl-btn" data-act="top"     title="First record">&#x2912;</button>
+        <button class="tbl-btn" data-act="bottom"  title="Last record">&#x2913;</button>
+        <button class="tbl-btn" data-act="up"      title="Previous record">&#9650;</button>
+        <button class="tbl-btn" data-act="down"    title="Next record">&#9660;</button>
+        <span class="tbl-btn-sep"></span>
+        <button class="tbl-btn" data-act="add"    title="Add row">&#xff0b;</button>
+        <button class="tbl-btn" data-act="delete" title="Delete row">&#x2715;</button>
+        <button class="tbl-btn tbl-btn-confirm" data-act="confirm" title="Confirm" disabled>&#x2714;</button>
+        <span class="tbl-btn-sep"></span>`;
+      bar.addEventListener('click', e => {
+        const btn = e.target.closest('[data-act]');
+        if (btn) handleTblAction(btn.dataset.act, tabId);
       });
+      const paginator = document.querySelector('#tabulator-' + tabId + ' .tabulator-paginator');
+      if (paginator) paginator.prepend(bar);
+      tblState[tabId] = {
+        tbl, dd, table, rowIdx: -1, pendingRow: null,
+        orderby, orderdir,
+        confirmBtn: bar.querySelector('[data-act="confirm"]'),
+      };
+
+      // Seek to matching row after initial load
+      if (seekVal) seekInTabulator(tbl, orderby, seekVal, tabId);
+
+      // Update index dropdown when column header is clicked (client-side sort)
+      tbl.on('dataSorted', function (sorters) {
+        if (!sorters || !sorters.length) return;
+        const sortedField = sorters[0].field;
+        const match = indexTags.find(t =>
+          (t.Expression || '').toLowerCase() === sortedField.toLowerCase() ||
+          (t.Tag || '').toLowerCase() === sortedField.toLowerCase()
+        );
+        const sel = document.getElementById('idx-sel-' + tabId);
+        if (sel && match) sel.value = match.Expression || '';
+      });
+    });
+
+    // ── Seek button handler ──────────────────────────────────────────────
+    document.getElementById('seek-go-' + tabId)?.addEventListener('click', () => {
+      const selectedExpr = document.getElementById('idx-sel-' + tabId)?.value || '';
+      const val          = (document.getElementById('seek-inp-' + tabId)?.value || '').trim();
+      const dir          = orderdir;  // preserve current direction
+      // Reload with the selected index order, then seek
+      loadTableData(tabId, dd, table, { orderby: selectedExpr, orderdir: dir, seekVal: val });
+    });
+
+    // Also trigger Go on Enter in the seek input
+    document.getElementById('seek-inp-' + tabId)?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('seek-go-' + tabId)?.click();
+    });
+  }
+
+  // Scroll the tabulator to the first row where the leading index field matches seekVal.
+  function seekInTabulator(tbl, orderby, seekVal, tabId) {
+    if (!seekVal || !orderby) return;
+    const firstField = orderby.split(/[;,]/)[0].trim();
+    if (!firstField) return;
+    const rows = tbl.getRows();
+    const low = seekVal.toLowerCase();
+    const target = rows.find(r => {
+      const v = String(r.getData()[firstField] ?? '').toLowerCase();
+      return v >= low;
+    });
+    if (target) {
+      tbl.deselectRow();
+      tbl.selectRow(target);
+      tbl.scrollToRow(target, 'top', false);
+      const msgEl = document.getElementById('seek-msg-' + tabId);
+      if (msgEl) msgEl.textContent = `→ ${String(target.getData()[firstField] ?? '')}`;
+    }
   }
 
   // Navigate to a row by its 0-based index in the full dataset.
@@ -549,14 +1195,17 @@
     const { tbl, dd, table } = inst;
 
     switch (act) {
-      case 'refresh':
-        fetch(`api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`)
-          .then(r => r.json())
-          .then(resp => {
-            if (!resp.error) { tbl.replaceData(resp.data); inst.rowIdx = -1; }
-          })
+      case 'refresh': {
+        // Preserve current ordering when refreshing
+        const ob = inst.orderby || '';
+        const od = inst.orderdir || 'ASC';
+        const url = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`
+          + (ob ? `&orderby=${encodeURIComponent(ob)}&orderdir=${encodeURIComponent(od)}` : '');
+        fetch(url).then(r => r.json())
+          .then(resp => { if (!resp.error) { tbl.replaceData(resp.data); inst.rowIdx = -1; } })
           .catch(() => {});
         break;
+      }
       case 'top':
         navigateToRow(inst, 0);
         break;
@@ -642,6 +1291,8 @@
     const ddOptions = Array.from(state.openConnections).map(n =>
       `<option value="${escAttr(n)}" ${n === dd ? 'selected' : ''}>${escHtml(n)}</option>`
     ).join('');
+    const savedScriptName = tab ? savedScriptNameForTab(tab) : '';
+    const saveScriptAttr = savedScriptName ? ` data-script-name="${escAttr(savedScriptName)}"` : '';
     return `
       <div class="sql-panel">
         <div class="sql-editor-pane" id="sql-editor-pane-${tabId}">
@@ -654,7 +1305,7 @@
             ${ddOptions}
           </select>
           <button class="btn" id="sql-open-btn-${tabId}" title="Open saved script">&#128194; Open</button>
-          <button class="btn" id="sql-save-btn-${tabId}" title="Save script">&#128190; Save</button>
+          <button class="btn" id="sql-save-btn-${tabId}"${saveScriptAttr} title="Save script">&#128190; Save</button>
           <button class="btn btn-primary" id="sql-run-${tabId}" title="Execute (F5 / F9)">&#9654; Execute</button>
           <button class="btn" id="sql-clear-${tabId}" title="Clear editor">Clear</button>
           <span style="font-size:11px;color:#45475a;margin-left:10px;white-space:nowrap;">
@@ -772,6 +1423,29 @@
     return sel || ed.getValue().trim();
   }
 
+  async function saveSqlScript(tabId, name) {
+    const sql = state.aceEditors[tabId]?.getValue() ?? '';
+    await apiFetch('api/sql_scripts.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'save', name, sql }),
+    });
+    const tabMeta = state.tabs.find(t => t.id === tabId);
+    if (tabMeta) {
+      tabMeta.scriptName = name;
+      tabMeta.title = name;
+    }
+    setStatus(`Script '${name}' saved`);
+  }
+
+  function savedScriptNameForTab(tabMeta) {
+    if (!tabMeta) return '';
+    if (tabMeta.scriptName) return tabMeta.scriptName;
+    const title = (tabMeta.title || '').trim();
+    if (!title || title === 'SQL' || /^SQL\s*[-\u2013\u2014]/.test(title)) return '';
+    return title;
+  }
+
   function bindSqlPanel(tabId, tab) {
     if (tab?.objType) { bindProcPanel(tabId, tab); return; }
     setTimeout(() => {
@@ -853,10 +1527,20 @@
 
       openBtn?.addEventListener('click', () => openSqlOpenModal());
 
-      saveBtn?.addEventListener('click', () => {
+      saveBtn?.addEventListener('click', async () => {
         const errEl = document.getElementById('sql-save-err');
         if (errEl) errEl.textContent = '';
         const tabMeta = state.tabs.find(t => t.id === tabId);
+        const scriptName = saveBtn?.dataset.scriptName || savedScriptNameForTab(tabMeta);
+        if (scriptName) {
+          try {
+            await saveSqlScript(tabId, scriptName);
+            if (saveBtn) saveBtn.dataset.scriptName = scriptName;
+          } catch (err) {
+            setStatus(`Save failed: ${err.message}`);
+          }
+          return;
+        }
         const pre = (tabMeta && !tabMeta.title.startsWith('SQL')) ? tabMeta.title : '';
         const nameInput = document.getElementById('sql-save-name');
         if (nameInput) nameInput.value = pre;
@@ -1282,16 +1966,12 @@
     errEl.textContent = '';
     if (!name) { errEl.textContent = 'Script name is required'; return; }
     const tabId = pendingSqlSaveTabId;
-    const sql   = state.aceEditors[tabId]?.getValue() ?? '';
     try {
-      await apiFetch('api/sql_scripts.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'save', name, sql }),
-      });
+      await saveSqlScript(tabId, name);
       closeModal('modal-sql-save');
       pendingSqlSaveTabId = null;
-      setStatus(`Script '${name}' saved`);
+      renderTabs();
+      activateTab(tabId);
     } catch (err) {
       errEl.textContent = err.message;
     }

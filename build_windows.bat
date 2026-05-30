@@ -3,7 +3,7 @@
 :: Requires: Visual Studio 2022 (any edition)
 ::
 :: Outputs:
-::   build\msvc-x64\Release\ace64.dll       drop-in ACE replacement
+::   build\msvc-x64\src\Release\openace64.dll    OpenADS ACE-compatible DLL
 ::   build\msvc-x64\Release\openads_serverd.exe   standalone TCP server
 ::   build\msvc-x64\Release\openads_bench.exe     SQL benchmark tool
 ::
@@ -48,7 +48,7 @@ if errorlevel 1 goto :fail
 
 echo.
 echo === Build complete ===
-echo   DLL : build\msvc-x64\%BUILD_TYPE%\ace64.dll
+echo   DLL : build\msvc-x64\src\%BUILD_TYPE%\openace64.dll
 echo   Srv : build\msvc-x64\%BUILD_TYPE%\openads_serverd.exe
 echo   Bench: build\msvc-x64\%BUILD_TYPE%\openads_bench.exe
 

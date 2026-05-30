@@ -1,0 +1,75 @@
+<?php
+/**
+ * api/save_user_groups.php — update a user's group memberships.
+ * POST { dd, user, groups: ["Group1", "Group2"] }
+ *
+ * Computes the diff vs current memberships and calls
+ * sp_AddUserToGroup / sp_RemoveUserFromGroup for each change.
+ */
+header('Content-Type: application/json');
+session_start();
+
+$body     = json_decode(file_get_contents('php://input'), true) ?? [];
+$ddName   = trim($body['dd']   ?? '');
+$userName = trim($body['user'] ?? '');
+$newGroups = array_map('trim', $body['groups'] ?? []);
+$newGroups = array_unique(array_filter($newGroups, fn($g) => $g !== ''));
+
+if (!isset($_SESSION['connections'][$ddName])) {
+    http_response_code(401);
+    echo json_encode(['error' => "Not connected to '$ddName'"]);
+    exit;
+}
+if ($ddName === '' || $userName === '') {
+    http_response_code(400);
+    echo json_encode(['error' => 'dd and user are required']);
+    exit;
+}
+
+$c    = $_SESSION['connections'][$ddName];
+$opts = ['path' => $c['path']];
+if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
+if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+
+try {
+    $conn = AdsConnection::connect($opts);
+
+    // Current groups
+    $current = [];
+    $stmt = $conn->query("SELECT GROUP_NAME, USER_NAME FROM system.usergroupmembers");
+    while ($row = $stmt->fetchAssoc()) {
+        if (strcasecmp($row['USER_NAME'] ?? '', $userName) === 0) {
+            $current[] = $row['GROUP_NAME'];
+        }
+    }
+
+    $currentSet = array_map('strtoupper', $current);
+    $newSet     = array_map('strtoupper', $newGroups);
+
+    $toAdd    = array_diff($newSet, $currentSet);
+    $toRemove = array_diff($currentSet, $newSet);
+
+    // Map uppercase back to original case for the stored procedure
+    $newMap     = array_combine($newSet, $newGroups);
+    $currentMap = array_combine($currentSet, $current);
+
+    $errs = [];
+    foreach ($toAdd as $g) {
+        $gname = $newMap[$g] ?? $g;
+        try {
+            $conn->execute("EXECUTE PROCEDURE sp_AddUserToGroup('$userName', '$gname')");
+        } catch (Throwable $e) { $errs[] = "Add to $gname: " . $e->getMessage(); }
+    }
+    foreach ($toRemove as $g) {
+        $gname = $currentMap[$g] ?? $g;
+        try {
+            $conn->execute("EXECUTE PROCEDURE sp_RemoveUserFromGroup('$userName', '$gname')");
+        } catch (Throwable $e) { $errs[] = "Remove from $gname: " . $e->getMessage(); }
+    }
+
+    $conn->close();
+    echo json_encode(['saved' => true, 'added' => count($toAdd), 'removed' => count($toRemove), 'errors' => $errs]);
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo json_encode(['error' => $e->getMessage()]);
+}

@@ -252,23 +252,39 @@ html, body {
 }
 
 /* ── jsTree theme overrides ───────────────────────────────────────────────── */
+#tree-container.jstree-default .jstree-anchor,
 #tree-container .jstree-default .jstree-anchor {
   color: #cdd6f4;
   height: 24px;
   line-height: 24px;
 }
+#tree-container.jstree-default .jstree-anchor:hover,
 #tree-container .jstree-default .jstree-anchor:hover {
-  background: #89b4fa;
-  color: #1e1e2e;
+  background: #313244;
+  color: #cdd6f4;
   border-radius: 3px;
 }
+#tree-container.jstree-default .jstree-clicked,
 #tree-container .jstree-default .jstree-clicked {
   background: #74c7ec !important;
   color: #1e1e2e !important;
   border-radius: 3px;
 }
+#tree-container.jstree-default .jstree-wholerow-clicked,
 #tree-container .jstree-default .jstree-wholerow-clicked { background: #74c7ec !important; }
-#tree-container .jstree-default .jstree-wholerow-hovered { background: #89b4fa !important; }
+#tree-container.jstree-default .jstree-wholerow-hovered,
+#tree-container .jstree-default .jstree-wholerow-hovered { background: #313244 !important; }
+#tree-container.jstree-default .jstree-hovered,
+#tree-container .jstree-default .jstree-hovered {
+  background: #313244 !important;
+  color: #cdd6f4 !important;
+  border-radius: 3px;
+  box-shadow: none !important;
+}
+#tree-container.jstree-default .jstree-wholerow-clicked.jstree-wholerow-hovered,
+#tree-container .jstree-default .jstree-wholerow-clicked.jstree-wholerow-hovered {
+  background: #74c7ec !important;
+}
 
 /* Custom icons using text fallback (works without an icon font) */
 .jstree-icon-dd-open::before    { content: "🗄"; font-style: normal; }
@@ -529,6 +545,51 @@ html, body {
 .tabulator .tabulator-row .tabulator-cell {
   border-right: 1px solid #2a2a3e !important;
   color: #cdd6f4 !important;
+}
+
+.tabulator .tabulator-row .tabulator-cell input,
+.tabulator .tabulator-row .tabulator-cell textarea,
+.tabulator .tabulator-row .tabulator-cell select {
+  background: #11111b !important;
+  color: #cdd6f4 !important;
+  border: 1px solid #89b4fa !important;
+  outline: none !important;
+  caret-color: #cdd6f4 !important;
+  font: inherit !important;
+}
+
+.tabulator .tabulator-row .tabulator-cell input:focus,
+.tabulator .tabulator-row .tabulator-cell textarea:focus,
+.tabulator .tabulator-row .tabulator-cell select:focus {
+  background: #11111b !important;
+  color: #cdd6f4 !important;
+  box-shadow: 0 0 0 1px #89b4fa inset !important;
+}
+
+.tabulator .tabulator-row .tabulator-cell input::selection,
+.tabulator .tabulator-row .tabulator-cell textarea::selection {
+  background: #89b4fa;
+  color: #1e1e2e;
+}
+
+.tabulator-popup-container,
+.tabulator-edit-list {
+  background: #11111b !important;
+  border-color: #45475a !important;
+  color: #cdd6f4 !important;
+}
+
+.tabulator-edit-list .tabulator-edit-list-item,
+.tabulator-edit-list .tabulator-edit-list-placeholder,
+.tabulator-edit-list .tabulator-edit-list-group {
+  background: #11111b !important;
+  color: #cdd6f4 !important;
+}
+
+.tabulator-edit-list .tabulator-edit-list-item.active,
+.tabulator-edit-list .tabulator-edit-list-item:hover {
+  background: #89b4fa !important;
+  color: #1e1e2e !important;
 }
 
 .tabulator .tabulator-footer {

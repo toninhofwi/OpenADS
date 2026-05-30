@@ -150,8 +150,9 @@ PHP_METHOD(AdsConnection, query)
 
     ulRet = AdsExecuteSQLDirect(hStmt, (UNSIGNED8 *)sql, &hCursor);
     if (ulRet != AE_SUCCESS) {
-        AdsCloseSQLStatement(hStmt);
+        /* Read error text BEFORE AdsCloseSQLStatement calls ok() and clears it */
         ads_throw_ace_exception(ulRet, "AdsConnection::query (execute)");
+        AdsCloseSQLStatement(hStmt);
         RETURN_THROWS();
     }
 

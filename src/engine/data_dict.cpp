@@ -164,10 +164,10 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             if (amf_res) {
                 auto am_file = std::move(amf_res).value();
                 auto sz_res = am_file.size();
-                if (sz_res && *sz_res > 0) {
-                    am_buf.resize(*sz_res);
-                    auto rr = am_file.read_at(0, am_buf.data(), *sz_res);
-                    if (rr && *rr < am_buf.size()) am_buf.resize(*rr);
+                if (sz_res && sz_res.value() > 0) {
+                    am_buf.resize(sz_res.value());
+                    auto rr = am_file.read_at(0, am_buf.data(), sz_res.value());
+                    if (rr && rr.value() < am_buf.size()) am_buf.resize(rr.value());
                 }
             }
         }
@@ -373,19 +373,58 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             functions_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Trigger" && !rec.obj_name.empty()) {
-            // SAP binary format: property = 4-byte LE event_mask; table comes from parent_id.
+            // SAP binary .add format for Trigger records (rec_len=524):
+            //   Property VarChar (plen bytes at base+225): bytes [0..3] = event type (LE uint32)
+            //   Property area (273 bytes at base+225..base+497):
+            //     [0..3]   event  (LE uint32): 1=INSERT 2=UPDATE 3=DELETE
+            //     [4..5]   0x04 (constant)
+            //     [6..7]   timing (LE uint16): 1=BEFORE 2=INSTEAD_OF 4=AFTER
+            //     [8..9]   0x00 (reserved/no-memos flag)
+            //     [10..11] 0x04 (constant)
+            //     [12..15] constant block (0x03 0x00 0x00 0x00)
+            //     [16..17] inline body length (LE uint16)
+            //     [18..]   inline body SQL text (up to 255 bytes)
+            //   More Property (9 bytes at base+498): am_block(4) + am_len(4) + pad
             TriggerEntry e;
             e.name        = rec.obj_name;
             e.table_alias = id_to_name.count(rec.parent_id) ? id_to_name.at(rec.parent_id) : "";
+
+            // Read event type (plen field, 4 bytes at base+225)
             if (!rec.prop_null && rec.property.size() >= 4) {
                 e.event_mask = static_cast<uint32_t>(
                     (static_cast<uint8_t>(rec.property[0]))       |
-                    (static_cast<uint8_t>(rec.property[1]) << 8)  |
+                    (static_cast<uint8_t>(rec.property[1]) <<  8) |
                     (static_cast<uint8_t>(rec.property[2]) << 16) |
                     (static_cast<uint8_t>(rec.property[3]) << 24));
             }
-            e.enabled   = true;
-            // Container and procedure are not stored in SAP binary triggers.
+
+            // Read timing (bytes 6-7 in the full 273-byte property area)
+            const std::size_t PA = base + 225;  // property area start in file buffer
+            if (PA + 8 <= buf.size()) {
+                e.timing = static_cast<uint32_t>(
+                    static_cast<uint8_t>(buf[PA + 6]) |
+                    (static_cast<uint8_t>(buf[PA + 7]) << 8));
+            }
+
+            // Read inline body starting at property area byte 18
+            if (PA + 18 < buf.size()) {
+                std::size_t body_start = PA + 18;
+                std::size_t body_end   = PA + 273;
+                if (body_end > buf.size()) body_end = buf.size();
+                std::string body = buf.substr(body_start, body_end - body_start);
+                auto nul = body.find('\0');
+                if (nul != std::string::npos) body.resize(nul);
+                auto first = body.find_first_not_of(" \t\r\n");
+                if (first != std::string::npos) body = body.substr(first);
+                auto last  = body.find_last_not_of(" \t\r\n");
+                if (last  != std::string::npos) body.resize(last + 1);
+                e.container = std::move(body);
+            }
+
+            // Append .am continuation (same pattern as procs/functions)
+            append_am(e.container, rec.more_property);
+
+            e.enabled = true;
             triggers_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Relation" && !rec.obj_name.empty() &&
@@ -656,7 +695,8 @@ util::Result<void> DataDict::load_() {
             field_props_[tbl][fld][trim(kv.substr(0, eq))] = trim(kv.substr(eq + 1));
 
         } else if (starts_with(line, "TRIGGER ")) {
-            // TRIGGER <name>=<table>;<event_mask>;<priority>;<enabled>;<container>;<procedure>;<comment>
+            // TRIGGER <name>=<table>;<event_mask>;<timing>;<priority>;<enabled>;<container>;<procedure>;<comment>
+            // (Legacy 7-field format: <table>;<event_mask>;<priority>;<enabled>;<container>;<proc>;<comment>)
             std::string body = line.substr(8);
             auto eq = body.find('=');
             if (eq == std::string::npos) continue;
@@ -669,16 +709,17 @@ util::Result<void> DataDict::load_() {
                 else cur.push_back(c);
             }
             parts.push_back(cur);
-            while (parts.size() < 7) parts.emplace_back();
+            while (parts.size() < 8) parts.emplace_back();
             TriggerEntry e;
             e.name        = name;
             e.table_alias = parts[0];
             try { e.event_mask = static_cast<std::uint32_t>(std::stoul(parts[1])); } catch (...) {}
-            try { e.priority   = static_cast<std::uint32_t>(std::stoul(parts[2])); } catch (...) {}
-            e.enabled   = (parts[3] != "0");
-            e.container = parts[4];
-            e.procedure = parts[5];
-            e.comment   = parts[6];
+            try { e.timing     = static_cast<std::uint32_t>(std::stoul(parts[2])); } catch (...) {}
+            try { e.priority   = static_cast<std::uint32_t>(std::stoul(parts[3])); } catch (...) {}
+            e.enabled   = (parts[4] != "0");
+            e.container = parts[5];
+            e.procedure = parts[6];
+            e.comment   = parts[7];
             if (!name.empty()) triggers_[name] = std::move(e);
 
         } else if (starts_with(line, "PROC ")) {
@@ -1578,6 +1619,7 @@ util::Result<void> DataDict::save() {
         const auto& e = triggers_.at(n);
         out += "TRIGGER " + n + "=" + e.table_alias + ";" +
                std::to_string(e.event_mask) + ";" +
+               std::to_string(e.timing) + ";" +
                std::to_string(e.priority) + ";" +
                (e.enabled ? "1" : "0") + ";" +
                e.container + ";" + e.procedure + ";" + e.comment + "\n";

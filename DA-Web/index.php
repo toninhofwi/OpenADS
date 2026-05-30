@@ -32,7 +32,7 @@
   <script src="vendor/ace/ext-language_tools.js"></script>
 
   <!-- Application styles -->
-  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/app.css?v=<?= filemtime(__DIR__ . '/css/app.css') ?>">
 </head>
 <body>
 <div id="app">
@@ -374,6 +374,6 @@
 </div>
 
 <!-- Application JS (loaded last so DOM is ready) -->
-<script src="js/app.js"></script>
+<script src="js/app.js?v=<?= filemtime(__DIR__ . '/js/app.js') ?>"></script>
 </body>
 </html>

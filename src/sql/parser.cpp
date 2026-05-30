@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <string>
@@ -407,18 +408,70 @@ parse_cmp(Cursor& c, const std::string& sql) {
             node->cmp.literal    = tmp;
         } else {
             // M10.24: bare identifier on RHS — outer-column reference
-            // for a correlated subquery (`b.x = a.y`). The executor
-            // reads it from the outer cursor at evaluation time.
+            // for a correlated subquery (`b.x = a.y`), OR a zero-arg
+            // function call like CURDATE() evaluated at parse time.
             std::string id = c.read_identifier();
             if (id.empty()) {
                 return util::Error{7200, 0,
                     "expected string literal, number, or column "
                     "reference on RHS of comparison", sql};
             }
-            node->cmp.is_outer_ref = true;
-            node->cmp.outer_column = id;
-            node->cmp.is_numeric   = false;
-            node->cmp.literal      = id;       // diagnostic fallback
+            if (c.peek_char('(')) {
+                // function call — consume the argument list
+                c.match_char('(');
+                int fn_depth = 1;
+                while (fn_depth > 0) {
+                    if (c.eof()) {
+                        return util::Error{7200, 0,
+                            "unterminated function call in WHERE clause", sql};
+                    }
+                    char ch = c.consume_char();
+                    if      (ch == '(') ++fn_depth;
+                    else if (ch == ')') --fn_depth;
+                }
+                // Evaluate known zero-arg date/time functions to string literals.
+                std::string uid;
+                uid.reserve(id.size());
+                for (char ch : id)
+                    uid.push_back(static_cast<char>(
+                        std::toupper(static_cast<unsigned char>(ch))));
+                char datebuf[24] = {};
+                std::time_t t = std::time(nullptr);
+                std::tm tm_l{};
+#ifdef _WIN32
+                localtime_s(&tm_l, &t);
+#else
+                localtime_r(&t, &tm_l);
+#endif
+                if (uid == "CURDATE" || uid == "TODAY" ||
+                    uid == "DATE"    || uid == "GETDATE") {
+                    std::snprintf(datebuf, sizeof(datebuf), "%04d-%02d-%02d",
+                                  tm_l.tm_year + 1900,
+                                  tm_l.tm_mon  + 1,
+                                  tm_l.tm_mday);
+                    node->cmp.literal    = datebuf;
+                    node->cmp.is_numeric = false;
+                } else if (uid == "NOW") {
+                    std::snprintf(datebuf, sizeof(datebuf),
+                                  "%04d-%02d-%02d %02d:%02d:%02d",
+                                  tm_l.tm_year + 1900,
+                                  tm_l.tm_mon  + 1,
+                                  tm_l.tm_mday,
+                                  tm_l.tm_hour,
+                                  tm_l.tm_min,
+                                  tm_l.tm_sec);
+                    node->cmp.literal    = datebuf;
+                    node->cmp.is_numeric = false;
+                } else {
+                    return util::Error{7200, 0,
+                        "unsupported function call on RHS of WHERE comparison: " + id, sql};
+                }
+            } else {
+                node->cmp.is_outer_ref = true;
+                node->cmp.outer_column = id;
+                node->cmp.is_numeric   = false;
+                node->cmp.literal      = id;       // diagnostic fallback
+            }
         }
     }
     return node;
@@ -612,6 +665,12 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     SelectStmt stmt;
     // M10.31 — optional DISTINCT immediately after SELECT.
     if (c.match_keyword("DISTINCT")) stmt.distinct = true;
+    // TOP N — Transact-SQL/xBase synonym for LIMIT N. Consume before
+    // the projection list so TOP/1 aren't read as column names.
+    if (c.match_keyword("TOP")) {
+        auto top_n = c.read_numeric_literal();
+        if (top_n && stmt.limit < 0) stmt.limit = static_cast<std::int64_t>(top_n.value());
+    }
     if (c.match_char('*')) {
         // SELECT * — projection stays empty (every column visible).
     } else {
@@ -786,8 +845,9 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
             // Multi-arg: SUBSTR(col,start,len), CONCAT(a,b),
             // REPLACE(col,old,new), DATEDIFF(a,b), DATEADD(col,n).
             // Zero-arg: NOW(), TODAY(), DATE(), TIME().
-            bool is_zero_arg   = (upper == "NOW"   || upper == "TODAY" ||
-                                  upper == "DATE"  || upper == "TIME")
+            bool is_zero_arg   = (upper == "NOW"    || upper == "TODAY"  ||
+                                  upper == "DATE"   || upper == "TIME"   ||
+                                  upper == "CURDATE" || upper == "GETDATE")
                                   && c.peek_char('(');
             bool is_single_arg = (upper == "UPPER" || upper == "LOWER" ||
                                   upper == "LEN"   || upper == "TRIM"  ||
@@ -808,7 +868,8 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                 ScalarFnCall fn;
                 if      (upper == "NOW")   fn.kind = ScalarFnKind::Now;
                 else if (upper == "TODAY") fn.kind = ScalarFnKind::Today;
-                else if (upper == "DATE")  fn.kind = ScalarFnKind::Date;
+                else if (upper == "DATE"  || upper == "CURDATE" ||
+                         upper == "GETDATE") fn.kind = ScalarFnKind::Date;
                 else                       fn.kind = ScalarFnKind::Time;
                 if (c.match_keyword("AS")) fn.alias = c.read_identifier();
                 std::size_t fi = stmt.fn_items.size();
@@ -929,8 +990,32 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                                 arg.number     = n.value();
                             } else {
                                 std::string id = c.read_identifier();
-                                arg.is_column = true;
-                                arg.column    = std::move(id);
+                                if (!id.empty() && c.peek_char('(')) {
+                                    // nested function call (e.g. Curdate()) —
+                                    // consume balanced parens and store the whole
+                                    // expression as a raw text literal
+                                    std::string raw = id;
+                                    raw.push_back('(');
+                                    c.match_char('(');
+                                    int depth = 1;
+                                    while (depth > 0) {
+                                        if (c.eof()) {
+                                            return util::Error{7200, 0,
+                                                "unterminated function call in UDF argument list", sql};
+                                        }
+                                        char ch = c.consume_char();
+                                        raw.push_back(ch);
+                                        if      (ch == '(') ++depth;
+                                        else if (ch == ')') --depth;
+                                    }
+                                    arg.is_column  = false;
+                                    arg.is_numeric = false;
+                                    arg.is_call    = true;
+                                    arg.text       = std::move(raw);
+                                } else {
+                                    arg.is_column = true;
+                                    arg.column    = std::move(id);
+                                }
                             }
                         }
                         fn.args.push_back(std::move(arg));

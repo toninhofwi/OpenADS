@@ -14,7 +14,7 @@ PHP_INCLUDES = $(PHP_DEVPACK)\include
 PHP_LIB      = C:\php\dev\php8ts.lib
 
 ACE_INCLUDE  = F:\OpenADS\include
-ACE_LIB      = F:\OpenADS\bindings\php_ext\openace64.lib
+ACE_LIB      = F:\OpenADS\build\msvc-x64\src\Release\openace64.lib
 
 SRC_DIR      = F:\OpenADS\bindings\php_ext\src
 OBJ_DIR      = F:\OpenADS\bindings\php_ext\obj
@@ -25,7 +25,7 @@ OUT_LIB      = $(OUT_DIR)\php_openads.lib
 INSTALL_DIR  = C:\php\ext
 PHP_DIR      = C:\php
 
-ACE_DLL_SRC  = F:\OpenADS\build\msvc-x64\src\Release\ace64.dll
+ACE_DLL_SRC  = F:\OpenADS\build\msvc-x64\src\Release\openace64.dll
 ACE_DLL_INST = $(PHP_DIR)\openace64.dll
 
 # -------------------------------------------------------------------------

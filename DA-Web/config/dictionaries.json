@@ -7,8 +7,8 @@
         "entryType": "dd"
     },
     {
-        "name": "SAP test data",
-        "path": "f:\\openads\\testdata\\data2\\",
+        "name": "Aquarium",
+        "path": "f:\\openads\\testdata\\Aquarium\\",
         "username": "",
         "connType": "local",
         "entryType": "free"

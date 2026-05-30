@@ -1,0 +1,20 @@
+1. 	When clicking on a table name as tabulator opens on the right side, we need to add a line above the tabulator with space for 
+	dropdown with available indexes on the table. The first option on the dropdown is "Natural Order".  Natural order simply shows 
+	records with no index order.  Below Natural order list all other available indexes.  Next to the dropdown there needs to be 
+	an input space where the user can type a string where to jump to.  Next to that space a [go] button.  clicking on [go] will 
+	reorder the tabulator rows by the selected index and jump to the first or closest record that matches input data.  
+	
+	There is already a way to change controlling index [Asc] and [Desc] by clicking on the icon on the column name.  We keep that.
+	When the user clicks on it, the dropdown showing controlling index name, needs to be updated to the new controlling index.
+	
+	If the controlling index is datetime, numeric, money, logical, or anything other than string the input will need to be converted. 
+	
+	
+2. 	Clicking on Landlords2Manage RI object in pmsys.add returns an error: Unexpected end of JSON input
+	Clicking on any other RI object opens dialog as expected without errors but foreign key tag on child table is still empty.
+	
+3.	On the free tables connection (aquarium), there is no DD but we do know there are indexes that autoopen when clicking on the table.
+	When daweb becomes aware of indexes, it needs to add them as branches below the table and allow changes just like when 
+	connected to a DD.  Changes obviusly get saved to the .cdx or .ntx or .adi files not dd as there is none.
+	
+Ask me if you dont understand and also suggest what else we can add to this daweb project.

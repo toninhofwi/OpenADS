@@ -142,7 +142,8 @@ public:
     struct TriggerEntry {
         std::string   name;
         std::string   table_alias;
-        std::uint32_t event_mask = 0;  // ADS_BEFORE/AFTER_INSERT/UPDATE/DELETE bits
+        std::uint32_t event_mask = 0;  // SAP event type: 1=INSERT 2=UPDATE 3=DELETE
+        std::uint32_t timing     = 0;  // SAP timing:     1=BEFORE 2=INSTEAD OF 4=AFTER
         std::string   container;
         std::string   procedure;
         std::uint32_t priority = 0;

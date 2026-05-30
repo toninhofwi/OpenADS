@@ -121,11 +121,12 @@ enum class ScalarFnKind {
 };
 
 struct ScalarFnArg {
-    bool        is_column = true;   // true for column ref; false for literal
+    bool        is_column  = true;  // true for column ref; false for literal
     std::string column;
     bool        is_numeric = false; // for literal kind
+    bool        is_call    = false; // raw function call, e.g. Curdate()
     std::string text;
-    double      number    = 0.0;
+    double      number     = 0.0;
 };
 
 struct ScalarFnCall {

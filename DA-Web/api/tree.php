@@ -89,8 +89,9 @@ if ($action === 'dd_children') {
                     'id'       => "tbl_{$ddName}_{$base}",
                     'text'     => $base,
                     'icon'     => 'jstree-icon-table',
-                    'children' => false,
-                    'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'table', 'data-table' => $base],
+                    'children' => true,
+                    'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'table',
+                                   'data-table' => $base, 'data-entry' => 'free'],
                 ];
             }
         }
@@ -105,7 +106,7 @@ if ($action === 'dd_children') {
         ['id' => "cat_{$ddName}_views",      'text' => 'Views',             'icon' => 'jstree-icon-views'],
         ['id' => "cat_{$ddName}_procs",      'text' => 'Stored Procedures', 'icon' => 'jstree-icon-procs'],
         ['id' => "cat_{$ddName}_functions",  'text' => 'Functions',         'icon' => 'jstree-icon-procs'],
-        ['id' => "cat_{$ddName}_triggers",   'text' => 'Triggers',          'icon' => 'jstree-icon-triggers'],
+        // Triggers are shown per-table (under each table node) — no global category
         ['id' => "cat_{$ddName}_users",      'text' => 'Users',             'icon' => 'jstree-icon-users'],
         ['id' => "cat_{$ddName}_groups",     'text' => 'Groups',            'icon' => 'jstree-icon-groups'],
         ['id' => "cat_{$ddName}_ri",         'text' => 'RI Objects',        'icon' => 'jstree-icon-ri'],
@@ -244,18 +245,21 @@ if ($action === 'category_children') {
 if ($action === 'table_children') {
     if ($ddName === '' || $table === '') { echo json_encode([]); exit; }
 
+    $entryType2 = $_GET['entry'] ?? '';   // 'free' for free-table directories
     $conn = getConn($ddName);
     if ($conn === null) { echo json_encode([]); exit; }
 
     $nodes = [];
     try {
         // Fields sub-node — leaf; click opens a metadata tab
+        $isFree = ($entryType2 === 'free');
         $nodes[] = [
             'id'       => "fields_{$ddName}_{$table}",
             'text'     => 'Fields',
             'icon'     => 'jstree-icon-fields',
             'children' => false,
-            'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'fields', 'data-table' => $table],
+            'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'fields',
+                           'data-table' => $table, 'data-entry' => $entryType2],
         ];
         // Indexes sub-node — leaf; click opens a metadata tab
         $nodes[] = [
@@ -263,8 +267,27 @@ if ($action === 'table_children') {
             'text'     => 'Indexes',
             'icon'     => 'jstree-icon-indexes',
             'children' => false,
-            'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'indexes', 'data-table' => $table],
+            'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'indexes',
+                           'data-table' => $table, 'data-entry' => $entryType2],
         ];
+        if (!$isFree) {
+            // Triggers — only for DD-connected tables
+            $nodes[] = [
+                'id'       => "tbl_triggers_{$ddName}_{$table}",
+                'text'     => 'Triggers',
+                'icon'     => 'jstree-icon-triggers',
+                'children' => false,
+                'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'table_triggers', 'data-table' => $table],
+            ];
+            // Generate SQL — only for DD-connected tables
+            $nodes[] = [
+                'id'       => "gen_sql_{$ddName}_{$table}",
+                'text'     => 'Generate SQL',
+                'icon'     => 'jstree-icon-sql',
+                'children' => false,
+                'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'gen_sql', 'data-table' => $table],
+            ];
+        }
     } finally {
         $conn->close();
     }

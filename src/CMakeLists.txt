@@ -148,9 +148,10 @@ if(OPENADS_WITH_HTTP)
         nlohmann_json::nlohmann_json)
 endif()
 
-# Output name follows ACE convention.
+# Output as openace64 / openace32 to distinguish from SAP's ace64.dll / ace32.dll.
+# This allows both DLLs to coexist in the same PHP installation.
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set_target_properties(openads_ace PROPERTIES OUTPUT_NAME "ace64")
+    set_target_properties(openads_ace PROPERTIES OUTPUT_NAME "openace64")
 else()
-    set_target_properties(openads_ace PROPERTIES OUTPUT_NAME "ace32")
+    set_target_properties(openads_ace PROPERTIES OUTPUT_NAME "openace32")
 endif()
