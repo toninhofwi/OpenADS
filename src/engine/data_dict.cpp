@@ -123,22 +123,63 @@ static std::string trim_char(const std::string& buf,
 }
 
 util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
-    // ADS Data Dictionary binary format.  Record layout (rec_len = 524):
-    //   [0]       status 0x04=active, 0x05=deleted
-    //   [1..4]    null bitmap (always zero in observed files)
-    //   [5..8]    Object ID   (uint32 LE, AutoInc)
-    //   [9..12]   Parent ID   (uint32 LE)
-    //   [13..22]  Object Type (CHAR(10))
-    //   [23..222] Object Name (CHAR(200))
-    //   [223..497]Property    (VarChar(275): uint16 LE len + data; 0xFFFF=null)
-    //   [498..506]More Property (Binary(9))
-    //   [507..510]Info1       (uint32 LE)
-    //   [511..514]Info2       (uint32 LE)
-    //   [515..523]Comment     (Memo(9))
+    // =========================================================================
+    // ADS binary .add file format.
+    //
+    // The .add file is an Advantage Data Table (ADT) whose header (variable
+    // length, field at 0x20) describes the column layout, and whose body is a
+    // fixed-length record array.
+    //
+    // Record layout (rec_len = 524 bytes):
+    //   [0]        status: 0x04=active, 0x05=deleted
+    //   [1..4]     null bitmap (zero in all observed files)
+    //   [5..8]     Object ID   (uint32 LE, AutoInc)
+    //   [9..12]    Parent ID   (uint32 LE)
+    //   [13..22]   Object Type (CHAR(10), space-padded)
+    //   [23..222]  Object Name (CHAR(200), space-padded)
+    //   [223..497] Property    (VarChar(275): uint16 LE plen at [223], data at
+    //                           [225..225+plen-1]; 0xFFFF = SQL NULL)
+    //   [498..506] More Property (Binary(9), memo block pointer for overflow)
+    //   [507..510] Info1       (uint32 LE)
+    //   [511..514] Info2       (uint32 LE)
+    //   [515..523] Comment     (Memo(9), block pointer)
     //
     // Header fields used for write-back:
     //   0x18-0x1B: total record count (active + deleted)
-    //   0x50-0x53: next ObjID to assign (= maxObjID + 1)
+    //   0x50-0x53: next ObjID to assign (= max active ObjID + 1)
+    //
+    // -------------------------------------------------------------------------
+    // Property VarChar layout (275 bytes = 2-byte plen + 273 data bytes):
+    //
+    //   The 273-byte data area is split into two zones:
+    //   - [0 .. plen-1]    object-type-specific inline data (varies by type)
+    //   - [plen .. 272]    extra area (mostly 0xFF padding; for User records
+    //                       this zone holds the group-membership token table)
+    //
+    //   For User records the extra area starts at offset plen and has the
+    //   following layout (reversed-engineered from the ACE binary format):
+    //
+    //     [plen+0 .. plen+1]  count_field (uint16 LE)
+    //                           0xFFFF  → no property-byte groups
+    //                           N×4     → N groups are stored
+    //     [plen+2 .. plen+2+N×4-1]
+    //                         N×4-byte group tokens (see Third pass below)
+    //     [...]               0x00 0x00 end marker + 0xFF padding
+    //
+    // -------------------------------------------------------------------------
+    // Group-membership storage — two mechanisms coexist in the same file:
+    //
+    //   1. Permission records (parent_id=user, info1=group, info2=0x80000000):
+    //      Written by AdsDDAddUserToGroup in SAP ACE v8+ and by OpenADS for all
+    //      new memberships.  Decoded in the Second pass below.
+    //
+    //   2. User property-byte XOR tokens:
+    //      An older per-database XOR encoding in the User property extra area.
+    //      Present in databases maintained by pre-v8 SAP ACE or set up via
+    //      AdsDDSetUserProperty(1102).  Decoded in the Third pass below.
+    //
+    //   Both sources are unioned into memberships_; duplicates are harmless.
+    // =========================================================================
     if (buf.size() < 40)
         return util::Error{5000, 0, "ADD file too small", path_};
 
@@ -467,11 +508,22 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         return 0;
     };
 
-    // Second pass: Permission records (need full id_to_type map built above).
-    //   parent_id → principal (user or group)
-    //   info1     → target object ID
-    //   Permission targeting a Group → user-group membership
-    //   All others                   → ACL entry stored in permissions_
+    // -------------------------------------------------------------------------
+    // Second pass: Permission records.
+    //
+    // Permission record layout:
+    //   obj_type  = "Permission"
+    //   obj_name  = sprintf("%08X", info1)   (hex of target obj_id)
+    //   parent_id = granting principal (User or Group obj_id)
+    //   info1     = target object obj_id
+    //   info2     = permission bitmask; 0x80000000 = INHERIT (full/group-member)
+    //
+    // Two interpretations depending on the target's type:
+    //   target type == "Group" → user-group membership
+    //     parent (User) is a member of target (Group).
+    //     SAP ACE creates these via AdsDDAddUserToGroup.  OpenADS uses the same
+    //     format for all new write-path group memberships.
+    //   target type != "Group" → ACL entry (table/object permission)
     for (const auto& rec : binary_recs_) {
         if (!rec.active || rec.obj_type != "Permission") continue;
         auto principal_it = id_to_name.find(rec.parent_id);
@@ -523,24 +575,77 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         }
     }
 
-    // ======================================================================
+    // -------------------------------------------------------------------------
     // Third pass: decode User property-byte group memberships.
     //
-    // SAP binary .add files store group membership tokens beyond the plen
-    // bytes of the property VarChar field.  Layout (starting at offset plen
-    // within the 273-byte property area):
+    // Token encoding (reverse-engineered from pmsys.add with ACE32 v10):
     //
-    //   [uint16 LE count_field]   count_field = N × 4  (0xFFFF = no groups)
-    //   [N × 4-byte tokens]
-    //
-    // Each token encodes one group via a per-database XOR key K[slot]:
     //   token[slot] = K[slot] XOR group_id_LE_4bytes
     //
-    // K[slot] is brute-forced: for each candidate group_id G, compute
-    // K = first_user_token XOR G_LE, then verify all slot tokens decode to
-    // valid group IDs.  This works because K is database-global (same for
-    // all users) and group IDs are known from the Group records.
-    // ======================================================================
+    //   where K[slot] is a 4-byte per-database constant.  Each successive
+    //   group a user belongs to occupies one slot (slot 0 = first group added,
+    //   slot 1 = second, …).  The slot key K[slot] is the SAME for all users
+    //   in the same database — it is not user-specific.
+    //
+    // Structure of the extra area at offset plen in the 273-byte property zone:
+    //
+    //   [plen+0..plen+1]  uint16 LE count_field
+    //                       0xFFFF → user has no property-byte groups (skip)
+    //                       N×4   → N group tokens follow
+    //   [plen+2..plen+2+N×4-1]
+    //                     N × 4-byte tokens (slot 0 first)
+    //   [ ... ]           0x00 0x00 end marker, then 0xFF padding
+    //
+    //   Note: plen varies per user (it is the password-hash length), so the
+    //   extra area starts at a different file offset for each user record.
+    //   The password hash itself is NOT a fixed-length field; its length grows
+    //   with the password.  The 3 bytes that earlier analyses thought were
+    //   "group tokens inside plen" are simply part of a longer password hash.
+    //
+    // How K[slot] is derived at runtime (no documentation available):
+    //
+    //   K[slot] is a per-database constant computed inside the SAP ACE DLL
+    //   from the 20-byte random key stored in the Database record's property
+    //   field.  The derivation algorithm is proprietary and not available.
+    //
+    //   We brute-force K[slot] using known-plaintext: the Group obj_ids from
+    //   all Group records are known, so for each candidate group_id G we
+    //   compute K = first_user_token XOR G_LE and verify that every other
+    //   user's slot-N token also decodes to a valid group_id.
+    //
+    // Disambiguation constraints:
+    //
+    //   For built-in groups (obj_ids 149–153 in a typical database) all
+    //   candidates K[slot][0] that differ by 1–4 are initially consistent,
+    //   because swapping which user maps to Administrators vs. General vs.
+    //   Supervisors looks equally valid.  Two constraints resolve this:
+    //
+    //   1. Ascending ID order: valid group IDs are tried smallest-first.
+    //      This matches the natural creation order of built-in groups and
+    //      picks the lowest-ID group for each slot's first occurrence.
+    //
+    //   2. No-duplicate: once a K[slot] is found, the decoded group IDs are
+    //      recorded per user.  A candidate K[s] that would assign a user to a
+    //      group it already holds from slot 0..s-1 is rejected.  This
+    //      eliminates the otherwise-valid "swap" assignments (e.g. a user
+    //      already in General from slot 0 cannot be in General again in slot 2).
+    //
+    // Together these two constraints uniquely determine K[slot] for all slots
+    // in all tested databases.
+    //
+    // Observed values for pmsys.add (pmsys database, verified with ACE32):
+    //   K[0] = [0x00, 0x71, 0x0D, 0x50]
+    //   K[1] = [0xE6, 0x96, 0x26, 0x39]
+    //   K[2] = [0x6F, 0xF3, 0x58, 0xE7]
+    //
+    // Decoded memberships (property bytes only, no Permission records):
+    //   AutoTasks → General (152)
+    //   user      → Supervisors (150), Administrators (149)
+    //   testuser  → testgroup (10719)
+    //   root      → Administrators (149), Supervisors (150), General (152)
+    //   RCB       → General (152), Administrators (149), Supervisors (150),
+    //               Readonly (151)  [slots 0-2 cross-validated; slot 3 has only
+    //               one user so the assignment is consistent but not confirmed]
     {
         std::unordered_set<uint32_t> valid_gids;
         for (const auto& [gid, gtype] : id_to_type)
@@ -1052,10 +1157,17 @@ DataDict::add_user_to_group(const std::string& user,
     }
     memberships_[user].insert(group);
     if (binary_format_) {
+        // Write a Permission record (parent=user, info1=group, info2=INHERIT).
+        // This is the standard SAP ACE v8+ format for group membership and is
+        // what AdsDDAddUserToGroup writes to the .add file.  We do NOT write
+        // property-byte XOR tokens: the derivation of K[slot] from the database
+        // key is proprietary to the ACE DLL and would require the same 20-byte
+        // random Database property to reproduce.  Permission records are read
+        // back correctly by the Second pass in load_add_binary_().
         uint32_t user_id  = binary_obj_id_of_("User",  user);
         uint32_t group_id = binary_obj_id_of_("Group", group);
         if (user_id == 0 || group_id == 0)
-            return save();  // IDs not in DD yet — in-memory only
+            return save();  // IDs not in DD yet — membership is in-memory only
         for (const auto& r : binary_recs_) {
             if (r.active && r.obj_type == "Permission" &&
                 r.parent_id == user_id && r.info1 == group_id)
@@ -1068,11 +1180,11 @@ DataDict::add_user_to_group(const std::string& user,
         perm.obj_id    = binary_alloc_id_();
         perm.parent_id = user_id;
         perm.obj_type  = "Permission";
-        perm.obj_name  = name_buf;
+        perm.obj_name  = name_buf;   // conventional: hex(group_id)
         perm.prop_null = false;
         perm.property  = name_buf;
         perm.info1     = group_id;
-        perm.info2     = 0x80000000u;
+        perm.info2     = 0x80000000u;  // INHERIT flag = "member of group"
         binary_recs_.push_back(std::move(perm));
     }
     return save();

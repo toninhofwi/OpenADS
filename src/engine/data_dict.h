@@ -18,16 +18,32 @@ namespace openads::engine {
 //     TABLE     <alias>=<relative_path>
 //     INDEX     <table_alias>=<index_path>[\t<comment>]
 //     USER      <name>
+//     GROUP     <name>
 //     MEMBER    <user>=<group>
 //     LINK      <alias>=<path>[\t<user>[\t<pwd>]]
 //     RI        <name>=<parent>;<child>;<tag>;<opt_update>;<opt_delete>;<fail_tbl>
 //     DBPROP    <key>=<value>
 //     USERPROP  <user>;<key>=<value>
 //
-//   Binary format (ADS proprietary .add):
-//     Detected by "ADS Data Dictionary\0" magic at offset 0.
-//     Full round-trip: loaded records are preserved verbatim; Table,
-//     Index, and User mutations add/delete binary records in-place.
+//   Binary format (ADS / SAP ACE proprietary .add):
+//     Detected by "ADS Data Dictionary\0" magic at offset 0.  Full round-trip:
+//     loaded records are preserved verbatim; mutations add/delete binary records
+//     in-place without reformatting the file.
+//
+//     Group membership is stored in two ways in the binary format:
+//
+//     1. Permission records (primary, SAP ACE v8+):
+//          obj_type="Permission", parent_id=user, info1=group, info2=0x80000000
+//          Written by AdsDDAddUserToGroup and by OpenADS for all new memberships.
+//
+//     2. User property-byte XOR tokens (legacy, pre-v8 or AdsDDSetUserProperty):
+//          Stored in the User record's property field beyond the plen bytes.
+//          Format: [uint16 N×4] [N × 4-byte tokens]
+//          token[slot] = K[slot] XOR group_id_LE_4bytes
+//          K[slot] is a per-database constant brute-forced from known group IDs
+//          at load time.  OpenADS writes Permission records, not XOR tokens.
+//
+//     Both sources are unioned into memberships_ on load.
 
 class DataDict {
 public:
