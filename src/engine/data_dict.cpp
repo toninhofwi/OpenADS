@@ -3,6 +3,7 @@
 #include "platform/file.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <sstream>
@@ -875,6 +876,10 @@ util::Result<void> DataDict::create_user(const std::string& user) {
     }
     users_.insert(user);
     if (binary_format_) {
+        for (const auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "User" && r.obj_name == user)
+                return save();
+        }
         BinaryRecord r;
         r.active    = true;
         r.obj_id    = binary_alloc_id_();
@@ -912,6 +917,30 @@ DataDict::add_user_to_group(const std::string& user,
         return util::Error{5000, 0, "DD member user / group empty", ""};
     }
     memberships_[user].insert(group);
+    if (binary_format_) {
+        uint32_t user_id  = binary_obj_id_of_("User",  user);
+        uint32_t group_id = binary_obj_id_of_("Group", group);
+        if (user_id == 0 || group_id == 0)
+            return save();  // IDs not in DD yet — in-memory only
+        for (const auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Permission" &&
+                r.parent_id == user_id && r.info1 == group_id)
+                return save();  // already exists
+        }
+        char name_buf[9];
+        std::snprintf(name_buf, sizeof(name_buf), "%08X", group_id);
+        BinaryRecord perm;
+        perm.active    = true;
+        perm.obj_id    = binary_alloc_id_();
+        perm.parent_id = user_id;
+        perm.obj_type  = "Permission";
+        perm.obj_name  = name_buf;
+        perm.prop_null = false;
+        perm.property  = name_buf;
+        perm.info1     = group_id;
+        perm.info2     = 0x80000000u;
+        binary_recs_.push_back(std::move(perm));
+    }
     return save();
 }
 
@@ -922,6 +951,19 @@ DataDict::remove_user_from_group(const std::string& user,
     if (it != memberships_.end()) {
         it->second.erase(group);
         if (it->second.empty()) memberships_.erase(it);
+    }
+    if (binary_format_) {
+        uint32_t user_id  = binary_obj_id_of_("User",  user);
+        uint32_t group_id = binary_obj_id_of_("Group", group);
+        if (user_id != 0 && group_id != 0) {
+            for (auto& r : binary_recs_) {
+                if (r.active && r.obj_type == "Permission" &&
+                    r.parent_id == user_id && r.info1 == group_id) {
+                    r.active = false;
+                    break;
+                }
+            }
+        }
     }
     return save();
 }
@@ -1506,6 +1548,23 @@ util::Result<void> DataDict::create_group(const std::string& group) {
     if (group.empty())
         return util::Error{5000, 0, "DD group name empty", ""};
     groups_.insert(group);
+    if (binary_format_) {
+        for (const auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Group" && r.obj_name == group)
+                return save();
+        }
+        BinaryRecord r;
+        r.active    = true;
+        r.obj_id    = binary_alloc_id_();
+        r.parent_id = binary_obj_id_of_("Database", "Database");
+        if (r.parent_id == 0) r.parent_id = 1;
+        r.obj_type  = "Group";
+        r.obj_name  = group;
+        r.prop_null = true;
+        r.info1     = 0;
+        r.info2     = 0;
+        binary_recs_.push_back(std::move(r));
+    }
     return save();
 }
 
@@ -1515,6 +1574,18 @@ util::Result<void> DataDict::delete_group(const std::string& group) {
         it->second.erase(group);
         if (it->second.empty()) it = memberships_.erase(it);
         else ++it;
+    }
+    if (binary_format_) {
+        uint32_t group_id = binary_obj_id_of_("Group", group);
+        for (auto& r : binary_recs_) {
+            if (!r.active) continue;
+            if (r.obj_type == "Group" && r.obj_name == group) {
+                r.active = false;
+            } else if (group_id != 0 && r.obj_type == "Permission" &&
+                       r.info1 == group_id) {
+                r.active = false;
+            }
+        }
     }
     return save();
 }

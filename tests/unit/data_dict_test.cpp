@@ -31,12 +31,26 @@ TEST_CASE("DataDict create + add_table + reopen + resolve") {
     fs::remove(p);
 }
 
+// -------------------------------------------------------------------------
+// Binary .add round-trip tests
+// -------------------------------------------------------------------------
+
+// Locate the pmsys.add fixture.
+// Primary: testdata/pmsys/pmsys.add (authoritative test dataset).
+// Fallback: tests/fixtures/adi/pmsys.add (legacy path, may not exist).
+static fs::path pmsys_fixture() {
+    auto primary = fs::path(__FILE__).parent_path().parent_path().parent_path()
+                   / "testdata" / "pmsys" / "pmsys.add";
+    if (fs::exists(primary)) return primary;
+    return fs::path(__FILE__).parent_path().parent_path()
+           / "fixtures" / "adi" / "pmsys.add";
+}
+
 TEST_CASE("DataDict open — ADS binary .add — reads Table entries") {
     // pmsys.add is the real proprietary ADS data dictionary from the PMSys
-    // fixture set.  We only need to verify that the binary parser loads the
+    // test dataset.  We only need to verify that the binary parser loads the
     // Table registry correctly; we do not mutate or re-save the file.
-    auto fixture = fs::path(__FILE__).parent_path().parent_path()
-                   / "fixtures" / "adi" / "pmsys.add";
+    auto fixture = pmsys_fixture();
     if (!fs::exists(fixture)) {
         WARN("pmsys.add fixture not found, skipping binary DD test");
         return;
@@ -56,17 +70,7 @@ TEST_CASE("DataDict open — ADS binary .add — reads Table entries") {
     CHECK_FALSE(dd.has_alias("AutoTasks"));
 }
 
-// -------------------------------------------------------------------------
-// Binary .add round-trip tests
-// -------------------------------------------------------------------------
-
-// Locate the pmsys.add fixture relative to this source file.
-static fs::path pmsys_fixture() {
-    return fs::path(__FILE__).parent_path().parent_path()
-           / "fixtures" / "adi" / "pmsys.add";
-}
-
-// Copy pmsys.add to a writable temp path so mutations don't touch the fixture.
+// Copy pmsys.add to a writable temp path so mutations don't touch the source.
 static fs::path stage_pmsys(const fs::path& dest_dir) {
     fs::create_directories(dest_dir);
     auto src = pmsys_fixture();
@@ -220,25 +224,97 @@ TEST_CASE("DataDict binary .add — create_user / delete_user round-trip") {
         auto opened = DataDict::open(add_path.string());
         REQUIRE(opened.has_value());
         DataDict dd = std::move(opened).value();
-        REQUIRE(dd.create_user("testuser").has_value());
+        REQUIRE(dd.create_user("newuser_crud").has_value());
     }
     {
         auto opened = DataDict::open(add_path.string());
         REQUIRE(opened.has_value());
         DataDict dd = std::move(opened).value();
-        CHECK(dd.has_user("testuser"));
-        REQUIRE(dd.delete_user("testuser").has_value());
+        CHECK(dd.has_user("newuser_crud"));
+        REQUIRE(dd.delete_user("newuser_crud").has_value());
     }
     {
         auto opened = DataDict::open(add_path.string());
         REQUIRE(opened.has_value());
         DataDict dd = std::move(opened).value();
-        CHECK_FALSE(dd.has_user("testuser"));
+        CHECK_FALSE(dd.has_user("newuser_crud"));
         // File is still binary.
         std::ifstream f(add_path, std::ios::binary);
         char sig[20] = {};
         f.read(sig, 20);
         CHECK(std::memcmp(sig, "ADS Data Dictionary", 19) == 0);
+    }
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("DataDict binary .add — create_group + add_user_to_group round-trip") {
+    auto fixture = pmsys_fixture();
+    if (!fs::exists(fixture)) {
+        WARN("pmsys.add fixture not found, skipping binary group membership test");
+        return;
+    }
+    const auto dir = fs::temp_directory_path() / "openads_dd_bin_grp";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    auto add_path = stage_pmsys(dir);
+
+    // Add a new group and add an existing user to it.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        REQUIRE(dd.create_group("newgrp").has_value());
+        REQUIRE(dd.add_user_to_group("user", "newgrp").has_value());
+    }
+
+    // Reopen: membership must persist via the Permission record we wrote.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        CHECK(dd.has_group("newgrp"));
+        CHECK(dd.is_member_of("user", "newgrp"));
+    }
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("DataDict binary .add — remove_user_from_group round-trip") {
+    auto fixture = pmsys_fixture();
+    if (!fs::exists(fixture)) {
+        WARN("pmsys.add fixture not found, skipping binary group remove test");
+        return;
+    }
+    const auto dir = fs::temp_directory_path() / "openads_dd_bin_grprm";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    auto add_path = stage_pmsys(dir);
+
+    // Set up: create group and add user.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        REQUIRE(dd.create_group("tmpgrp").has_value());
+        REQUIRE(dd.add_user_to_group("user", "tmpgrp").has_value());
+    }
+
+    // Verify member, then remove.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        REQUIRE(dd.is_member_of("user", "tmpgrp"));
+        REQUIRE(dd.remove_user_from_group("user", "tmpgrp").has_value());
+    }
+
+    // Reopen: membership gone.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        CHECK_FALSE(dd.is_member_of("user", "tmpgrp"));
     }
 
     fs::remove_all(dir, ec);
