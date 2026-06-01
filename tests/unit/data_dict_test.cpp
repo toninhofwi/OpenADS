@@ -320,6 +320,35 @@ TEST_CASE("DataDict binary .add — remove_user_from_group round-trip") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("DataDict binary .add — property-byte group memberships decoded") {
+    // Verifies that groups stored in SAP-format User property bytes (not
+    // Permission records) are correctly decoded by load_add_binary_().
+    // pmsys testuser is in testgroup (id=10719) via property bytes only.
+    // pmsys root is in Administrators, Supervisors, General via property bytes.
+    auto fixture = pmsys_fixture();
+    if (!fs::exists(fixture)) {
+        WARN("pmsys.add fixture not found, skipping property-byte decode test");
+        return;
+    }
+    auto opened = DataDict::open(fixture.string());
+    REQUIRE(opened.has_value());
+    DataDict dd = std::move(opened).value();
+
+    // testuser → testgroup (only via property bytes, no Permission record)
+    CHECK(dd.is_member_of("testuser", "testgroup"));
+    // root → built-in groups (only via property bytes)
+    CHECK(dd.is_member_of("root", "Administrators"));
+    CHECK(dd.is_member_of("root", "Supervisors"));
+    CHECK(dd.is_member_of("root", "General"));
+    // RCB → user-created groups via Permission records (existing behaviour)
+    CHECK(dd.is_member_of("RCB", "Tenants"));
+    CHECK(dd.is_member_of("RCB", "Agents"));
+    CHECK(dd.is_member_of("RCB", "Owners"));
+    // RCB also has built-in groups via property bytes
+    CHECK(dd.is_member_of("RCB", "General"));
+    CHECK(dd.is_member_of("RCB", "Administrators"));
+}
+
 TEST_CASE("DataDict remove_table + reopen no longer has the alias") {
     auto p = fs::temp_directory_path() / "openads_m6_dd_remove.add";
     fs::remove(p);

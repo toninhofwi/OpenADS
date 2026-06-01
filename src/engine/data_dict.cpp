@@ -523,6 +523,140 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         }
     }
 
+    // ======================================================================
+    // Third pass: decode User property-byte group memberships.
+    //
+    // SAP binary .add files store group membership tokens beyond the plen
+    // bytes of the property VarChar field.  Layout (starting at offset plen
+    // within the 273-byte property area):
+    //
+    //   [uint16 LE count_field]   count_field = N × 4  (0xFFFF = no groups)
+    //   [N × 4-byte tokens]
+    //
+    // Each token encodes one group via a per-database XOR key K[slot]:
+    //   token[slot] = K[slot] XOR group_id_LE_4bytes
+    //
+    // K[slot] is brute-forced: for each candidate group_id G, compute
+    // K = first_user_token XOR G_LE, then verify all slot tokens decode to
+    // valid group IDs.  This works because K is database-global (same for
+    // all users) and group IDs are known from the Group records.
+    // ======================================================================
+    {
+        std::unordered_set<uint32_t> valid_gids;
+        for (const auto& [gid, gtype] : id_to_type)
+            if (gtype == "Group") valid_gids.insert(gid);
+
+        if (!valid_gids.empty()) {
+            constexpr std::size_t MAX_SLOTS = 10;
+            constexpr std::size_t PROP_AREA = 273;
+
+            struct TokEntry { std::string user; std::array<uint8_t, 4> tok; };
+            std::array<std::vector<TokEntry>, MAX_SLOTS> slot_data;
+
+            // Collect tokens from every User record.
+            for (std::size_t i = 0; i < total; ++i) {
+                std::size_t base = hdr_len + i * rec_len;
+                if (base + rec_len > buf.size()) break;
+                if (static_cast<uint8_t>(buf[base]) != 0x04) continue;
+                if (trim_char(buf, base + 13, 10) != "User") continue;
+                std::string uname = trim_char(buf, base + 23, 200);
+                if (uname.empty()) continue;
+                uint16_t plen2 = le16(buf, base + 223);
+                if (plen2 == 0xFFFFu) continue;
+                std::size_t xoff = base + 225 + plen2;
+                std::size_t xend = base + 225 + PROP_AREA;
+                if (xoff + 2 > xend) continue;
+                uint16_t cf = le16(buf, xoff);
+                if (cf == 0xFFFFu || cf == 0) continue;
+                uint32_t ntok = static_cast<uint32_t>(cf) / 4u;
+                for (uint32_t s = 0; s < ntok && s < MAX_SLOTS; ++s) {
+                    std::size_t toff = xoff + 2 + s * 4;
+                    if (toff + 4 > xend) break;
+                    std::array<uint8_t, 4> tok = {
+                        static_cast<uint8_t>(buf[toff]),
+                        static_cast<uint8_t>(buf[toff + 1]),
+                        static_cast<uint8_t>(buf[toff + 2]),
+                        static_cast<uint8_t>(buf[toff + 3])};
+                    slot_data[s].push_back({uname, tok});
+                }
+            }
+
+            // Sort group IDs ascending for deterministic brute force: smaller IDs
+            // are tried first, matching the natural creation order of built-in groups.
+            std::vector<uint32_t> sorted_gids(valid_gids.begin(), valid_gids.end());
+            std::sort(sorted_gids.begin(), sorted_gids.end());
+
+            // For each slot, brute-force K[slot] with two constraints:
+            //   (a) all tokens decode to valid group IDs, AND
+            //   (b) no user is assigned to the same group more than once across slots.
+            std::array<std::array<uint8_t, 4>, MAX_SLOTS> slot_keys{};
+            std::array<bool, MAX_SLOTS> slot_known{};
+            for (auto& k : slot_keys) k = {};
+            for (auto& b : slot_known) b = false;
+
+            // Per-user decoded group IDs (property bytes only) across slots.
+            std::unordered_map<std::string, std::unordered_set<uint32_t>> user_prop_gids;
+
+            for (std::size_t s = 0; s < MAX_SLOTS; ++s) {
+                if (slot_data[s].empty()) break;
+                const auto& t0 = slot_data[s][0].tok;
+                for (uint32_t gid : sorted_gids) {
+                    std::array<uint8_t, 4> K = {
+                        static_cast<uint8_t>(t0[0] ^ static_cast<uint8_t>(gid & 0xFFu)),
+                        static_cast<uint8_t>(t0[1] ^ static_cast<uint8_t>((gid >> 8) & 0xFFu)),
+                        static_cast<uint8_t>(t0[2] ^ static_cast<uint8_t>((gid >> 16) & 0xFFu)),
+                        static_cast<uint8_t>(t0[3] ^ static_cast<uint8_t>((gid >> 24) & 0xFFu))};
+                    bool ok = true;
+                    for (const auto& e : slot_data[s]) {
+                        const auto& t = e.tok;
+                        uint32_t dec =
+                            static_cast<uint32_t>(t[0] ^ K[0]) |
+                            (static_cast<uint32_t>(t[1] ^ K[1]) << 8) |
+                            (static_cast<uint32_t>(t[2] ^ K[2]) << 16) |
+                            (static_cast<uint32_t>(t[3] ^ K[3]) << 24);
+                        if (!valid_gids.count(dec)) { ok = false; break; }
+                        // Reject if this user would be in the same group twice.
+                        auto uit = user_prop_gids.find(e.user);
+                        if (uit != user_prop_gids.end() && uit->second.count(dec)) {
+                            ok = false; break;
+                        }
+                    }
+                    if (ok) {
+                        slot_keys[s] = K; slot_known[s] = true;
+                        // Record decoded groups to enforce uniqueness for later slots.
+                        for (const auto& e : slot_data[s]) {
+                            const auto& t = e.tok;
+                            uint32_t dec =
+                                static_cast<uint32_t>(t[0] ^ K[0]) |
+                                (static_cast<uint32_t>(t[1] ^ K[1]) << 8) |
+                                (static_cast<uint32_t>(t[2] ^ K[2]) << 16) |
+                                (static_cast<uint32_t>(t[3] ^ K[3]) << 24);
+                            user_prop_gids[e.user].insert(dec);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Decode tokens and populate memberships_.
+            for (std::size_t s = 0; s < MAX_SLOTS; ++s) {
+                if (!slot_known[s]) continue;
+                const auto& K = slot_keys[s];
+                for (const auto& e : slot_data[s]) {
+                    const auto& t = e.tok;
+                    uint32_t gid =
+                        static_cast<uint32_t>(t[0] ^ K[0]) |
+                        (static_cast<uint32_t>(t[1] ^ K[1]) << 8) |
+                        (static_cast<uint32_t>(t[2] ^ K[2]) << 16) |
+                        (static_cast<uint32_t>(t[3] ^ K[3]) << 24);
+                    auto it = id_to_name.find(gid);
+                    if (it != id_to_name.end())
+                        memberships_[e.user].insert(it->second);
+                }
+            }
+        }
+    }
+
     return {};
 }
 
