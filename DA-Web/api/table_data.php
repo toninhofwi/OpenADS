@@ -10,10 +10,12 @@
 header('Content-Type: application/json');
 session_start();
 
-$ddName   = trim($_GET['dd']       ?? '');
-$table    = trim($_GET['table']    ?? '');
-$orderby  = trim($_GET['orderby']  ?? '');
-$orderdir = strtoupper(trim($_GET['orderdir'] ?? 'ASC')) === 'DESC' ? 'DESC' : 'ASC';
+$ddName    = trim($_GET['dd']        ?? '');
+$table     = trim($_GET['table']     ?? '');
+$orderby   = trim($_GET['orderby']   ?? '');
+$orderdir  = strtoupper(trim($_GET['orderdir'] ?? 'ASC')) === 'DESC' ? 'DESC' : 'ASC';
+$seek      = $_GET['seek']           ?? '';
+$seekfield = trim($_GET['seekfield'] ?? '');
 
 if ($ddName === '' || $table === '') {
     http_response_code(400);
@@ -31,6 +33,14 @@ if (!preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $table)) {
     http_response_code(400);
     echo json_encode(['error' => 'invalid table name']);
     exit;
+}
+
+// Build server-side seek clause (WHERE seekfield >= 'value').
+// seekfield must be a safe identifier; seek value is escaped by doubling single quotes.
+$seekClause = '';
+if ($seek !== '' && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $seekfield)) {
+    $escapedSeek = str_replace("'", "''", $seek);
+    $seekClause  = " WHERE $seekfield >= '$escapedSeek'";
 }
 
 // Build ORDER BY clause from index expression.
@@ -58,7 +68,7 @@ if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 
 try {
     $conn = AdsConnection::connect($opts);
-    $sql  = "SELECT * FROM $table$orderClause LIMIT 2000";
+    $sql  = "SELECT * FROM $table$seekClause$orderClause LIMIT 2000";
     $stmt = $conn->query($sql);
     $rows = $stmt->fetchAll();
     $stmt->close();

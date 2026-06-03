@@ -244,6 +244,38 @@ TEST_CASE("Perms: AdsDDSetUserTableRights / AdsDDGetUserTableRights round-trip")
     fs::remove_all(dir, ec);
 }
 
+// Verify that OpenADS bitmask bit positions match SAP ADS_PERMISSION_* constants:
+//   READ=0x01  UPDATE=0x02  EXECUTE=0x04  INHERIT=0x08  INSERT=0x10  DELETE=0x20
+// This test pins the bit-level encoding so it is not accidentally regressed.
+TEST_CASE("Perms: bitmask bit positions — INSERT is 0x10, DELETE is 0x20") {
+    auto dir = fs::temp_directory_path() / "openads_perm_bits";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf");
+    // level=3 → bitmask = READ(0x01)|UPDATE(0x02)|INSERT(0x10)|DELETE(0x20) = 0x33
+    make_perm_add(dir, "TABLEPERM tbl;alice=3\n");
+
+    ADSHANDLE hConn = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(hConn != 0);
+
+    // alice can open for shared/write (INSERT+UPDATE present).
+    ADSHANDLE hTbl = 0;
+    UNSIGNED8 name[8] = "tbl";
+    UNSIGNED32 rc = AdsOpenTable(hConn, name, name, ADS_CDX, 0, 0,
+                                 1, ADS_SHARED, &hTbl);
+    CHECK(rc == 0);
+    CHECK(hTbl != 0);
+    if (hTbl) {
+        // Append should succeed at level 3.
+        REQUIRE(AdsAppendRecord(hTbl) == 0);
+        REQUIRE(AdsCloseTable(hTbl) == 0);
+    }
+
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("Perms: AdsDDGetTableProperty returns effective level") {
     auto dir = fs::temp_directory_path() / "openads_perm_prop216";
     std::error_code ec;

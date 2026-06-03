@@ -1,21 +1,21 @@
 <?php
 /**
- * api/save_group_meta.php — save permission changes for a DD group.
- * POST { dd, group, rows: [{ object, type, parent, canSelect, canInsert, canUpdate, canDelete, canExec }] }
+ * api/save_user_meta.php — save direct permission changes for a DD user.
+ * POST { dd, user, rows: [{ object, type, parent, canSelect, canInsert, canUpdate, canDelete, canExec }] }
  *
  * Object type codes:
- *   1  = Table      → GRANT SELECT/INSERT/UPDATE/DELETE/EXECUTE ON "obj" TO "group"
- *   4  = Field      → derived from table permissions; skipped (not independently saveable)
- *   6  = View       → GRANT SELECT/INSERT/UPDATE/DELETE/EXECUTE ON "obj" TO "group"
- *   10 = StoredProc → GRANT EXECUTE ON "obj" TO "group"
- *   18 = Function   → GRANT EXECUTE ON "obj" TO "group"
+ *   1  = Table      → GRANT SELECT/INSERT/UPDATE/DELETE ON "obj" TO "user"
+ *   4  = Field      → derived from table permissions; skipped
+ *   6  = View       → GRANT SELECT/INSERT/UPDATE/DELETE ON "obj" TO "user"
+ *   10 = StoredProc → GRANT EXECUTE ON "obj" TO "user"
+ *   18 = Function   → GRANT EXECUTE ON "obj" TO "user"
  */
 header('Content-Type: application/json');
 session_start();
 
 $body   = json_decode(file_get_contents('php://input'), true) ?? [];
-$ddName = trim($body['dd']    ?? '');
-$group  = trim($body['group'] ?? '');
+$ddName = trim($body['dd']   ?? '');
+$user   = trim($body['user'] ?? '');
 $rows   = $body['rows'] ?? [];
 
 if (!isset($_SESSION['connections'][$ddName])) {
@@ -23,9 +23,9 @@ if (!isset($_SESSION['connections'][$ddName])) {
     echo json_encode(['error' => "Not connected to '$ddName'"]);
     exit;
 }
-if ($ddName === '' || $group === '' || !is_array($rows)) {
+if ($ddName === '' || $user === '' || !is_array($rows)) {
     http_response_code(400);
-    echo json_encode(['error' => 'dd, group and rows are required']);
+    echo json_encode(['error' => 'dd, user and rows are required']);
     exit;
 }
 
@@ -48,18 +48,14 @@ try {
         $type = (int)($row['type'] ?? 0);
         if ($obj === '') continue;
 
-        // Type 4 (Field): field permissions are derived from their parent table.
-        // Changing individual field permissions requires table-level grants.
-        // Skip these rows — the user should edit the parent table row instead.
+        // Field rows (type 4) are derived from table permissions; skip.
         if ($type === 4) continue;
 
-        // Type 10 (Stored Proc) and 18 (Function): EXECUTE only.
         $isExecOnly = ($type === 10 || $type === 18);
 
         if ($isExecOnly) {
             $permMap = ['EXECUTE' => 'canExec'];
         } else {
-            // Tables (1) and Views (6): DML permissions.
             $permMap = [
                 'SELECT'  => 'canSelect',
                 'INSERT'  => 'canInsert',
@@ -78,15 +74,15 @@ try {
             }
         }
 
-        $qobj = '"' . str_replace('"', '""', $obj) . '"';
-        $qgrp = '"' . str_replace('"', '""', $group) . '"';
+        $qobj  = '"' . str_replace('"', '""', $obj)  . '"';
+        $qusr  = '"' . str_replace('"', '""', $user) . '"';
 
         if (!empty($grants)) {
-            $sql = 'GRANT ' . implode(', ', $grants) . " ON $qobj TO $qgrp";
+            $sql = 'GRANT ' . implode(', ', $grants) . " ON $qobj TO $qusr";
             try { $conn->execute($sql); $saved++; } catch (Throwable $e) { $errs[] = "GRANT on $obj: " . $e->getMessage(); }
         }
         if (!empty($revokes)) {
-            $sql = 'REVOKE ' . implode(', ', $revokes) . " ON $qobj FROM $qgrp";
+            $sql = 'REVOKE ' . implode(', ', $revokes) . " ON $qobj FROM $qusr";
             try { $conn->execute($sql); } catch (Throwable $e) { /* revoke of ungranted perm may fail silently */ }
         }
     }

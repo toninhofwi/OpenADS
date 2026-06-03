@@ -29,18 +29,13 @@ if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 try {
     $conn = AdsConnection::connect($opts);
 
-    // User's current groups
+    // User's current groups — filter in SQL to avoid unclosed-cursor interference
     $groups = [];
-    $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroupmembers");
+    $escapedUser = str_replace("'", "''", $userName);
+    $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroupmembers WHERE USER_NAME = '$escapedUser'");
     while ($row = $stmt->fetchAssoc()) {
-        $user = $row['USER_NAME'] ?? '';
-        // column order may vary; re-fetch with both columns
-    }
-    $stmt2 = $conn->query("SELECT GROUP_NAME, USER_NAME FROM system.usergroupmembers");
-    while ($row = $stmt2->fetchAssoc()) {
-        if (strcasecmp($row['USER_NAME'] ?? '', $userName) === 0) {
-            $groups[] = $row['GROUP_NAME'];
-        }
+        $g = $row['GROUP_NAME'] ?? '';
+        if ($g !== '') $groups[] = $g;
     }
     sort($groups);
 

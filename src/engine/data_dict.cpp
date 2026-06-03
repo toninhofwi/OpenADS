@@ -493,18 +493,31 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             e.comment = parts[0];
             e.sql     = parts[1];
             views_[e.name] = std::move(e);
+
+        } else if (rec.obj_type == "Field" && !rec.obj_name.empty()) {
+            // Populate field_props_ so system.permissions can enumerate fields.
+            // parent_id → table's obj_id; info1 → ordinal position (1-based).
+            auto tbl_it = id_to_name.find(rec.parent_id);
+            if (tbl_it != id_to_name.end()) {
+                const std::string& tbl = tbl_it->second;
+                auto& fp = field_props_[tbl][rec.obj_name];
+                if (fp.find("ordinal") == fp.end())
+                    fp["ordinal"] = std::to_string(rec.info1);
+            }
         }
     }
 
     // SAP object-type string → numeric code used in system.permissions.
     auto type_code = [](const std::string& t) -> int {
-        if (t == "Table")     return 1;
-        if (t == "Database")  return 3;
-        if (t == "User")      return 8;
-        if (t == "StoredProc")return 10;
-        if (t == "Function")  return 18;
-        if (t == "Group")     return 6;
-        if (t == "View")      return 12;
+        if (t == "Table")      return 1;   // ADS_DD_TABLE_OBJECT
+        if (t == "Field")      return 4;   // ADS_DD_FIELD_OBJECT
+        if (t == "View")       return 6;   // ADS_DD_VIEW_OBJECT
+        if (t == "User")       return 8;   // ADS_DD_USER_OBJECT
+        if (t == "Group")      return 9;   // ADS_DD_USER_GROUP_OBJECT
+        if (t == "StoredProc") return 10;  // ADS_DD_PROCEDURE_OBJECT
+        if (t == "Database")   return 11;  // ADS_DD_DATABASE_OBJECT
+        if (t == "Link")       return 12;  // ADS_DD_LINK_OBJECT
+        if (t == "Function")   return 18;  // ADS_DD_FUNCTION_OBJECT
         return 0;
     };
 
@@ -556,19 +569,26 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             permissions_.push_back(std::move(pe));
 
             // Also maintain table_perms_ for get_effective_permission().
+            // SAP ADS_PERMISSION_* bit layout:
+            //   bit0(0x01)=READ/SELECT  bit1(0x02)=UPDATE
+            //   bit4(0x10)=INSERT       bit5(0x20)=DELETE
+            //   bit31(0x80000000)=WITH_GRANT sentinel (SAP writes this for all grants)
             if (target_type == "Table") {
-                // bit 31 = INHERIT (use parent group's rights = full for compat)
-                // bits 0-3 = SELECT/UPDATE/INSERT/DELETE
                 int level;
                 if (rec.info2 & 0x80000000u) {
-                    level = 4;  // inherit → treat as full for backward compat
+                    // SAP WITH_GRANT sentinel — treat as full access (we cannot
+                    // decode the actual level from the encrypted property blobs).
+                    level = 4;
+                } else if (rec.info2 & 0x20u) {
+                    level = 3;  // DELETE present → DELETE level
+                } else if (rec.info2 & 0x10u) {
+                    level = 2;  // INSERT present (no DELETE) → WRITE level
+                } else if (rec.info2 & 0x02u) {
+                    level = 2;  // UPDATE present → WRITE level
+                } else if (rec.info2 & 0x01u) {
+                    level = 1;  // READ only
                 } else {
-                    uint32_t dml = rec.info2 & 0x0Fu;  // bits 0-3
-                    level = (dml == 0x0F) ? 4
-                          : (dml & 0x08)  ? 3   // delete
-                          : (dml & 0x02)  ? 2   // update
-                          : (dml & 0x01)  ? 1   // read
-                          : 0;
+                    level = 0;
                 }
                 table_perms_[target_name][principal] = level;
             }
@@ -916,7 +936,25 @@ util::Result<void> DataDict::load_() {
             std::string ug  = trim(rest.substr(0, eq));
             std::string lvs = trim(rest.substr(eq + 1));
             if (tbl.empty() || ug.empty() || lvs.empty()) continue;
-            try { table_perms_[tbl][ug] = std::stoi(lvs); }
+            try {
+                int level = std::stoi(lvs);
+                table_perms_[tbl][ug] = level;
+                // Mirror into permissions_ so eff_ops enforcement works.
+                uint32_t bitmask = 0;
+                if (level >= 1) bitmask |= 0x001u;           // READ
+                if (level >= 2) bitmask |= 0x002u | 0x010u;  // UPDATE|INSERT
+                if (level >= 3) bitmask |= 0x020u;           // DELETE
+                if (level >= 4) bitmask  = 0x80000000u;      // full sentinel
+                bool is_grp = (groups_.find(ug) != groups_.end());
+                PermissionEntry pe;
+                pe.object_name      = tbl;
+                pe.object_type      = "Table";
+                pe.object_type_code = 1;
+                pe.grantee          = ug;
+                pe.grantee_is_group = is_grp;
+                pe.bitmask          = bitmask;
+                permissions_.push_back(std::move(pe));
+            }
             catch (...) {}
 
         } else if (starts_with(line, "FIELDPROP ")) {
@@ -1338,13 +1376,16 @@ DataDict::set_table_permission(const std::string& table,
     table_perms_[table][user_or_group] = level;
 
     // Mirror into permissions_ so system.permissions reflects GRANT/REVOKE.
-    // Encode level back to info2 bitmask bits 0-3 (SELECT/UPDATE/INSERT/DELETE).
+    // Encode using SAP ADS_PERMISSION_* bitmask constants:
+    //   bit0(0x01)=READ/SELECT  bit1(0x02)=UPDATE
+    //   bit4(0x10)=INSERT       bit5(0x20)=DELETE
+    //   bit31(0x80000000)=WITH_GRANT (used for FULL / level-4)
     uint32_t bitmask = 0;
-    if (level >= 1) bitmask |= 0x01u;  // SELECT
+    if (level >= 1) bitmask |= 0x01u;  // READ / SELECT
     if (level >= 2) bitmask |= 0x02u;  // UPDATE
-    if (level >= 2) bitmask |= 0x04u;  // INSERT
-    if (level >= 3) bitmask |= 0x08u;  // DELETE
-    if (level >= 4) bitmask = 0x80000000u;  // full → INHERIT (SAP compat)
+    if (level >= 2) bitmask |= 0x10u;  // INSERT
+    if (level >= 3) bitmask |= 0x20u;  // DELETE
+    if (level >= 4) bitmask = 0x80000000u;  // FULL / WITH_GRANT sentinel
 
     // Update existing entry or add new one.
     for (auto& pe : permissions_) {
@@ -1371,28 +1412,40 @@ DataDict::set_table_permission(const std::string& table,
 // ---------------------------------------------------------------------------
 
 // Translate a stored info2 bitmask + grantee context to an EffectiveOps.
-// Groups:  0x80000000 = SAP standard write grant (upd+ins+del, no sel).
-//          Explicit bits 0-4 decoded directly.
-// Users:   0x80000000 = inherit (contributes nothing — groups cover it).
-//          Explicit bits decoded directly.
+//
+// SAP binary .add files store 0x80000000 as a constant sentinel in info2 for
+// ALL Permission records (both group and user ACL entries).  The actual per-bit
+// rights (READ, UPDATE, INSERT, DELETE, …) are encoded in two encrypted 8-byte
+// property-zone blobs using a proprietary SAP algorithm.  OpenADS cannot
+// decode those blobs; for group grants we fall back to full DML.
+//
+// OpenADS-written Permission records store the actual ADS_PERMISSION_* bitmask
+// directly in info2 (without encryption):
+//   0x001=READ/SELECT  0x002=UPDATE   0x004=EXECUTE  0x008=INHERIT(meta, skip)
+//   0x010=INSERT       0x020=DELETE
 static DataDict::EffectiveOps ops_from_bitmask(uint32_t mask, bool is_group) {
     DataDict::EffectiveOps ops;
-    const uint32_t SAP_GRP_WRITE = 0x80000000u;
-    const uint32_t explicit_mask = 0x1Fu;          // bits 0-4
+    const uint32_t SAP_SENTINEL = 0x80000000u;
 
-    if (mask == SAP_GRP_WRITE) {
+    if (mask & SAP_SENTINEL) {
+        // SAP-written sentinel: actual per-bit rights are in encrypted blobs.
+        // For group ACL entries: assume full DML (SELECT + UPDATE + INSERT + DELETE).
+        // For user ACL entries: 0x80000000 alone means INHERIT-only from groups;
+        //   effective DML comes via group membership resolution in get_effective_ops.
         if (is_group) {
+            ops.select_  = true;
             ops.update_  = true;
             ops.insert_  = true;
             ops.delete_  = true;
         }
-        // user: inherit — no contribution here; groups will cover it
-    } else if (mask & explicit_mask) {
-        ops.select_  = (mask & 0x01u) != 0;
-        ops.update_  = (mask & 0x02u) != 0;
-        ops.insert_  = (mask & 0x04u) != 0;
-        ops.delete_  = (mask & 0x08u) != 0;
-        ops.execute_ = (mask & 0x10u) != 0;
+    } else {
+        // OpenADS-written bitmask: ADS_PERMISSION_* bit layout from ace.h.
+        ops.select_  = (mask & 0x001u) != 0;  // ADS_PERMISSION_READ
+        ops.update_  = (mask & 0x002u) != 0;  // ADS_PERMISSION_UPDATE
+        ops.execute_ = (mask & 0x004u) != 0;  // ADS_PERMISSION_EXECUTE
+        // 0x008 = ADS_PERMISSION_INHERIT — meta-flag, not a DML right, skip
+        ops.insert_  = (mask & 0x010u) != 0;  // ADS_PERMISSION_INSERT
+        ops.delete_  = (mask & 0x020u) != 0;  // ADS_PERMISSION_DELETE
     }
     return ops;
 }

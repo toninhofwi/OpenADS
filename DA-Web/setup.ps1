@@ -23,7 +23,17 @@ $vendors = @(
     @{ url = 'https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css'
        dest = 'vendor\tabulator\css\tabulator.min.css' },
     @{ url = 'https://unpkg.com/split.js@1.6.5/dist/split.min.js'
-       dest = 'vendor\split.js\split.min.js' }
+       dest = 'vendor\split.js\split.min.js' },
+
+    # Ace Editor 1.32 — SQL editor in triggers, stored procedures, and SQL tabs
+    @{ url = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ace.min.js'
+       dest = 'vendor\ace\ace.js' },
+    @{ url = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/mode-sql.min.js'
+       dest = 'vendor\ace\mode-sql.js' },
+    @{ url = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/theme-dracula.min.js'
+       dest = 'vendor\ace\theme-dracula.js' },
+    @{ url = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ext-language_tools.min.js'
+       dest = 'vendor\ace\ext-language_tools.js' }
 )
 
 foreach ($v in $vendors) {

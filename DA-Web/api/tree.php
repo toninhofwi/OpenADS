@@ -200,13 +200,23 @@ if ($action === 'category_children') {
                 $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroups ORDER BY GROUP_NAME");
                 $seen = [];
                 while ($row = $stmt->fetchAssoc()) {
-                    $g = $row['GROUP_NAME'];
-                    if (isset($seen[$g])) continue;
+                    $g = trim($row['GROUP_NAME']);
+                    if ($g === '' || isset($seen[$g])) continue;
                     $seen[$g] = true;
                     $nodes[] = ['id' => "grp_{$ddName}_{$g}", 'text' => $g,
                                 'icon' => 'jstree-icon-group', 'children' => false,
                                 'a_attr' => ['data-dd' => $ddName, 'data-type' => 'group', 'data-name' => $g]];
                 }
+                // ACE built-in groups are always present in every DD; surface them
+                // even if system.usergroups omits them in this OpenADS build.
+                foreach (['DB:Admin', 'DB:Backup', 'DB:Debug', 'DB:Public'] as $builtin) {
+                    if (isset($seen[$builtin])) continue;
+                    $seen[$builtin] = true;
+                    $nodes[] = ['id' => "grp_{$ddName}_{$builtin}", 'text' => $builtin,
+                                'icon' => 'jstree-icon-group', 'children' => false,
+                                'a_attr' => ['data-dd' => $ddName, 'data-type' => 'group', 'data-name' => $builtin]];
+                }
+                usort($nodes, fn($a, $b) => strcmp($a['text'], $b['text']));
                 break;
 
             case 'ri':

@@ -9,7 +9,7 @@
 # -------------------------------------------------------------------------
 # Paths
 # -------------------------------------------------------------------------
-PHP_DEVPACK  = F:\php_advantage\php-devpack\php-8.0.1-devel-vs16-x64
+PHP_DEVPACK  = F:\php_advantage\php-devpack\php-8.4.21-devel-vs17-x64
 PHP_INCLUDES = $(PHP_DEVPACK)\include
 PHP_LIB      = C:\php\dev\php8ts.lib
 
@@ -51,7 +51,7 @@ CFLAGS = \
     /D "x64" \
     /D "ZTS=1" \
     /D "COMPILE_DL_OPENADS" \
-    /D "ZEND_ENABLE_STATIC_TSRMLS_CACHE=1" \
+    /D "ZEND_ENABLE_STATIC_TSRMLS_CACHE=0" \
     /D "NDEBUG" \
     /D "ZEND_DEBUG=0" \
     /I "$(SRC_DIR)" \
@@ -70,9 +70,11 @@ LFLAGS = \
     /OUT:$(OUT_DLL) \
     /IMPLIB:$(OUT_LIB) \
     /MACHINE:X64 \
-    /DEBUG
+    /DEBUG \
+    /DELAYLOAD:openace64.dll
 
 LIBS = \
+    delayimp.lib \
     $(PHP_LIB) \
     $(ACE_LIB) \
     kernel32.lib \

@@ -1,0 +1,333 @@
+OpenADS — Roadmap Status
+As of: 2026-06-02
+Current release: v1.0.0-rc29 (2026-05-26)
+
+================================================================================
+PHASES COMPLETED
+================================================================================
+
+Phase 0.1.x — Drop-in for the Harbour read/write path                    DONE
+  All M0–M8.11 milestones complete. Final 0.1.0 released.
+  Harbour rddtst.prg passes 442/442 via contrib/rddads → OpenADS ace64.dll.
+
+Phase 0.2.x — Broadened ABI surface, polished engine                     DONE
+  All M9.1–M9.27 milestones complete. Final 0.2.0 released 2026-05-04.
+  231 Ads* exports resolved; no MISS entries remain.
+
+Phase 0.3.x — Proprietary formats + advanced SQL                    LARGELY DONE
+  M10.x (full SQL dialect, 54 milestones), M11.x (VFP types, TPS, AEP,
+  collation, codepage), M12.x (Phase 2 TCP wire server, TLS client,
+  transport abstraction, wire-protocol.md) — all complete.
+
+================================================================================
+CURRENT PHASE: 0.3.x — DEFERRED ITEMS (still open)
+================================================================================
+
+These were explicitly deferred during 0.3.x and carry into 1.0.x planning:
+
+1. VFP NULL-bitmap extension (0x32 header byte)
+   - Autoinc (M10.11) and V/Q field types (M11.1) are working today.
+   - What's missing: the full 0x32 DBF variant header byte that combines
+     autoinc + null-flag semantics in a single header signature. VFP files
+     that carry both features simultaneously may not parse correctly.
+   - Steps:
+     a. Identify VFP fixtures that carry header byte 0x32 with both
+        autoinc columns AND nullable columns.
+     b. Extend parse_dbf_fields in src/drivers/dbf_common.cpp to handle
+        the combined 0x32 case (already handles 0x30 CDX+FPT).
+     c. Verify null-bitmap (M11.6) and autoinc (M10.11) coexist correctly
+        on a single 0x32 table.
+     d. Add a unit test in tests/unit/ using a 0x32 fixture.
+
+2. ADI index files (.adi)
+   - .adt tables are fully usable today using CDX or NTX sidecar indexes.
+   - AdsOpenIndex on a .adi file currently fails (no driver exists).
+   - What's missing: a clean-room on-disk specification of the SAP ADI
+     B+tree format.
+   - Steps:
+     a. Produce a clean-room format spec via public observable behavior
+        (open .adi files from SAP ADS, log every read, map the layout).
+        Document in docs/adt-format.md alongside existing ADT/ADM spec.
+     b. Implement src/drivers/adt/adi_index.cpp (stub already in repo
+        layout per README architecture section).
+     c. Wire AdsOpenIndex into AdtDriver when path ends in .adi.
+     d. Add smoke test: create .adt table with SAP ADS, save .adi, open
+        with OpenADS, verify seek/skip.
+
+3. ADT table creation via AdsCreateTable(ADS_ADT)
+   - Currently falls back to DBF format silently.
+   - Steps:
+     a. Implement AdtDriver::create_table() that writes the .adt header
+        format documented in docs/adt-format.md.
+     b. Update AdsCreateTable in src/abi/ace_exports.cpp to route
+        ADS_ADT to the new creation path instead of DBF.
+     c. Add test: create .adt via OpenADS, open with SAP ADS, verify
+        byte-compatible header.
+
+4. ADT encryption (SAP proprietary per-record encryption)
+   - OpenADS' own AES-256-CTR encryption (M11.2) works for DBF files.
+   - SAP's proprietary per-record encryption for .adt files is not
+     implemented and is out of scope until a clean-room spec exists.
+   - Steps (deferred until spec available):
+     a. Document the byte boundary via public observable behavior.
+     b. Implement in src/drivers/adt/adt_table.cpp alongside the
+        existing AES-256-CTR path in src/engine/encryption.cpp.
+
+5. TLS — server-side termination
+   - Client-side TLS (tls:// URI) is done via mbedtls 3.6 (M12.12).
+   - Server-side TLS termination is deferred: mbedtls 3.6 does not expose
+     a supported way to adopt an externally-accepted fd.
+   - Interim: deployments should front openads_serverd with a TLS proxy
+     (nginx, stunnel).
+   - Steps for v1.0.x:
+     a. Either: upgrade mbedtls and use its server-side accept loop, OR
+     b. Use platform-native TLS (SChannel on Windows, SecureTransport
+        on macOS, OpenSSL on Linux) via the ITransport abstraction
+        (network/transport.h, M12.13).
+
+6. SQL gaps (minor, noted in "Still planned for 0.3.x")
+   - ORDER BY inside UNION members (multi-column, currently last member only).
+   - Richer projection expressions (arithmetic + string concat across more
+     clause types — M10.39/40/43 cover the common cases today).
+   - Steps: targeted additions to src/sql/parse/parser.cpp and
+     src/sql/exec/executor.cpp; each should be a 1-2 day milestone.
+
+7. Linux Harbour smoke harness (post-0.2.0, rolled into 0.3.x)
+   - CI builds and tests cleanly on Linux and macOS.
+   - What's missing: a Linux Harbour installation so smoke.prg can run
+     end-to-end on the ubuntu runner.
+   - Steps:
+     a. Add a CI step that installs Harbour from source or a package
+        on ubuntu-24.04.
+     b. Compile smoke.prg against rddads + OpenADS libace.so on Linux.
+     c. Run and capture output in ci.yml (compat.yml leg).
+
+================================================================================
+NEXT MILESTONE: 1.0.0 final
+================================================================================
+
+Currently at: v1.0.0-rc29. The 1.0.x milestone defined in the roadmap requires:
+
+1. Original ACE remote protocol compatibility
+   - The current wire protocol (M12.x) is OpenADS-native, not byte-compatible
+     with the SAP Advantage 11.x/12.x TCP wire protocol.
+   - 1.0.0 as defined in the roadmap calls for clients to speak the original
+     ACE remote protocol so a single ace64.dll can be either a local DLL or
+     a TCP client to a remote ADS server.
+   - Steps:
+     a. Obtain a clean-room understanding of the SAP ADS wire protocol
+        from public observable behavior (Wireshark captures, public SDK
+        docs, Harbour adsx.c source).
+     b. Implement a SapWireTransport alongside the current
+        OpenAdsWireTransport, using the same ITransport abstraction.
+     c. AdsConnect60 selects the transport based on URI prefix:
+        - tcp:// → current OpenADS wire (inter-OpenADS)
+        - ads:// or sap:// → SAP ACE wire (for talking to real ADS servers)
+
+2. Connection multiplexing / session hardening
+   - Current server: one thread per client connection, simple per-session
+     state. Needs:
+     a. Connection pool / multiplexing so many short-lived Studio or
+        PHP client connections don't exhaust threads.
+     b. Graceful timeout and cleanup for abandoned sessions.
+     c. Load testing / stress: many concurrent clients, large result sets.
+
+3. Compatibility test matrix against Advantage 11.x + 12.x
+   - Steps:
+     a. Identify a test instance with SAP ADS 11.x or 12.x available.
+     b. Run the full rddtst.prg suite (already 442/442 locally) against
+        a remote ADS server via the SAP wire, then against OpenADS via
+        the OpenADS wire, and compare outputs.
+     c. Document any divergence in docs/ace-coverage.md.
+
+4. Release quality: documentation and packaging
+   - README sections that reference ace64.dll need to clarify the
+     openace64.dll rename (see todo item 7).
+   - Update the status table in README with new tags/dates (todo item 8).
+   - wire-protocol.md: add DD functions and usage (todo item 9).
+   - Build-your-own-Harbour-app section needs updating (todo items 7, 11).
+   - Explain bindings/php vs bindings/php_ext difference (todo item 6).
+
+================================================================================
+SAP DD PERMISSION SYSTEM — RESEARCH FINDINGS (2026-06-02)
+================================================================================
+
+This section documents what was learned by reverse-engineering pmsys.add
+(a real SAP Data Architect database) and cross-referencing SAP ARC source code
+(c:\Program Files (x86)\Advantage 10.10\ARC\Source) plus the SAP ACE SDK
+(f:/php_advantage/acesdk/ace.h).
+
+--- WHAT IS CONFIRMED ---
+
+1. SAP ADS_PERMISSION_* bitmask constants (from acesdk/ace.h):
+     0x00000001  READ / SELECT
+     0x00000002  UPDATE
+     0x00000004  EXECUTE (stored procs / functions)
+     0x00000008  INHERIT
+     0x00000010  INSERT                    ← OpenADS had this at bit2 (WRONG, now fixed)
+     0x00000020  DELETE                    ← OpenADS had this at bit3 (WRONG, now fixed)
+     0x00000040  LINK_ACCESS / ACCESS
+     0x00000080  CREATE
+     0x00000100  ALTER
+     0x00000200  DROP
+     0x80000000  WITH_GRANT (meta-flag; SAP writes this for all group Permission records)
+     0xFFFFFFFF  ALL
+     0x8FFFFFFF  ALL + WITH_GRANT
+
+2. Object type codes (now correct in OpenADS; were wrong for Group/View/Database):
+     1=Table  4=Field  6=View  8=User  9=Group  10=StoredProc
+     11=Database  12=Link  14=Trigger  18=Function
+
+3. Binary Permission record layout in the .add file:
+   - offset 9  (parent_id): obj_id of the GRANTEE (user or group)
+   - offset 507 (info1):    obj_id of the TARGET object (table / proc / func)
+   - offset 511 (info2):    permission bitmask
+   - offset 225–246:        two 10-byte blocks: [uint16=8][8-byte opaque blob][0xFFFF]
+
+4. SAP writes info2 = 0x80000000 for EVERY Permission record for groups,
+   regardless of whether the table is read-only or full DML.
+   The per-table SELECT/UPDATE/INSERT/DELETE differentiation is NOT in info2.
+
+5. SAP Data Architect reads permissions via system.permissions SQL view (provided
+   by the ACE engine). The ARC Delphi source has no binary decoding — all decoding
+   is inside the compiled ace.dll. The SAP API function is:
+     AdsDDGetPermissions(hConn, grantee, objType, objName, parent,
+                         getInherited, *permissionBitmask)
+   Attempts to call this via PHP FFI against ace64.dll (C:\php\ace64.dll) failed
+   because it requires a native DD connection, and the Advantage Local Server
+   service is not running on this machine.
+
+--- WHAT IS UNKNOWN / UNDECODED ---
+
+1. THE 8-BYTE OPAQUE BLOBS (highest priority unknown):
+   Each Permission record contains two opaque 8-byte values at offsets 227–234
+   and 239–246. These are DIFFERENT for every record and differ between a
+   read-only table (sys_registry: SELECT only) and a full-DML table (landlords).
+   No mathematical relationship to permission level, obj_id, parent_id, or any
+   XOR combination was found. These are the SAP-proprietary encoding of the
+   actual per-table group permission level (READ=1, WRITE=2, DELETE=3, FULL=4).
+   They cannot be decoded without SAP's algorithm.
+
+   IMPACT: For SAP-created .add files, OpenADS shows full DML for every table
+   in every group (because 0x80000000 → treated as full access). DaWeb cannot
+   display the correct per-table differentiation from imported SAP databases.
+
+2. ADS_DD_TABLE_PERMISSION_LEVEL property 216 storage location.
+   SAP ARC reads this table property (column security enforcement mode 1/2/3)
+   but we do not know which binary field of the Table record stores it.
+
+--- TODO: PERMISSION SYSTEM ---
+
+  [ ] HIGH: Decipher the 8-byte blob encoding.
+      Method: install Advantage Local Server; call AdsDDGetPermissions() via
+      PHP FFI; compare returned bitmask values to the blob bytes to find the
+      encoding algorithm. Alternatively: create a test .add with known permissions
+      using SAP Data Architect, dump the blobs, and infer the pattern from
+      controlled inputs (GRANT SELECT only on A, GRANT ALL on B).
+
+  [ ] MEDIUM: Expose AdsDDGetPermissions() in OpenADS ace_exports.cpp so that
+      clients have a direct API for fine-grained permission queries (rather than
+      only system.permissions SQL).
+
+  [ ] MEDIUM: GRANT/REVOKE multiple rights in one statement. SQL parser currently
+      only handles a single right per statement. Add comma-separated right list.
+
+  [ ] MEDIUM: GRANT EXECUTE ON proc TO group — not yet handled in SQL parser.
+
+  [ ] LOW: Field-level GRANT: GRANT SELECT ON table(column) TO principal.
+      Requires SQL parser extension + per-column PermissionEntry storage.
+
+  [ ] LOW: Implement ADS_DD_TABLE_PERMISSION_LEVEL (property 216) correctly
+      once storage location is found.
+
+--- WHAT WORKS TODAY ---
+
+  [x] GRANT/REVOKE single-right on table → set_table_permission writes SAP-compatible
+      bitmask (0x01 SELECT, 0x13 WRITE, 0x33 DELETE, 0x80000000 FULL).
+  [x] system.permissions view returns SELECT/UPDATE/INSERT/DELETE columns with
+      correct values for OpenADS-written permissions.
+  [x] system.permissions has PARENT column; field rows (type=4) are derived from
+      their parent table's permission record.
+  [x] All SAP object type codes are correct (Group=9, View=6, Field=4, etc.).
+
+================================================================================
+DA-WEB (Data Architect Web) — OPEN BUGS AND FEATURES
+================================================================================
+
+These are tracked in DA-Web/todo.txt. Priority order:
+
+BUG 1 (HIGH): RI Objects — foreign key tag dropdown always empty
+  File: DA-Web/api/ri_meta.php, DA-Web/js/app.js
+  - The dropdown for the child table's foreign key tag and the parent table's
+    primary key tag are not populating.
+  - Investigate: the tag list query may be running before a table is selected,
+    or the API response format doesn't match what app.js expects.
+  - Fix the API response for ri_meta.php and the JS handler that populates
+    the tag dropdowns when a table is chosen.
+
+BUG 2 (HIGH): User group memberships showing wrong data
+  File: DA-Web/api/user_groups.php
+  - User RCB belongs to Administrators, Supervisors, General, Internet but
+    DA-Web shows Agents, Owners, Tenants.
+  - Likely a query filtering issue (wrong user key or case sensitivity).
+
+BUG 3 (MEDIUM): Built-in DD groups not showing (DB:Public, DB:Backup, DB:Admin, DB:Debug)
+  File: DA-Web/api/user_groups.php or group_meta.php
+  - SAP DDs always include these 4 system groups with their own permissions.
+    They are present in pmsys.add but don't appear in DA-Web.
+  - Find where these groups are stored in the .add/.am binary and expose them
+    in the tree alongside user-created groups.
+
+FEATURE 1 (MEDIUM): Inline table editing in Tabulator
+  File: DA-Web/js/app.js, DA-Web/api/row_ops.php (or table_data.php)
+  - Users need to edit non-primary-key fields directly in the data grid.
+  - Add Tabulator cell editing for non-PK columns.
+  - A Save button commits changes via the existing row_ops.php endpoint.
+  - Primary key columns must remain read-only (detect from schema/index data).
+
+FEATURE 2 (LOW): ACE editor auto-download in setup.bat
+  File: DA-Web/setup.bat, DA-Web/README.md
+  - ACE editor is currently loaded from CDN. Add it to setup.bat so it is
+    vendored alongside jQuery/jsTree/Tabulator/Split.js.
+  - Update README.md to reflect the change.
+
+FEATURE 3 (LOW): Studio AOF features in DA-Web
+  - Review the Studio web console's AOF / Rushmore demo flow.
+  - Identify which AOF features (filter install, OptLevel display, CREATE INDEX
+    hint chips) can be adapted into DA-Web's table browser.
+
+MAINTENANCE 1: openads_serverd smart DLL detection
+  - Server should detect whether ace64.dll or openace64.dll is present and
+    load whichever is available, rather than requiring a fixed name.
+
+MAINTENANCE 2: Cross-platform build verification
+  - Confirm the full source tree builds on Linux and macOS following existing
+    CMake presets. Fix any platform-specific compilation errors found.
+  - Run the unit test suite on each platform and document results.
+
+================================================================================
+SUMMARY — NEXT STEPS IN PRIORITY ORDER
+================================================================================
+
+Immediate (bugs, DA-Web):
+  1. Fix RI Objects foreign key tag dropdown (DA-Web BUG 1)
+  2. Fix user group memberships query (DA-Web BUG 2)
+  3. Show built-in DD groups DB:Public/Backup/Admin/Debug (DA-Web BUG 3)
+
+Short-term (0.3.x deferred, low effort):
+  4. SQL gap: ORDER BY inside UNION members
+  5. VFP 0x32 header byte combined autoinc+nullable support
+  6. Linux Harbour smoke CI leg
+
+Medium-term (DA-Web features + docs):
+  7. Inline table editing in Tabulator (DA-Web FEATURE 1)
+  8. README cleanup: openace64 naming, status table, bindings explanation
+  9. wire-protocol.md DD functions update
+
+Longer-term (1.0.0 final blockers):
+  10. ADI index file driver (needs clean-room format spec)
+  11. ADT table creation (AdsCreateTable with ADS_ADT)
+  12. SAP ACE wire protocol compatibility layer
+  13. Connection multiplexing and session hardening in openads_serverd
+  14. Compatibility test matrix vs Advantage 11.x/12.x installations
+  15. Server-side TLS termination

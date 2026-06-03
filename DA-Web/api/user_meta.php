@@ -1,35 +1,31 @@
 <?php
 /**
- * api/group_meta.php — permissions granted to a DD group.
- * GET ?dd=&group=
+ * api/user_meta.php — direct permissions granted to a DD user.
+ * GET ?dd=&user=
  *
- * Returns { data: [ row, … ] } where each row is:
- *   { object, type, parent, canSelect, canInsert, canUpdate, canDelete, canExec }
+ * Returns { data: [ row, … ], canInherit: bool } where each row is:
+ *   { object, type, parent, canSelect, canInsert, canUpdate, canDelete, canExec, canAlter, canDrop }
  *
- * Object types returned:
- *   1  = Table          (parent = "")
- *   4  = Field/Column   (parent = table name)
- *   6  = View           (parent = "")
- *   10 = StoredProc     (parent = "")
- *   18 = Function       (parent = "")
+ * canInherit: true when the user has INHERIT="1" in system.permissions, meaning
+ *   their effective permissions also include rights from any groups they belong to.
  *
- * Field rows (type 4) are derived by the engine from table permissions and are
- * interleaved after their parent table's row.
+ * Values reflect direct grants only (system.permissions WHERE GRANTEE = user).
+ * Any non-"0" value ("1" normal, "2" admin/WITH-GRANT) means the right is granted.
  */
 header('Content-Type: application/json');
 session_start();
 
-$ddName    = trim($_GET['dd']    ?? '');
-$groupName = trim($_GET['group'] ?? '');
+$ddName   = trim($_GET['dd']   ?? '');
+$userName = trim($_GET['user'] ?? '');
 
 if (!isset($_SESSION['connections'][$ddName])) {
     http_response_code(401);
     echo json_encode(['error' => "Not connected to '$ddName'"]);
     exit;
 }
-if ($ddName === '' || $groupName === '') {
+if ($ddName === '' || $userName === '') {
     http_response_code(400);
-    echo json_encode(['error' => 'dd and group are required']);
+    echo json_encode(['error' => 'dd and user are required']);
     exit;
 }
 
@@ -41,14 +37,14 @@ if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 try {
     $conn = AdsConnection::connect($opts);
 
-    // ── Step 1: load all permissions for this group into a map ──────────────────
+    // ── Step 1: load all permissions for this user into a map ──────────────────
     // Key for top-level objects:  type . "\0" . lowercase(obj_name)
     // Key for field objects:      "4\0" . lowercase(parent) . "\0" . lowercase(obj_name)
-    $permMap = [];
+    $permMap    = [];
+    $canInherit = false;
     $stmt = $conn->query('SELECT * FROM system.permissions');
     while ($row = $stmt->fetchAssoc()) {
-        if (strcasecmp((string)($row['GRANTEE'] ?? ''), $groupName) !== 0) continue;
-        // OBJ_TYPE is a DBF numeric column → may be float; cast to string for keys.
+        if (strcasecmp((string)($row['GRANTEE'] ?? ''), $userName) !== 0) continue;
         $type   = (string)(int)($row['OBJ_TYPE'] ?? 0);
         $name   = strtolower(trim((string)($row['OBJ_NAME']  ?? '')));
         $parent = strtolower(trim((string)($row['PARENT']     ?? '')));
@@ -58,11 +54,13 @@ try {
             $key = "{$type}\0{$name}";
         }
         $permMap[$key] = $row;
+        // Detect INHERIT flag (any row with INHERIT="1" means the user has it set).
+        if (!$canInherit && ($row['INHERIT'] ?? '0') === '1') $canInherit = true;
     }
     $stmt->close();
 
     // ── Step 2: helper to build one output row ──────────────────────────────────
-    // Any non-'0' value ("1" = normal grant, "2" = admin/WITH-GRANT level) means granted.
+    // Any non-'0' value means granted (handles "1" normal and "2" admin level).
     $hasGrant = fn($p, string $col): bool => $p && ($p[$col] ?? '0') !== '0';
 
     $buildRow = function (string $name, string $type, string $parent) use ($permMap, $hasGrant): array {
@@ -89,7 +87,6 @@ try {
     $rows = [];
 
     // ── Step 3: enumerate all objects and emit rows ─────────────────────────────
-    // Tables + their fields (fields come from system.permissions directly)
     $tables = [];
     $stmt = $conn->query('SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME');
     while ($row = $stmt->fetchAssoc()) {
@@ -98,7 +95,6 @@ try {
     $stmt->close();
 
     // Collect field rows per table from permMap (type 4).
-    // OBJ_TYPE is a DBF numeric field → PHP float; cast to string before comparing.
     $fieldsByTable = [];
     foreach ($permMap as $key => $p) {
         if ((string)($p['OBJ_TYPE'] ?? '') !== '4') continue;
@@ -109,7 +105,6 @@ try {
 
     foreach ($tables as $tbl) {
         $rows[] = $buildRow($tbl, '1', '');
-        // Append field rows for this table, sorted
         $tlower = strtolower($tbl);
         if (!empty($fieldsByTable[$tlower])) {
             $fnames = $fieldsByTable[$tlower];
@@ -148,7 +143,7 @@ try {
     } catch (Throwable $e) {}
 
     $conn->close();
-    echo json_encode(['data' => $rows]);
+    echo json_encode(['data' => $rows, 'canInherit' => $canInherit]);
 } catch (Throwable $e) {
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);

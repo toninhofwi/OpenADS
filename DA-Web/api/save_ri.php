@@ -68,8 +68,8 @@ try {
     // Drop existing RI with this name (ignore error if it doesn't exist)
     try { $conn->execute("EXECUTE PROCEDURE sp_DropReferentialIntegrity('$riName')"); } catch (Throwable $e) {}
 
-    // Create new RI
-    $sql = "EXECUTE PROCEDURE sp_CreateReferentialIntegrity('$riName', '$parent', '$child', '$parentTag', $updateOpt, $deleteOpt, '$failTable')";
+    // Create new RI — ACE parameter order: riName, failTable, parentTable, childTable, parentTag, updateRule, deleteRule
+    $sql = "EXECUTE PROCEDURE sp_CreateReferentialIntegrity('$riName', '$failTable', '$parent', '$child', '$parentTag', $updateOpt, $deleteOpt)";
     $conn->execute($sql);
     $conn->close();
     echo json_encode(['saved' => true]);

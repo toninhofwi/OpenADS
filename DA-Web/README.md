@@ -16,7 +16,7 @@ Web-based replacement for SAP Data Architect. Manages OpenADS data dictionaries 
 | **jsTree 3.3.x** | Lazy-loading navigation tree | Auto-downloaded |
 | **Tabulator 6.x** | Data grid for tables, fields, indexes, permissions | Auto-downloaded |
 | **Split.js 1.6.x** | Resizable panes (tree ↔ content) | Auto-downloaded |
-| **Ace Editor** | SQL code editor | Loaded from CDN (ace.js) |
+| **Ace Editor 1.32** | SQL code editor (triggers, procs, SQL tabs) | Auto-downloaded by `setup.bat` / `setup.ps1` |
 
 ### Why OpenAce64.dll and not Ace64.dll
 
@@ -88,7 +88,7 @@ cd F:\OpenADS\DA-Web
 setup.bat
 ```
 
-This downloads jQuery, jsTree, Tabulator, and Split.js into `vendor/`.
+This downloads jQuery, jsTree, Tabulator, Split.js, and Ace Editor into `vendor/`. The app works fully offline after this step.
 
 ### 6. Configure Apache virtual host
 
@@ -203,13 +203,18 @@ Click any stored procedure or function to open an Ace editor pre-loaded with its
 
 Click the **+** button in the tab bar (or use **File → New SQL**) to open a blank SQL editor. Select a database from the dropdown, write SQL, and press **F5** or **Execute**.
 
+Result sets appear in a Tabulator grid with local pagination (25 / 50 / 100 / 200 rows per page). The pagination bar includes **Export** buttons on the left: **CSV**, **HTML**, **JSON**, **XML**, and **Excel** (.xls SpreadsheetML). All formats export every row across all pages, not just the visible page. Ctrl+Enter runs only the selected text.
+
 ### Users
 
-Click any user name under **Users** to open a Group Memberships tab showing the groups this user belongs to. Use **+ Add Group** (dropdown of all groups not already assigned), **Remove Selected**, and **Save Changes** to manage memberships.
+Click any user name under **Users** to open a two-panel tab:
+
+- **Group Memberships** (top) — lists the groups this user belongs to. Use **+ Add Group** (dropdown of available groups), **Remove Selected**, and **Save** to manage memberships.
+- **Direct Permissions** (bottom) — shows per-object rights granted directly to this user (as opposed to rights inherited through group membership). Displays Select, Insert, Update, Delete, Execute, Alter, Drop per object. Alter and Drop are read-only; the other columns are editable with a **Save Changes** button that issues `GRANT`/`REVOKE` SQL. An **↑ Inherits from groups** badge appears when the user has the INHERIT flag set, meaning effective rights also include all groups they belong to.
 
 ### Groups
 
-Click any group name under **Groups** to open a Permissions grid showing per-object access rights (Select, Insert, Update, Delete, Execute) across all DD objects. Edit the Yes/No cells and click **Save Changes** to issue GRANT/REVOKE statements.
+Click any group name under **Groups** to open a Permissions grid showing per-object access rights across all DD objects. Columns: **Select, Insert, Update, Delete, Execute** (editable — click a cell to toggle, then **Save Changes** to issue GRANT/REVOKE SQL), plus **Alter** and **Drop** (read-only — displays what is stored in the DD but DDL-level rights cannot yet be set via GRANT syntax). Field rows (type 4) are derived from their parent table's grant and are shown read-only.
 
 ### RI Objects
 
@@ -247,8 +252,10 @@ Click any view under **Views** to open its SQL definition in the editor.
 | `api/gen_sql.php` | GET | Generate CREATE TABLE + index + trigger DDL |
 | `api/group_meta.php` | GET | Group permissions from system.permissions |
 | `api/save_group_meta.php` | POST | GRANT/REVOKE permissions for a group |
-| `api/user_groups.php` | GET | User's group memberships |
+| `api/user_groups.php` | GET | User's group memberships + all available groups |
 | `api/save_user_groups.php` | POST | Add/remove user from groups |
+| `api/user_meta.php` | GET | Direct permissions granted to a user (from system.permissions) |
+| `api/save_user_meta.php` | POST | GRANT/REVOKE direct permissions to a user |
 | `api/ri_meta.php` | GET | RI object details, table list, tag list |
 | `api/save_ri.php` | POST | Create / update / delete an RI object |
 | `api/sql_scripts.php` | GET/POST | Saved SQL script CRUD |
@@ -271,7 +278,8 @@ DA-Web/
 ├── config/
 │   ├── dictionaries.json   Registered DD list (persisted across sessions)
 │   └── sql_scripts.json    Saved SQL scripts
-└── vendor/                 Auto-downloaded client libraries
+└── vendor/                 Auto-downloaded client libraries (run setup.bat)
+    ├── ace/                ace.js, mode-sql.js, theme-dracula.js, ext-language_tools.js
     ├── jquery/
     ├── jstree/
     ├── tabulator/

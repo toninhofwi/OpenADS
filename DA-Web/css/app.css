@@ -234,8 +234,20 @@ html, body {
 .sql-results {
   flex: 1;
   min-height: 120px;
-  overflow: auto;
-  padding: 8px;
+  overflow: hidden;
+}
+
+.sql-export-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 8px;
+}
+
+.sql-export-label {
+  font-size: 11px;
+  color: #585b70;
+  margin-right: 2px;
 }
 
 .sql-panel > .gutter.gutter-vertical {

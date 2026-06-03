@@ -24,6 +24,7 @@ if (!extension_loaded('openads') && !class_exists('AdsConnection')) {
     class AdsStatement
     {
         public function fetchAssoc(): ?array {}
+        public function fetchAll(): array {}
         public function close(): void {}
     }
 
@@ -35,6 +36,22 @@ if (!extension_loaded('openads') && !class_exists('AdsConnection')) {
         /** @return array[] each: ['tag'=>string,'expression'=>string,'descending'=>bool] */
         public function getIndexTags(): array {}
         public function recordCount(): int {}
+        // Navigation
+        public function gotoTop(): void {}
+        public function gotoBottom(): void {}
+        public function skip(int $n): void {}
+        public function atEOF(): bool {}
+        public function atBOF(): bool {}
+        // Record I/O
+        public function getRecord(): array {}
+        public function appendRecord(): void {}
+        public function writeRecord(): void {}
+        public function deleteRecord(): void {}
+        // Field setters
+        public function setString(string $field, string $value): void {}
+        public function setLong(string $field, int $value): void {}
+        public function setDouble(string $field, float $value): void {}
+        public function setLogical(string $field, bool $value): void {}
     }
 
     class AdsDictionary

@@ -1,8 +1,9 @@
 <?php
 /**
- * api/row_ops.php — INSERT / DELETE a single row via AdsTable native API.
- * POST { action, dd, table, row }   action=insert  → append + write record
- * POST { action, dd, table, orig }  action=delete  → scan + delete matching record
+ * api/row_ops.php — INSERT / UPDATE / DELETE a single row.
+ * POST { action, dd, table, row }                        action=insert → append + write
+ * POST { action, dd, table, orig }                       action=delete → scan + delete
+ * POST { action, dd, table, orig, row, pkFields:[…] }    action=update → SQL UPDATE
  */
 header('Content-Type: application/json');
 session_start();
@@ -87,6 +88,51 @@ try {
         $conn->close();
         if ($found) echo json_encode(['ok' => true]);
         else        echo json_encode(['error' => 'Matching record not found']);
+
+    } elseif ($action === 'update') {
+        $orig     = $body['orig']     ?? [];
+        $newVals  = $body['row']      ?? [];
+        $pkFields = array_map('strtoupper', $body['pkFields'] ?? []);
+
+        if (empty($pkFields)) {
+            $tbl->close(); $conn->close();
+            http_response_code(400);
+            echo json_encode(['error' => 'pkFields required for update']);
+            exit;
+        }
+
+        $esc = fn($v) => str_replace("'", "''", (string)$v);
+
+        // SET — all fields that changed, excluding PK columns
+        $setParts = [];
+        foreach ($newVals as $field => $value) {
+            if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $field)) continue;
+            if (in_array(strtoupper($field), $pkFields, true)) continue;
+            $setParts[] = $value === null ? "$field = NULL" : "$field = '{$esc($value)}'";
+        }
+
+        if (empty($setParts)) {
+            $tbl->close(); $conn->close();
+            echo json_encode(['ok' => true]); // nothing changed
+            exit;
+        }
+
+        // WHERE — PK columns from original row
+        $whereParts = [];
+        foreach ($pkFields as $pk) {
+            $val = null;
+            foreach ($orig as $k => $v) {
+                if (strtoupper($k) === $pk) { $val = $v; break; }
+            }
+            $whereParts[] = $val === null ? "$pk IS NULL" : "$pk = '{$esc($val)}'";
+        }
+
+        $tbl->close(); // release AdsTable before issuing SQL on same connection
+        $sql = "UPDATE $table SET " . implode(', ', $setParts)
+             . " WHERE "            . implode(' AND ', $whereParts);
+        $conn->execute($sql);
+        $conn->close();
+        echo json_encode(['ok' => true]);
 
     } else {
         http_response_code(400);

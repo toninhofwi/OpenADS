@@ -1,20 +1,137 @@
-1. 	When clicking on a table name as tabulator opens on the right side, we need to add a line above the tabulator with space for 
-	dropdown with available indexes on the table. The first option on the dropdown is "Natural Order".  Natural order simply shows 
-	records with no index order.  Below Natural order list all other available indexes.  Next to the dropdown there needs to be 
-	an input space where the user can type a string where to jump to.  Next to that space a [go] button.  clicking on [go] will 
-	reorder the tabulator rows by the selected index and jump to the first or closest record that matches input data.  
-	
-	There is already a way to change controlling index [Asc] and [Desc] by clicking on the icon on the column name.  We keep that.
-	When the user clicks on it, the dropdown showing controlling index name, needs to be updated to the new controlling index.
-	
-	If the controlling index is datetime, numeric, money, logical, or anything other than string the input will need to be converted. 
-	
-	
-2. 	Clicking on Landlords2Manage RI object in pmsys.add returns an error: Unexpected end of JSON input
-	Clicking on any other RI object opens dialog as expected without errors but foreign key tag on child table is still empty.
-	
-3.	On the free tables connection (aquarium), there is no DD but we do know there are indexes that autoopen when clicking on the table.
-	When daweb becomes aware of indexes, it needs to add them as branches below the table and allow changes just like when 
-	connected to a DD.  Changes obviusly get saved to the .cdx or .ntx or .adi files not dd as there is none.
-	
-Ask me if you dont understand and also suggest what else we can add to this daweb project.
+OPEN BUGS
+---------
+
+1. [HIGH] RI Objects — foreign key tag and primary key tag dropdowns always empty.
+   On RI Transactions2Leases: parent PK tag and child FK tag both show blank.
+   Multiple fix attempts failed.  Must fix.
+   Files: api/ri_meta.php, js/app.js
+
+2. [HIGH] User group memberships showing wrong data.
+   User RCB belongs to Administrators, Supervisors, General, Internet yet
+   DA-Web shows Agents, Owners, Tenants.
+   Files: api/user_groups.php
+
+3. [MEDIUM] Built-in DD groups not visible.
+   SAP DDs always include DB:Public, DB:Backup, DB:Admin, DB:Debug.
+   These 4 groups are in pmsys.add but do not appear in the tree or group list.
+   Need to find where they are encoded in the binary .add file and expose them.
+   Files: api/tree.php, api/user_groups.php or group_meta.php
+
+
+OPEN FEATURES
+-------------
+
+4. [MEDIUM] Inline table editing in Tabulator.
+   Users need to edit non-PK cell values directly in the data grid.
+   A Save button should commit changes via row_ops.php.
+   PK columns must remain read-only.
+   Files: js/app.js, api/row_ops.php
+
+5. [LOW] Studio AOF features in DA-Web.
+   Review Studio web console's AOF/Rushmore demo flow.
+   Identify AOF features (filter install, OptLevel display, CREATE INDEX hint chips)
+   that can be adapted into DA-Web's table browser.
+
+
+OPEN MAINTENANCE
+----------------
+
+6. openads_serverd smart DLL detection.
+   Server should detect whether ace64.dll or openace64.dll is present and
+   load whichever is available.
+
+7. Cross-platform build verification.
+   Confirm full source tree builds on Linux and macOS.  Run unit tests on
+   each platform and document results.
+
+8. Explain bindings/php vs bindings/php_ext difference.
+   Add docs explaining when to use the pure-PHP FFI binding vs the
+   compiled Zend extension.
+
+9. Build-your-own-Harbour-app section in OpenADS readme.md needs updating.
+   Check section still reflects openace64.dll naming correctly.
+
+10. wire-protocol.md — add DD functions and usage.
+
+11. More tests for DD: permissions enforcement, triggers firing, RI rules.
+
+12. Inspect Studio web console of OpenADS and see how AOFs work; adapt
+    useful features into daWeb when browsing a table.
+
+13. openads_serverd needs to be smarter and know if Ace64 is present or
+    OpenAce64 and load the right one.
+
+14. OpenADS needs to build cross-platform. See git repo CI for current
+    failures on non-Windows platforms.
+
+
+COMPLETED
+---------
+
+[DONE] ACE Editor auto-downloads via setup.bat / setup.ps1 alongside jQuery,
+       jsTree, Tabulator, Split.js.  README.md updated.
+
+[DONE] Inline table cell editing — non-PK fields are editable in the data
+       grid; Save button commits via row_ops.php.  PK columns are read-only.
+
+[DONE] Export buttons on SQL results — CSV, HTML, JSON, XML, Excel in the
+       Tabulator pagination bar.
+
+[DONE] User Direct Permissions panel — User tab now shows two sections:
+       Group Memberships (top) and Direct Permissions (bottom).
+       api/user_meta.php + api/save_user_meta.php added.
+
+[DONE] Group permissions fix — permission values '1' (normal) and '2'
+       (WITH GRANT) both recognized as "granted"; Alter/Drop read-only
+       columns added to group permissions grid.
+
+[DONE] openace64.dll rename — DA-Web and README updated to reflect new
+       DLL name.
+
+
+DD PERMISSIONS IMPLEMENTATION STATUS (2026-06-03)
+--------------------------------------------------
+
+system.permissions virtual table is implemented and returns correct data for
+OpenADS-created .add files.  For SAP-created .add files (e.g. pmsys.add)
+there are two known gaps:
+
+ROOT CAUSE 1 — ENCRYPTED BLOBS (not yet fixed)
+  SAP writes 0x80000000 in info2 for ALL Permission records regardless of
+  actual rights.  The real per-table per-right bits (READ/UPDATE/INSERT/DELETE)
+  are stored in two 8-byte opaque encrypted blobs in the property zone.
+  OpenADS treats the sentinel as "full DML" for all groups.
+  Impact: General group shows full DML on every table; SAP shows read-only on
+  some (sys_registry, tags, autoreports, etc.).
+
+  Property zone layout (SAP Permission record):
+    prop[0..1]:  08 00  (length=8)
+    prop[2..9]:  [8 bytes encrypted blob 1]  <- ADS_PERMISSION bitmask
+    prop[10..11]: FF FF
+    prop[12..13]: 08 00  (length=8)
+    prop[14..21]: [8 bytes encrypted blob 2]  <- WITH GRANT version
+    prop[22+]:   FF FF padding
+
+  The encryption is object-specific (same bitmask → different blobs for
+  different tables).  Encryption algorithm is inside ACE binary only.
+  SAP Data Architect has NO decryption code — it just calls system.permissions.
+
+  TO FIX: Either reverse-engineer the ACE binary cipher, OR implement a
+  hybrid mode: when ACE64.dll is present, call AdsDDGetPermissions() to
+  populate permissions_ with correct bitmasks during .add binary load.
+  See tests/tools/sap_perm_probe.cpp for how to call AdsDDGetPermissions().
+
+ROOT CAUSE 2 — MISSING ZERO-ROWS (fixable)
+  SAP system.permissions emits a row for EVERY (grantee × object) combination,
+  showing zeros for ungranted permissions.
+  OpenADS only emits rows where a Permission record actually exists.
+  Impact: 40 missing rows per grantee (no-grant objects silently absent).
+
+  TO FIX in src/abi/ace_exports.cpp (~line 6985 system.permissions handler):
+  After iterating dd->permissions(), enumerate all grantees × all objects and
+  emit a zero-row for each (grantee, object) pair without an ACL entry.
+
+ROOT CAUSE 3 — EXTRA FIELD ROWS (fixable)
+  ('row', field, auditlog) and ('seq', field, propertytransactions) appear in
+  OpenADS output but not in SAP — these are DBF fields not registered in the DD.
+  TO FIX: filter field rows against the DD field list.

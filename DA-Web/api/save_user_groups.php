@@ -36,11 +36,11 @@ try {
 
     // Current groups
     $current = [];
-    $stmt = $conn->query("SELECT GROUP_NAME, USER_NAME FROM system.usergroupmembers");
+    $escapedUser = str_replace("'", "''", $userName);
+    $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroupmembers WHERE USER_NAME = '$escapedUser'");
     while ($row = $stmt->fetchAssoc()) {
-        if (strcasecmp($row['USER_NAME'] ?? '', $userName) === 0) {
-            $current[] = $row['GROUP_NAME'];
-        }
+        $g = $row['GROUP_NAME'] ?? '';
+        if ($g !== '') $current[] = $g;
     }
 
     $currentSet = array_map('strtoupper', $current);

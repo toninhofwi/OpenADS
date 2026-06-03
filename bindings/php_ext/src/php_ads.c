@@ -8,7 +8,9 @@
 /* Forward declaration for the standalone function implemented in ads_misc.c */
 PHP_FUNCTION(ads_dd_create);
 
-/* Required for ZTS builds: defines the per-module _tsrm_ls_cache variable */
+/* Defines _tsrm_ls_cache as a plain global (TSRM_TLS stripped via Makefile).
+ * With ZEND_ENABLE_STATIC_TSRMLS_CACHE=0, EG()/CG() call tsrm_get_ls_cache()
+ * directly and never read this variable — thread-safe, no .tls section needed. */
 #if defined(ZTS) && defined(COMPILE_DL_OPENADS)
 ZEND_TSRMLS_CACHE_DEFINE()
 #endif
@@ -282,34 +284,23 @@ PHP_MINFO_FUNCTION(ads)
  * --------------------------------------------------------------------- */
 PHP_RINIT_FUNCTION(ads)
 {
-#if defined(ZTS) && defined(COMPILE_DL_OPENADS)
-    ZEND_TSRMLS_CACHE_UPDATE();
-#endif
     return SUCCESS;
 }
 
 PHP_MINIT_FUNCTION(ads)
 {
-#if defined(ZTS) && defined(COMPILE_DL_OPENADS)
-    ZEND_TSRMLS_CACHE_UPDATE();
-#endif
-
-    /* AdsException extends RuntimeException */
+    /* AdsException extends Exception */
     zend_class_entry ce_exc;
     INIT_CLASS_ENTRY(ce_exc, "AdsException", NULL);
-    ads_exception_ce = zend_register_internal_class_ex(
-        &ce_exc,
-        zend_hash_str_find_ptr(CG(class_table), "runtimeexception",
-                               sizeof("runtimeexception") - 1)
-    );
-
-    ads_register_constants(module_number);
+    ads_exception_ce = zend_register_internal_class_ex(&ce_exc, zend_ce_exception);
 
     ads_connection_register_class();
     ads_statement_register_class();
     ads_table_register_class();
     ads_misc_register_classes();
     ads_prepared_register_class();
+
+    ads_register_constants(module_number);
 
     return SUCCESS;
 }

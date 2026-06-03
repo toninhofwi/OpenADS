@@ -294,6 +294,11 @@ public:
     const std::vector<PermissionEntry>&
         permissions() const noexcept { return permissions_; }
 
+    using FieldPropsMap = std::unordered_map<std::string,
+                              std::unordered_map<std::string,
+                                  std::unordered_map<std::string, std::string>>>;
+    const FieldPropsMap& field_props() const noexcept { return field_props_; }
+
     // ---- DB / user properties (M10.1) ----------------------------------
     util::Result<void> set_db_property(const std::string& key,
                                        const std::string& value);

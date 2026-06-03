@@ -1,10 +1,12 @@
 <?php
 /**
- * api/ri_meta.php — RI object metadata, table list, and index tags.
+ * api/ri_meta.php — RI object metadata and table list.
  *
- * GET ?dd=&ri=<name>           → { ri: { name, parent, child, parent_tag, child_tag, update_opt, delete_opt } }
- * GET ?dd=&action=tables       → { tables: ["Table1", ...] }
- * GET ?dd=&action=tags&table=  → { tags: ["TagName", ...] }
+ * GET ?dd=&ri=<name>   → { ri:{…}, parentTags:[…], childTags:[…] }
+ * GET ?dd=&action=tables → { tables: ["Table1", …] }
+ *
+ * Index tags are now embedded in the main RI response so the client
+ * does not need separate tag-fetch round-trips.
  */
 header('Content-Type: application/json');
 session_start();
@@ -12,7 +14,6 @@ session_start();
 $ddName = trim($_GET['dd']     ?? '');
 $action = trim($_GET['action'] ?? '');
 $riName = trim($_GET['ri']     ?? '');
-$table  = trim($_GET['table']  ?? '');
 
 if (!isset($_SESSION['connections'][$ddName])) {
     http_response_code(401);
@@ -42,10 +43,25 @@ function ruleLabel(string $v): string {
     };
 }
 
-// Sanitise a string so json_encode never returns false.
+// Trim + UTF-8 sanitise a DB string (fixed-width char fields carry trailing spaces).
 function safeStr(mixed $v): string {
-    $s = (string)($v ?? '');
+    $s = trim((string)($v ?? ''));
     return mb_convert_encoding($s, 'UTF-8', 'UTF-8');
+}
+
+// Fetch index tag names for a table via AdsTable::getIndexTags().
+function fetchTags(AdsConnection $conn, string $table): array {
+    if ($table === '') return [];
+    $tags = [];
+    try {
+        $tbl = AdsTable::open($conn, $table, 0);
+        foreach ($tbl->getIndexTags() as $t) {
+            $tag = trim((string)($t['tag'] ?? ''));
+            if ($tag !== '') $tags[] = $tag;
+        }
+        $tbl->close();
+    } catch (Throwable $e) {}
+    return $tags;
 }
 
 try {
@@ -55,35 +71,23 @@ try {
     if ($action === 'tables') {
         $tables = [];
         $stmt = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
-        while ($row = $stmt->fetchAssoc()) $tables[] = safeStr($row['TABLE_NAME']);
+        while ($row = $stmt->fetchAssoc()) {
+            $t = safeStr($row['TABLE_NAME']);   // safeStr now trims
+            if ($t !== '') $tables[] = $t;
+        }
         $conn->close();
         echo json_encode(['tables' => $tables], JSON_FLAGS);
         exit;
     }
 
-    // ── Return index tags for a table ──────────────────────────────────────
-    if ($action === 'tags') {
-        $tags = [];
-        if ($table !== '') {
-            try {
-                $tbl = AdsTable::open($conn, $table, 0);
-                foreach ($tbl->getIndexTags() as $t) $tags[] = safeStr($t['tag']);
-                $tbl->close();
-            } catch (Throwable $e) {}
-        }
-        $conn->close();
-        echo json_encode(['tags' => $tags], JSON_FLAGS);
-        exit;
-    }
-
-    // ── Return RI object by name ───────────────────────────────────────────
+    // ── Return RI object by name, with embedded index tags ─────────────────
     if ($riName === '') {
         http_response_code(400);
         echo json_encode(['error' => 'ri name or action required']);
         exit;
     }
 
-    $ri  = null;
+    $ri = null;
     $stmt = $conn->query("SELECT * FROM system.relations");
     while ($row = $stmt->fetchAssoc()) {
         if (strcasecmp(safeStr($row['RI_NAME'] ?? ''), $riName) === 0) {
@@ -101,17 +105,21 @@ try {
         }
     }
 
-    $conn->close();
-
     if ($ri === null) {
-        echo json_encode(['ri' => [
+        $ri = [
             'name' => $riName, 'parent' => '', 'child' => '',
             'parent_tag' => '', 'child_tag' => '',
             'update_opt' => 'Restrict', 'delete_opt' => 'Restrict', 'fail_table' => '',
-        ]], JSON_FLAGS);
-    } else {
-        echo json_encode(['ri' => $ri], JSON_FLAGS);
+        ];
     }
+
+    // Embed index tags for both tables so client needs no extra round-trips
+    $parentTags = fetchTags($conn, $ri['parent']);
+    $childTags  = fetchTags($conn, $ri['child']);
+
+    $conn->close();
+    echo json_encode(['ri' => $ri, 'parentTags' => $parentTags, 'childTags' => $childTags], JSON_FLAGS);
+
 } catch (Throwable $e) {
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);

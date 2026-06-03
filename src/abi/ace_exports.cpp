@@ -6915,14 +6915,30 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
     }
     if (sys_name == "permissions") {
         // Columns match SAP system.permissions:
-        //   OBJECT_NAME, OBJECT_TYPE (numeric), GRANTEE
+        //   OBJ_NAME, OBJ_TYPE (numeric), PARENT, GRANTEE
         //   then 10 permission flag columns (0=denied, 1=granted, ""=N/A for type)
-        // Bitmask: bit0=SELECT bit1=UPDATE bit2=INSERT bit3=DELETE
-        //          bit4=EXECUTE bit5=ACCESS bit6=CREATE bit7=ALTER bit8=DROP bit31=INHERIT
-        // DBF field names: max 10 chars.
+        // PARENT is empty for top-level objects; table name for field rows (OBJ_TYPE=4).
+        //
+        // ADS_PERMISSION_* bitmask constants (ace.h):
+        //   0x001=READ/SELECT  0x002=UPDATE   0x004=EXECUTE  0x008=INHERIT(meta)
+        //   0x010=INSERT       0x020=DELETE   0x040=LINK_ACCESS
+        //   0x080=CREATE       0x100=ALTER    0x200=DROP
+        //   0x80000000=WITH_GRANT / SAP sentinel
+        //
+        // Column display values:
+        //   ""  = not applicable for this object/grantee type
+        //   "0" = permission not granted
+        //   "1" = permission granted to a GROUP grantee
+        //   "2" = permission granted directly to a USER grantee
+        //
+        // SAP binary .add files store 0x80000000 as a constant info2 sentinel
+        // for ALL Permission records; per-bit rights are in encrypted blobs
+        // OpenADS cannot decode.  We therefore treat the SAP sentinel as
+        // granting full DML for group records.
         const std::vector<Col> cols = {
             {"OBJ_NAME",  'C', 200, 0},
             {"OBJ_TYPE",  'N',   3, 0},
+            {"PARENT",    'C', 200, 0},
             {"GRANTEE",   'C', 200, 0},
             {"SELECT",    'C',   1, 0},
             {"UPDATE",    'C',   1, 0},
@@ -6935,59 +6951,120 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
             {"ALTER",     'C',   1, 0},
             {"DROP",      'C',   1, 0},
         };
-        // Helper: extract a single bit as "0"/"1", or "" if not applicable.
-        auto bit = [](uint32_t mask, int pos) -> std::string {
-            return ((mask >> pos) & 1u) ? "1" : "0";
+
+        const uint32_t SAP_SENTINEL = 0x80000000u;
+
+        // Return "1" or "2" depending on grantee type, or "0" if not set.
+        // Groups use "1"; users use "2".
+        auto perm_val = [](bool set, bool is_grp) -> std::string {
+            if (!set) return "0";
+            return is_grp ? "1" : "2";
         };
-        // SAP ADS stores 0x80000000 as the standard "group write grant" bitmask.
-        // Bits 0-3 are all zero in this value, but SAP ACE interprets the flag as
-        // granting UPDATE(1)+INSERT(1)+DELETE(1) for group grantees on table objects.
-        // For user grantees the same value means INHERIT(1) from their group.
-        // This constant matches the behavior observed in SAP Data Architect output.
-        const uint32_t SAP_GROUP_WRITE_GRANT = 0x80000000u;
-        auto grp_dml = [SAP_GROUP_WRITE_GRANT](uint32_t mask, int pos) -> std::string {
-            // Bits 0-3: if they're explicitly set use them; otherwise treat the
-            // SAP_GROUP_WRITE_GRANT sentinel as UPDATE+INSERT+DELETE (bits 1-3).
-            uint32_t explicit_bits = mask & 0x0Fu;
-            if (explicit_bits != 0) return ((mask >> pos) & 1u) ? "1" : "0";
-            // SAP standard group write grant: UPDATE=1 INSERT=1 DELETE=1 SELECT=0
-            if (mask == SAP_GROUP_WRITE_GRANT && pos >= 1 && pos <= 3) return "1";
-            return "0";
+
+        // Decode a DML bitmask for a single logical column.
+        // sap_bit: actual bit position in the ADS_PERMISSION mask.
+        auto dml_col = [&perm_val](
+                            uint32_t mask, bool is_grp, int sap_bit) -> std::string {
+            const uint32_t SAP_SENTINEL = 0x80000000u;
+            if (mask & SAP_SENTINEL) {
+                // SAP sentinel: cannot decode actual level from encrypted blobs.
+                // For groups: approximate as full DML (SELECT+UPDATE+INSERT+DELETE).
+                // For users: SAP sentinel alone = INHERIT-only, no direct DML.
+                return perm_val(is_grp, is_grp);
+            }
+            return perm_val((mask >> sap_bit) & 1u, is_grp);
         };
+
+        // Execute column (ADS_PERMISSION_EXECUTE = bit 2 = 0x004).
+        auto exe_col = [&perm_val](uint32_t mask, bool is_grp) -> std::string {
+            const uint32_t SAP_SENTINEL = 0x80000000u;
+            if (mask & SAP_SENTINEL) return perm_val(is_grp, is_grp);
+            return perm_val((mask >> 2) & 1u, is_grp);
+        };
+
         std::vector<std::vector<std::string>> rows;
         for (const auto& pe : dd->permissions()) {
             const auto& t = pe.object_type;
-            bool is_table  = (t == "Table");
-            bool is_exec   = (t == "StoredProc" || t == "Function");
+            bool is_table    = (t == "Table");
+            bool is_exec     = (t == "StoredProc" || t == "Function");
             bool is_obj_user = (t == "User"  || t == "Group");
-            bool is_db     = (t == "Database");
-            bool is_group  = pe.grantee_is_group;
+            bool is_db       = (t == "Database");
+            bool is_grp      = pe.grantee_is_group;
             uint32_t m = pe.bitmask;
-            bool show_inherit = !is_group && !is_obj_user;
-            bool show_dml   = is_group ? (is_table || is_db) : false;
-            bool show_exec  = is_group ? (is_exec  || is_db) : false;
-            // Execute for groups: SAP_GROUP_WRITE_GRANT → grant execute (1)
-            auto grp_exe = [&]() -> std::string {
-                if (!show_exec) return "";
-                uint32_t explicit_bits = m & 0x10u;
-                if (explicit_bits) return (m & 0x10u) ? "1" : "0";
-                return (m == SAP_GROUP_WRITE_GRANT) ? "1" : "0";
+
+            bool show_dml    = (is_table || is_db);
+            bool show_exec   = (is_exec  || is_db);
+            // Groups don't use INHERIT (they are the inheritable entity).
+            // Users: show INHERIT if SAP sentinel set (0x80000000) or INHERIT bit (0x008) set.
+            bool show_inherit = !is_grp && !is_obj_user;
+            auto inherit_val  = [&]() -> std::string {
+                if (!show_inherit) return "";
+                bool set = (m & SAP_SENTINEL) || (m & 0x008u);
+                return set ? "1" : "0";
             };
+
+            // ALTER (0x100) and DROP (0x200).
+            auto alt_val = [&]() -> std::string {
+                if (is_obj_user || is_exec) return "";
+                if (m & SAP_SENTINEL) return perm_val(is_grp, is_grp);
+                return perm_val((m >> 8) & 1u, is_grp);
+            };
+            auto drop_val = [&]() -> std::string {
+                if (is_obj_user) return "";
+                if (m & SAP_SENTINEL) return perm_val(is_grp, is_grp);
+                return perm_val((m >> 9) & 1u, is_grp);
+            };
+
             rows.push_back({
                 pe.object_name,
                 std::to_string(pe.object_type_code),
+                "",                                                   // PARENT (top-level)
                 pe.grantee,
-                (show_dml)           ? grp_dml(m,0) : "",       // SELECT
-                (show_dml)           ? grp_dml(m,1) : "",       // UPDATE
-                (show_dml)           ? grp_dml(m,2) : "",       // INSERT
-                (show_dml)           ? grp_dml(m,3) : "",       // DELETE
-                show_exec            ? grp_exe()    : "",       // EXECUTE
-                (is_db && is_group)  ? bit(m,5)    : "",       // ACCESS
-                show_inherit         ? bit(m,31)   : "",       // INHERIT
-                (is_db && is_group)  ? bit(m,6)    : "",       // CREATE
-                (!is_obj_user && !is_exec) ? bit(m,7) : "",   // ALTER
-                (!is_obj_user)       ? bit(m,8)    : "",       // DROP
+                show_dml  ? dml_col(m, is_grp, 0)  : "",             // SELECT  (bit 0)
+                show_dml  ? dml_col(m, is_grp, 1)  : "",             // UPDATE  (bit 1)
+                show_dml  ? dml_col(m, is_grp, 4)  : "",             // INSERT  (bit 4)
+                show_dml  ? dml_col(m, is_grp, 5)  : "",             // DELETE  (bit 5)
+                show_exec ? exe_col(m, is_grp)      : "",             // EXECUTE (bit 2)
+                (is_db && is_grp) ? dml_col(m, is_grp, 6) : "",      // ACCESS  (bit 6)
+                inherit_val(),                                         // INHERIT
+                (is_db && is_grp) ? dml_col(m, is_grp, 7) : "",      // CREATE  (bit 7)
+                alt_val(),                                             // ALTER   (bit 8)
+                drop_val(),                                            // DROP    (bit 9)
             });
+
+            // Field-level rows: one row per field with OBJ_TYPE=4 and PARENT=table.
+            // SELECT/UPDATE/INSERT inherit from the table; DELETE/EXECUTE/etc. are N/A.
+            if (is_table) {
+                auto fp_it = dd->field_props().find(pe.object_name);
+                if (fp_it != dd->field_props().end()) {
+                    std::vector<std::string> fnames;
+                    fnames.reserve(fp_it->second.size());
+                    for (const auto& [fn, _] : fp_it->second)
+                        fnames.push_back(fn);
+                    std::sort(fnames.begin(), fnames.end());
+                    std::string fsel = dml_col(m, is_grp, 0);
+                    std::string fupd = dml_col(m, is_grp, 1);
+                    std::string fins = dml_col(m, is_grp, 4);
+                    for (const auto& fname : fnames) {
+                        rows.push_back({
+                            fname,
+                            "4",               // OBJ_TYPE = ADS_DD_FIELD_OBJECT
+                            pe.object_name,    // PARENT = table name
+                            pe.grantee,
+                            fsel,              // SELECT
+                            fupd,              // UPDATE
+                            fins,              // INSERT
+                            "",                // DELETE (N/A for fields)
+                            "",                // EXECUTE
+                            "",                // ACCESS
+                            "",                // INHERIT
+                            "",                // CREATE
+                            "",                // ALTER
+                            "",                // DROP
+                        });
+                    }
+                }
+            }
         }
         return build(cols, rows);
     }

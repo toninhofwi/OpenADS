@@ -100,6 +100,7 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **post-rc29** | 2026-06-03 | **Full Data Dictionary engine enforcement + DA-Web management UI.** Triggers fire server-side (BEFORE/AFTER INSERT/UPDATE/DELETE; bodies loaded from binary `.add`/`.am`); RI rules enforced (Restrict/Cascade/SetNull); permissions enforced on `AdsOpenTable` (`GRANT`/`REVOKE` SQL persists to `.add` and takes effect immediately). Binary `.add` parser extended: User property-byte XOR group-membership tokens decoded alongside Permission-record memberships; trigger SQL bodies loaded from the `.am` continuation memo. `system.permissions` virtual table returns SELECT/UPDATE/INSERT/DELETE/EXECUTE/ALTER/DROP per (grantee, object) with correct 0/1/2 values; `system.effectivepermissions` merges direct + inherited group rights. `AdsDDGetPermissions` / `AdsDDSetUserTableRights` / `AdsDDGetUserTableRights` implemented. SAP ACE API name aliases forwarded. `system.functions` virtual table added. Auto-opens `.adi` index when `AdsOpenTable` opens an `.adt`. ADT RowVersion/ModTime field type support. **DA-Web**: full browser-based Data Architect replacement (tables, fields, indexes, triggers, stored procedures, functions, views, RI objects, users, groups, permissions, SQL editor with export); powered by the `php_openads` native Zend extension. |
 | **v1.0.0-rc29** | 2026-05-26 | **Turnkey `hbmk2` (`.hbp`) example for Harbour apps — `examples/harbour-hbmk2/`.** Asked on the FiveTech forum: "alguna alma caritativa que proporcione un archivo de compilación `.hbp` para crear un programa con OpenADS — todos mis intentos han fracasado". The repo now ships a complete `hbmk2` project (x64 + x86 variants, Windows `build.cmd` + POSIX `build.sh` wrappers, `openads_demo.prg` console app that exercises `AdsConnect` → `DbCreate` → `INDEX ON UPPER(NAME)` → `dbSeek`) — drop in your `.prg`, set `OPENADS_LIB`, run `hbmk2`. The `.hbp` is short by design: only the two link entries that change for OpenADS (`-lrddads` + `-L${OPENADS_LIB} -lace64`). README and `docs/{en,es,pt}/getting-started.md` carry walkthroughs, including the typical "unresolved `AdsConnect60`" / "loaded the wrong `ace64.dll`" pitfalls. |
 | **v1.0.0-rc28** | 2026-05-22 | **ADT / ADM support (M4 ADT) — read + write SAP Advantage native tables.** OpenADS can now open `.adt` files produced by the original Advantage Client Engine and write records back; `.adm` memo stores auto-attach when the table carries `Memo` or `Binary` fields. Full 13-type field vocabulary: CHAR, CICHAR (case-insensitive, maps to `ADS_CISTRING` = 25), LOGICAL, DATE (4-byte Julian Day Number), DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY. ADM uses 256-byte fixed blocks with no per-block header; the 9-byte in-record reference (`block_no LE` + `data_len LE` + `0x00`) is resolved transparently by the engine. Record prefix: `0x04` = active / `0x05` = deleted, normalised to DBF convention on read and restored on write; null-bitmap bytes (1–4) are zeroed on `AppendBlank` rather than space-filled. `AdsCreateTable` with `ADS_ADT` still creates a DBF (ADT creation deferred); ADI index files are not yet implemented. Verified against `f:\pmsys\data\landlords.adt` (13 fields, 7 records, CICHAR key, ADM memo round-trip "SEC 8 preferred") via `tests/unit/abi_adt_smoke_test.cpp` (skipped on machines without the fixture). Suite 398 / 398. |
 | **v1.0.0-rc27** | 2026-05-17 | **`AdsGetField` pads CHARACTER fields to the declared width.** Reported by Pritpal Bedi — a Harbour `mini_xbrowse /ads` truncated every text column (`Charlie`→`Charl`, `Barcelona`→`Barcel`) where native DBFCDX showed them full. `AdsGetField` returned CHAR values rtrim'd (`make_string` strips trailing spaces); DBF CHAR is fixed-width space-padded, so xbrowse auto-sized columns to the trimmed value and clipped the rest. `AdsGetField` now re-pads CHARACTER values to the declared field width on both the local and remote read paths; the engine's internal decode stays trimmed so SQL / index keys / AOF are untouched (verified `fieldlenprobe.prg` matches the DBFCDX baseline, `idxprobe.prg` index walk still `SORTED=YES`, suite 397/397). Also: `tools/harbour_patch/rddads-compat.patch` applies again (a dropped blank context line had made `git apply` reject the `rddads.h` hunk); PHP binding gains `Cursor::fetchAssoc/fetchNum` + `Table::seek`; the release workflow adds a macOS Intel (x64) build leg. |
@@ -472,7 +473,7 @@ GetField → Skip → Disconnect`) round-trips end-to-end through a
 Windows-side client → remote Linux server over an SSH-forwarded
 TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
 
-### What works today (0.2.0)
+### What works today (v1.0.0-rc29+)
 
 #### Engine
 
@@ -543,8 +544,30 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   FPT blocks carry an explicit type tag (Text / Picture / Object), so
   the same field can hold either text memos or `ADS_BINARY` /
   `ADS_IMAGE` payloads with embedded NULs.
-- **Data Dictionary** — `.add` alias resolution; `Connection::open(<.add>)`
-  resolves member tables on every `AdsOpenTable`.
+- **Data Dictionary** — Full read/write support for both OpenADS-native text
+  format and the SAP binary `.add` / `.am` / `.ai` format.
+  `Connection::open(<.add>)` resolves member tables on every `AdsOpenTable`.
+  The engine enforces server-side: **triggers** (BEFORE / AFTER INSERT / UPDATE
+  / DELETE dispatch; bodies loaded from binary `.add` / `.am`), **referential
+  integrity** (Restrict, Cascade, SetNull on child INSERT / parent DELETE-UPDATE),
+  and **permissions** (GRANT/REVOKE; effective rights OR group memberships).
+  Virtual system tables: `system.tables`, `system.fields`, `system.indexes`,
+  `system.views`, `system.storedprocedures`, `system.functions`,
+  `system.usergroupmembers`, `system.usergroups`, `system.permissions`,
+  `system.effectivepermissions`.
+  SQL DDL: `GRANT`/`REVOKE` single or multiple rights, `CREATE DATABASE`,
+  `CREATE TABLE`/`INDEX`/`TRIGGER`/`PROCEDURE`/`FUNCTION`.
+  Group memberships decoded from both Permission records (SAP ACE v8+) and
+  User property-byte XOR tokens (pre-v8 format); both sources unioned.
+  **Note:** for SAP-created `.add` files, per-table DML differentiation within
+  a group grant is stored in opaque encrypted blobs that OpenADS cannot decode;
+  the engine approximates these as full access. OpenADS-created grants store
+  exact ADS_PERMISSION bitmasks and are fully accurate.
+  **DA-Web** — `DA-Web/` is a PHP web application that manages OpenADS data
+  dictionaries through a browser: browse tables, views, stored procedures,
+  functions, triggers, RI objects, users, groups; execute ad-hoc SQL; edit
+  table structure; generate DDL scripts. Powered by the `php_openads` native
+  PHP extension.
 - **Locking** — OS byte-range locks with the same ranges as the
   original ACE so installs can coexist during migration. Lock
   acquires are non-blocking (`LockFileEx LOCKFILE_FAIL_IMMEDIATELY`
@@ -556,19 +579,22 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
 
 - **231 `Ads*` exports** — every entry point Harbour
   `c:\harbour\lib\win\msvc64\rddads.lib` references is resolvable
-  through OpenADS' DLL. Real implementations for ~ 130 of them; the
-  remainder are **local-mode silent-success** (the `AdsMg*`
-  server-management surface, the `AdsDD*` advanced-DD CRUD surface,
-  and the `Cache*` / `Set*` / `Refresh*` / `Customize*` Harbour-side
-  preferences — all return `AE_SUCCESS` and either zero-fill the
-  caller's struct or report empty / quiescent state, so apps that
-  only inspect the return code keep running). **No exports
-  hard-fail with `AE_FUNCTION_NOT_AVAILABLE` at the function level
-  any more.** Specific ADD-only branches (e.g.
-  `AdsRestructureTable`'s `pucDeleteFields` / `pucChangeFields`
-  arguments) still surface that error code at the argument level
-  with a clear comment pointing at the 0.3.x deferral. The split
-  is documented inline in `src/abi/ace_stubs.cpp`.
+  through OpenADS' DLL. Real implementations for the full engine +
+  DD surface; the remainder are **local-mode silent-success** (the
+  `AdsMg*` server-management surface, and the `Cache*` / `Set*` /
+  `Refresh*` / `Customize*` Harbour-side preferences — all return
+  `AE_SUCCESS` and either zero-fill the caller's struct or report
+  empty / quiescent state). `AdsDD*` DD CRUD functions have real
+  implementations: `AdsDDCreate`, `AdsDDAddTable`, `AdsDDAddIndex`,
+  `AdsDDAddTrigger`, `AdsDDAddRelation`, `AdsDDAddUser`,
+  `AdsDDAddUserToGroup`, `AdsDDRemoveUser`, `AdsDDGetPermissions`,
+  `AdsDDSetUserTableRights`, `AdsDDGetUserTableRights`, and more.
+  **No exports hard-fail with `AE_FUNCTION_NOT_AVAILABLE` at the
+  function level.** Specific add-only branches (e.g.
+  `AdsRestructureTable`'s `pucChangeFields` type-conversion) still
+  surface that error code at the argument level with a comment.
+  SAP ACE API name aliases are forwarded to the OpenADS equivalents
+  so legacy code calling the old names still resolves correctly.
 - **6 legacy CRT shims** — `_dclass`, `_dsign`, `_wfsopen`, `_getch`,
   `_kbhit`, `_eof` re-exported from `ace64.dll` so apps built against
   Harbour's prebuilt MSVC2013-era libs link without rebuilding
@@ -576,31 +602,42 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
 
 #### SQL
 
-- **DML.** `INSERT INTO <t> (cols) VALUES (lits)` (M10.5),
-  `UPDATE <t> SET col=lit, … [WHERE …]` (M10.7), and
-  `DELETE FROM <t> [WHERE …]` (M10.7) all flow through
-  `AdsExecuteSQLDirect`; the dispatcher peeks at the leading
-  keyword and routes to the right path.
-- **SELECT.** `SELECT * FROM <table> [WHERE <expr>] [ORDER BY <col>
-  [ASC|DESC]]` where `<expr>` is a full boolean tree built from
-  `AND` / `OR` / `NOT` / parens (M10.3) over leaves that are either
-  an infix comparison `<col> op <lit>` (six operators: `=`, `!=` /
-  `<>`, `<`, `>`, `<=`, `>=`; literal can be a string `'…'` or a
-  numeric `42` / `3.14`) or `CONTAINS(<col>, '<query>')` against a
-  prebuilt `.fts` file. ORDER BY (M10.6) materialises matching
-  recnos and sorts by the column's typed value. CONTAINS captures
-  a precomputed recno-set so the FTS lookup runs once per query,
-  not per row. Projection lists, joins, aggregates, subqueries,
-  `CREATE TABLE` / `CREATE INDEX` arrive in later 0.3.x milestones.
+- **DML** — `INSERT INTO <t> (cols) VALUES (lits)`, `UPDATE <t> SET
+  col=lit … [WHERE …]`, `DELETE FROM <t> [WHERE …]`, `GRANT <rights>
+  ON <obj> TO <principal>`, `REVOKE <rights> ON <obj> FROM
+  <principal>` (comma-separated rights list), `CREATE DATABASE`,
+  `CREATE TABLE`, `CREATE INDEX`, `CREATE TRIGGER`, `CREATE PROCEDURE`,
+  `CREATE FUNCTION`.
+- **SELECT** — full projection lists; `WHERE` with boolean tree
+  (`AND` / `OR` / `NOT` / parens) over infix comparisons, `IN (…)`,
+  `BETWEEN`, `EXISTS`, scalar subqueries, `CONTAINS(<col>,'query')`;
+  `ORDER BY <col> [ASC|DESC]`; `GROUP BY … [HAVING …]`; `DISTINCT`;
+  `LIMIT` / `TOP`; `INNER` / `LEFT` / `RIGHT` / `FULL` JOIN; `UNION`
+  / `UNION ALL`; aggregates `COUNT` / `SUM` / `AVG` / `MIN` / `MAX`;
+  window functions `ROW_NUMBER()` / `RANK()` / `DENSE_RANK()` over
+  `PARTITION BY … ORDER BY …`.
+- **Virtual system tables** — `system.tables`, `system.fields`,
+  `system.indexes`, `system.views`, `system.storedprocedures`,
+  `system.functions`, `system.usergroupmembers`, `system.usergroups`,
+  `system.permissions`, `system.effectivepermissions`.
+- **DD SQL** — `GRANT`/`REVOKE` write Permission records to the `.add`
+  file and mirror into the live `permissions_` map so enforcement takes
+  effect immediately without reopening the DD.
 
 #### Tests
 
-- **271 doctest cases / 4360 assertions** passing on Windows / MSVC
-  Release.
-- **Harbour smoke** harness producing a runnable `smoke.exe` that
-  drives the full read + write + index + multi-tag + transaction +
-  memo + compound-expression path through `rddads.lib` and OpenADS'
-  `ace64.dll`.
+- **517 doctest cases** passing on Windows / MSVC Release (cross-platform
+  CI green on Windows MSVC, Ubuntu 24.04 clang, macOS AppleClang).
+- **Harbour smoke** harness (`smoke.exe`) drives the full read + write +
+  index + multi-tag + transaction + memo + compound-expression path
+  through `rddads.lib` and OpenADS' `ace64.dll`.
+- **Permissions unit tests** (`tests/unit/abi_dd_perms_test.cpp`) cover
+  no-ACL open, level 0 block, level 1 read-only, level 2 write, group
+  inheritance, check_rights=0 bypass, bitmask bit positions, and the
+  `AdsDDSetUserTableRights` / `AdsDDGetUserTableRights` round-trip.
+- **Tools** — `tests/tools/sap_perm_probe.cpp` (calls `AdsDDGetPermissions`
+  via SAP ACE64 to probe real bitmasks) and `tests/tools/dump_perm_records.cpp`
+  (dumps raw info2 + property blobs from any binary `.add` file).
 
 ## Roadmap
 

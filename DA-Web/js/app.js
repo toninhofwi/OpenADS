@@ -401,22 +401,72 @@
           `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
              <button class="btn btn-sm btn-primary" id="save-group-${tabId}">&#128190; Save Changes</button>
              <span id="save-group-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+             <span style="font-size:11px;color:#585b70;margin-left:8px;">Field rows reflect table-level permissions (set at table level to change)</span>
            </div>
            <div id="group-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+        // Object type → human label mapping (SAP ADS_DD_* codes)
+        const TYPE_LABEL = { 1:'Table', 4:'Field', 6:'View', 10:'Stored Proc', 18:'Function' };
+
+        // Per-column N/A and editability rules:
+        //   isExecType   (10, 18) → only EXECUTE shown; DML columns show —
+        //   isFieldType  (4)      → SELECT/UPDATE/INSERT shown read-only; DELETE/EXECUTE show —
+        //   isSchemaType (1, 6)   → ALTER/DROP applicable; N/A for fields/exec
+        const isExecType   = t => t === 10 || t === 18;
+        const isFieldType  = t => t === 4;
+        const isSchemaType = t => t === 1 || t === 6;
+
+        const DASH = '<span style="color:#45475a;font-size:13px;display:block;text-align:center;">—</span>';
+        const check = (on, editable) => on
+          ? `<span style="color:${editable?'#a6e3a1':'#6a9f7e'};font-size:16px;display:block;text-align:center;${editable?'cursor:pointer':'opacity:0.6'};">✓</span>`
+          : `<span style="color:${editable?'#f38ba8':'#9a6f72'};font-size:16px;display:block;text-align:center;${editable?'cursor:pointer':'opacity:0.6'};">✗</span>`;
+
+        // readonly=true → display-only (no cellClick toggle)
+        const permCol = (title, field, readonly = false) => ({
+          title, field, width: 72, headerSort: false,
+          formatter: (cell) => {
+            const t = cell.getRow().getData().type;
+            if (field === 'canExec')  return isExecType(t)   ? check(cell.getValue()==='Yes', !readonly) : DASH;
+            if (field === 'canDelete') return (isFieldType(t) || isExecType(t)) ? DASH : check(cell.getValue()==='Yes', !readonly);
+            if (field === 'canAlter' || field === 'canDrop') return isSchemaType(t) ? check(cell.getValue()==='Yes', false) : DASH;
+            // canSelect / canInsert / canUpdate
+            if (isExecType(t)) return DASH;
+            return check(cell.getValue()==='Yes', !(isFieldType(t) || readonly));
+          },
+          cellClick: (_e, cell) => {
+            if (readonly) return;
+            const t = cell.getRow().getData().type;
+            if (isFieldType(t)) return;
+            if (field === 'canExec'   && !isExecType(t)) return;
+            if (field !== 'canExec'   &&  isExecType(t)) return;
+            if (field === 'canDelete' &&  isExecType(t)) return;
+            if ((field === 'canAlter' || field === 'canDrop')) return;  // DDL: read-only
+            cell.setValue(cell.getValue() === 'Yes' ? 'No' : 'Yes');
+          },
+        });
 
         const grid = new Tabulator('#group-tbl-' + tabId, { /* global Tabulator */
           data: resp.data,
           layout: 'fitDataFill',
-          pagination: 'local', paginationSize: 200, height: 'calc(100% - 34px)',
+          pagination: 'local', paginationSize: 500, height: 'calc(100% - 34px)',
           placeholder: '(no objects)',
+          rowFormatter: row => {
+            if (row.getData().type === 4)
+              row.getElement().style.background = '#181825';
+          },
           columns: [
-            { title: 'Object',   field: 'object',  widthGrow: 3, headerSort: true },
-            { title: 'Type',     field: 'type',    width: 100,   headerSort: false },
-            { title: 'Select',   field: 'canSelect', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
-            { title: 'Insert',   field: 'canInsert', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
-            { title: 'Update',   field: 'canUpdate', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
-            { title: 'Delete',   field: 'canDelete', width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
-            { title: 'Execute',  field: 'canExec',   width: 80, editor: 'select', editorParams: { values: { '': '', Yes: 'Yes', No: 'No' } } },
+            { title: 'Object', field: 'object', widthGrow: 3, headerSort: true },
+            { title: 'Parent', field: 'parent', width: 130, headerSort: true,
+              formatter: cell => cell.getValue() ? escHtml(cell.getValue()) : '' },
+            { title: 'Type', field: 'type', width: 100, headerSort: false,
+              formatter: cell => TYPE_LABEL[cell.getValue()] || `Type ${cell.getValue()}` },
+            permCol('Select',  'canSelect'),
+            permCol('Insert',  'canInsert'),
+            permCol('Update',  'canUpdate'),
+            permCol('Delete',  'canDelete'),
+            permCol('Execute', 'canExec'),
+            permCol('Alter',   'canAlter', true),
+            permCol('Drop',    'canDrop',  true),
           ],
         });
 
@@ -455,68 +505,161 @@
   function loadUserData(tabId, dd, userName) {
     const container = document.getElementById('user-' + tabId);
     if (!container) return;
-    apiFetch(`api/user_groups.php?dd=${encodeURIComponent(dd)}&user=${encodeURIComponent(userName)}`)
-      .then(resp => {
-        if (resp.error) {
-          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
-          return;
+    Promise.all([
+      apiFetch(`api/user_groups.php?dd=${encodeURIComponent(dd)}&user=${encodeURIComponent(userName)}`),
+      apiFetch(`api/user_meta.php?dd=${encodeURIComponent(dd)}&user=${encodeURIComponent(userName)}`),
+    ]).then(([groupsResp, permsResp]) => {
+      if (groupsResp.error) {
+        container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(groupsResp.error)}</div>`;
+        return;
+      }
+
+      const inheritBadge = permsResp?.canInherit
+        ? `<span style="font-size:11px;color:#a6e3a1;margin-left:8px;" title="User inherits rights from group memberships">&#8679; Inherits from groups</span>`
+        : '';
+
+      container.innerHTML =
+        `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+           <span style="font-size:12px;color:#89b4fa;font-weight:600;">Group Memberships</span>
+           <button class="btn btn-sm" id="add-group-${tabId}">+ Add Group</button>
+           <button class="btn btn-sm" id="del-group-${tabId}">&#8722; Remove Selected</button>
+           <button class="btn btn-sm btn-primary" id="save-grp-${tabId}">&#128190; Save</button>
+           <span id="save-grp-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+         </div>
+         <div id="user-grp-${tabId}" style="flex:0 0 180px;min-height:0;overflow:hidden;border-bottom:2px solid #313244;"></div>
+         <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+           <span style="font-size:12px;color:#89b4fa;font-weight:600;">Direct Permissions</span>
+           ${inheritBadge}
+           <button class="btn btn-sm btn-primary" id="save-perm-${tabId}" style="margin-left:auto;">&#128190; Save Changes</button>
+           <span id="save-perm-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+           <span style="font-size:11px;color:#585b70;">Alter/Drop columns are read-only</span>
+         </div>
+         <div id="user-perm-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+      // ── Group membership grid ────────────────────────────────────────────────
+      const currentSet  = new Set((groupsResp.groups || []).map(g => g.toLowerCase()));
+      const available   = (groupsResp.allGroups || []).filter(g => !currentSet.has(g.toLowerCase()));
+      const availValues = Object.fromEntries(available.map(g => [g, g]));
+
+      const grpGrid = new Tabulator('#user-grp-' + tabId, { /* global Tabulator */
+        data: (groupsResp.groups || []).map(g => ({ group: g })),
+        layout: 'fitDataFill',
+        selectable: 1,
+        height: '100%',
+        placeholder: '(user is not a member of any groups)',
+        columns: [{ title: 'Group Name', field: 'group', widthGrow: 1, editor: 'select',
+          editorParams: { values: availValues, autocomplete: true, allowEmpty: true },
+          headerSort: true,
+          formatter: v => escHtml(v.getValue()),
+        }],
+      });
+
+      document.getElementById('add-group-' + tabId)?.addEventListener('click', () => {
+        const inGrid = new Set(grpGrid.getData().map(r => (r.group || '').toLowerCase()));
+        const opts = (groupsResp.allGroups || []).filter(g => !inGrid.has(g.toLowerCase()));
+        if (opts.length === 0) return;
+        grpGrid.addRow({ group: opts[0] }, false);
+      });
+      document.getElementById('del-group-' + tabId)?.addEventListener('click', () =>
+        grpGrid.getSelectedRows().forEach(r => r.delete()));
+
+      const saveGrpBtn = document.getElementById('save-grp-' + tabId);
+      const saveGrpMsg = document.getElementById('save-grp-msg-' + tabId);
+      saveGrpBtn?.addEventListener('click', async () => {
+        if (saveGrpMsg) saveGrpMsg.textContent = 'Saving…';
+        try {
+          const groups = grpGrid.getData().map(r => r.group).filter(g => g.trim() !== '');
+          const r = await apiFetch('api/save_user_groups.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dd, user: userName, groups }),
+          });
+          if (saveGrpMsg) saveGrpMsg.textContent = r.error ? `Error: ${r.error}` : 'Saved';
+        } catch (err) {
+          if (saveGrpMsg) saveGrpMsg.textContent = `Error: ${err.message}`;
         }
-        container.innerHTML =
-          `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
-             <button class="btn btn-sm" id="add-group-${tabId}">+ Add Group</button>
-             <button class="btn btn-sm" id="del-group-${tabId}">&#8722; Remove Selected</button>
-             <button class="btn btn-sm btn-primary" id="save-user-${tabId}">&#128190; Save Changes</button>
-             <span id="save-user-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
-           </div>
-           <div id="user-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+      });
 
-        // Groups the user is NOT yet a member of (available to add)
-        const currentSet = new Set((resp.groups || []).map(g => g.toLowerCase()));
-        const available  = (resp.allGroups || []).filter(g => !currentSet.has(g.toLowerCase()));
-        const availValues = Object.fromEntries(available.map(g => [g, g]));
+      // ── Direct permissions grid ──────────────────────────────────────────────
+      if (permsResp?.error || !permsResp?.data) {
+        const el = document.getElementById('user-perm-' + tabId);
+        if (el) el.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(permsResp?.error || 'Failed to load permissions')}</div>`;
+      } else {
+        const TYPE_LABEL   = { 1:'Table', 4:'Field', 6:'View', 10:'Stored Proc', 18:'Function' };
+        const isExecType   = t => t === 10 || t === 18;
+        const isFieldType  = t => t === 4;
+        const isSchemaType = t => t === 1 || t === 6;
 
-        const grid = new Tabulator('#user-tbl-' + tabId, { /* global Tabulator */
-          data: resp.groups.map(g => ({ group: g })),
+        const DASH = '<span style="color:#45475a;font-size:13px;display:block;text-align:center;">—</span>';
+        const check = (on, editable) => on
+          ? `<span style="color:${editable?'#a6e3a1':'#6a9f7e'};font-size:16px;display:block;text-align:center;${editable?'cursor:pointer':'opacity:0.6'};">✓</span>`
+          : `<span style="color:${editable?'#f38ba8':'#9a6f72'};font-size:16px;display:block;text-align:center;${editable?'cursor:pointer':'opacity:0.6'};">✗</span>`;
+
+        const permCol = (title, field, readonly = false) => ({
+          title, field, width: 72, headerSort: false,
+          formatter: (cell) => {
+            const t = cell.getRow().getData().type;
+            if (field === 'canExec')   return isExecType(t)   ? check(cell.getValue()==='Yes', !readonly) : DASH;
+            if (field === 'canDelete') return (isFieldType(t) || isExecType(t)) ? DASH : check(cell.getValue()==='Yes', !readonly);
+            if (field === 'canAlter' || field === 'canDrop') return isSchemaType(t) ? check(cell.getValue()==='Yes', false) : DASH;
+            if (isExecType(t)) return DASH;
+            return check(cell.getValue()==='Yes', !(isFieldType(t) || readonly));
+          },
+          cellClick: (_e, cell) => {
+            if (readonly) return;
+            const t = cell.getRow().getData().type;
+            if (isFieldType(t)) return;
+            if (field === 'canExec'   && !isExecType(t)) return;
+            if (field !== 'canExec'   &&  isExecType(t)) return;
+            if (field === 'canDelete' &&  isExecType(t)) return;
+            if (field === 'canAlter'  || field === 'canDrop') return;
+            cell.setValue(cell.getValue() === 'Yes' ? 'No' : 'Yes');
+          },
+        });
+
+        const permGrid = new Tabulator('#user-perm-' + tabId, { /* global Tabulator */
+          data: permsResp.data,
           layout: 'fitDataFill',
-          selectable: 1,
-          height: 'calc(100% - 34px)',
-          placeholder: '(user is not a member of any groups)',
-          columns: [{ title: 'Group Name', field: 'group', widthGrow: 1, editor: 'select',
-            editorParams: { values: availValues, autocomplete: true, allowEmpty: true },
-            headerSort: true,
-            formatter: v => escHtml(v.getValue()),
-          }],
+          pagination: 'local', paginationSize: 500, height: '100%',
+          placeholder: '(no permission records for this user)',
+          rowFormatter: row => {
+            if (row.getData().type === 4)
+              row.getElement().style.background = '#181825';
+          },
+          columns: [
+            { title: 'Object', field: 'object', widthGrow: 3, headerSort: true },
+            { title: 'Parent', field: 'parent', width: 130, headerSort: true,
+              formatter: cell => cell.getValue() ? escHtml(cell.getValue()) : '' },
+            { title: 'Type', field: 'type', width: 100, headerSort: false,
+              formatter: cell => TYPE_LABEL[cell.getValue()] || `Type ${cell.getValue()}` },
+            permCol('Select',  'canSelect'),
+            permCol('Insert',  'canInsert'),
+            permCol('Update',  'canUpdate'),
+            permCol('Delete',  'canDelete'),
+            permCol('Execute', 'canExec'),
+            permCol('Alter',   'canAlter', true),
+            permCol('Drop',    'canDrop',  true),
+          ],
         });
 
-        document.getElementById('add-group-' + tabId)?.addEventListener('click', () => {
-          // Rebuild available list based on current grid data
-          const inGrid = new Set(grid.getData().map(r => (r.group || '').toLowerCase()));
-          const opts = (resp.allGroups || []).filter(g => !inGrid.has(g.toLowerCase()));
-          if (opts.length === 0) return;
-          grid.addRow({ group: opts[0] }, false);
-        });
-        document.getElementById('del-group-' + tabId)?.addEventListener('click', () =>
-          grid.getSelectedRows().forEach(r => r.delete()));
-
-        const saveBtn = document.getElementById('save-user-' + tabId);
-        const msgEl   = document.getElementById('save-user-msg-' + tabId);
-        saveBtn?.addEventListener('click', async () => {
-          if (msgEl) msgEl.textContent = 'Saving…';
+        const savePermBtn = document.getElementById('save-perm-' + tabId);
+        const savePermMsg = document.getElementById('save-perm-msg-' + tabId);
+        savePermBtn?.addEventListener('click', async () => {
+          if (savePermMsg) savePermMsg.textContent = 'Saving…';
           try {
-            const groups = grid.getData().map(r => r.group).filter(g => g.trim() !== '');
-            const r = await apiFetch('api/save_user_groups.php', {
+            const r = await apiFetch('api/save_user_meta.php', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ dd, user: userName, groups }),
+              body: JSON.stringify({ dd, user: userName, rows: permGrid.getData() }),
             });
-            if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : 'Saved';
+            if (savePermMsg) savePermMsg.textContent = r.error ? `Error: ${r.error}` : `Saved ${r.saved} permission(s)`;
           } catch (err) {
-            if (msgEl) msgEl.textContent = `Error: ${err.message}`;
+            if (savePermMsg) savePermMsg.textContent = `Error: ${err.message}`;
           }
         });
-      })
-      .catch(err => {
-        if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
-      });
+      }
+    })
+    .catch(err => {
+      if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+    });
   }
 
   // ── RI Object form tab ──────────────────────────────────────────────────────
@@ -542,9 +685,15 @@
         container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(riResp.error)}</div>`;
         return;
       }
-      const ri = riResp.ri || {};
-      const tables = tablesResp.tables || [];
-      const mkOpts = (list, sel) => list.map(t => `<option${t===sel?' selected':''}>${escHtml(t)}</option>`).join('');
+      const ri         = riResp.ri || {};
+      const tables     = tablesResp.tables || [];
+      const parentTags = riResp.parentTags || [];
+      const childTags  = riResp.childTags  || [];
+
+      const mkOpts  = (list, sel) => list.map(t => `<option${t===sel?' selected':''}>${escHtml(t)}</option>`).join('');
+      const tagOpts = (list, sel) => list.map(t =>
+        `<option${t.toLowerCase()===(sel||'').toLowerCase()?' selected':''}>${escHtml(t)}</option>`
+      ).join('');
       const ruleOpts = (sel) => ['Restrict','Cascade','SetNull'].map(v => `<option${v===sel?' selected':''}>${v}</option>`).join('');
 
       container.innerHTML = `
@@ -557,7 +706,7 @@
             </select>
             <label>Primary Key Tag</label>
             <select id="ri-ptag-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
-              <option value="${escAttr(ri.parent_tag||'')}">${escHtml(ri.parent_tag||'')}</option>
+              ${tagOpts(parentTags, ri.parent_tag)}
             </select>
             <label>Child Table</label>
             <select id="ri-ctbl-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
@@ -565,7 +714,7 @@
             </select>
             <label>Foreign Key Tag</label>
             <select id="ri-ctag-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
-              <option value="${escAttr(ri.child_tag||'')}">${escHtml(ri.child_tag||'')}</option>
+              ${tagOpts(childTags, ri.child_tag)}
             </select>
             <label>Update Rule</label>
             <select id="ri-urule-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:4px;border-radius:4px;">
@@ -583,27 +732,22 @@
           </div>
         </div>`;
 
-      // Load index tags for a table and pre-select a specific tag
-      const loadTags = async (tableId, tagSelectId, selectValue = '') => {
-        const tbl = document.getElementById(tableId)?.value;
+      // Re-fetch tags when the user changes the parent or child table
+      const loadTags = async (tableId, tagSelectId) => {
+        const tbl = document.getElementById(tableId)?.value?.trim();
         if (!tbl) return;
         const tagSel = document.getElementById(tagSelectId);
         if (!tagSel) return;
         try {
-          const r = await apiFetch(`api/ri_meta.php?dd=${encodeURIComponent(dd)}&action=tags&table=${encodeURIComponent(tbl)}`);
-          const tags = r.tags || [];
-          tagSel.innerHTML = tags.map(t =>
-            `<option${t.toLowerCase() === selectValue.toLowerCase() ? ' selected' : ''}>${escHtml(t)}</option>`
-          ).join('');
-        } catch {}
+          const r = await apiFetch(`api/table_meta.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(tbl)}&kind=indexes`);
+          if (r.error) console.warn('loadTags error for', tbl, ':', r.error);
+          const tags = (r.data || []).map(row => row.Tag || '').filter(Boolean);
+          tagSel.innerHTML = tags.map(t => `<option>${escHtml(t)}</option>`).join('');
+        } catch (e) { console.warn('loadTags fetch error:', e); }
       };
 
       document.getElementById('ri-ptbl-' + tabId)?.addEventListener('change', () => loadTags('ri-ptbl-' + tabId, 'ri-ptag-' + tabId));
       document.getElementById('ri-ctbl-' + tabId)?.addEventListener('change', () => loadTags('ri-ctbl-' + tabId, 'ri-ctag-' + tabId));
-
-      // Populate tags immediately for the current parent and child tables
-      if (ri.parent) loadTags('ri-ptbl-' + tabId, 'ri-ptag-' + tabId, ri.parent_tag || '');
-      if (ri.child)  loadTags('ri-ctbl-' + tabId, 'ri-ctag-' + tabId, ri.child_tag  || '');
 
       const msgEl = document.getElementById('save-ri-msg-' + tabId);
       document.getElementById('save-ri-' + tabId)?.addEventListener('click', async () => {
@@ -1024,21 +1168,33 @@
 
     const { orderby = '', orderdir = 'ASC', seekVal = '' } = opts;
 
-    // Fetch index tags + table data in parallel
-    const tagsUrl = `api/table_meta.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}&kind=indexes`;
-    const dataUrl = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`
-      + (orderby ? `&orderby=${encodeURIComponent(orderby)}&orderdir=${encodeURIComponent(orderdir)}` : '');
+    // Derive the leading field from the index expression (e.g. "leaseid" from "leaseid;enddate")
+    const seekField = orderby ? orderby.split(/[;,]/)[0].trim() : '';
+    const seekActive = !!(seekVal && seekField);
 
-    let indexTags = [], resp;
+    // Fetch index tags, field metadata, and row data in parallel
+    const tagsUrl   = `api/table_meta.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}&kind=indexes`;
+    const fieldsUrl = `api/table_meta.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}&kind=fields`;
+    let dataUrl = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`;
+    if (orderby) dataUrl += `&orderby=${encodeURIComponent(orderby)}&orderdir=${encodeURIComponent(orderdir)}`;
+    if (seekActive) dataUrl += `&seek=${encodeURIComponent(seekVal)}&seekfield=${encodeURIComponent(seekField)}`;
+
+    let indexTags = [], fields = [], resp;
     try {
-      [indexTags, resp] = await Promise.all([
+      [indexTags, fields, resp] = await Promise.all([
         fetch(tagsUrl).then(r => r.json()).then(r => r.data || []).catch(() => []),
+        fetch(fieldsUrl).then(r => r.json()).then(r => r.data || []).catch(() => []),
         fetch(dataUrl).then(r => r.json()),
       ]);
     } catch (err) {
       container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
       return;
     }
+
+    // Set of PK field names (uppercase) — these cells are read-only for existing rows
+    const pkFieldsUpper = new Set(
+      fields.filter(f => f.Index === 'Primary').map(f => (f.Field || '').toUpperCase())
+    );
 
     if (resp.error) {
       container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
@@ -1053,6 +1209,11 @@
         return `<option value="${escAttr(expr)}"${sel}>${escHtml(t.Tag)}</option>`;
       })).join('');
 
+    const pillStyle = 'display:flex;align-items:center;gap:3px;background:#f0a500;color:#1e1e2e;'
+      + 'padding:2px 6px 2px 9px;border-radius:10px;font-size:11px;font-weight:600;';
+    const clearBtnStyle = 'background:none;border:none;cursor:pointer;color:#1e1e2e;font-size:14px;'
+      + 'line-height:1;padding:0 0 0 2px;font-weight:bold;';
+
     container.innerHTML = `
       <div id="seek-bar-${tabId}" style="flex:0 0 auto;display:flex;gap:6px;align-items:center;padding:4px 8px;background:#1e1e2e;border-bottom:1px solid #313244;">
         <select id="idx-sel-${tabId}" style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 6px;border-radius:4px;font-size:12px;">
@@ -1061,6 +1222,10 @@
         <input id="seek-inp-${tabId}" type="text" placeholder="Seek to…" value="${escAttr(seekVal)}"
           style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 8px;border-radius:4px;font-size:12px;width:180px;">
         <button class="btn" id="seek-go-${tabId}" style="font-size:12px;padding:3px 10px;">Go</button>
+        <span id="seek-pill-${tabId}" style="${pillStyle}${seekActive ? '' : 'display:none;'}">
+          ⊙ ${escHtml(seekVal)}
+          <button id="seek-clear-${tabId}" style="${clearBtnStyle}" title="Clear seek">×</button>
+        </span>
         <span id="seek-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
       </div>
       <div id="tabulator-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
@@ -1070,14 +1235,23 @@
       data: resp.data,
       autoColumns: true,
       autoColumnsDefinitions: function (defs) {
-        return defs.map(def => ({
-          ...def,
-          editor: 'input',
-          editable: function (cell) {
-            const inst = tblState[tabId];
-            return !!(inst && inst.pendingRow && cell.getRow() === inst.pendingRow);
-          },
-        }));
+        return defs.map(def => {
+          const isPk = pkFieldsUpper.has((def.field || '').toUpperCase());
+          return {
+            ...def,
+            editor: 'input',
+            editable: function (cell) {
+              const inst = tblState[tabId];
+              if (!inst) return false;
+              // During row insert: all fields editable (user may need to provide PK)
+              if (inst.pendingRow && cell.getRow() === inst.pendingRow) return true;
+              // Existing row: only non-PK fields
+              return !isPk;
+            },
+            // Subtle visual hint for PK columns
+            ...(isPk ? { headerTooltip: 'Primary key — read only' } : {}),
+          };
+        });
       },
       layout: 'fitDataFill',
       pagination: 'local',
@@ -1109,9 +1283,11 @@
         <button class="tbl-btn" data-act="up"      title="Previous record">&#9650;</button>
         <button class="tbl-btn" data-act="down"    title="Next record">&#9660;</button>
         <span class="tbl-btn-sep"></span>
-        <button class="tbl-btn" data-act="add"    title="Add row">&#xff0b;</button>
-        <button class="tbl-btn" data-act="delete" title="Delete row">&#x2715;</button>
-        <button class="tbl-btn tbl-btn-confirm" data-act="confirm" title="Confirm" disabled>&#x2714;</button>
+        <button class="tbl-btn" data-act="add"        title="Add row">&#xff0b;</button>
+        <button class="tbl-btn" data-act="delete"     title="Delete row">&#x2715;</button>
+        <button class="tbl-btn tbl-btn-confirm" data-act="confirm" title="Confirm insert" disabled>&#x2714;</button>
+        <span class="tbl-btn-sep"></span>
+        <button class="tbl-btn tbl-btn-save" data-act="save-edits" title="Save cell edits" disabled>&#x1F4BE;</button>
         <span class="tbl-btn-sep"></span>`;
       bar.addEventListener('click', e => {
         const btn = e.target.closest('[data-act]');
@@ -1121,12 +1297,46 @@
       if (paginator) paginator.prepend(bar);
       tblState[tabId] = {
         tbl, dd, table, rowIdx: -1, pendingRow: null,
-        orderby, orderdir,
-        confirmBtn: bar.querySelector('[data-act="confirm"]'),
+        orderby, orderdir, seekVal, seekField,
+        pkFields: [...pkFieldsUpper],
+        dirtyRows: new Map(),
+        confirmBtn:   bar.querySelector('[data-act="confirm"]'),
+        saveEditsBtn: bar.querySelector('[data-act="save-edits"]'),
       };
 
-      // Seek to matching row after initial load
-      if (seekVal) seekInTabulator(tbl, orderby, seekVal, tabId);
+      // Capture original row data when a cell editor opens (before value changes)
+      tbl.on('cellEditing', (cell) => {
+        const inst = tblState[tabId];
+        if (!inst) return;
+        const row = cell.getRow();
+        if (row === inst.pendingRow) return;
+        if (!inst.dirtyRows.has(row)) {
+          inst.dirtyRows.set(row, { orig: { ...row.getData() } });
+        }
+      });
+
+      // Enable Save button after any cell is changed
+      tbl.on('cellEdited', (cell) => {
+        const inst = tblState[tabId];
+        if (!inst) return;
+        if (cell.getRow() === inst.pendingRow) return;
+        if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = false;
+      });
+
+      // When a seek is active the server already returned rows starting at the match;
+      // row 0 is always the hit — select and highlight it.
+      if (seekActive) {
+        const firstRows = tbl.getRows();
+        if (firstRows.length) {
+          tbl.selectRow(firstRows[0]);
+          tblState[tabId].rowIdx = 0;
+          const msgEl = document.getElementById('seek-msg-' + tabId);
+          if (msgEl) {
+            const matched = String(firstRows[0].getData()[seekField] ?? '');
+            if (matched) msgEl.textContent = `→ ${matched}`;
+          }
+        }
+      }
 
       // Update index dropdown when column header is clicked (client-side sort)
       tbl.on('dataSorted', function (sorters) {
@@ -1145,35 +1355,23 @@
     document.getElementById('seek-go-' + tabId)?.addEventListener('click', () => {
       const selectedExpr = document.getElementById('idx-sel-' + tabId)?.value || '';
       const val          = (document.getElementById('seek-inp-' + tabId)?.value || '').trim();
-      const dir          = orderdir;  // preserve current direction
-      // Reload with the selected index order, then seek
-      loadTableData(tabId, dd, table, { orderby: selectedExpr, orderdir: dir, seekVal: val });
+      if (val && !selectedExpr) {
+        const msgEl = document.getElementById('seek-msg-' + tabId);
+        if (msgEl) msgEl.textContent = 'Select an index to seek';
+        return;
+      }
+      loadTableData(tabId, dd, table, { orderby: selectedExpr, orderdir, seekVal: val });
     });
 
-    // Also trigger Go on Enter in the seek input
+    // Clear-seek button: reload without seek, preserve ordering
+    document.getElementById('seek-clear-' + tabId)?.addEventListener('click', () => {
+      loadTableData(tabId, dd, table, { orderby, orderdir, seekVal: '' });
+    });
+
+    // Enter in seek input triggers Go
     document.getElementById('seek-inp-' + tabId)?.addEventListener('keydown', e => {
       if (e.key === 'Enter') document.getElementById('seek-go-' + tabId)?.click();
     });
-  }
-
-  // Scroll the tabulator to the first row where the leading index field matches seekVal.
-  function seekInTabulator(tbl, orderby, seekVal, tabId) {
-    if (!seekVal || !orderby) return;
-    const firstField = orderby.split(/[;,]/)[0].trim();
-    if (!firstField) return;
-    const rows = tbl.getRows();
-    const low = seekVal.toLowerCase();
-    const target = rows.find(r => {
-      const v = String(r.getData()[firstField] ?? '').toLowerCase();
-      return v >= low;
-    });
-    if (target) {
-      tbl.deselectRow();
-      tbl.selectRow(target);
-      tbl.scrollToRow(target, 'top', false);
-      const msgEl = document.getElementById('seek-msg-' + tabId);
-      if (msgEl) msgEl.textContent = `→ ${String(target.getData()[firstField] ?? '')}`;
-    }
   }
 
   // Navigate to a row by its 0-based index in the full dataset.
@@ -1195,12 +1393,39 @@
     const { tbl, dd, table } = inst;
 
     switch (act) {
+      case 'save-edits': {
+        if (!inst.dirtyRows || inst.dirtyRows.size === 0) return;
+        const jobs = [];
+        for (const [row, { orig }] of inst.dirtyRows) {
+          jobs.push(
+            apiFetch('api/row_ops.php', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'update', dd: inst.dd, table: inst.table,
+                orig, row: row.getData(), pkFields: inst.pkFields,
+              }),
+            }).catch(e => ({ error: e.message }))
+          );
+        }
+        Promise.all(jobs).then(results => {
+          const errs = results.filter(r => r.error).map(r => r.error);
+          inst.dirtyRows.clear();
+          if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = true;
+          setStatus(errs.length
+            ? `Save errors: ${errs.join('; ')}`
+            : `Saved ${results.length} row(s)`);
+        });
+        break;
+      }
       case 'refresh': {
-        // Preserve current ordering when refreshing
-        const ob = inst.orderby || '';
+        const ob = inst.orderby  || '';
         const od = inst.orderdir || 'ASC';
-        const url = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`
-          + (ob ? `&orderby=${encodeURIComponent(ob)}&orderdir=${encodeURIComponent(od)}` : '');
+        const sv = inst.seekVal  || '';
+        const sf = inst.seekField || '';
+        let url = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`;
+        if (ob) url += `&orderby=${encodeURIComponent(ob)}&orderdir=${encodeURIComponent(od)}`;
+        if (sv && sf) url += `&seek=${encodeURIComponent(sv)}&seekfield=${encodeURIComponent(sf)}`;
         fetch(url).then(r => r.json())
           .then(resp => { if (!resp.error) { tbl.replaceData(resp.data); inst.rowIdx = -1; } })
           .catch(() => {});
@@ -1376,7 +1601,7 @@
       if (resp.columns !== undefined) {
         msgEl.textContent = `${resp.data.length} row(s)`;
         if (results) {
-          results.innerHTML = `<div id="sql-tab-${tabId}"></div>`;
+          results.innerHTML = `<div id="sql-tab-${tabId}" style="height:100%;"></div>`;
 
           // Detect columns whose values contain newlines — use textarea formatter.
           const multilineCols = new Set();
@@ -1392,24 +1617,99 @@
               : col
           );
 
-          new Tabulator('#sql-tab-' + tabId, {  /* global Tabulator */
+          const sqlTable = new Tabulator('#sql-tab-' + tabId, {  /* global Tabulator */
             data: resp.data,
             columns,
             layout: 'fitDataFill',
+            height: '100%',
             pagination: 'local',
             paginationSize: 50,
             paginationSizeSelector: [25, 50, 100, 200],
             movableColumns: true,
             placeholder: '(no rows)',
           });
+
+          // ── Export buttons — injected into the paginator bar on the left ────
+          const blobDownload = (content, filename, mime) => {
+            const url = URL.createObjectURL(new Blob([content], { type: mime }));
+            Object.assign(document.createElement('a'), { href: url, download: filename }).click();
+            URL.revokeObjectURL(url);
+          };
+
+          sqlTable.on('tableBuilt', () => {
+            const paginator = document.querySelector(`#sql-tab-${tabId} .tabulator-paginator`);
+            if (!paginator) return;
+
+            // Guard: only add once
+            if (paginator.querySelector('.sql-export-bar')) return;
+
+            const bar = document.createElement('div');
+            bar.className = 'sql-export-bar';
+            bar.innerHTML =
+              `<span class="sql-export-label">Export:</span>
+               <button class="btn btn-sm" data-fmt="csv"  >CSV</button>
+               <button class="btn btn-sm" data-fmt="html" >HTML</button>
+               <button class="btn btn-sm" data-fmt="json" >JSON</button>
+               <button class="btn btn-sm" data-fmt="xml"  >XML</button>
+               <button class="btn btn-sm" data-fmt="excel">Excel</button>`;
+
+            bar.addEventListener('click', e => {
+              const fmt = e.target.closest('[data-fmt]')?.dataset.fmt;
+              if (!fmt) return;
+              const stem = 'results';
+              if (fmt === 'csv')  { sqlTable.download('csv',  stem + '.csv');  return; }
+              if (fmt === 'html') { sqlTable.download('html', stem + '.html'); return; }
+              if (fmt === 'json') { sqlTable.download('json', stem + '.json'); return; }
+
+              const fields = sqlTable.getColumnDefinitions()
+                .filter(c => c.field)
+                .map(c => ({ field: c.field, title: c.title || c.field }));
+              const rows = sqlTable.getData();
+
+              if (fmt === 'xml') {
+                const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<results>\n';
+                rows.forEach(row => {
+                  xml += '  <row>\n';
+                  fields.forEach(f => { xml += `    <${f.field}>${esc(row[f.field])}</${f.field}>\n`; });
+                  xml += '  </row>\n';
+                });
+                xml += '</results>';
+                blobDownload(xml, stem + '.xml', 'application/xml');
+                return;
+              }
+
+              if (fmt === 'excel') {
+                const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                let xl = `<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Worksheet ss:Name="Results">
+  <Table>
+   <Row>${fields.map(f => `<Cell><Data ss:Type="String">${esc(f.title)}</Data></Cell>`).join('')}</Row>\n`;
+                rows.forEach(row => {
+                  xl += `   <Row>${fields.map(f => {
+                    const v = row[f.field] ?? '';
+                    const isNum = v !== '' && !isNaN(Number(v));
+                    return `<Cell><Data ss:Type="${isNum ? 'Number' : 'String'}">${esc(v)}</Data></Cell>`;
+                  }).join('')}</Row>\n`;
+                });
+                xl += `  </Table>\n </Worksheet>\n</Workbook>`;
+                blobDownload(xl, stem + '.xls', 'application/vnd.ms-excel');
+                return;
+              }
+            });
+
+            paginator.prepend(bar);
+          });
         }
       } else {
         msgEl.textContent = resp.message ? '✓ ' + resp.message : '';
-        if (results) results.innerHTML = `<div class="alert alert-success">${escHtml(resp.message)}</div>`;
+        if (results) results.innerHTML = `<div class="alert alert-success" style="margin:8px;">${escHtml(resp.message)}</div>`;
       }
     } catch (err) {
       msgEl.textContent = '⚠ ' + err.message;
-      if (results) results.innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`;
+      if (results) results.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
     } finally {
       if (runBtn) runBtn.disabled = false;
     }
