@@ -1,0 +1,22 @@
+-inc
+-w3
+-es2
+
+test_open_ads_adsntx.prg
+
+# OpenADS build output dir — adjust via build.cmd or set OPENADS_DIR env var
+-L${OPENADS_DIR}
+
+# Harbour contrib RDDs + OpenADS import library
+-lrddads
+-lace64
+
+# Standard DBF RDDs
+-lrddcdx
+-lrddntx
+-lrddfpt
+
+# Linker: avoid CRT conflicts with Harbour's msvc64 build
+-ldflag=/NODEFAULTLIB:libucrt
+-ldflag=/NODEFAULTLIB:msvcrt
+-lucrt

@@ -28,6 +28,12 @@ tests/fixtures/**/_sys_*.dbf
 
 # Smoke-test build artefacts (third-party RDD harnesses)
 tests/smoke/harbour/smoke.exe
+tests/wilson/*.exe
+tests/wilson/*.obj
+tests/wilson/*.c
+tests/wilson/*.pdb
+tests/wilson/*.log
+tests/wilson/openads.*
 tests/smoke/harbour/smoke_out.txt
 tests/smoke/harbour/stubs.log
 tests/smoke/harbour/hb_out.log
