@@ -661,11 +661,22 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
     // Decoded memberships (property bytes only, no Permission records):
     //   AutoTasks → General (152)
     //   user      → Supervisors (150), Administrators (149)
-    //   testuser  → testgroup (10719)
+    //   testuser  → testgroup (10719)  [single-user slot — skipped, ambiguous]
     //   root      → Administrators (149), Supervisors (150), General (152)
-    //   RCB       → General (152), Administrators (149), Supervisors (150),
-    //               Readonly (151)  [slots 0-2 cross-validated; slot 3 has only
-    //               one user so the assignment is consistent but not confirmed]
+    //   RCB       → General (152), Administrators (149), Supervisors (150)
+    //               [slot 3 skipped: only RCB has tokens there; Internet (153)
+    //               is the correct group per SAP but cannot be confirmed without
+    //               at least one other user at the same slot for cross-validation]
+    //
+    // Built-in groups (DB:Public, DB:Admin, DB:Debug, DB:Backup):
+    //   These have NO Group records, NO Permission records, and NO XOR tokens
+    //   in the .add file.  Their membership is encoded in a 16-byte block at a
+    //   fixed position in each User record's property extra area, using a
+    //   per-user cipher (XOR-testing across three controlled test users with
+    //   known memberships showed zero shared tokens — the key is user-derived,
+    //   not per-database).  The algorithm is proprietary to the SAP ACE binary.
+    //   OpenADS cannot decode these memberships from the binary file.
+    //   DB:Public is hardcoded below (all users are always members per SAP spec).
     {
         std::unordered_set<uint32_t> valid_gids;
         for (const auto& [gid, gtype] : id_to_type)
@@ -725,6 +736,19 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             for (std::size_t s = 0; s < MAX_SLOTS; ++s) {
                 if (slot_data[s].empty()) break;
                 const auto& t0 = slot_data[s][0].tok;
+
+                // Count how many group IDs produce a valid K for this slot.
+                // With multiple users any valid K is cross-validated; with a
+                // single user, multiple candidates mean the result is ambiguous
+                // (we cannot distinguish e.g. Readonly from Internet).
+                // Strategy:
+                //   n_valid == 0  → no valid K, skip
+                //   n_valid == 1  → unambiguous, accept (even for 1 user)
+                //   n_valid >= 2 and multiple users → cross-validated, accept first
+                //   n_valid >= 2 and single user    → ambiguous, skip
+                int n_valid = 0;
+                std::array<uint8_t, 4> first_K{};
+
                 for (uint32_t gid : sorted_gids) {
                     std::array<uint8_t, 4> K = {
                         static_cast<uint8_t>(t0[0] ^ static_cast<uint8_t>(gid & 0xFFu)),
@@ -740,26 +764,38 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                             (static_cast<uint32_t>(t[2] ^ K[2]) << 16) |
                             (static_cast<uint32_t>(t[3] ^ K[3]) << 24);
                         if (!valid_gids.count(dec)) { ok = false; break; }
-                        // Reject if this user would be in the same group twice.
                         auto uit = user_prop_gids.find(e.user);
                         if (uit != user_prop_gids.end() && uit->second.count(dec)) {
                             ok = false; break;
                         }
                     }
                     if (ok) {
-                        slot_keys[s] = K; slot_known[s] = true;
-                        // Record decoded groups to enforce uniqueness for later slots.
-                        for (const auto& e : slot_data[s]) {
-                            const auto& t = e.tok;
-                            uint32_t dec =
-                                static_cast<uint32_t>(t[0] ^ K[0]) |
-                                (static_cast<uint32_t>(t[1] ^ K[1]) << 8) |
-                                (static_cast<uint32_t>(t[2] ^ K[2]) << 16) |
-                                (static_cast<uint32_t>(t[3] ^ K[3]) << 24);
-                            user_prop_gids[e.user].insert(dec);
-                        }
-                        break;
+                        if (n_valid == 0) first_K = K;
+                        ++n_valid;
+                        // For multi-user slots the first valid K is cross-validated;
+                        // no need to count further.
+                        if (slot_data[s].size() >= 2) break;
+                        // For single-user slots we must keep counting to detect
+                        // ambiguity (more than one valid candidate).
+                        if (n_valid >= 2) break;
                     }
+                }
+
+                // Skip: no valid K, or single user with multiple candidates.
+                if (n_valid == 0) continue;
+                if (n_valid >= 2 && slot_data[s].size() < 2) continue;
+
+                slot_keys[s] = first_K;
+                slot_known[s] = true;
+                // Record decoded groups to enforce uniqueness for later slots.
+                for (const auto& e : slot_data[s]) {
+                    const auto& t = e.tok;
+                    uint32_t dec =
+                        static_cast<uint32_t>(t[0] ^ first_K[0]) |
+                        (static_cast<uint32_t>(t[1] ^ first_K[1]) << 8) |
+                        (static_cast<uint32_t>(t[2] ^ first_K[2]) << 16) |
+                        (static_cast<uint32_t>(t[3] ^ first_K[3]) << 24);
+                    user_prop_gids[e.user].insert(dec);
                 }
             }
 
@@ -780,6 +816,13 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                 }
             }
         }
+
+        // DB:Public — SAP built-in group that every authenticated user belongs
+        // to.  It has no Group record in the binary .add file; its membership is
+        // encoded in a per-user cipher that OpenADS cannot decode.  Add it
+        // unconditionally for all users so system.usergroupmembers matches SAP.
+        for (const auto& uname : users_)
+            memberships_[uname].insert("DB:Public");
     }
 
     return {};

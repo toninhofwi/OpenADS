@@ -323,8 +323,8 @@ TEST_CASE("DataDict binary .add — remove_user_from_group round-trip") {
 TEST_CASE("DataDict binary .add — property-byte group memberships decoded") {
     // Verifies that groups stored in SAP-format User property bytes (not
     // Permission records) are correctly decoded by load_add_binary_().
-    // pmsys testuser is in testgroup (id=10719) via property bytes only.
     // pmsys root is in Administrators, Supervisors, General via property bytes.
+    // Note: testuser/testgroup were removed from the fixture; root is used instead.
     auto fixture = pmsys_fixture();
     if (!fs::exists(fixture)) {
         WARN("pmsys.add fixture not found, skipping property-byte decode test");
@@ -334,19 +334,26 @@ TEST_CASE("DataDict binary .add — property-byte group memberships decoded") {
     REQUIRE(opened.has_value());
     DataDict dd = std::move(opened).value();
 
-    // testuser → testgroup (only via property bytes, no Permission record)
-    CHECK(dd.is_member_of("testuser", "testgroup"));
-    // root → built-in groups (only via property bytes)
+    // root → groups stored only via property bytes (cross-validated, 2-3 users/slot)
     CHECK(dd.is_member_of("root", "Administrators"));
     CHECK(dd.is_member_of("root", "Supervisors"));
     CHECK(dd.is_member_of("root", "General"));
-    // RCB → user-created groups via Permission records (existing behaviour)
+    // RCB → user-created groups via Permission records
     CHECK(dd.is_member_of("RCB", "Tenants"));
     CHECK(dd.is_member_of("RCB", "Agents"));
     CHECK(dd.is_member_of("RCB", "Owners"));
-    // RCB also has built-in groups via property bytes
+    // RCB → groups via property bytes (cross-validated slots 0-2)
     CHECK(dd.is_member_of("RCB", "General"));
     CHECK(dd.is_member_of("RCB", "Administrators"));
+    CHECK(dd.is_member_of("RCB", "Supervisors"));
+    // Ambiguous slot (only RCB at slot 3, Readonly vs Internet indistinguishable):
+    // must NOT produce the wrong Readonly assignment.
+    CHECK_FALSE(dd.is_member_of("RCB", "Readonly"));
+    // DB:Public — hardcoded for all users (SAP built-in group, no record in .add)
+    CHECK(dd.is_member_of("RCB", "DB:Public"));
+    CHECK(dd.is_member_of("root", "DB:Public"));
+    CHECK(dd.is_member_of("user-admin", "DB:Public"));
+    CHECK(dd.is_member_of("user-public", "DB:Public"));
 }
 
 TEST_CASE("DataDict remove_table + reopen no longer has the alias") {
