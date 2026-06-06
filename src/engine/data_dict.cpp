@@ -552,8 +552,24 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         const std::string& target_name = target_name_it->second;
 
         if (target_type == "Group") {
-            // principal (User) is a member of target_name (Group).
-            memberships_[principal].insert(target_name);
+            // Group-membership records come in two varieties:
+            //
+            //   SAP-written   (AdsDDAddUserToGroup):   prop_null = true  (plen=0xFFFF)
+            //   OpenADS-written (our add_user_to_group): prop_null = false (hex property)
+            //
+            // SAP does NOT delete Permission records when removing a user from a
+            // group — it only updates the XOR property-byte tokens (Third Pass).
+            // This leaves stale records that SAP's own AdsDDGetUserProperty(1102)
+            // and system.usergroups do NOT include.  Verified on pmsys.add and
+            // mp.add: every SAP-written group-membership record has prop_null=true,
+            // every OpenADS-written one has prop_null=false.
+            //
+            // Rule: trust only prop_null=false (OpenADS-written) records here.
+            //       prop_null=true (SAP-written) records may be stale → skip them.
+            //       Current SAP memberships are decoded from XOR tokens (Third Pass).
+            if (!rec.prop_null) {
+                memberships_[principal].insert(target_name);
+            }
         } else {
             // ACL entry: store full bitmask for system.permissions.
             auto principal_type_it = id_to_type.find(rec.parent_id);

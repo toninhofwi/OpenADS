@@ -334,22 +334,29 @@ TEST_CASE("DataDict binary .add — property-byte group memberships decoded") {
     REQUIRE(opened.has_value());
     DataDict dd = std::move(opened).value();
 
-    // root → groups stored only via property bytes (cross-validated, 2-3 users/slot)
+    // root → groups decoded from XOR property bytes (cross-validated slots).
+    // Verified against AdsDDGetUserProperty(1102): root is in
+    // Administrators, Supervisors, General, DB:Public, DB:Admin, DB:Backup, DB:Debug.
     CHECK(dd.is_member_of("root", "Administrators"));
     CHECK(dd.is_member_of("root", "Supervisors"));
     CHECK(dd.is_member_of("root", "General"));
-    // RCB → user-created groups via Permission records
-    CHECK(dd.is_member_of("RCB", "Tenants"));
-    CHECK(dd.is_member_of("RCB", "Agents"));
-    CHECK(dd.is_member_of("RCB", "Owners"));
-    // RCB → groups via property bytes (cross-validated slots 0-2)
+
+    // RCB → XOR property-byte groups only (Permission records targeting groups
+    // are stale orphans; AdsDDGetUserProperty(1102) confirms RCB is in:
+    // Administrators, Supervisors, General, Internet, DB:Public, DB:Admin).
+    // Internet is at slot 3 (skipped: single-user, ambiguous candidates).
     CHECK(dd.is_member_of("RCB", "General"));
     CHECK(dd.is_member_of("RCB", "Administrators"));
     CHECK(dd.is_member_of("RCB", "Supervisors"));
-    // Ambiguous slot (only RCB at slot 3, Readonly vs Internet indistinguishable):
-    // must NOT produce the wrong Readonly assignment.
+    // Stale Permission records (Tenants/Agents/Owners) must NOT produce memberships
+    // — SAP's own property 1102 does not include these for RCB.
+    CHECK_FALSE(dd.is_member_of("RCB", "Tenants"));
+    CHECK_FALSE(dd.is_member_of("RCB", "Agents"));
+    CHECK_FALSE(dd.is_member_of("RCB", "Owners"));
+    // Ambiguous slot 3 must NOT assign the wrong group.
     CHECK_FALSE(dd.is_member_of("RCB", "Readonly"));
-    // DB:Public — hardcoded for all users (SAP built-in group, no record in .add)
+
+    // DB:Public — hardcoded for all users (SAP built-in, no record in .add)
     CHECK(dd.is_member_of("RCB", "DB:Public"));
     CHECK(dd.is_member_of("root", "DB:Public"));
     CHECK(dd.is_member_of("user-admin", "DB:Public"));
