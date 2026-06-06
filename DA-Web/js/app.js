@@ -526,7 +526,8 @@
            <button class="btn btn-sm btn-primary" id="save-grp-${tabId}">&#128190; Save</button>
            <span id="save-grp-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
          </div>
-         <div id="user-grp-${tabId}" style="flex:0 0 180px;min-height:0;overflow:hidden;border-bottom:2px solid #313244;"></div>
+         <div id="user-grp-${tabId}" style="flex:0 0 160px;min-height:0;overflow:hidden;"></div>
+         <div id="user-grp-builtin-${tabId}" style="border-bottom:2px solid #313244;background:#1e1e2e;min-height:22px;"></div>
          <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
            <span style="font-size:12px;color:#89b4fa;font-weight:600;">Direct Permissions</span>
            ${inheritBadge}
@@ -535,6 +536,25 @@
            <span style="font-size:11px;color:#585b70;">Alter/Drop columns are read-only</span>
          </div>
          <div id="user-perm-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+      // ── Built-in DB: group badges (read-only, cannot be edited via OpenADS) ──
+      const builtins = groupsResp.builtinGroups || [];
+      const builtinEl = document.getElementById('user-grp-builtin-' + tabId);
+      if (builtinEl) {
+        const badges = builtins.map(g =>
+          `<span style="display:inline-block;background:#313244;color:#a6adc8;border-radius:4px;
+                        padding:1px 7px;font-size:11px;margin:2px;" title="SAP built-in group — managed by per-user cipher, read-only in OpenADS">${escHtml(g)}</span>`
+        ).join('');
+        const note = groupsResp.dbGroupNote || '';
+        builtinEl.innerHTML = badges
+          ? `<div style="padding:2px 6px;">${badges}
+               <span style="font-size:10px;color:#585b70;margin-left:4px;" title="${escHtml(note)}">&#9432;</span>
+             </div>`
+          : `<div style="padding:2px 6px;font-size:11px;color:#585b70;">
+               No SAP built-in groups decoded.
+               <span title="${escHtml(note)}" style="cursor:default;">&#9432; DB:Admin/Backup/Debug not visible (per-user cipher)</span>
+             </div>`;
+      }
 
       // ── Group membership grid ────────────────────────────────────────────────
       const currentSet  = new Set((groupsResp.groups || []).map(g => g.toLowerCase()));

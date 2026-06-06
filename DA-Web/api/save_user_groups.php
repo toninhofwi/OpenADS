@@ -43,6 +43,12 @@ try {
         if ($g !== '') $current[] = $g;
     }
 
+    // Filter out DB: built-in groups — they are managed by SAP's per-user cipher
+    // and cannot be persistently changed via OpenADS (no XOR token encoding support).
+    $isBuiltin   = fn($g) => strncasecmp($g, 'DB:', 3) === 0;
+    $current     = array_values(array_filter($current,   fn($g) => !$isBuiltin($g)));
+    $newGroups   = array_values(array_filter($newGroups, fn($g) => !$isBuiltin($g)));
+
     $currentSet = array_map('strtoupper', $current);
     $newSet     = array_map('strtoupper', $newGroups);
 
