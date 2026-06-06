@@ -598,29 +598,34 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
     // -------------------------------------------------------------------------
     // Third pass: decode User property-byte group memberships.
     //
-    // Token encoding (reverse-engineered from pmsys.add with ACE32 v10):
+    // Token encoding (reverse-engineered from pmsys.add with ACE32 v10,
+    // verified against mp.add with SAP ACE64 v11 / 14 groups / 43 users):
     //
     //   token[slot] = K[slot] XOR group_id_LE_4bytes
     //
-    //   where K[slot] is a 4-byte per-database constant.  Each successive
-    //   group a user belongs to occupies one slot (slot 0 = first group added,
-    //   slot 1 = second, …).  The slot key K[slot] is the SAME for all users
-    //   in the same database — it is not user-specific.
+    //   where K[slot] is a 4-byte per-database constant.  Each user's token at
+    //   slot s encodes the group that user was assigned to in s-th position.
+    //   DIFFERENT users may be in different groups at the same slot index.
+    //   K[slot] is the SAME for all users in the same database.
     //
     // Structure of the extra area at offset plen in the 273-byte property zone:
     //
     //   [plen+0..plen+1]  uint16 LE count_field
     //                       0xFFFF → user has no property-byte groups (skip)
     //                       N×4   → N group tokens follow
-    //   [plen+2..plen+2+N×4-1]
-    //                     N × 4-byte tokens (slot 0 first)
-    //   [ ... ]           0x00 0x00 end marker, then 0xFF padding
+    //   [plen+2..plen+N×4+1]
+    //                     N × 4-byte XOR tokens (slot 0 first)
+    //   [plen+N×4+2 ..]   Post-token section (DB: built-in group membership
+    //                     block).  Contains 4-byte entries alternating FFFFFFFF
+    //                     separators and encoded values, optionally followed by
+    //                     a uint16 length + N bytes of per-user-encrypted data.
+    //                     This block uses a per-user cipher OpenADS cannot decode.
+    //   [...]             0xFF padding to end of 273-byte zone
+    //   [var]             XML-like <OTHER_PROPERTIES>...</OTHER_PROPERTIES> block,
+    //                     stored as uint16 length + XML bytes, inside the FF zone.
     //
     //   Note: plen varies per user (it is the password-hash length), so the
     //   extra area starts at a different file offset for each user record.
-    //   The password hash itself is NOT a fixed-length field; its length grows
-    //   with the password.  The 3 bytes that earlier analyses thought were
-    //   "group tokens inside plen" are simply part of a longer password hash.
     //
     // How K[slot] is derived at runtime (no documentation available):
     //
@@ -635,55 +640,62 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
     //
     // Disambiguation constraints:
     //
-    //   For built-in groups (obj_ids 149–153 in a typical database) all
-    //   candidates K[slot][0] that differ by 1–4 are initially consistent,
-    //   because swapping which user maps to Administrators vs. General vs.
-    //   Supervisors looks equally valid.  Two constraints resolve this:
-    //
     //   1. Ascending ID order: valid group IDs are tried smallest-first.
-    //      This matches the natural creation order of built-in groups and
-    //      picks the lowest-ID group for each slot's first occurrence.
+    //      This picks the lowest-ID group for each slot's first occurrence.
     //
     //   2. No-duplicate: once a K[slot] is found, the decoded group IDs are
     //      recorded per user.  A candidate K[s] that would assign a user to a
-    //      group it already holds from slot 0..s-1 is rejected.  This
-    //      eliminates the otherwise-valid "swap" assignments (e.g. a user
-    //      already in General from slot 0 cannot be in General again in slot 2).
+    //      group it already holds from slot 0..s-1 is rejected.
     //
-    // Together these two constraints uniquely determine K[slot] for all slots
-    // in all tested databases.
+    //   3. Single-user ambiguity: if only one user has a token at slot s AND
+    //      multiple K candidates pass all checks, the slot is skipped (cannot
+    //      be disambiguated without a second user for cross-validation).
+    //
+    // Together these constraints uniquely determine K[slot] for all slots in
+    // all tested databases (verified on pmsys.add, mp.add).
     //
     // Observed values for pmsys.add (pmsys database, verified with ACE32):
-    //   K[0] = [0x00, 0x71, 0x0D, 0x50]
-    //   K[1] = [0xE6, 0x96, 0x26, 0x39]
+    //   K[0] = [0x00, 0x71, 0x0D, 0x50]  K[1] = [0xE6, 0x96, 0x26, 0x39]
     //   K[2] = [0x6F, 0xF3, 0x58, 0xE7]
     //
-    // Decoded memberships (property bytes only, no Permission records):
-    //   AutoTasks → General (152)
-    //   user      → Supervisors (150), Administrators (149)
-    //   testuser  → testgroup (10719)  [single-user slot — skipped, ambiguous]
-    //   root      → Administrators (149), Supervisors (150), General (152)
-    //   RCB       → General (152), Administrators (149), Supervisors (150)
-    //               [slot 3 skipped: only RCB has tokens there; Internet (153)
-    //               is the correct group per SAP but cannot be confirmed without
-    //               at least one other user at the same slot for cross-validation]
+    // Observed values for mp.add (sfi-2021, 14 groups, 43 users, ACE64 v11):
+    //   K[0] = [0xBC, 0x56, 0x29, 0x7C]  K[1] = [0xB5, 0xCF, 0x07, 0x0D]
+    //   K[2] = [0xF0, 0x0B, 0x6E, 0xB2]  K[3] = [0xCF, 0xA0, 0x89, 0x50]
+    //   K[4] = [0xF6, 0xCE, 0x0A, 0xD9]  K[5] = [0x8B, 0x02, 0x78, 0x96]
+    //   K[6] = [0x7C, 0x9E, 0x0E, 0x6C]
+    //   (7 slots used; max 8 groups/user in this DB)
+    //
+    // Accuracy: property-byte XOR decodes 42/43 users correctly (cross-checked
+    // against system.usergroups HTML export).  The remaining user (RCB) has 3
+    // additional groups in Permission records (newer-format) handled by Second
+    // Pass above.  Combined accuracy: 43/43.
     //
     // Built-in groups (DB:Public, DB:Admin, DB:Debug, DB:Backup):
-    //   These have NO Group records, NO Permission records, and NO XOR tokens
-    //   in the .add file.  Their membership is encoded in a 16-byte block at a
-    //   fixed position in each User record's property extra area, using a
-    //   per-user cipher (XOR-testing across three controlled test users with
-    //   known memberships showed zero shared tokens — the key is user-derived,
-    //   not per-database).  The algorithm is proprietary to the SAP ACE binary.
-    //   OpenADS cannot decode these memberships from the binary file.
-    //   DB:Public is hardcoded below (all users are always members per SAP spec).
+    //   These have NO Group records and NO XOR tokens in the .add file.
+    //   DB:Admin/Backup/Debug: encoded in the post-token section with a per-user
+    //   cipher (key is user-derived, not per-database — confirmed by zero shared
+    //   tokens across users with known memberships).  Cannot be decoded offline.
+    //   DB:Public: hardcoded below — SAP spec says every authenticated user is a
+    //   member.  The other DB: groups are set by AdsDDAddUserToGroup via a
+    //   separate server-side call; we cannot replicate the encoding.
+    //
+    // SAP DLL alternative (when adssys credentials are available):
+    //   AdsDDGetUserProperty(hConn, username, 1102 /*ADS_DD_USER_GROUP_MEMBERSHIP*/,
+    //                        buf, &len)
+    //   Returns a semicolon-separated, null-terminated ASCII string of ALL group
+    //   names including DB: built-ins.  Example (pmsys.add, user root):
+    //     "General;Supervisors;Administrators;DB:Public;DB:Admin;DB:Debug;DB:Backup"
+    //   This is the authoritative source when available.  A future "SAP-DLL-assisted"
+    //   mode could call this function at load time (if ACE64.dll is on PATH and
+    //   adssys credentials are held) to replace the XOR brute-force entirely and
+    //   add DB:Admin/Debug/Backup support.  Not implemented — requires live creds.
     {
         std::unordered_set<uint32_t> valid_gids;
         for (const auto& [gid, gtype] : id_to_type)
             if (gtype == "Group") valid_gids.insert(gid);
 
         if (!valid_gids.empty()) {
-            constexpr std::size_t MAX_SLOTS = 10;
+            constexpr std::size_t MAX_SLOTS = 20;  // mp.add uses 7; pmsys uses 3
             constexpr std::size_t PROP_AREA = 273;
 
             struct TokEntry { std::string user; std::array<uint8_t, 4> tok; };
