@@ -91,3 +91,8 @@ Thumbs.db
 *.pdb
 *.ilk
 rddtst_ads.log
+
+# Prebuilt per-compiler import libraries are committed (release CI has no
+# Borland toolchain); regenerate with dist/import-libs/gen.ps1.
+!dist/import-libs/
+!dist/import-libs/**

@@ -126,6 +126,11 @@ jobs:
           # ACE name work without renaming anything.
           Copy-Item "$build/src/Release/openace$bits.dll"   "$stage/ace$bits.dll"
           Copy-Item "$build/src/Release/openace$bits.lib"   "$stage/ace$bits.lib" -ErrorAction SilentlyContinue
+          # Per-compiler import libraries (MSVC / MinGW-GCC / Borland) for
+          # ace<bits>.dll — prebuilt under dist/import-libs because the CI
+          # runners have no Borland toolchain (see dist/import-libs/gen.ps1).
+          New-Item -ItemType Directory "$stage/lib" | Out-Null
+          Copy-Item -Recurse "dist/import-libs/${{ matrix.arch }}/*" "$stage/lib/"
           # Server + bench CLIs
           Copy-Item "$build/tools/serverd/Release/openads_serverd.exe" "$stage/"
           Copy-Item "$build/tools/bench/Release/openads_bench.exe"     "$stage/"
