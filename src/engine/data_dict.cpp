@@ -390,9 +390,9 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                     // holds the continuation.  Read as many bytes as fit.
                     auto read_lstr = [&](std::string& out) {
                         if (pos + 2 > PL) return;
-                        uint16_t slen =
+                        uint16_t slen = static_cast<uint16_t>(
                             static_cast<uint8_t>(buf[PS + pos]) |
-                            (static_cast<uint16_t>(static_cast<uint8_t>(buf[PS + pos + 1])) << 8);
+                            (static_cast<uint16_t>(static_cast<uint8_t>(buf[PS + pos + 1])) << 8));
                         pos += 2;
                         if (slen == 0 || slen == 0xFFFF) return;
                         std::size_t readable = std::min<std::size_t>(slen, PL - pos);

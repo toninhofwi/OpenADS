@@ -43,6 +43,7 @@
 #include <thread>
 
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -4886,7 +4887,7 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         if (usLen >= 4 && (val[0] < '0' || val[0] > '9')) {
             // Binary 4-byte LE
             auto* b = static_cast<const std::uint8_t*>(pBuf);
-            out = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
+            out = static_cast<std::uint32_t>(b[0]) | (static_cast<std::uint32_t>(b[1]) << 8) | (static_cast<std::uint32_t>(b[2]) << 16) | (static_cast<std::uint32_t>(b[3]) << 24);
         } else if (!val.empty()) {
             try { out = static_cast<std::uint32_t>(std::stoul(val)); } catch (...) {}
         }
@@ -5189,14 +5190,14 @@ UNSIGNED32 AdsDDSetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         case ADS_DD_RI_UPDATE_RULE:
             if (pBuf && usLen >= 4) {
                 auto* b = static_cast<const std::uint8_t*>(pBuf);
-                std::uint32_t v = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
+                std::uint32_t v = static_cast<std::uint32_t>(b[0]) | (static_cast<std::uint32_t>(b[1]) << 8) | (static_cast<std::uint32_t>(b[2]) << 16) | (static_cast<std::uint32_t>(b[3]) << 24);
                 e.update_opt = std::to_string(v);
             }
             break;
         case ADS_DD_RI_DELETE_RULE:
             if (pBuf && usLen >= 4) {
                 auto* b = static_cast<const std::uint8_t*>(pBuf);
-                std::uint32_t v = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
+                std::uint32_t v = static_cast<std::uint32_t>(b[0]) | (static_cast<std::uint32_t>(b[1]) << 8) | (static_cast<std::uint32_t>(b[2]) << 16) | (static_cast<std::uint32_t>(b[3]) << 24);
                 e.delete_opt = std::to_string(v);
             }
             break;
@@ -6781,7 +6782,7 @@ UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
 // the system.* virtual tables from the connection's DataDict state.
 // `sys_name` is the part after "system." (already lower-cased by the caller).
 // Returns the basename of the temp file, or "" if the name is unknown.
-extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_name) {
+extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
     for (auto& ch : sys_name) ch = static_cast<char>(
         std::tolower(static_cast<unsigned char>(ch)));
 
@@ -7340,7 +7341,7 @@ extern "C++" static std::string build_system_dbf(Connection* c, std::string sys_
 
 // Dispatch for ADS built-in sp_* stored procedures. Returns true and sets *prc
 // if the name was recognized; caller falls through to the DLL path otherwise.
-extern "C++" static bool dispatch_sp_builtin(
+extern "C++" bool dispatch_sp_builtin(
         Connection* c,
         const std::string& uname,
         const std::vector<openads::sql::ExecuteProcedureArg>& args,
