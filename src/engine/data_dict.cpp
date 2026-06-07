@@ -9,6 +9,12 @@
 #include <sstream>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace openads::engine {
 
 namespace {
@@ -2080,6 +2086,106 @@ util::Result<void> DataDict::save() {
     if (!wrote) return wrote.error();
     if (auto s = file.sync(); !s) return s.error();
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// populate_builtin_memberships_via_sap
+//
+// SAP ACE stores DB:Admin, DB:Backup, DB:Debug membership in a 16-byte
+// encrypted block inside each User record's post-token section.  The
+// encryption uses a per-user key derived inside the SAP ACE binary — we
+// cannot decode it offline.  When the SAP DLL (ace64.dll) is present, we
+// use AdsDDGetUserProperty(ADS_DD_USER_GROUP_MEMBERSHIP=1102) to retrieve
+// the full semicolon-separated group list (including DB: built-ins) and
+// store the relevant groups in memberships_.
+//
+// Calling conventions (Windows x64, SAP ace64.dll):
+//   AdsConnect60    — UNSIGNED32 (WINAPI *)(UNSIGNED8*, UNSIGNED16,
+//                                           UNSIGNED8*, UNSIGNED8*,
+//                                           UNSIGNED32, ADSHANDLE*)
+//   AdsDDGetUserProperty — UNSIGNED32 (WINAPI *)(ADSHANDLE, UNSIGNED8*,
+//                                           UNSIGNED16, void*, UNSIGNED16*)
+//   AdsDisconnect   — UNSIGNED32 (WINAPI *)(ADSHANDLE)
+// ---------------------------------------------------------------------------
+void DataDict::populate_builtin_memberships_via_sap(
+    const std::string& adssys_password) noexcept
+{
+#ifdef _WIN32
+    if (!binary_format_) return;
+    if (builtin_memberships_populated_) return;
+    if (users_.empty() || path_.empty()) return;
+
+    // Minimal inline type aliases matching ace.h (no ace.h dependency).
+    using U8  = unsigned char;
+    using U16 = unsigned short;
+    using U32 = unsigned int;
+    using H64 = unsigned long long;  // ADSHANDLE on x64
+
+    typedef U32 (WINAPI *pfnConnect)(U8*, U16, U8*, U8*, U32, H64*);
+    typedef U32 (WINAPI *pfnGetUserProp)(H64, U8*, U16, void*, U16*);
+    typedef U32 (WINAPI *pfnDisconnect)(H64);
+
+    HMODULE dll = nullptr;
+    {
+        const char* candidates[] = {
+            "ace64.dll",
+            "f:\\Ads11\\ace64.dll",
+            nullptr
+        };
+        for (int i = 0; candidates[i] && !dll; ++i)
+            dll = LoadLibraryA(candidates[i]);
+        if (!dll) return;
+    }
+
+    auto* fnConnect = (pfnConnect)GetProcAddress(dll, "AdsConnect60");
+    auto* fnGetProp = (pfnGetUserProp)GetProcAddress(dll, "AdsDDGetUserProperty");
+    auto* fnDisconn = (pfnDisconnect)GetProcAddress(dll, "AdsDisconnect");
+
+    if (!fnConnect || !fnGetProp || !fnDisconn) {
+        FreeLibrary(dll);
+        return;
+    }
+
+    H64 hConn = 0;
+    U32 rc = fnConnect(
+        (U8*)path_.c_str(),
+        0x0001u /* ADS_LOCAL_SERVER */,
+        (U8*)"adssys",
+        (U8*)adssys_password.c_str(),
+        0u, &hConn);
+    if (rc != 0) {
+        FreeLibrary(dll);
+        return;
+    }
+
+    for (const auto& uname : users_) {
+        unsigned char buf[4096] = {};
+        U16 len = static_cast<U16>(sizeof(buf));
+        rc = fnGetProp(hConn, (U8*)uname.c_str(),
+                       1102u /* ADS_DD_USER_GROUP_MEMBERSHIP */,
+                       buf, &len);
+        if (rc != 0 || len == 0) continue;
+
+        // Parse "GroupA;GroupB;DB:Backup\0"
+        const char* p   = reinterpret_cast<const char*>(buf);
+        const char* end = p + len;
+        while (p < end) {
+            const char* semi = p;
+            while (semi < end && *semi != ';' && *semi != '\0') ++semi;
+            if (semi > p) {
+                std::string g(p, semi);
+                while (!g.empty() && g.back() == ' ') g.pop_back();
+                if (g == "DB:Admin" || g == "DB:Backup" || g == "DB:Debug")
+                    memberships_[uname].insert(std::move(g));
+            }
+            p = (semi < end && *semi == ';') ? semi + 1 : end;
+        }
+    }
+
+    fnDisconn(hConn);
+    FreeLibrary(dll);
+    builtin_memberships_populated_ = true;
+#endif
 }
 
 } // namespace openads::engine

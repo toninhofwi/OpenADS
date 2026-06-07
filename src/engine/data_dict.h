@@ -54,6 +54,15 @@ public:
     // Build a fresh empty DD on disk.
     static util::Result<DataDict> create(const std::string& path);
 
+    // Supplement DB: built-in group memberships (DB:Admin, DB:Backup, DB:Debug)
+    // via the SAP ACE DLL (ace64.dll).  Called after a successful connection
+    // when the caller holds adssys-level credentials.  No-ops gracefully if the
+    // DLL is not available or the connection fails.  Windows-only; binary .add
+    // format only.  Thread-safe: runs at most once per DataDict instance.
+    void populate_builtin_memberships_via_sap(const std::string& adssys_password) noexcept;
+
+    bool is_binary_format() const noexcept { return binary_format_; }
+
     // ---- TABLE (M6) ------------------------------------------------------
     util::Result<void> add_table(const std::string& alias,
                                  const std::string& relative_path);
@@ -374,6 +383,7 @@ private:
 
     // Binary format state (populated only when binary_format_ == true).
     bool binary_format_ = false;
+    bool builtin_memberships_populated_ = false;
     std::string binary_hdr_;            // raw hdr_len bytes, updated in-place
     std::uint32_t binary_hdr_len_ = 0;
     std::uint32_t binary_rec_len_ = 0;

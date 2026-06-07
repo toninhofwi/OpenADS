@@ -816,6 +816,13 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
         }
         if (!user.empty())
             raw->set_username(user);
+
+        // When connecting to a SAP binary .add file, attempt to supplement
+        // memberships_ with DB:Admin/DB:Backup/DB:Debug via the SAP ACE DLL.
+        // The encrypted per-user block in the .add binary cannot be decoded
+        // without the DLL.  This is a best-effort, no-op if DLL not found.
+        if (dd->is_binary_format() && !pwd.empty())
+            dd->populate_builtin_memberships_via_sap(pwd);
     }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
