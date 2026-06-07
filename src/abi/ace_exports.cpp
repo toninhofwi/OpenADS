@@ -658,7 +658,7 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
 // Returns effective permission level (0-4) for the authenticated user on a
 // DD table alias. Returns 4 (full) when no ACL or no DD is present.
 // Legacy — kept for callers that only need a coarse level.
-int table_perm_level(Connection* conn, const std::string& alias) {
+[[maybe_unused]] int table_perm_level(Connection* conn, const std::string& alias) {
     if (!conn || !conn->has_dd()) return 4;
     auto* dd = conn->dd();
     if (!dd->has_table_acl(alias)) return 4;
