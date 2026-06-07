@@ -1,3 +1,12 @@
+# Test fixtures synthesise binary DBF / index / DD blobs with integer
+# literals and `buf[int_index]` accesses. Under clang/gcc -Werror those
+# trip -Wconversion / -Wsign-conversion even though the narrowing is
+# intentional (masking bytes). Relax just those two for test code — the
+# library in src/ keeps the full strict warning set. MSVC is unaffected.
+if(NOT MSVC)
+    add_compile_options(-Wno-conversion -Wno-sign-conversion)
+endif()
+
 add_executable(openads_unit_tests
     unit/doctest_main.cpp
     unit/util_result_test.cpp
