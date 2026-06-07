@@ -318,11 +318,13 @@ std::string pad_char_field(std::string s, std::size_t width) {
 // Referential Integrity enforcement
 // ---------------------------------------------------------------------------
 
-// Tables where AdsAppendRecord was called but AdsWriteRecord hasn't fired.
-std::unordered_set<Table*>& pending_appends() {
-    static std::unordered_set<Table*> s;
-    return s;
-}
+// "AdsAppendRecord called but AdsWriteRecord hasn't fired yet" is tracked
+// per-Table via Table::pending_append() — see table.h. It used to be a
+// global std::unordered_set<Table*>, but a freed table's heap address
+// could be reused by a different table that still carried the stale
+// "pending append" flag, making a plain UPDATE take the INSERT path and
+// silently skip RI cascade/restrict enforcement (intermittent, heap-
+// layout dependent). Storing the flag on the Table removes that aliasing.
 
 // Recursion guard: prevents RI cascade actions from triggering a second
 // round of RI checks on the child table.
@@ -461,17 +463,27 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
         bool need_write = (del_opt == ADS_DD_RI_CASCADE ||
                            del_opt == ADS_DD_RI_SETNULL ||
                            del_opt == ADS_DD_RI_SETDEFAULT);
-        auto ch = conn->open_table(rule.child,
-                                   openads::engine::TableType::Cdx,
-                                   need_write ? openads::engine::OpenMode::Shared
-                                              : openads::engine::OpenMode::Read);
-        if (!ch) continue;   // can't open child → skip rule
-        Table* child = conn->lookup_table(ch.value());
-        if (!child) { conn->close_table(ch.value()); continue; }
+        // Reuse the application's already-open child instance when present
+        // (see ri_enforce_update for why a second open races and drops the
+        // action). Open a fresh one only as a fallback.
+        Table* child = conn->find_open_table(rule.child);
+        bool   opened_here = false;
+        Handle ch_handle = 0;
+        if (!child) {
+            auto ch = conn->open_table(rule.child,
+                                       openads::engine::TableType::Cdx,
+                                       need_write ? openads::engine::OpenMode::Shared
+                                                  : openads::engine::OpenMode::Read);
+            if (!ch) continue;   // can't open child → skip rule
+            child = conn->lookup_table(ch.value());
+            if (!child) { conn->close_table(ch.value()); continue; }
+            opened_here = true;
+            ch_handle   = ch.value();
+        }
 
         if (del_opt == ADS_DD_RI_RESTRICT) {
             bool any = ri_scan(*child, rule.parent_tag, pk_val, nullptr);
-            conn->close_table(ch.value());
+            if (opened_here) conn->close_table(ch_handle);
             if (any) {
                 return openads::util::Error{
                     openads::AE_RI_VIOLATION, 0,
@@ -501,25 +513,22 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
             }
             in_ri_check() = false;
             if (!matches.empty()) (void)child->flush();
-            conn->close_table(ch.value());
+            if (opened_here) conn->close_table(ch_handle);
         }
     }
     return {};
 }
 
-// Snapshot of PK field values captured at navigation time so ri_enforce_update
-// can compare old vs new without re-reading a dirty buffer. Keyed by Table*.
-std::unordered_map<Table*, std::unordered_map<std::string, std::string>>&
-pk_snapshots() {
-    static std::unordered_map<Table*, std::unordered_map<std::string, std::string>> m;
-    return m;
-}
-
 // Called after every successful local-table navigation.
-// If the table is a parent in any RI rule, snapshot its PK fields.
+// If the table is a parent in any RI rule, snapshot its PK fields onto
+// the Table itself (Table::ri_snapshot()). Storing the snapshot on the
+// Table — rather than in a global Table*-keyed map — means it lives and
+// dies with the table, so a freed-then-reallocated table can never
+// inherit a previous table's stale snapshot (the cause of intermittent
+// missed cascades/restrictions seen only in the full-suite run).
 void snapshot_ri_pks(Table* t) {
     if (!t || t->eof()) {
-        pk_snapshots().erase(t);
+        if (t) t->ri_snapshot().clear();
         return;
     }
     Connection* conn = conn_for_table(t);
@@ -533,7 +542,7 @@ void snapshot_ri_pks(Table* t) {
         if (rule.parent == alias) { is_parent = true; break; }
     }
     if (!is_parent) return;
-    auto& snap = pk_snapshots()[t];
+    auto& snap = t->ri_snapshot();
     snap.clear();
     for (auto& [rname, rule] : dd->ri()) {
         if (rule.parent != alias) continue;
@@ -565,11 +574,10 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
         // New PK value is in the dirty buffer.
         std::string new_pk = ri_trim(ri_read_field(parent, rule.parent_tag));
 
-        // Old PK value was snapshotted at navigation time.
-        auto sit = pk_snapshots().find(&parent);
-        if (sit == pk_snapshots().end()) continue;
-        auto fit = sit->second.find(rule.parent_tag);
-        if (fit == sit->second.end()) continue;
+        // Old PK value was snapshotted onto the parent Table at nav time.
+        auto& snap = parent.ri_snapshot();
+        auto fit = snap.find(rule.parent_tag);
+        if (fit == snap.end()) continue;
         std::string old_pk = fit->second;
 
         if (old_pk == new_pk) continue;   // no PK change for this rule
@@ -578,17 +586,29 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
         bool need_write = (upd_opt == ADS_DD_RI_CASCADE ||
                            upd_opt == ADS_DD_RI_SETNULL ||
                            upd_opt == ADS_DD_RI_SETDEFAULT);
-        auto ch = conn->open_table(rule.child,
-                                   openads::engine::TableType::Cdx,
-                                   need_write ? openads::engine::OpenMode::Shared
-                                              : openads::engine::OpenMode::Read);
-        if (!ch) continue;
-        Table* child = conn->lookup_table(ch.value());
-        if (!child) { conn->close_table(ch.value()); continue; }
+        // Prefer the child instance the application already has open on
+        // this connection — cascading into a *second* open of the same
+        // file races the OS file cache and share-mode locks, which
+        // intermittently dropped the cascade/restrict. Only open (and
+        // later close) a fresh instance when the child isn't already open.
+        Table* child = conn->find_open_table(rule.child);
+        bool   opened_here = false;
+        Handle ch_handle = 0;
+        if (!child) {
+            auto ch = conn->open_table(rule.child,
+                                       openads::engine::TableType::Cdx,
+                                       need_write ? openads::engine::OpenMode::Shared
+                                                  : openads::engine::OpenMode::Read);
+            if (!ch) continue;
+            child = conn->lookup_table(ch.value());
+            if (!child) { conn->close_table(ch.value()); continue; }
+            opened_here = true;
+            ch_handle   = ch.value();
+        }
 
         if (upd_opt == ADS_DD_RI_RESTRICT) {
             bool any = ri_scan(*child, rule.parent_tag, old_pk, nullptr);
-            conn->close_table(ch.value());
+            if (opened_here) conn->close_table(ch_handle);
             if (any) {
                 // Restore parent's old PK to disk. set_field wrote the new
                 // value immediately (writeback_record_), so we must undo it.
@@ -628,7 +648,7 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
             }
             in_ri_check() = false;
             if (!matches.empty()) (void)child->flush();
-            conn->close_table(ch.value());
+            if (opened_here) conn->close_table(ch_handle);
         }
     }
     return {};
@@ -821,23 +841,30 @@ UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
     // entry that owned the Table and leave dangling pointers behind.
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (c != nullptr) {
+        // Collect this connection's still-open Table handles. `s.conns.erase`
+        // below frees the Connection — and with it every Table it owns — so
+        // any registry slot still pointing at one of those Tables would dangle.
+        // A later allocation reusing that heap address then aliases the stale
+        // slot, which surfaces as AdsGetAllTables over-counting and, worse, a
+        // use-after-free on any Ads* call that looks the stale handle up.
+        // owns_table_ptr() identifies the owned tables precisely (the old
+        // heuristic could not, so it purged every registered Table*).
+        std::vector<Handle> owned_handles;
         std::vector<Table*> to_purge;
-        s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
+        s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
             if (k != HandleKind::Table) return;
             Table* tp = static_cast<Table*>(p);
-            if (tp == nullptr) return;
-            // Heuristic: if the connection's lookup_table on any handle
-            // returns this pointer, the table belongs to this conn. We
-            // don't have that handle here, so collect all tables and
-            // purge any whose driver path lives under the conn's data
-            // dir. Simpler: purge every Table* registered, since at
-            // teardown the caller already closed its tables and any
-            // stale residue is per-table.
+            if (tp == nullptr || !c->owns_table_ptr(tp)) return;
+            owned_handles.push_back(h);
             to_purge.push_back(tp);
         });
         for (Table* tp : to_purge) {
             purge_bindings_for_table(tp);
             purge_pending_binaries_for_table(tp);
+        }
+        for (Handle h : owned_handles) {
+            cursor_projections().erase(h);
+            s.registry.release(h);
         }
     }
     s.registry.release(hConnect);
@@ -1881,7 +1908,7 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
         (void)t->flush();
         purge_bindings_for_table(t);
         purge_pending_binaries_for_table(t);
-        pk_snapshots().erase(t);
+        t->ri_snapshot().clear();
     }
     cursor_projections().erase(hTable);
     s.registry.release(hTable);
@@ -2506,7 +2533,7 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     // lock layer no-ops in read/exclusive modes, and a lock contention
     // here doesn't invalidate the append itself.
     (void)t->try_lock_record_excl(t->recno());
-    pending_appends().insert(t);
+    t->set_pending_append(true);
     return ok();
 }
 
@@ -2519,7 +2546,8 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    bool is_insert = pending_appends().erase(t) > 0;
+    bool is_insert = t->pending_append();
+    t->set_pending_append(false);
     if (is_insert) {
         if (Connection* conn = conn_for_table(t)) {
             if (auto ri = ri_check_insert(conn, *t); !ri)
@@ -2546,7 +2574,7 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    pending_appends().erase(t);   // abandon any in-flight append
+    t->set_pending_append(false);   // abandon any in-flight append
     if (Connection* conn = conn_for_table(t)) {
         if (auto ri = ri_enforce_delete(conn, *t); !ri)
             return fail(ri.error());

@@ -64,10 +64,13 @@ util::Result<Connection> Connection::open(const std::string& data_dir) {
     return c;
 }
 
-util::Result<Handle> Connection::open_table(const std::string& relative_path,
-                                            engine::TableType  type,
-                                            engine::OpenMode   mode,
-                                            engine::LockingMode locking) {
+// Resolve a caller-supplied table name (DD alias, bare leaf, or path)
+// to the absolute on-disk file the driver opens. `type` is updated when
+// the extension implies a different driver than the caller's default.
+// Shared by open_table and find_open_table so both agree byte-for-byte
+// on which physical file a name maps to.
+std::string Connection::resolve_table_file(const std::string& relative_path,
+                                           engine::TableType&  type) {
     namespace fs = std::filesystem;
     std::string effective = relative_path;
     if (dd_.has_value()) effective = dd_->resolve(relative_path);
@@ -99,7 +102,31 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
         else if (ext == ".ntx" && type == engine::TableType::Cdx)
             type = engine::TableType::Ntx;
     }
-    auto resolved = platform::resolve_case_insensitive(full.string());
+    return platform::resolve_case_insensitive(full.string());
+}
+
+// Return a table already open on this connection that resolves to the
+// same physical file as `relative_path`, or nullptr if none is open.
+// Used by RI enforcement so a cascade/restrict acts on the very buffer
+// the application already holds, instead of opening a second instance
+// of the same file (two instances race on the OS file cache and on
+// share-mode locks, producing intermittent missed cascades).
+engine::Table* Connection::find_open_table(const std::string& relative_path,
+                                           engine::TableType  type) {
+    std::string resolved = resolve_table_file(relative_path, type);
+    for (auto& [h, holder] : tables_) {
+        (void)h;
+        if (holder && holder->path() == resolved) return holder.get();
+    }
+    return nullptr;
+}
+
+util::Result<Handle> Connection::open_table(const std::string& relative_path,
+                                            engine::TableType  type,
+                                            engine::OpenMode   mode,
+                                            engine::LockingMode locking) {
+    namespace fs = std::filesystem;
+    auto resolved = resolve_table_file(relative_path, type);
 
     auto t = engine::Table::open(resolved, type, mode, locking);
     if (!t) return t.error();

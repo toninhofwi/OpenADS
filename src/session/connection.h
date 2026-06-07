@@ -40,6 +40,14 @@ public:
 
     engine::Table* lookup_table(Handle h);
 
+    // Return a table already open on this connection that maps to the
+    // same physical file as `relative_path`, or nullptr. RI enforcement
+    // uses this to act on the application's open buffer rather than a
+    // second instance of the same file.
+    engine::Table* find_open_table(const std::string& relative_path,
+                                   engine::TableType  type =
+                                       engine::TableType::Cdx);
+
     const std::string& data_dir() const noexcept { return data_dir_; }
 
     // Transaction surface (M5).
@@ -121,6 +129,8 @@ public:
 
 private:
     util::Result<void> recover_orphan_tx_();
+    std::string resolve_table_file(const std::string& relative_path,
+                                   engine::TableType&  type);
 
     std::string                                                data_dir_;
     std::unordered_map<Handle, std::unique_ptr<engine::Table>> tables_;

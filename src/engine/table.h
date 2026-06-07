@@ -42,6 +42,23 @@ public:
 
     const std::string& path() const noexcept { return path_; }
 
+    // RI old-PK snapshot captured at navigation time and compared against
+    // the dirty buffer in ri_enforce_update to decide cascade/restrict.
+    // Held on the Table itself (not a global Table*-keyed map) so it is
+    // freed with the table and can never alias a reused heap address —
+    // the source of intermittent missed cascades/restrictions.
+    std::unordered_map<std::string, std::string>& ri_snapshot() noexcept {
+        return ri_snapshot_;
+    }
+
+    // Set between AdsAppendRecord and the matching AdsWriteRecord so the
+    // write knows it is an INSERT (RI insert-check) rather than an UPDATE
+    // (RI cascade/restrict). Held on the Table — not a global Table*-keyed
+    // set — so a freed-then-reused heap address can't make a plain update
+    // look like an append and silently bypass RI update enforcement.
+    bool pending_append() const noexcept { return pending_append_; }
+    void set_pending_append(bool v) noexcept { pending_append_ = v; }
+
     std::uint16_t field_count() const noexcept;
     const drivers::DbfField& field_descriptor(std::uint16_t idx) const;
     std::int32_t field_index(const std::string& name) const noexcept;
@@ -321,6 +338,8 @@ private:
     std::uint32_t                                 recno_  = 0;
     std::vector<std::uint8_t>                     record_buf_;
     std::string                                   path_;
+    std::unordered_map<std::string, std::string>  ri_snapshot_;
+    bool                                          pending_append_ = false;
     bool                                          last_seek_found_ = false;
     bool                                          aof_active_      = false;
     int                                           aof_opt_level_   = 0;
