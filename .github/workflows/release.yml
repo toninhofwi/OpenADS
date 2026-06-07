@@ -91,8 +91,14 @@ jobs:
           STAGE="openads-${{ steps.tag.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'macos' }}-${{ matrix.arch }}"
           mkdir -p "$STAGE"
           BUILD="build/${{ matrix.preset }}"
-          # Engine drop-in
-          cp "$BUILD"/src/libace64.* "$STAGE/" 2>/dev/null || true
+          # Engine shared lib is built as libopenace64.{so,dylib}. Ship it,
+          # plus a drop-in-named copy libace64.* for apps that load by the
+          # canonical ACE name.
+          for f in "$BUILD"/src/libopenace64.*; do
+            [ -e "$f" ] || continue
+            cp "$f" "$STAGE/"
+            cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+          done
           # Server + bench CLIs
           cp "$BUILD"/tools/serverd/openads_serverd "$STAGE/"
           cp "$BUILD"/tools/bench/openads_bench   "$STAGE/"
@@ -108,12 +114,18 @@ jobs:
           $stage = "openads-${{ steps.tag.outputs.version }}-windows-${{ matrix.arch }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
           $build = "build/${{ matrix.preset }}"
-          # Engine drop-in (ace32.dll on x86 / ace64.dll on x64)
-          Copy-Item "$build/src/Release/ace*.dll"           "$stage/"
-          # Import library so downstream apps + Harbour rddads can
-          # link against OpenADS by name.
-          Copy-Item "$build/src/Release/ace*.lib"           "$stage/" -ErrorAction SilentlyContinue
-          Copy-Item "$build/src/Release/ace*.exp"           "$stage/" -ErrorAction SilentlyContinue
+          $bits  = if ("${{ matrix.arch }}" -eq "x64") { "64" } else { "32" }
+          # The engine DLL is built as openace64.dll / openace32.dll so it
+          # can coexist with SAP's ace64.dll in the same PHP install. Ship
+          # that (DLL + import lib + exports)...
+          Copy-Item "$build/src/Release/openace$bits.dll"   "$stage/"
+          Copy-Item "$build/src/Release/openace$bits.lib"   "$stage/" -ErrorAction SilentlyContinue
+          Copy-Item "$build/src/Release/openace$bits.exp"   "$stage/" -ErrorAction SilentlyContinue
+          # ...plus a drop-in-named copy ace64.dll / ace32.dll (+ .lib) so
+          # Harbour rddads and legacy apps that load OpenADS by the canonical
+          # ACE name work without renaming anything.
+          Copy-Item "$build/src/Release/openace$bits.dll"   "$stage/ace$bits.dll"
+          Copy-Item "$build/src/Release/openace$bits.lib"   "$stage/ace$bits.lib" -ErrorAction SilentlyContinue
           # Server + bench CLIs
           Copy-Item "$build/tools/serverd/Release/openads_serverd.exe" "$stage/"
           Copy-Item "$build/tools/bench/Release/openads_bench.exe"     "$stage/"
