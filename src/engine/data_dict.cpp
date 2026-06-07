@@ -207,8 +207,9 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                 auto am_file = std::move(amf_res).value();
                 auto sz_res = am_file.size();
                 if (sz_res && sz_res.value() > 0) {
-                    am_buf.resize(sz_res.value());
-                    auto rr = am_file.read_at(0, am_buf.data(), sz_res.value());
+                    am_buf.resize(static_cast<std::size_t>(sz_res.value()));
+                    auto rr = am_file.read_at(0, am_buf.data(),
+                                              static_cast<std::size_t>(sz_res.value()));
                     if (rr && rr.value() < am_buf.size()) am_buf.resize(rr.value());
                 }
             }
