@@ -573,6 +573,9 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             }
         } else {
             // ACL entry: store full bitmask for system.permissions.
+            // SAP-written ACL records (prop_null=true, info2=0x80000000) signal
+            // that the DD needs to be imported via openads_import_dd.
+            if (rec.prop_null) has_sap_permissions_ = true;
             auto principal_type_it = id_to_type.find(rec.parent_id);
             bool is_grp = (principal_type_it != id_to_type.end() &&
                            principal_type_it->second == "Group");
@@ -689,23 +692,44 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
     //
     // Built-in groups (DB:Public, DB:Admin, DB:Debug, DB:Backup):
     //   These have NO Group records and NO XOR tokens in the .add file.
-    //   DB:Admin/Backup/Debug: encoded in the post-token section with a per-user
-    //   cipher (key is user-derived, not per-database — confirmed by zero shared
-    //   tokens across users with known memberships).  Cannot be decoded offline.
-    //   DB:Public: hardcoded below — SAP spec says every authenticated user is a
-    //   member.  The other DB: groups are set by AdsDDAddUserToGroup via a
-    //   separate server-side call; we cannot replicate the encoding.
+    //   DB:Public: hardcoded below — SAP spec: every authenticated user is a member.
     //
-    // SAP DLL alternative (when adssys credentials are available):
-    //   AdsDDGetUserProperty(hConn, username, 1102 /*ADS_DD_USER_GROUP_MEMBERSHIP*/,
-    //                        buf, &len)
-    //   Returns a semicolon-separated, null-terminated ASCII string of ALL group
-    //   names including DB: built-ins.  Example (pmsys.add, user root):
-    //     "General;Supervisors;Administrators;DB:Public;DB:Admin;DB:Debug;DB:Backup"
-    //   This is the authoritative source when available.  A future "SAP-DLL-assisted"
-    //   mode could call this function at load time (if ACE64.dll is on PATH and
-    //   adssys credentials are held) to replace the XOR brute-force entirely and
-    //   add DB:Admin/Debug/Backup support.  Not implemented — requires live creds.
+    //   DB:Admin/Backup/Debug: encoded as a per-user encrypted 16-byte block in the
+    //   post-token section.  Binary layout after the last XOR token:
+    //
+    //     [FF FF FF FF FF FF]  6-byte separator
+    //     [02 00 00 00]        marker
+    //     [FF FF FF FF]        4-byte separator
+    //     [02 00 00 00]        marker
+    //     uint16 LE cb_len     16 → cipher block follows; 0xFFFF → absent
+    //     [16 bytes]           per-user cipher block (present when cb_len==16)
+    //
+    //   The cipher block encodes which DB: built-in groups the user belongs to via
+    //   XOR with a per-user keystream.  The full 16-byte membership encodings are
+    //   known constants (confirmed universal across multiple databases):
+    //     DB:Admin  delta = {D1,75,DA,BB, 00,00,00,00, 00,00,00,20, D9,3D,92,6B}
+    //     DB:Backup delta = {7B,52,D9,C3, 00,00,00,00, 01,00,00,00, E0,E9,C4,79}
+    //     DB:Debug  delta = {6B,D5,21,9A, 00,00,00,00, 06,00,01,00, 0A,13,0F,3F}
+    //   i.e. cipher_member = keystream XOR delta; cipher_nonmember = keystream.
+    //   Membership bits specifically sit at block[8:12] (Admin:{00,00,00,20},
+    //   Backup:{01,00,00,00}, Debug:{06,00,01,00}).
+    //
+    //   WHY the cipher blocks cannot be decoded offline:
+    //     The keystream is derived from a per-database key inside the SAP ACE DLL.
+    //     While both LOCAL and REMOTE SAP server connections enumerate DB: group
+    //     memberships correctly via SQL (system.usergroupmembers) and via
+    //     AdsDDGetUserProperty(1102), the keystream itself is never exposed and no
+    //     offline algorithm has been reverse-engineered.  Exhaustive cryptanalysis
+    //     (DES-ECB, AES-128, TEA, XTEA, RC4 variants, differential analysis on 200
+    //     consecutive OID pairs) produced no match.
+    //     See tests/tools/sap_block_crack.cpp for the full analysis tool.
+    //
+    //   OpenADS-native persistence (current approach):
+    //     add_user_to_group(user, "DB:Admin") auto-creates a Group record for the
+    //     DB: built-in if none exists, then writes a Permission record.  This
+    //     survives save/load without the SAP DLL.  For SAP-created .add files the
+    //     cipher blocks remain undecodable; DB:Admin/Backup/Debug memberships in
+    //     those files are not visible to OpenADS unless re-added explicitly.
     {
         std::unordered_set<uint32_t> valid_gids;
         for (const auto& [gid, gtype] : id_to_type)
@@ -1276,6 +1300,28 @@ DataDict::add_user_to_group(const std::string& user,
         // back correctly by the Second pass in load_add_binary_().
         uint32_t user_id  = binary_obj_id_of_("User",  user);
         uint32_t group_id = binary_obj_id_of_("Group", group);
+
+        // DB: built-in groups (DB:Admin, DB:Backup, DB:Debug, DB:Public) have
+        // no Group records in SAP-created .add files.  Auto-create one so the
+        // Permission record below has a valid target ID and the membership
+        // survives save/load.
+        if (group_id == 0 && group.size() >= 3 &&
+            group[0]=='D' && group[1]=='B' && group[2]==':') {
+            groups_.insert(group);
+            BinaryRecord gr;
+            gr.active    = true;
+            gr.obj_id    = binary_alloc_id_();
+            gr.parent_id = binary_obj_id_of_("Database", "Database");
+            if (gr.parent_id == 0) gr.parent_id = 1;
+            gr.obj_type  = "Group";
+            gr.obj_name  = group;
+            gr.prop_null = true;
+            gr.info1     = 0;
+            gr.info2     = 0;
+            group_id     = gr.obj_id;
+            binary_recs_.push_back(std::move(gr));
+        }
+
         if (user_id == 0 || group_id == 0)
             return save();  // IDs not in DD yet — membership is in-memory only
         for (const auto& r : binary_recs_) {
@@ -1440,43 +1486,106 @@ DataDict::get_user_property(const std::string& user,
 }
 
 util::Result<void>
+DataDict::grant_permission(const std::string& obj_type,
+                            const std::string& obj_name,
+                            const std::string& grantee,
+                            uint32_t bitmask) {
+    if (obj_type.empty() || obj_name.empty() || grantee.empty())
+        return util::Error{5000, 0, "PERM obj_type/obj_name/grantee empty", ""};
+
+    bool is_grp = (groups_.find(grantee) != groups_.end());
+
+    // Keep table_perms_ coarse-level map in sync for Table objects
+    // (used by get_effective_permission and text-format TABLEPERM lines).
+    if (obj_type == "Table") {
+        int lvl = 0;
+        if (bitmask & 0x80000000u)            lvl = 4;
+        else if (bitmask & 0x020u)            lvl = 3;
+        else if (bitmask & (0x010u | 0x002u)) lvl = 2;
+        else if (bitmask & 0x001u)            lvl = 1;
+        table_perms_[obj_name][grantee] = lvl;
+    }
+
+    // Update existing permissions_ entry or append a new one.
+    bool found = false;
+    for (auto& pe : permissions_) {
+        if (pe.object_name == obj_name && pe.object_type == obj_type &&
+            pe.grantee == grantee) {
+            pe.bitmask          = bitmask;
+            pe.grantee_is_group = is_grp;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        auto type_code_of = [](const std::string& t) -> int {
+            if (t == "Table")      return 1;
+            if (t == "Field")      return 4;
+            if (t == "View")       return 6;
+            if (t == "User")       return 8;
+            if (t == "Group")      return 9;
+            if (t == "StoredProc") return 10;
+            if (t == "Database")   return 11;
+            if (t == "Link")       return 12;
+            if (t == "Function")   return 18;
+            return 0;
+        };
+        PermissionEntry pe;
+        pe.object_name      = obj_name;
+        pe.object_type      = obj_type;
+        pe.object_type_code = type_code_of(obj_type);
+        pe.grantee          = grantee;
+        pe.grantee_is_group = is_grp;
+        pe.bitmask          = bitmask;
+        permissions_.push_back(std::move(pe));
+    }
+
+    if (binary_format_) {
+        // Resolve grantee and target obj_ids.
+        uint32_t grantee_id = binary_obj_id_of_("User", grantee);
+        if (grantee_id == 0) grantee_id = binary_obj_id_of_("Group", grantee);
+        uint32_t target_id  = binary_obj_id_of_(obj_type, obj_name);
+        if (grantee_id == 0 || target_id == 0)
+            return save();  // objects not in binary DD yet — in-memory only
+
+        // Deactivate any existing Permission record for (grantee, target).
+        // This supersedes SAP-written records with the 0x80000000 full-access
+        // sentinel, replacing them with the actual imported bitmask.
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Permission" &&
+                r.parent_id == grantee_id && r.info1 == target_id)
+                r.active = false;
+        }
+
+        char name_buf[9];
+        std::snprintf(name_buf, sizeof(name_buf), "%08X", target_id);
+        BinaryRecord perm;
+        perm.active    = true;
+        perm.obj_id    = binary_alloc_id_();
+        perm.parent_id = grantee_id;
+        perm.obj_type  = "Permission";
+        perm.obj_name  = name_buf;
+        perm.prop_null = false;
+        perm.property  = name_buf;
+        perm.info1     = target_id;
+        perm.info2     = bitmask;
+        binary_recs_.push_back(std::move(perm));
+    }
+    return save();
+}
+
+util::Result<void>
 DataDict::set_table_permission(const std::string& table,
                                 const std::string& user_or_group,
                                 int level) {
     if (table.empty() || user_or_group.empty())
         return util::Error{5000, 0, "TABLEPERM table/user empty", ""};
-    table_perms_[table][user_or_group] = level;
-
-    // Mirror into permissions_ so system.permissions reflects GRANT/REVOKE.
-    // Encode using SAP ADS_PERMISSION_* bitmask constants:
-    //   bit0(0x01)=READ/SELECT  bit1(0x02)=UPDATE
-    //   bit4(0x10)=INSERT       bit5(0x20)=DELETE
-    //   bit31(0x80000000)=WITH_GRANT (used for FULL / level-4)
     uint32_t bitmask = 0;
-    if (level >= 1) bitmask |= 0x01u;  // READ / SELECT
-    if (level >= 2) bitmask |= 0x02u;  // UPDATE
-    if (level >= 2) bitmask |= 0x10u;  // INSERT
-    if (level >= 3) bitmask |= 0x20u;  // DELETE
-    if (level >= 4) bitmask = 0x80000000u;  // FULL / WITH_GRANT sentinel
-
-    // Update existing entry or add new one.
-    for (auto& pe : permissions_) {
-        if (pe.object_name == table && pe.grantee == user_or_group &&
-            pe.object_type == "Table") {
-            pe.bitmask = bitmask;
-            return save();
-        }
-    }
-    PermissionEntry pe;
-    pe.object_name      = table;
-    pe.object_type      = "Table";
-    pe.object_type_code = 1;
-    pe.grantee          = user_or_group;
-    pe.grantee_is_group = (groups_.find(user_or_group) != groups_.end());
-    pe.bitmask          = bitmask;
-    permissions_.push_back(std::move(pe));
-
-    return save();
+    if (level >= 1) bitmask |= 0x001u;
+    if (level >= 2) bitmask |= 0x002u | 0x010u;
+    if (level >= 3) bitmask |= 0x020u;
+    if (level >= 4) bitmask  = 0x80000000u;
+    return grant_permission("Table", table, user_or_group, bitmask);
 }
 
 // ---------------------------------------------------------------------------

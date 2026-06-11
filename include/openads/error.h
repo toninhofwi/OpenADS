@@ -23,6 +23,7 @@
 #undef AE_DIVISION_BY_ZERO
 #undef AE_LOGIN_FAILED
 #undef AE_REMOTE_ERROR
+#undef AE_SAP_PERMS_NEED_IMPORT
 
 namespace openads {
 
@@ -47,6 +48,7 @@ enum : std::uint32_t {
     AE_LOGIN_FAILED             = 7077,
     AE_ACCESS_DENIED            = 7079,
     AE_REMOTE_ERROR             = 5172,
+    AE_SAP_PERMS_NEED_IMPORT    = 5174, // DD has SAP-format permissions; run import tool
     AE_RI_VIOLATION             = 508   // referential integrity constraint failed
 };
 

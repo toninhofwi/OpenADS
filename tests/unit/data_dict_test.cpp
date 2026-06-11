@@ -320,6 +320,120 @@ TEST_CASE("DataDict binary .add — remove_user_from_group round-trip") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("DataDict binary .add — DB: built-in group membership round-trip") {
+    // Verifies that add_user_to_group for DB: built-in groups (DB:Admin etc.)
+    // persists across save/reload even though SAP .add files have no Group
+    // records for these built-ins.  The fix auto-creates a Group record so the
+    // Permission record has a valid target.
+    auto fixture = pmsys_fixture();
+    if (!fs::exists(fixture)) {
+        WARN("pmsys.add fixture not found, skipping DB: built-in group test");
+        return;
+    }
+    const auto dir = fs::temp_directory_path() / "openads_dd_bin_dbgrp";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    auto add_path = stage_pmsys(dir);
+
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        // Add user-admin to DB:Admin without prior create_group("DB:Admin").
+        REQUIRE(dd.add_user_to_group("user-admin", "DB:Admin").has_value());
+        REQUIRE(dd.add_user_to_group("user-backup", "DB:Backup").has_value());
+    }
+
+    // Reopen: memberships and auto-created Group records must survive.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        CHECK(dd.has_group("DB:Admin"));
+        CHECK(dd.has_group("DB:Backup"));
+        CHECK(dd.is_member_of("user-admin", "DB:Admin"));
+        CHECK(dd.is_member_of("user-backup", "DB:Backup"));
+        // Second add_user_to_group must not duplicate the Group record.
+        REQUIRE(dd.add_user_to_group("user-debug", "DB:Admin").has_value());
+    }
+
+    // Verify second membership added in the second session persists.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        CHECK(dd.is_member_of("user-admin", "DB:Admin"));
+        CHECK(dd.is_member_of("user-debug", "DB:Admin"));
+        CHECK(dd.is_member_of("user-backup", "DB:Backup"));
+    }
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("DataDict binary .add — grant_permission round-trip") {
+    // Verifies that grant_permission() persists fine-grained ACL bitmasks
+    // to binary .add files and that they survive a save/reload cycle.
+    // Also verifies that a second call for the same (grantee, object) pair
+    // deactivates the prior record rather than accumulating duplicates.
+    auto fixture = pmsys_fixture();
+    if (!fs::exists(fixture)) {
+        WARN("pmsys.add fixture not found, skipping grant_permission test");
+        return;
+    }
+    const auto dir = fs::temp_directory_path() / "openads_dd_bin_perm";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    auto add_path = stage_pmsys(dir);
+
+    // Grant SELECT-only (0x001) on "landlords" to "user-public".
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        REQUIRE(dd.grant_permission("Table", "landlords", "user-public", 0x001u).has_value());
+    }
+
+    // Reload: effective level must be 1 (read), not 4 (full from SAP sentinel).
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        CHECK(dd.get_effective_permission("user-public", "landlords") == 1);
+    }
+
+    // Upgrade to SELECT+UPDATE+INSERT (0x013) — second call must supersede first.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        REQUIRE(dd.grant_permission("Table", "landlords", "user-public", 0x013u).has_value());
+    }
+
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        CHECK(dd.get_effective_permission("user-public", "landlords") == 2);
+    }
+
+    // set_table_permission (level wrapper) must still work and also persist.
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        REQUIRE(dd.set_table_permission("landlords", "user-admin", 3).has_value());
+    }
+
+    {
+        auto opened = DataDict::open(add_path.string());
+        REQUIRE(opened.has_value());
+        DataDict dd = std::move(opened).value();
+        CHECK(dd.get_effective_permission("user-admin", "landlords") == 3);
+    }
+
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("DataDict binary .add — property-byte group memberships decoded") {
     // Verifies that groups stored in SAP-format User property bytes (not
     // Permission records) are correctly decoded by load_add_binary_().

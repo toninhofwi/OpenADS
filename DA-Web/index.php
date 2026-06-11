@@ -63,6 +63,8 @@
     <div class="menu-item" data-menu="tools">
       Tools
       <div class="menu-dropdown">
+        <div class="drop-item" data-action="import-sap-dd">Import SAP DD…</div>
+        <div class="drop-separator"></div>
         <div class="drop-item" data-action="refresh-tree">Refresh Tree</div>
       </div>
     </div>
@@ -369,6 +371,53 @@
     <div class="modal-footer">
       <button class="btn" id="props-cancel">Cancel</button>
       <button class="btn btn-primary" id="props-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: Import SAP DD ───────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-import-sap-dd" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <span>Import SAP Data Dictionary</span>
+      <span class="modal-close" onclick="document.getElementById('modal-import-sap-dd').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="isdd-err" class="modal-err"></div>
+      <p style="margin:0 0 12px;color:#cdd6f4;font-size:12px;line-height:1.5;">
+        Copies a SAP ADS <code>.add</code> file and imports its group memberships
+        and permissions into the OpenADS copy using the native import tool.
+        The original file is never modified.
+      </p>
+      <div class="form-group">
+        <label for="isdd-name">Display name for imported DD <span class="req">*</span></label>
+        <input type="text" id="isdd-name" placeholder="e.g. MyApp (imported)" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="isdd-source">Source SAP .add file <span class="req">*</span></label>
+        <input type="text" id="isdd-source" placeholder="C:\Data\myapp.add" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="isdd-dest">Destination OpenADS .add file <span class="req">*</span></label>
+        <input type="text" id="isdd-dest" placeholder="C:\Data\myapp_openads.add" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="isdd-user">SAP administrator username <span class="req">*</span></label>
+        <input type="text" id="isdd-user" placeholder="AdsSysAdmin" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="isdd-password">SAP password</label>
+        <input type="password" id="isdd-password" autocomplete="current-password">
+      </div>
+      <div class="form-group">
+        <label for="isdd-saplib">SAP library path <span class="opt">(optional — leave blank for defaults)</span></label>
+        <input type="text" id="isdd-saplib" placeholder="C:\Program Files (x86)\Advantage 11.10\ace64.dll" autocomplete="off">
+      </div>
+      <div id="isdd-result" style="display:none;margin-top:10px;padding:10px;border-radius:6px;font-size:12px;line-height:1.6;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="isdd-cancel">Cancel</button>
+      <button class="btn btn-primary" id="isdd-run">Import</button>
     </div>
   </div>
 </div>

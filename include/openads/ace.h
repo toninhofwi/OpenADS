@@ -926,6 +926,7 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define AE_VALUE_OVERFLOW          5057
 #define AE_INVALID_EXPRESSION      5079
 #define AE_INDEX_ALREADY_OPEN      5108
+#define AE_SAP_PERMS_NEED_IMPORT   5174  /* DD has SAP-format permissions; run import tool */
 
 // ---- Management API struct typedefs (Harbour contrib/rddads) ----
 // Field names taken from public Sybase / SAP ace.h documentation;

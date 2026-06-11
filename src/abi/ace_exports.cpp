@@ -822,6 +822,12 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     Handle h = s.registry.register_object(HandleKind::Connection, raw);
     s.conns.emplace(h, std::move(holder));
     *phConnect = h;
+    // Return a non-fatal warning when the DD has SAP-written ACL permissions
+    // that must be imported before OpenADS can enforce them.  The connection
+    // handle IS valid; callers should disconnect, run openads_import_dd, and
+    // reconnect to the imported copy.
+    if (raw->has_dd() && raw->dd()->has_sap_permissions())
+        return openads::AE_SAP_PERMS_NEED_IMPORT;
     return ok();
 }
 

@@ -113,6 +113,7 @@
       case 'connect':      openConnectModal(el.dataset.dd); break;
       case 'disconnect':   disconnectDD(el.dataset.dd);   break;
       case 'open-sql':     openSqlTab();                  break;
+      case 'import-sap-dd': openImportSapDDModal();         break;
       case 'refresh-tree': refreshTree();                  break;
       case 'about':        openAboutModal();               break;
     }
@@ -2542,6 +2543,80 @@
   }
 
   function escAttr(s) { return escHtml(s); }
+
+  // ── Modal: Import SAP DD ──────────────────────────────────────────────────
+  function openImportSapDDModal() {
+    clearModalErr('isdd-err');
+    const res = document.getElementById('isdd-result');
+    if (res) { res.style.display = 'none'; res.textContent = ''; }
+    const btn = document.getElementById('isdd-run');
+    if (btn) { btn.textContent = 'Import'; btn.disabled = false; }
+    openModal('modal-import-sap-dd');
+    setTimeout(() => document.getElementById('isdd-name')?.focus(), 50);
+  }
+
+  document.getElementById('isdd-cancel')?.addEventListener('click', () => closeModal('modal-import-sap-dd'));
+
+  document.getElementById('isdd-run')?.addEventListener('click', async () => {
+    const name     = document.getElementById('isdd-name').value.trim();
+    const source   = document.getElementById('isdd-source').value.trim();
+    const dest     = document.getElementById('isdd-dest').value.trim();
+    const user     = document.getElementById('isdd-user').value.trim();
+    const password = document.getElementById('isdd-password').value;
+    const sapLib   = document.getElementById('isdd-saplib').value.trim();
+    const errEl    = document.getElementById('isdd-err');
+    const resEl    = document.getElementById('isdd-result');
+    const btn      = document.getElementById('isdd-run');
+    errEl.textContent = '';
+    resEl.style.display = 'none';
+
+    if (!name || !source || !dest || !user) {
+      errEl.textContent = 'Name, source, destination, and user are required';
+      return;
+    }
+
+    btn.textContent = 'Importing…';
+    btn.disabled = true;
+    setStatus('Running import…');
+
+    try {
+      const data = await apiFetch('api/import_sap_dd.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, source, dest, user, password, sapLib }),
+      });
+
+      const lines = [
+        `✓ Import complete`,
+        `  Group memberships: ${data.db_memberships}`,
+        `  Permissions:       ${data.permissions}`,
+        data.registered ? `  Registered as "${name}" in the connection list` : `  (already registered)`,
+      ];
+      if (data.warnings?.length) {
+        lines.push('', 'Warnings:');
+        data.warnings.forEach(w => lines.push(`  • ${w}`));
+      }
+
+      resEl.style.display = 'block';
+      resEl.style.background = '#1e6621';
+      resEl.style.color = '#cfffd1';
+      resEl.style.whiteSpace = 'pre';
+      resEl.textContent = lines.join('\n');
+
+      btn.textContent = 'Done';
+      setStatus(`Imported SAP DD as '${name}'`);
+      refreshTree();
+    } catch (err) {
+      resEl.style.display = 'block';
+      resEl.style.background = '#3b0f0f';
+      resEl.style.color = '#f38ba8';
+      resEl.style.whiteSpace = 'pre-wrap';
+      resEl.textContent = err.message;
+      btn.textContent = 'Import';
+      btn.disabled = false;
+      setStatus('Import failed');
+    }
+  });
 
   // ── Boot ───────────────────────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', async () => {

@@ -144,6 +144,7 @@ add_subdirectory(tools/serverd)
 add_subdirectory(tools/bench)
 add_subdirectory(tools/stress)
 add_subdirectory(tools/mgprobe)
+add_subdirectory(tools/import_dd)
 
 if(OPENADS_BUILD_TESTS)
     enable_testing()

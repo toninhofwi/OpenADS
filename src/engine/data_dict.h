@@ -277,8 +277,21 @@ public:
     std::vector<EffectivePermEntry>
         get_all_effective_perms(const std::string& username) const;
 
+    // Fine-grained permission grant using the SAP ADS_PERMISSION_* bitmask.
+    // obj_type: "Table", "View", "StoredProc", "Function", "Database", …
+    // grantee:  user or group name.
+    // bitmask:  ADS_PERMISSION_* bits (0x001=SELECT, 0x002=UPDATE, 0x010=INSERT,
+    //           0x020=DELETE, 0x004=EXECUTE, 0x80000000=full/sentinel).
+    // Deactivates any existing SAP-written record for the same (grantee, object)
+    // pair so imported bitmasks are not shadowed by the 0x80000000 sentinel.
+    util::Result<void> grant_permission(const std::string& obj_type,
+                                        const std::string& obj_name,
+                                        const std::string& grantee,
+                                        uint32_t bitmask);
+
     // level: 0=none, 1=read, 2=write, 3=delete, 4=full.
     // user_or_group may be a user name or a group name.
+    // Thin wrapper around grant_permission("Table", …) for backward compat.
     util::Result<void> set_table_permission(const std::string& table,
                                              const std::string& user_or_group,
                                              int level);
@@ -288,6 +301,10 @@ public:
     bool has_table_acl(const std::string& table) const noexcept {
         return table_perms_.find(table) != table_perms_.end();
     }
+    // True when the DD was created by SAP ACE and contains unimported ACL
+    // Permission records.  Clients should prompt the user to run the import
+    // tool; AdsConnect60 surfaces this as AE_SAP_PERMS_NEED_IMPORT (5174).
+    bool has_sap_permissions() const noexcept { return has_sap_permissions_; }
     const std::unordered_map<std::string, std::unordered_map<std::string, int>>&
         table_perms() const noexcept { return table_perms_; }
 
@@ -374,6 +391,10 @@ private:
 
     // Binary format state (populated only when binary_format_ == true).
     bool binary_format_ = false;
+    // True when the binary DD contains SAP-written ACL Permission records
+    // (info2=0x80000000, prop_null=true) that have not yet been imported via
+    // the openads_import_dd tool.  Set during load; cleared by grant_permission.
+    bool has_sap_permissions_ = false;
     std::string binary_hdr_;            // raw hdr_len bytes, updated in-place
     std::uint32_t binary_hdr_len_ = 0;
     std::uint32_t binary_rec_len_ = 0;
