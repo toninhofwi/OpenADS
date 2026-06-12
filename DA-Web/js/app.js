@@ -61,7 +61,11 @@
   async function apiFetch(url, options = {}) {
     const res = await fetch(url, options);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const err = new Error(data.error || `HTTP ${res.status}`);
+      err.data = data;
+      throw err;
+    }
     return data;
   }
 
@@ -982,7 +986,8 @@
         { title: 'Descending', field: 'Descending', width: 100, headerSort: false,
           editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
         { title: 'Unique',     field: 'Unique',     width: 80,  headerSort: false,
-          editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
+          editor: 'select', editorParams: { values: { '': '', No: 'No', Yes: 'Yes' } } },
+        { title: 'Primary',    field: 'Primary',    width: 80,  headerSort: false },
         { title: 'Binary',     field: 'Binary',     width: 80,  headerSort: false,
           editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
         { title: 'Key Type',   field: 'KeyType',    width: 90,  headerSort: false },
@@ -1217,6 +1222,67 @@
       fields.filter(f => f.Index === 'Primary').map(f => (f.Field || '').toUpperCase())
     );
 
+    // Map: field name (uppercase) → BaseType — used to apply display formatters
+    const fieldBaseTypeMap = {};
+    fields.forEach(f => { fieldBaseTypeMap[(f.Field || '').toUpperCase()] = f.BaseType || ''; });
+
+    // Types that are intrinsically read-only (engine-managed counters / binary blobs)
+    const READ_ONLY_TYPES = new Set([
+      'RowVersion', 'ModTime', 'AutoIncrement', 'Binary', 'Blob',
+    ]);
+
+    // Build a Tabulator formatter for a field based on its BaseType.
+    // Returns null when no special formatting is needed.
+    function makeTypeFormatter(baseType) {
+      switch (baseType) {
+        case 'Date':
+        case 'AdtDate':
+          // PHP now returns "YYYY-MM-DD" — but guard against legacy "YYYYMMDD" too
+          return (cell) => {
+            const v = cell.getValue();
+            if (!v) return '';
+            const s = String(v);
+            if (/^\d{8}$/.test(s))
+              return s.slice(0,4) + '-' + s.slice(4,6) + '-' + s.slice(6,8);
+            return escHtml(s);
+          };
+        case 'DateTime':
+        case 'Timestamp':
+        case 'AdtTimestamp':
+          // PHP now returns "YYYY-MM-DD HH:MM:SS" — guard against "YYYYMMDDHHMMSS" too
+          return (cell) => {
+            const v = cell.getValue();
+            if (!v) return '';
+            const s = String(v);
+            if (/^\d{14}$/.test(s))
+              return s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8)+' '
+                    +s.slice(8,10)+':'+s.slice(10,12)+':'+s.slice(12,14);
+            return escHtml(s);
+          };
+        case 'Time':
+          return (cell) => escHtml(String(cell.getValue() ?? ''));
+        case 'RowVersion':
+        case 'ModTime':
+          return (cell) => {
+            const v = cell.getValue();
+            return v ? `<code style="font-size:11px">${escHtml(String(v))}</code>` : '';
+          };
+        case 'Logical':
+          return (cell) => {
+            const v = cell.getValue();
+            if (v === true  || v === 1 || v === '1' || String(v).toUpperCase() === 'T') return '✓';
+            if (v === false || v === 0 || v === '0' || String(v).toUpperCase() === 'F') return '✗';
+            return '';
+          };
+        case 'Memo':
+        case 'Binary':
+        case 'Blob':
+          return 'textarea';
+        default:
+          return null;
+      }
+    }
+
     if (resp.error) {
       container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
       return;
@@ -1257,21 +1323,34 @@
       autoColumns: true,
       autoColumnsDefinitions: function (defs) {
         return defs.map(def => {
-          const isPk = pkFieldsUpper.has((def.field || '').toUpperCase());
-          return {
+          const fieldUpper = (def.field || '').toUpperCase();
+          const isPk       = pkFieldsUpper.has(fieldUpper);
+          const baseType   = fieldBaseTypeMap[fieldUpper] || '';
+          const isROType   = READ_ONLY_TYPES.has(baseType);
+          const fmtr       = makeTypeFormatter(baseType);
+          const col = {
             ...def,
-            editor: 'input',
+            editor: isROType ? false : 'input',
             editable: function (cell) {
+              if (isROType) return false;
               const inst = tblState[tabId];
               if (!inst) return false;
-              // During row insert: all fields editable (user may need to provide PK)
               if (inst.pendingRow && cell.getRow() === inst.pendingRow) return true;
-              // Existing row: only non-PK fields
               return !isPk;
             },
-            // Subtle visual hint for PK columns
-            ...(isPk ? { headerTooltip: 'Primary key — read only' } : {}),
           };
+          if (isPk)    col.headerTooltip = 'Primary key — read only';
+          if (isROType) col.headerTooltip = baseType + ' — read only';
+          if (fmtr !== null) {
+            if (fmtr === 'textarea') {
+              col.formatter      = 'textarea';
+              col.variableHeight = true;
+              col.width          = 300;
+            } else {
+              col.formatter = fmtr;
+            }
+          }
+          return col;
         });
       },
       layout: 'fitDataFill',
@@ -2219,6 +2298,13 @@
       setStatus(`Connected to '${ddName}'`);
       updateConnectionCount();
     } catch (err) {
+      if (err.data?.code === 5174) {
+        overlay.classList.remove('open');
+        openImportSapDDModal();
+        document.getElementById('isdd-source').value = path;
+        document.getElementById('isdd-name').value = ddName;
+        return;
+      }
       errEl.textContent = err.message;
     }
   });
@@ -2558,6 +2644,9 @@
   document.getElementById('isdd-cancel')?.addEventListener('click', () => closeModal('modal-import-sap-dd'));
 
   document.getElementById('isdd-run')?.addEventListener('click', async () => {
+    const btn      = document.getElementById('isdd-run');
+    if (btn.textContent === 'Done') { closeModal('modal-import-sap-dd'); return; }
+
     const name     = document.getElementById('isdd-name').value.trim();
     const source   = document.getElementById('isdd-source').value.trim();
     const dest     = document.getElementById('isdd-dest').value.trim();
@@ -2566,7 +2655,6 @@
     const sapLib   = document.getElementById('isdd-saplib').value.trim();
     const errEl    = document.getElementById('isdd-err');
     const resEl    = document.getElementById('isdd-result');
-    const btn      = document.getElementById('isdd-run');
     errEl.textContent = '';
     resEl.style.display = 'none';
 

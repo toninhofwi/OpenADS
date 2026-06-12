@@ -5,6 +5,7 @@
  */
 header('Content-Type: application/json');
 session_start();
+require_once __DIR__ . '/common.php';
 
 $ddName = trim($_GET['dd']    ?? '');
 $table  = trim($_GET['table'] ?? '');
@@ -137,6 +138,8 @@ function fieldTypeLabel(string $raw, int $len, int $dec): string {
         case 15: return 'AutoIncrement';
         case 18: return 'Money';
         case 20: return "CICharacter($len)";
+        case 21: return 'RowVersion';
+        case 22: return 'ModTime';
         default: return $raw ?: '?';
     }
 }
@@ -175,6 +178,8 @@ function fieldBaseType(string $raw): string {
         case 15: return 'AutoIncrement';
         case 18: return 'Money';
         case 20: return 'CICharacter';
+        case 21: return 'RowVersion';
+        case 22: return 'ModTime';
         default: return $raw ?: '?';
     }
 }
@@ -304,12 +309,21 @@ try {
         $tbl  = AdsTable::open($conn, $table, 0);
         $tags = $tbl->getIndexTags();
         $tbl->close();
+
+        $pkTag = '';
+        try {
+            $dict2 = AdsDictionary::fromConnection($conn);
+            $pkTag = strtoupper(trim($dict2->getTableProperty($table, 209)));
+        } catch (Throwable $e) {}
+
         foreach ($tags as $t) {
+            $isPrimary = ($pkTag !== '' && strtoupper($t['tag']) === $pkTag);
             $rows[] = [
                 'Tag'        => $t['tag'],
                 'Expression' => $t['expression'],
                 'Descending' => $t['descending'] ? 'Yes' : 'No',
-                'Unique'     => '',
+                'Unique'     => $isPrimary ? 'Yes' : '',
+                'Primary'    => $isPrimary ? 'Yes' : '',
                 'Binary'     => '',
                 'KeyType'    => '',
             ];
@@ -396,6 +410,5 @@ try {
     $conn->close();
     echo json_encode(['data' => $rows]);
 } catch (Throwable $e) {
-    http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    api_exception(500, $e);
 }

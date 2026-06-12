@@ -12,5 +12,12 @@
         "username": "",
         "connType": "local",
         "entryType": "free"
+    },
+    {
+        "name": "Pmsys-TestData-Imported",
+        "path": "f:\\openads\\testdata\\pmsys\\pmsys_imported.add",
+        "username": "adssys",
+        "connType": "local",
+        "entryType": "dd"
     }
 ]

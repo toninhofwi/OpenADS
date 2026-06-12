@@ -6,6 +6,7 @@
  */
 header('Content-Type: application/json');
 session_start();
+require_once __DIR__ . '/common.php';
 
 if (!extension_loaded('openads')) {
     http_response_code(500);
@@ -35,9 +36,7 @@ if ($action === 'connect') {
         $conn = AdsConnection::connect($opts);
         $conn->close();
     } catch (AdsException $e) {
-        http_response_code(401);
-        echo json_encode(['error' => $e->getMessage()]);
-        exit;
+        api_exception(401, $e, $e->getCode() === 5174 ? ['path' => $path] : []);
     }
 
     if (!isset($_SESSION['connections'])) {

@@ -12,6 +12,7 @@
  */
 header('Content-Type: application/json');
 session_start();
+require_once __DIR__ . '/common.php';
 
 $body     = json_decode(file_get_contents('php://input'), true) ?? [];
 $name     = trim($body['name']     ?? '');
@@ -39,9 +40,7 @@ try {
     $encrypt = ($password !== '') ? 1 : 0;
     ads_dd_create($path, $encrypt, $password);
 } catch (AdsException $e) {
-    http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
-    exit;
+    api_exception(500, $e);
 }
 
 // Register in dictionaries.json

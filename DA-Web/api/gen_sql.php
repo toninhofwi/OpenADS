@@ -9,6 +9,7 @@
  */
 header('Content-Type: application/json');
 session_start();
+require_once __DIR__ . '/common.php';
 
 $ddName = trim($_GET['dd']    ?? '');
 $table  = trim($_GET['table'] ?? '');
@@ -294,6 +295,5 @@ try {
     $sql = implode("\n", $lines);
     echo json_encode(['sql' => $sql], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } catch (Throwable $e) {
-    http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    api_exception(500, $e);
 }

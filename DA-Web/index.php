@@ -188,7 +188,7 @@
       </div>
       <div class="form-group">
         <label for="odd-user">Default username</label>
-        <input type="text" id="odd-user" placeholder="AdsSysAdmin" autocomplete="off">
+        <input type="text" id="odd-user" placeholder="AdsSys" autocomplete="off">
       </div>
       <div class="form-group">
         <label>Connection type</label>
@@ -248,7 +248,7 @@
       <div id="connect-err" style="color:#f38ba8;font-size:12px;min-height:16px;margin-bottom:6px;"></div>
       <div class="form-group">
         <label for="connect-username">Username</label>
-        <input type="text" id="connect-username" value="AdsSysAdmin" autocomplete="off">
+        <input type="text" id="connect-username" value="AdsSys" autocomplete="off">
       </div>
       <div class="form-group">
         <label for="connect-password">Password</label>
@@ -403,7 +403,7 @@
       </div>
       <div class="form-group">
         <label for="isdd-user">SAP administrator username <span class="req">*</span></label>
-        <input type="text" id="isdd-user" placeholder="AdsSysAdmin" autocomplete="off">
+        <input type="text" id="isdd-user" placeholder="AdsSys" autocomplete="off">
       </div>
       <div class="form-group">
         <label for="isdd-password">SAP password</label>

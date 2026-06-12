@@ -181,6 +181,16 @@ for ($i = 0; $i < $total; $i++) {
         }
     }
 
+    // Final pass: strip any trailing binary garbage from the assembled body
+    // (can arrive from inline property area or .am padding)
+    $len = strlen($sqlBody);
+    while ($len > 0) {
+        $b = ord($sqlBody[$len - 1]);
+        if (($b >= 0x20 && $b <= 0x7E) || $b === 0x09 || $b === 0x0A || $b === 0x0D) break;
+        $len--;
+    }
+    $sqlBody = rtrim(substr($sqlBody, 0, $len), " \t\r\n");
+
     $result = [
         'body'         => $sqlBody,
         'input_params' => $inputParams,
