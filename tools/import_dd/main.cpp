@@ -253,6 +253,11 @@ int main(int argc, char** argv) {
     }
 
     // ── Step 2: load SAP DLL ─────────────────────────────────────────────────
+    // If the user gave a directory instead of a .dll path, append the DLL name.
+    if (!sap_lib_path.empty() && fs::is_directory(sap_lib_path)) {
+        sap_lib_path = (fs::path(sap_lib_path) / "ace64.dll").string();
+    }
+
     lib_handle sap = nullptr;
     if (!sap_lib_path.empty()) {
         sap = lib_open(sap_lib_path.c_str());
