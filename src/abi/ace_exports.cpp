@@ -2152,7 +2152,28 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
-    *pulLen = t->field_descriptor(idx).length;
+    const auto& fd = t->field_descriptor(idx);
+    // Return the string representation length, not the raw field length, for
+    // types where decode_field() produces a longer formatted string. This lets
+    // callers (e.g. the PHP extension) allocate the right buffer size before
+    // calling AdsGetString.
+    using openads::drivers::DbfFieldType;
+    switch (fd.type) {
+        case DbfFieldType::DateTime:
+        case DbfFieldType::AdtTimestamp:
+        case DbfFieldType::ModTime:
+            *pulLen = 14;  // "YYYYMMDDHHMMSS"
+            break;
+        case DbfFieldType::AdtDate:
+            *pulLen = 8;   // "YYYYMMDD"
+            break;
+        case DbfFieldType::RowVersion:
+            *pulLen = 20;  // up to 20 digits for uint64_max
+            break;
+        default:
+            *pulLen = fd.length;
+            break;
+    }
     return ok();
 }
 

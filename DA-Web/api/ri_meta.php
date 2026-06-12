@@ -2,11 +2,12 @@
 /**
  * api/ri_meta.php — RI object metadata and table list.
  *
- * GET ?dd=&ri=<name>   → { ri:{…}, parentTags:[…], childTags:[…] }
- * GET ?dd=&action=tables → { tables: ["Table1", …] }
+ * GET ?dd=&ri=<name>              → { ri:{…}, parentTags:[…], childTags:[…] }
+ * GET ?dd=&action=tables          → { tables: ["Table1", …] }
+ * GET ?dd=&action=tags&table=<t>  → { tags: ["Tag1", …] }
  *
- * Index tags are now embedded in the main RI response so the client
- * does not need separate tag-fetch round-trips.
+ * Tag names come from parsing the physical CDX/ADI index files referenced
+ * in system.indexes — the .add binary has no 'Key'-type records.
  */
 header('Content-Type: application/json');
 session_start();
@@ -44,80 +45,217 @@ function ruleLabel(string $v): string {
     };
 }
 
-// Trim + UTF-8 sanitise a DB string (fixed-width char fields carry trailing spaces).
 function safeStr(mixed $v): string {
     $s = trim((string)($v ?? ''));
     return mb_convert_encoding($s, 'UTF-8', 'UTF-8');
 }
 
-// Read index tag names for a table from the binary .add file.
-// Walks Table → Index → Key record hierarchy; returns sorted tag names.
-function fetchTagsFromBinary(string $addPath, string $tableName): array {
-    $bin = @file_get_contents($addPath);
-    if ($bin === false || strlen($bin) < 40) return [];
+// ── CDX parser ────────────────────────────────────────────────────────────────
+//
+// A compound CDX file starts with a 1024-byte file header. Bytes 0-3 (u32 LE)
+// give the offset of the structure-tag root leaf page (512 bytes). That leaf
+// uses CDX's "compact" encoding with key_size = 10 and holds one entry per tag;
+// each entry's key (trimmed) is the tag name.
 
-    $hdrLen = unpack('V', substr($bin, 0x20, 4))[1];
-    $recLen = unpack('V', substr($bin, 0x24, 4))[1];
-    if ($recLen === 0) return [];
-    $total = intdiv(strlen($bin) - $hdrLen, $recLen);
+function decodeCdxStructLeaf(string $leaf): array {
+    if (strlen($leaf) < 512) return [];
 
-    $idName   = [];   // obj_id  → name
-    $idType   = [];   // obj_id  → obj_type string
-    $idParent = [];   // obj_id  → parent_id
+    $attr  = unpack('v', substr($leaf, 0, 2))[1];
+    if (!($attr & 2)) return [];           // CDX_NODE_LEAF = 2
 
-    for ($i = 0; $i < $total; $i++) {
-        $base = $hdrLen + $i * $recLen;
-        if ($base + $recLen > strlen($bin)) break;
-        if (ord($bin[$base]) !== 0x04) continue;          // 0x04 = active
-        $oid = unpack('V', substr($bin, $base + 5, 4))[1];
-        $pid = unpack('V', substr($bin, $base + 9, 4))[1];
-        $ot  = rtrim(substr($bin, $base + 13, 10), " \0");
-        $nm  = rtrim(substr($bin, $base + 23, 200), " \0");
-        if ($nm !== '') $idName[$oid] = $nm;
-        $idType[$oid]   = $ot;
-        $idParent[$oid] = $pid;
-    }
+    $nkeys     = unpack('v', substr($leaf, 2, 2))[1];
+    $dup_bits  = ord($leaf[21]);
+    $trl_bits  = ord($leaf[22]);
+    $key_bytes = ord($leaf[23]);
+    $key_size  = 10;                       // CDX_STRUCT_KEY_LEN
 
-    // Find table obj_id by name (case-insensitive)
-    $tableId = null;
-    foreach ($idType as $oid => $ot) {
-        if ($ot === 'Table' && isset($idName[$oid]) &&
-            strcasecmp($idName[$oid], $tableName) === 0) {
-            $tableId = $oid;
-            break;
+    if ($nkeys === 0 || $key_bytes === 0) return [];
+
+    $CDX_EXT = 24;                         // CDX_EXT_HEADSIZE
+    $buf_pos  = 512 - $CDX_EXT;           // = 488; suffix area right-edge
+    $prev     = str_repeat(' ', $key_size);
+    $tags     = [];
+    $shift    = 32 - $dup_bits - $trl_bits;
+    $trl_mask = $trl_bits > 0 ? ((1 << $trl_bits) - 1) : 0;
+    $dup_mask = $dup_bits > 0 ? ((1 << $dup_bits) - 1) : 0;
+
+    for ($i = 0; $i < $nkeys; $i++) {
+        $e_off = $CDX_EXT + $i * $key_bytes;
+        if ($e_off + $key_bytes > 512) break;
+
+        // dup/trl are packed in the last 4 bytes of the entry
+        if ($key_bytes < 4) break;
+        $last4 = unpack('V', substr($leaf, $e_off + $key_bytes - 4, 4))[1];
+        $tmp   = $shift < 32 ? (($last4 >> $shift) & 0xFFFF) : 0;
+        $trl   = $tmp & $trl_mask;
+        $dup   = ($tmp >> $trl_bits) & $dup_mask;
+
+        if ($dup + $trl > $key_size) break;
+        $suffix_len = $key_size - $dup - $trl;
+        if ($buf_pos < $suffix_len) break;
+        $buf_pos -= $suffix_len;
+
+        // Build full key from prefix (prev) + suffix + trailing spaces
+        $key = $prev;
+        if ($suffix_len > 0) {
+            $suffix = substr($leaf, $CDX_EXT + $buf_pos, $suffix_len);
+            for ($j = 0; $j < $suffix_len; $j++) {
+                $key[$dup + $j] = $suffix[$j];
+            }
         }
-    }
-    if ($tableId === null) return [];
-
-    // Collect Index obj_ids whose parent = table
-    $indexIds = [];
-    foreach ($idParent as $oid => $pid) {
-        if ($pid === $tableId && ($idType[$oid] ?? '') === 'Index') {
-            $indexIds[$oid] = true;
+        for ($t = $key_size - $trl; $t < $key_size; $t++) {
+            $key[$t] = ' ';
         }
+        $prev = $key;
+        $tag  = rtrim($key);
+        if ($tag !== '') $tags[] = $tag;
     }
+    return $tags;
+}
 
-    // Collect Key names whose parent = one of those Index records
-    $tags = [];
-    foreach ($idParent as $oid => $pid) {
-        if (isset($indexIds[$pid]) && ($idType[$oid] ?? '') === 'Key') {
-            $tag = $idName[$oid] ?? '';
-            if ($tag !== '') $tags[] = $tag;
-        }
-    }
+function fetchTagsFromCdx(string $path): array {
+    $bin = @file_get_contents($path);
+    if ($bin === false || strlen($bin) < 1536) return [];
+
+    // File header (1024 bytes). Bytes 0-3 = struct_root page offset.
+    $struct_root = unpack('V', substr($bin, 0, 4))[1];
+    if ($struct_root === 0 || $struct_root + 512 > strlen($bin)) return [];
+
+    $tags = decodeCdxStructLeaf(substr($bin, $struct_root, 512));
     sort($tags);
     return $tags;
 }
 
-try {
-    $conn = AdsConnection::connect($opts);
+// ── ADI parser ────────────────────────────────────────────────────────────────
+//
+// ADI is the ADT compound index format. Page 2 (offset 1024) is the tag
+// directory. Each 6-byte entry encodes a "fmarker" page number; that page
+// contains "F<n>" or "F<n1>;F<n2>" giving 1-based field numbers. The tag
+// name is the field name of the first component, read from the companion .adt
+// file header (hdr_len at byte 32; fields at byte 400, 200 bytes each).
 
-    $addPath = $c['path'];   // path to the .add file
+function fetchTagsFromAdi(string $adiPath): array {
+    $PAGE = 512;
+    $DIR_ENTRY_START = 24;
+    $DIR_ENTRY_SIZE  = 6;
+
+    $adi = @file_get_contents($adiPath);
+    if ($adi === false || strlen($adi) < 3 * $PAGE) return [];
+
+    // Tag directory: page 2
+    $pg2   = substr($adi, 2 * $PAGE, $PAGE);
+    $count = unpack('v', substr($pg2, 2, 2))[1];
+    if ($count === 0 || $count > 200) return [];
+
+    // Collect first-component field numbers from fmarker pages
+    $fnums = [];
+    for ($i = 0; $i < $count; $i++) {
+        $off = $DIR_ENTRY_START + $i * $DIR_ENTRY_SIZE;
+        if ($off + 1 > $PAGE) break;
+        $xx     = ord($pg2[$off]);
+        $fmk_pg = $xx + 1;
+        $fmk_off = $fmk_pg * $PAGE;
+        if ($fmk_off + $PAGE > strlen($adi)) continue;
+        $fmk = substr($adi, $fmk_off, $PAGE);
+        if ($fmk[0] !== 'F') continue;
+        // Parse "F<n>" or "F<n1>;F<n2>..."
+        $j = 1;
+        while ($j < $PAGE && $fmk[$j] >= '1' && $fmk[$j] <= '9') {
+            $n = 0;
+            while ($j < $PAGE && $fmk[$j] >= '0' && $fmk[$j] <= '9') {
+                $n = $n * 10 + (ord($fmk[$j]) - 48);
+                $j++;
+            }
+            if ($n > 0 && $n <= 255) { $fnums[] = $n; break; } // first field only
+        }
+    }
+
+    if (empty($fnums)) return [];
+
+    // Read ADT companion file to resolve field numbers to names
+    $adtPath = preg_replace('/\\.adi$/i', '.adt', $adiPath);
+    if (!file_exists($adtPath)) return [];
+
+    $hdr = @file_get_contents($adtPath, false, null, 0, 400);
+    if ($hdr === false || strlen($hdr) < 40) return [];
+
+    $hdr_len    = unpack('V', substr($hdr, 32, 4))[1];
+    $num_fields = (int)(($hdr_len - 400) / 200);
+    if ($num_fields <= 0) return [];
+
+    $fld_data = @file_get_contents($adtPath, false, null, 400, $num_fields * 200);
+    if ($fld_data === false) return [];
+
+    $field_names = [];
+    for ($i = 0; $i < $num_fields; $i++) {
+        $d    = substr($fld_data, $i * 200, 200);
+        $name = rtrim(substr($d, 0, 128), "\0 ");
+        $field_names[] = $name;
+    }
+
+    $tags = [];
+    foreach ($fnums as $fnum) {
+        if ($fnum >= 1 && $fnum <= count($field_names) && $field_names[$fnum - 1] !== '') {
+            $tags[] = $field_names[$fnum - 1];
+        }
+    }
+
+    $tags = array_values(array_unique($tags));
+    sort($tags);
+    return $tags;
+}
+
+// ── Index tag resolver ────────────────────────────────────────────────────────
+
+// Resolve a potentially-relative index file path using the DD directory.
+function resolveIndexPath(string $idxFile, string $addDir): string {
+    if ($idxFile === '') return '';
+    // Absolute: Windows drive (X:\ or X:/) or UNC (\\) or Unix (/)
+    if (preg_match('/^([a-zA-Z]:[\\\\\/]|\\\\\\\\|\/)/', $idxFile)) {
+        return $idxFile;
+    }
+    return $addDir . DIRECTORY_SEPARATOR . $idxFile;
+}
+
+// Fetch index tags for $tableName by querying system.indexes and parsing files.
+function fetchIndexTags(AdsConnection $conn, string $addDir, string $tableName): array {
+    if ($tableName === '') return [];
+    try {
+        $tags = [];
+        $stmt = $conn->query("SELECT TABLE_NAME, INDEX_FILE FROM system.indexes");
+        while ($row = $stmt->fetchAssoc()) {
+            $tbl = trim((string)($row['TABLE_NAME'] ?? ''));
+            if (strcasecmp($tbl, $tableName) !== 0) continue;
+            $idxFile = trim((string)($row['INDEX_FILE'] ?? ''));
+            if ($idxFile === '') continue;
+            $path = resolveIndexPath($idxFile, $addDir);
+            if (!file_exists($path)) continue;
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            if ($ext === 'cdx') {
+                foreach (fetchTagsFromCdx($path) as $t) $tags[] = $t;
+            } elseif ($ext === 'adi') {
+                foreach (fetchTagsFromAdi($path) as $t) $tags[] = $t;
+            }
+        }
+        $stmt->close();
+        $tags = array_values(array_unique($tags));
+        sort($tags);
+        return $tags;
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+// ── Request dispatch ──────────────────────────────────────────────────────────
+
+try {
+    $conn   = AdsConnection::connect($opts);
+    $addDir = dirname($c['path']);
 
     // ── Return all tables ──────────────────────────────────────────────────
     if ($action === 'tables') {
         $tables = [];
-        $stmt = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
+        $stmt   = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
         while ($row = $stmt->fetchAssoc()) {
             $t = safeStr($row['TABLE_NAME']);
             if ($t !== '') $tables[] = $t;
@@ -127,11 +265,12 @@ try {
         exit;
     }
 
-    // ── Return tag names for a table (used when user changes table select) ──
+    // ── Return tag names for a table (user changed table select) ──────────
     if ($action === 'tags') {
         $table = trim($_GET['table'] ?? '');
+        $tags  = fetchIndexTags($conn, $addDir, $table);
         $conn->close();
-        echo json_encode(['tags' => fetchTagsFromBinary($addPath, $table)], JSON_FLAGS);
+        echo json_encode(['tags' => $tags], JSON_FLAGS);
         exit;
     }
 
@@ -142,7 +281,7 @@ try {
         exit;
     }
 
-    $ri = null;
+    $ri   = null;
     $stmt = $conn->query("SELECT * FROM system.relations");
     while ($row = $stmt->fetchAssoc()) {
         if (strcasecmp(safeStr($row['RI_NAME'] ?? ''), $riName) === 0) {
@@ -168,12 +307,15 @@ try {
         ];
     }
 
-    // Embed index tags for both tables from the binary .add file
-    $parentTags = fetchTagsFromBinary($addPath, $ri['parent']);
-    $childTags  = fetchTagsFromBinary($addPath, $ri['child']);
+    $parentTags = fetchIndexTags($conn, $addDir, $ri['parent']);
+    $childTags  = fetchIndexTags($conn, $addDir, $ri['child']);
 
     $conn->close();
-    echo json_encode(['ri' => $ri, 'parentTags' => $parentTags, 'childTags' => $childTags], JSON_FLAGS);
+    echo json_encode([
+        'ri'         => $ri,
+        'parentTags' => $parentTags,
+        'childTags'  => $childTags,
+    ], JSON_FLAGS);
 
 } catch (Throwable $e) {
     api_exception(500, $e);

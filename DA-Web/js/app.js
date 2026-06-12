@@ -1526,7 +1526,16 @@
             return '<span style="color:#a6adc8;font-style:italic;">BLOB</span>';
           };
         case 'Memo':
-          return 'textarea';
+          return (cell) => {
+            const v = cell.getValue();
+            if (v === null || v === undefined || v === '') return '';
+            const s = String(v);
+            // PHP encodes invalid UTF-8 bytes as U+FFFD; control chars also signal binary.
+            if (s.includes('�') || /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(s)) {
+              return '<span style="color:#a6adc8;font-style:italic;">BLOB</span>';
+            }
+            return `<span style="white-space:pre-wrap;">${escHtml(s)}</span>`;
+          };
         default:
           return null;
       }
