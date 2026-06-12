@@ -98,6 +98,7 @@ PHP_METHOD(AdsConnection, connect)
     );
 
     if (ulRet != AE_SUCCESS) {
+        if (hConn) AdsDisconnect(hConn);
         ads_throw_ace_exception(ulRet, "AdsConnection::connect");
         RETURN_THROWS();
     }

@@ -161,12 +161,103 @@ void ads_get_field_zval(ADSHANDLE hCursor, const char *fieldName, zval *retval)
             break;
         }
 
-        case ADS_ROWVERSION: {
-            /* 8-byte row-version counter: read raw bytes, return as hex string. */
-            unsigned char rawBuf[8] = {0};
+        case ADS_DATE: {
+            /* Date field: AdsGetString returns "YYYYMMDD" — reformat to "YYYY-MM-DD". */
+            unsigned char dateBuf[16] = {0};
+            UNSIGNED32 ulBufSize = (UNSIGNED32)sizeof(dateBuf);
+            ulRet = AdsGetString(hCursor, (UNSIGNED8 *)fieldName,
+                                 dateBuf, &ulBufSize, ADS_TRIM);
+            if (ulRet == AE_SUCCESS) {
+                if (ulBufSize == 8 && dateBuf[0] >= '1' && dateBuf[0] <= '9') {
+                    char fmt[11];
+                    fmt[0]=dateBuf[0]; fmt[1]=dateBuf[1];
+                    fmt[2]=dateBuf[2]; fmt[3]=dateBuf[3];
+                    fmt[4]='-';
+                    fmt[5]=dateBuf[4]; fmt[6]=dateBuf[5];
+                    fmt[7]='-';
+                    fmt[8]=dateBuf[6]; fmt[9]=dateBuf[7];
+                    fmt[10]='\0';
+                    ZVAL_STRINGL(retval, fmt, 10);
+                } else {
+                    ZVAL_STRINGL(retval, (char *)dateBuf, (size_t)ulBufSize);
+                }
+            }
+            break;
+        }
+
+        case ADS_TIMESTAMP: {
+            /* Timestamp: ADT returns "YYYYMMDDHHMMSS" (14 printable digits);
+             * DBF 'T' returns 8 raw binary bytes (4-byte Julian LE + 4-byte ms LE).
+             * Decode both to "YYYY-MM-DD HH:MM:SS". */
+            unsigned char tsBuf[24] = {0};
+            UNSIGNED32 ulBufSize = (UNSIGNED32)sizeof(tsBuf);
+            ulRet = AdsGetString(hCursor, (UNSIGNED8 *)fieldName,
+                                 tsBuf, &ulBufSize, 0);
+            if (ulRet == AE_SUCCESS) {
+                char fmt[20];
+                if (ulBufSize == 14) {
+                    /* ADT compact string "YYYYMMDDHHMMSS" */
+                    UNSIGNED32 k; int all_dig = 1;
+                    for (k = 0; k < 14; k++)
+                        if (tsBuf[k] < '0' || tsBuf[k] > '9') { all_dig = 0; break; }
+                    if (all_dig) {
+                        fmt[0]=tsBuf[0]; fmt[1]=tsBuf[1];
+                        fmt[2]=tsBuf[2]; fmt[3]=tsBuf[3]; fmt[4]='-';
+                        fmt[5]=tsBuf[4]; fmt[6]=tsBuf[5]; fmt[7]='-';
+                        fmt[8]=tsBuf[6]; fmt[9]=tsBuf[7]; fmt[10]=' ';
+                        fmt[11]=tsBuf[8]; fmt[12]=tsBuf[9]; fmt[13]=':';
+                        fmt[14]=tsBuf[10]; fmt[15]=tsBuf[11]; fmt[16]=':';
+                        fmt[17]=tsBuf[12]; fmt[18]=tsBuf[13]; fmt[19]='\0';
+                        ZVAL_STRINGL(retval, fmt, 19);
+                        break;
+                    }
+                }
+                if (ulBufSize == 8) {
+                    /* DBF binary: 4-byte Julian Day LE + 4-byte ms-since-midnight LE */
+                    UNSIGNED32 jdn = (UNSIGNED32)tsBuf[0]
+                                   | ((UNSIGNED32)tsBuf[1] <<  8)
+                                   | ((UNSIGNED32)tsBuf[2] << 16)
+                                   | ((UNSIGNED32)tsBuf[3] << 24);
+                    UNSIGNED32 ms  = (UNSIGNED32)tsBuf[4]
+                                   | ((UNSIGNED32)tsBuf[5] <<  8)
+                                   | ((UNSIGNED32)tsBuf[6] << 16)
+                                   | ((UNSIGNED32)tsBuf[7] << 24);
+                    if (jdn == 0 && ms == 0) {
+                        ZVAL_STRING(retval, "");
+                    } else {
+                        /* Fliegel-Van Flandern JDN → calendar */
+                        long long l = (long long)jdn + 68569;
+                        long long n = (4 * l) / 146097;
+                        l -= (146097 * n + 3) / 4;
+                        long long ii = (4000 * (l + 1)) / 1461001;
+                        l -= (1461 * ii) / 4 - 31;
+                        long long jj = (80 * l) / 2447;
+                        int d  = (int)(l - (2447 * jj) / 80);
+                        l = jj / 11;
+                        int mo = (int)(jj + 2 - 12 * l);
+                        int y  = (int)(100 * (n - 49) + ii + l);
+                        unsigned hh  = ms / 3600000u;
+                        unsigned mn  = (ms % 3600000u) / 60000u;
+                        unsigned ss  = (ms % 60000u) / 1000u;
+                        snprintf(fmt, sizeof(fmt), "%04d-%02d-%02d %02u:%02u:%02u",
+                                 y, mo, d, hh, mn, ss);
+                        ZVAL_STRINGL(retval, fmt, 19);
+                    }
+                    break;
+                }
+                /* Fallback: unknown format, return as-is */
+                ZVAL_STRINGL(retval, (char *)tsBuf, (size_t)ulBufSize);
+            }
+            break;
+        }
+
+        case ADS_ROWVERSION:
+        case ADS_MODTIME: {
+            /* 8-byte binary counter: read raw bytes via AdsGetString, return hex. */
+            unsigned char rawBuf[16] = {0};
             UNSIGNED32 ulBufSize = (UNSIGNED32)sizeof(rawBuf);
-            ulRet = AdsGetBinary(hCursor, (UNSIGNED8 *)fieldName,
-                                 0, (UNSIGNED8 *)rawBuf, &ulBufSize);
+            ulRet = AdsGetString(hCursor, (UNSIGNED8 *)fieldName,
+                                 rawBuf, &ulBufSize, 0);
             if (ulRet == AE_SUCCESS && ulBufSize > 0) {
                 static const char hc[] = "0123456789abcdef";
                 char hexBuf[19] = "0x";
@@ -183,7 +274,7 @@ void ads_get_field_zval(ADSHANDLE hCursor, const char *fieldName, zval *retval)
         }
 
         default: {
-            /* String, Date, Timestamp, Time, Varchar, NChar, Raw, etc. */
+            /* String, Time, Varchar, NChar, etc. */
             UNSIGNED32 ulFieldLen = 0;
             UNSIGNED32 ulBufSize;
             char *buf;

@@ -144,17 +144,21 @@ int main(int argc, char** argv) {
         // Let's look at the actual rec_len to validate.
         // rec_len should be >= 506 at minimum.
 
-        if (base + 506 <= buf.size()) {
-            info1 = le32(buf.c_str(), base + 498);
-            info2 = le32(buf.c_str(), base + 502);
-        } else {
-            // Try other offsets
-            info1 = le32(buf.c_str(), base + rec_len - 12);
-            info2 = le32(buf.c_str(), base + rec_len - 8);
+        // Correct offsets from data_dict.cpp:
+        //   more_property[498..506], info1[507..510], info2[511..514]
+        // obj_name IS sprintf("%08X", info1) so parse it directly as backup.
+        if (base + 515 <= buf.size()) {
+            info1 = le32(buf.c_str(), base + 507);
+            info2 = le32(buf.c_str(), base + 511);
+        }
+        // Also resolve target from obj_name hex (canonical source)
+        std::string obj_name_hex = trim(buf.c_str(), base + 23, 200);
+        if (info1 == 0 && obj_name_hex.size() == 8) {
+            try { info1 = (uint32_t)std::stoul(obj_name_hex, nullptr, 16); } catch (...) {}
         }
 
         std::string principal = id_name.count(parent_id) ? id_name[parent_id] : "?unk?";
-        std::string target    = id_name.count(info1)     ? id_name[info1]     : "?unk?";
+        std::string target    = id_name.count(info1)     ? id_name[info1]     : "?unk?(" + obj_name_hex + ")";
         std::string ttype     = id_type.count(info1)     ? id_type[info1]     : "?";
 
         printf("%-6zu %-12s %-30s %-20s  0x%08X  %s%s\n",
@@ -177,6 +181,20 @@ int main(int argc, char** argv) {
         seen[info2]++;
     }
     for (auto& kv : seen)
+        printf("  0x%08X (%d times)  [%s]\n", kv.first, kv.second, decode_perm(kv.first).c_str());
+
+    // Also dump summary: unique info2 at CORRECT offsets (507/511)
+    printf("\n--- info2 at correct offsets (507..510=info1, 511..514=info2) ---\n");
+    std::unordered_map<uint32_t,int> seen2;
+    for (size_t i = 0; i < total; ++i) {
+        size_t base = hdr_len + i * rec_len;
+        std::string obj_type = trim(buf.c_str(), base + 13, 10);
+        if (obj_type != "Permission") continue;
+        if (base + 515 > buf.size()) continue;
+        uint32_t i2 = le32(buf.c_str(), base + 511);
+        seen2[i2]++;
+    }
+    for (auto& kv : seen2)
         printf("  0x%08X (%d times)  [%s]\n", kv.first, kv.second, decode_perm(kv.first).c_str());
 
     return 0;
