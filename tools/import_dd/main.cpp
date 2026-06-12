@@ -43,7 +43,22 @@ namespace fs = std::filesystem;
 
 #ifdef _WIN32
 using lib_handle = HMODULE;
-static lib_handle lib_open(const char* path)    { return LoadLibraryA(path); }
+static lib_handle lib_open(const char* path) {
+    // Set the DLL search directory to the directory containing ace64.dll so that
+    // its dependencies (adsloc64.dll, aicu64.dll, axcws64.dll) are loaded from
+    // the same version set.  Without this, Windows finds them via PATH — potentially
+    // a mismatched version in "Common Files\Advantage" — and AdsConnect60 fails
+    // with error 7078.
+    std::string p = path;
+    auto sep = p.find_last_of("\\/");
+    if (sep != std::string::npos) {
+        std::string dir = p.substr(0, sep);
+        SetDllDirectoryA(dir.c_str());
+    }
+    HMODULE h = LoadLibraryA(path);
+    SetDllDirectoryA(nullptr);  // restore default search order
+    return h;
+}
 static void*      lib_sym(lib_handle h, const char* name) {
     return reinterpret_cast<void*>(GetProcAddress(h, name));
 }
@@ -96,6 +111,16 @@ using PFN_GetField   = UNSIGNED32 (ADS_CALL*)(ADSHANDLE h, UNSIGNED8* name,
 using PFN_NumFields  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE h, UNSIGNED16* n);
 using PFN_FieldName  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE h, UNSIGNED16 idx,
                            UNSIGNED8* buf, UNSIGNED16* len);
+using PFN_GetPerms   = UNSIGNED32 (ADS_CALL*)(ADSHANDLE h, UNSIGNED8* grantee,
+                           UNSIGNED16 obj_type, UNSIGNED8* obj_name,
+                           UNSIGNED8* parent, UNSIGNED16 inherited,
+                           UNSIGNED32* out);
+using PFN_FindFirst  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, UNSIGNED16 findType,
+                           UNSIGNED8* parent, UNSIGNED8* nameBuf,
+                           UNSIGNED16* nameLen, ADSHANDLE* phFind);
+using PFN_FindNext   = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, ADSHANDLE hFind,
+                           UNSIGNED8* nameBuf, UNSIGNED16* nameLen);
+using PFN_FindClose  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, ADSHANDLE hFind);
 
 struct SapFuncs {
     PFN_Connect    connect    = nullptr;
@@ -108,6 +133,10 @@ struct SapFuncs {
     PFN_GetField   getField   = nullptr;
     PFN_NumFields  numFields  = nullptr;
     PFN_FieldName  fieldName  = nullptr;
+    PFN_GetPerms   getPerms   = nullptr;
+    PFN_FindFirst  findFirst  = nullptr;
+    PFN_FindNext   findNext   = nullptr;
+    PFN_FindClose  findClose  = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -161,40 +190,6 @@ static std::string sap_field(const SapFuncs& f, ADSHANDLE hc, const char* name) 
     return buf;
 }
 
-// OBJ_TYPE numeric → DataDict obj_type string.
-static std::string obj_type_name(const std::string& numeric_str) {
-    int code = 0;
-    try { code = std::stoi(numeric_str); } catch (...) {}
-    switch (code) {
-        case  1: return "Table";
-        case  4: return "Field";
-        case  6: return "View";
-        case 10: return "StoredProc";
-        case 11: return "Database";
-        case 12: return "Link";
-        case 18: return "Function";
-        default: return "";
-    }
-}
-
-// Build ADS_PERMISSION_* bitmask from system.permissions row.
-static uint32_t perm_bitmask(const SapFuncs& f, ADSHANDLE hc) {
-    auto bit = [&](const char* col, uint32_t mask) -> uint32_t {
-        auto v = sap_field(f, hc, col);
-        return (v == "1" || v == "2") ? mask : 0u;
-    };
-    uint32_t b = 0;
-    b |= bit("SELECT",  0x001u);
-    b |= bit("UPDATE",  0x002u);
-    b |= bit("EXECUTE", 0x004u);
-    b |= bit("INSERT",  0x010u);
-    b |= bit("DELETE",  0x020u);
-    b |= bit("ACCESS",  0x040u);
-    b |= bit("CREATE",  0x080u);
-    b |= bit("ALTER",   0x100u);
-    b |= bit("DROP",    0x200u);
-    return b;
-}
 
 // ---------------------------------------------------------------------------
 // Default SAP library search paths
@@ -290,6 +285,10 @@ int main(int argc, char** argv) {
     f.getField   = (PFN_GetField)  lib_sym(sap, "AdsGetField");
     f.numFields  = (PFN_NumFields) lib_sym(sap, "AdsGetNumFields");
     f.fieldName  = (PFN_FieldName) lib_sym(sap, "AdsGetFieldName");
+    f.getPerms   = (PFN_GetPerms)  lib_sym(sap, "AdsDDGetPermissions");
+    f.findFirst  = (PFN_FindFirst) lib_sym(sap, "AdsDDFindFirstObject");
+    f.findNext   = (PFN_FindNext)  lib_sym(sap, "AdsDDFindNextObject");
+    f.findClose  = (PFN_FindClose) lib_sym(sap, "AdsDDFindClose");
 
     if (!f.connect || !f.disconnect || !f.execSQL || !f.close ||
         !f.createStmt || !f.atEOF || !f.skip || !f.getField) {
@@ -349,34 +348,83 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── Step 6: read object permissions ──────────────────────────────────────
+    // ── Step 6: read object permissions via AdsDDGetPermissions ─────────────
+    // system.permissions SQL returns 0 rows for SAP binary .add files because
+    // the real ACLs are stored in encrypted property blobs.  Use the
+    // AdsDDGetPermissions API instead, which decrypts them on the fly.
+    // We enumerate all grantees × all objects using AdsDDFindFirstObject/Next
+    // (avoids SQL queries to system.* which fail in local-server binary-DD mode).
+
+    // Object type codes from ADS_DD_*_OBJECT constants in ace.h
+    static const UNSIGNED16 kObjTable = 1;
+    static const UNSIGNED16 kObjView  = 6;
+    static const UNSIGNED16 kObjProc  = 10;
+    static const UNSIGNED16 kObjFunc  = 18;
+    static const UNSIGNED16 kObjUser  = 8;
+    static const UNSIGNED16 kObjGroup = 9;
+
     struct Perm {
         std::string obj_type, obj_name, grantee;
         uint32_t    bitmask;
     };
     std::vector<Perm> perms;
-    {
-        ADSHANDLE hc = 0;
-        rc = f.execSQL(hStmt,
-            (UNSIGNED8*)"SELECT * FROM system.permissions",
-            &hc);
-        if (rc == 0 && hc) {
-            UNSIGNED16 eof = 0;
-            while (f.atEOF(hc, &eof) == 0 && !eof) {
-                auto obj_name  = sap_field(f, hc, "OBJ_NAME");
-                auto obj_type  = obj_type_name(sap_field(f, hc, "OBJ_TYPE"));
-                auto grantee   = sap_field(f, hc, "GRANTEE");
-                uint32_t mask  = perm_bitmask(f, hc);
 
-                if (!obj_name.empty() && !obj_type.empty() &&
-                    !grantee.empty() && mask != 0)
-                    perms.push_back({obj_type, obj_name, grantee, mask});
+    // Helper: enumerate DD objects of a given type using AdsDDFindFirst/Next.
+    auto dd_enum = [&](UNSIGNED16 type) -> std::vector<std::string> {
+        std::vector<std::string> result;
+        if (!f.findFirst || !f.findNext || !f.findClose) return result;
+        char nameBuf[256] = {};
+        UNSIGNED16 nameLen = sizeof(nameBuf) - 1;
+        ADSHANDLE hFind = 0;
+        UNSIGNED32 rc2 = f.findFirst(hConn, type, nullptr,
+                                     (UNSIGNED8*)nameBuf, &nameLen, &hFind);
+        while (rc2 == 0 && hFind) {
+            nameBuf[nameLen] = '\0';
+            // Trim trailing spaces
+            for (int i = (int)nameLen - 1; i >= 0 && nameBuf[i] == ' '; --i)
+                nameBuf[i] = '\0';
+            if (nameBuf[0]) result.push_back(nameBuf);
+            nameLen = sizeof(nameBuf) - 1;
+            nameBuf[0] = '\0';
+            rc2 = f.findNext(hConn, hFind, (UNSIGNED8*)nameBuf, &nameLen);
+        }
+        if (hFind) f.findClose(hConn, hFind);
+        return result;
+    };
 
-                f.skip(hc, 1);
+    if (!f.getPerms) {
+        warnings.push_back("AdsDDGetPermissions not found in SAP library — ACLs skipped.");
+    } else if (!f.findFirst) {
+        warnings.push_back("AdsDDFindFirstObject not found in SAP library — ACLs skipped.");
+    } else {
+        // Collect all grantees: users and groups
+        struct Grantee { std::string name; };
+        std::vector<Grantee> grantees;
+        for (auto& nm : dd_enum(kObjUser))  grantees.push_back({nm});
+        for (auto& nm : dd_enum(kObjGroup)) grantees.push_back({nm});
+
+        // Collect all securable objects: tables, views, stored procs, functions
+        struct Obj { std::string name, type_name; UNSIGNED16 type_code; };
+        std::vector<Obj> objects;
+        for (auto& nm : dd_enum(kObjTable)) objects.push_back({nm, "Table",      kObjTable});
+        for (auto& nm : dd_enum(kObjView))  objects.push_back({nm, "View",       kObjView});
+        for (auto& nm : dd_enum(kObjProc))  objects.push_back({nm, "StoredProc", kObjProc});
+        for (auto& nm : dd_enum(kObjFunc))  objects.push_back({nm, "Function",   kObjFunc});
+
+        // Probe each (grantee × object) pair for direct permissions
+        for (const auto& g : grantees) {
+            for (const auto& o : objects) {
+                UNSIGNED32 mask = 0;
+                UNSIGNED32 prc = f.getPerms(hConn,
+                    (UNSIGNED8*)g.name.c_str(),
+                    o.type_code,
+                    (UNSIGNED8*)o.name.c_str(),
+                    nullptr,
+                    0,      // direct permissions only (not inherited)
+                    &mask);
+                if (prc == 0 && mask != 0)
+                    perms.push_back({o.type_name, o.name, g.name, mask});
             }
-            f.close(hc);
-        } else {
-            warnings.push_back("system.permissions query failed — ACLs skipped.");
         }
     }
 
@@ -405,6 +453,15 @@ int main(int argc, char** argv) {
         auto r = dd.grant_permission(p.obj_type, p.obj_name, p.grantee, p.bitmask);
         if (r) ++written_perms;
         else warnings.push_back("grant_permission(" + p.obj_type + "," + p.obj_name + "," + p.grantee + "): " + r.error().message);
+    }
+
+    // Remove all SAP-written encrypted Permission records from the dest file.
+    // Even when system.permissions returned 0 rows (SAP stores real ACLs in
+    // encrypted blobs not exposed via SQL), the original SAP records must be
+    // deleted so OpenADS no longer raises AE_SAP_PERMS_NEED_IMPORT (5174).
+    {
+        auto r = dd.clear_sap_permissions();
+        if (!r) warnings.push_back("clear_sap_permissions: " + r.error().message);
     }
 
     emit_result(true, written_memberships, written_perms, "", warnings);
