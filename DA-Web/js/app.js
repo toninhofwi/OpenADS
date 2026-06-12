@@ -2676,7 +2676,7 @@
 
       const lines = [
         `✓ Import complete`,
-        `  Group memberships: ${data.db_memberships}`,
+        `  Group memberships: ${data.memberships}`,
         `  Permissions:       ${data.permissions}`,
         data.registered ? `  Registered as "${name}" in the connection list` : `  (already registered)`,
       ];

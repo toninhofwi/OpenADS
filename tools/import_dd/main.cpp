@@ -13,8 +13,8 @@
 //                     [--no-copy]   (dest already exists, skip the copy step)
 //
 // Output: JSON to stdout.
-//   { "ok": true,  "db_memberships": N, "permissions": N, "warnings": [...] }
-//   { "ok": false, "error": "...",                        "warnings": [...] }
+//   { "ok": true,  "memberships": N, "permissions": N, "warnings": [...] }
+//   { "ok": false, "error": "...",                      "warnings": [...] }
 //
 // Called from DA-Web via exec(); the PHP side parses the JSON result.
 
@@ -158,13 +158,13 @@ static std::string json_escape(const std::string& s) {
 }
 
 static void emit_result(bool ok,
-                        int db_memberships, int permissions,
+                        int memberships, int permissions,
                         const std::string& error,
                         const std::vector<std::string>& warnings) {
     std::printf("{\"ok\":%s", ok ? "true" : "false");
     if (ok) {
-        std::printf(",\"db_memberships\":%d,\"permissions\":%d",
-                    db_memberships, permissions);
+        std::printf(",\"memberships\":%d,\"permissions\":%d",
+                    memberships, permissions);
     } else {
         std::printf(",\"error\":\"%s\"", json_escape(error).c_str());
     }
@@ -327,7 +327,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // ── Step 5: read DB: group memberships ───────────────────────────────────
+    // ── Step 5: read all user→group memberships ──────────────────────────────
+    // We read every membership from SAP, then re-write them using add_user_to_group
+    // (which sets prop_null=false).  clear_sap_permissions() later wipes the original
+    // SAP-written records (prop_null=true), so pre-importing ALL memberships is
+    // essential — otherwise regular groups (Administrators, Supervisors, etc.) vanish.
     struct Membership { std::string user, group; };
     std::vector<Membership> memberships;
     {
@@ -335,7 +339,6 @@ int main(int argc, char** argv) {
         rc = f.execSQL(hStmt,
             (UNSIGNED8*)"SELECT User_Name, Group_Name "
                         "FROM system.usergroupmembers "
-                        "WHERE Group_Name LIKE 'DB:%' "
                         "ORDER BY User_Name, Group_Name",
             &hc);
         if (rc == 0 && hc) {
@@ -349,7 +352,7 @@ int main(int argc, char** argv) {
             }
             f.close(hc);
         } else {
-            warnings.push_back("system.usergroupmembers query failed — DB: groups skipped.");
+            warnings.push_back("system.usergroupmembers query failed — group memberships skipped.");
         }
     }
 
