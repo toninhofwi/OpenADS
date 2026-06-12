@@ -431,16 +431,15 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             break;
         }
         case DbfFieldType::AdtMoney: {
-            // ADT type 18: 8-byte IEEE754 LE double (same wire format as Double/VFP B).
-            // NOT the same as VFP Currency (int64/10000). The ADI key computation
-            // treats MONEY identically to DOUBLE, confirming the storage format.
+            // ADT type 18: 8-byte little-endian SIGNED64, value * 10000.
+            // Same wire encoding as VFP Currency ('Y'), not IEEE754 double.
             if (field.length < 8) { v.as_string = make_string(p, field.length); break; }
-            double d = 0.0;
-            std::memcpy(&d, p, 8);
-            char tmp[32];
-            std::snprintf(tmp, sizeof(tmp), "%.4f", d);
+            std::int64_t raw = read_i64_le(p);
+            double money = static_cast<double>(raw) / 10000.0;
+            char tmp[64];
+            std::snprintf(tmp, sizeof(tmp), "%.4f", money);
             v.as_string  = tmp;
-            v.as_double  = d;
+            v.as_double  = money;
             break;
         }
         case DbfFieldType::ModTime: {
@@ -580,9 +579,14 @@ util::Result<void> encode_field_double(const DbfField& f,
             }
             break;
         case DbfFieldType::Double:
-        case DbfFieldType::AdtMoney:  // ADT type 18: IEEE754 LE double, same wire as Double
             if (f.length >= 8) {
                 write_f64_le(dst, value);
+                return {};
+            }
+            break;
+        case DbfFieldType::AdtMoney:
+            if (f.length >= 8) {
+                write_i64_le(dst, static_cast<std::int64_t>(value * 10000.0));
                 return {};
             }
             break;

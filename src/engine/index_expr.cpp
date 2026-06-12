@@ -332,7 +332,8 @@ private:
             f.type == drivers::DbfFieldType::Float ||
             f.type == drivers::DbfFieldType::Integer ||
             f.type == drivers::DbfFieldType::Double ||
-            f.type == drivers::DbfFieldType::Currency) {
+            f.type == drivers::DbfFieldType::Currency ||
+            f.type == drivers::DbfFieldType::AdtMoney) {
             v.is_number = true;
             v.n = r.value().as_double;
             // For arithmetic-style indexes the Clipper convention is
@@ -570,7 +571,8 @@ Value parse_atom(Lex& lx, Table& t) {
             f.type == drivers::DbfFieldType::Float    ||
             f.type == drivers::DbfFieldType::Integer  ||
             f.type == drivers::DbfFieldType::Double   ||
-            f.type == drivers::DbfFieldType::Currency) {
+            f.type == drivers::DbfFieldType::Currency ||
+            f.type == drivers::DbfFieldType::AdtMoney) {
             v.is_number = true;
             v.n = r.value().as_double;
         } else {

@@ -49,7 +49,7 @@ DbfFieldType classify_adt_field(std::uint16_t raw_type) {
         case 13: return DbfFieldType::Time;
         case 14: return DbfFieldType::AdtTimestamp;
         case 15: return DbfFieldType::AutoInc;
-        case 18: return DbfFieldType::AdtMoney;    // MONEY: 8-byte IEEE754 LE double
+        case 18: return DbfFieldType::AdtMoney;    // MONEY: 8-byte LE int64, value * 10000
         case 20: return DbfFieldType::CiCharacter;
         case 21: return DbfFieldType::RowVersion;  // 8-byte uint64 LE row version counter
         case 22: return DbfFieldType::ModTime;     // 8-byte modification timestamp

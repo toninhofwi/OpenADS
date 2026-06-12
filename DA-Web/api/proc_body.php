@@ -129,31 +129,55 @@ for ($i = 0; $i < $total; $i++) {
         $sqlBody     = trim($sqlBody);
 
     } else {
-        // StoredProc layout: [input_params\0][0xFF×6][8 binary bytes][CRLF][SQL body]
+        // StoredProc layout — two known formats:
+        //
+        // SAP-original:       [input_params\0][0xFF×6][8-byte hdr][CRLF][SQL body]
+        //   body at offset $plen inside property area
+        //
+        // OpenADS-imported:   [input_params\0][SQL body\0][optional metadata...]
+        //   body immediately after the input_params NUL byte
+        //
+        // Detected by inspecting the byte right after the params NUL:
+        //   printable ASCII (≥0x20) → OpenADS-imported, read as NUL-terminated body.
+        //   anything else            → SAP-original, use 0xFF/CRLF scan from $plen.
 
-        // input_params: first plen bytes, NUL-terminated
-        if (!$propNull && $plen > 0) {
-            $raw = substr($data, $PS, $plen);
+        $paramNul = 0;
+        if (!$propNull) {
+            $raw = substr($data, $PS, min($plen > 0 ? $plen : $PL, $PL));
             $nul = strpos($raw, "\0");
-            $inputParams = ($nul !== false) ? substr($raw, 0, $nul) : $raw;
+            if ($nul !== false) {
+                $inputParams = substr($raw, 0, $nul);
+                $paramNul    = $nul;
+            } else {
+                $inputParams = rtrim($raw);
+                $paramNul    = strlen($raw);
+            }
         }
 
-        // Inline SQL body: skip params → 0xFF markers → binary header → CRLF → body
-        $pos = $propNull ? 0 : $plen;
-        while ($pos < $PL && ord($data[$PS + $pos]) === 0xFF) $pos++;
-        while ($pos + 1 < $PL) {
-            if (ord($data[$PS + $pos]) === 0x0D && ord($data[$PS + $pos + 1]) === 0x0A) break;
-            $pos++;
-        }
-        if ($pos + 1 < $PL) {
-            $end = $PL;
-            for ($j = $pos; $j < $PL; $j++) {
-                if ($data[$PS + $j] === "\0") { $end = $j; break; }
+        $bodyStart = $paramNul + 1;
+        if ($bodyStart < $PL && ord($data[$PS + $bodyStart]) >= 0x20) {
+            // OpenADS-imported format: NUL-terminated body starts right after params
+            $pos = $bodyStart;
+            $bodyEnd = $pos;
+            while ($bodyEnd < $PL && $data[$PS + $bodyEnd] !== "\0") $bodyEnd++;
+            $sqlBody = substr($data, $PS + $pos, $bodyEnd - $pos);
+        } else {
+            // SAP-original format: body at $plen, preceded by 0xFF markers and binary header
+            $pos = $propNull ? 0 : $plen;
+            while ($pos < $PL && ord($data[$PS + $pos]) === 0xFF) $pos++;
+            while ($pos + 1 < $PL) {
+                if (ord($data[$PS + $pos]) === 0x0D && ord($data[$PS + $pos + 1]) === 0x0A) break;
+                $pos++;
             }
-            $sqlBody = substr($data, $PS + $pos, $end - $pos);
-            $sqlBody = ltrim($sqlBody, " \t\r\n");
-            $sqlBody = rtrim($sqlBody, " \t\r\n");
+            if ($pos + 1 < $PL) {
+                $end = $PL;
+                for ($j = $pos; $j < $PL; $j++) {
+                    if ($data[$PS + $j] === "\0") { $end = $j; break; }
+                }
+                $sqlBody = substr($data, $PS + $pos, $end - $pos);
+            }
         }
+        $sqlBody = trim($sqlBody ?? '');
     }
 
     // Append .am continuation — more_property bytes [498..506]:

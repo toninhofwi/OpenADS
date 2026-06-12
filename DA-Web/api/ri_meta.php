@@ -218,10 +218,13 @@ function resolveIndexPath(string $idxFile, string $addDir): string {
 }
 
 // Fetch index tags for $tableName by querying system.indexes and parsing files.
+// Falls back to probing the DD directory for {table}.adi / {table}.cdx when
+// system.indexes has no registered entry for the table (e.g. unregistered indexes).
 function fetchIndexTags(AdsConnection $conn, string $addDir, string $tableName): array {
     if ($tableName === '') return [];
     try {
         $tags = [];
+        $found = false;
         $stmt = $conn->query("SELECT TABLE_NAME, INDEX_FILE FROM system.indexes");
         while ($row = $stmt->fetchAssoc()) {
             $tbl = trim((string)($row['TABLE_NAME'] ?? ''));
@@ -230,6 +233,7 @@ function fetchIndexTags(AdsConnection $conn, string $addDir, string $tableName):
             if ($idxFile === '') continue;
             $path = resolveIndexPath($idxFile, $addDir);
             if (!file_exists($path)) continue;
+            $found = true;
             $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
             if ($ext === 'cdx') {
                 foreach (fetchTagsFromCdx($path) as $t) $tags[] = $t;
@@ -238,10 +242,28 @@ function fetchIndexTags(AdsConnection $conn, string $addDir, string $tableName):
             }
         }
         $stmt->close();
+
+        // Fallback: if system.indexes had no entry, probe the DD directory directly.
+        if (!$found) {
+            $lower = strtolower($tableName);
+            foreach (['adi', 'cdx'] as $ext) {
+                // Try exact case, then lowercase, then uppercase
+                foreach ([$tableName, $lower, strtoupper($tableName)] as $stem) {
+                    $path = $addDir . DIRECTORY_SEPARATOR . $stem . '.' . $ext;
+                    if (file_exists($path)) {
+                        foreach (($ext === 'adi' ? fetchTagsFromAdi($path) : fetchTagsFromCdx($path)) as $t) {
+                            $tags[] = $t;
+                        }
+                        break 2;
+                    }
+                }
+            }
+        }
+
         $tags = array_values(array_unique($tags));
         sort($tags);
         return $tags;
-    } catch (Throwable $e) {
+    } catch (Throwable) {
         return [];
     }
 }

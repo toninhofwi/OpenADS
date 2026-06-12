@@ -1161,7 +1161,7 @@ DbfTypeSpec dbf_type_for(const std::string& name) {
     if (eq("ShortInt"))
         return {'S', 2, 0, false};    // ADT type 12: 2-byte int16
     if (eq("Money") || eq("Currency"))
-        return {'$', 8, 0, false};    // ADT type 18: 8-byte IEEE754 double
+        return {'$', 8, 0, false};    // ADT type 18: 8-byte int64 * 10000
     if (eq("Timestamp"))
         return {'P', 8, 0, false};    // ADT type 14: 8-byte JDN+ms
     if (eq("AutoInc"))
@@ -1251,7 +1251,7 @@ AdtFieldSpec adt_spec_for(const FieldOut& f) {
         case 'W': return {20, static_cast<std::uint16_t>(f.length ? f.length : 10u),
                           0, false};                       // CICHARACTER
         case 'S': return {12, 2,          0,     false};  // SHORTINT
-        case '$': return {18, 8,          0,     false};  // MONEY (IEEE754 double)
+        case '$': return {18, 8,          0,     false};  // MONEY (int64 * 10000)
         case 'P': return {14, 8,          0,     false};  // TIMESTAMP (JDN+ms)
         case 'A': return {15, 4,          0,     false};  // AUTOINC
         case 'Z': return {13, 4,          0,     false};  // TIME (ms since midnight)

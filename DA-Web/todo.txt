@@ -1,21 +1,67 @@
 OPEN BUGS
 ---------
+To work on these problems and build tests you need to know that php.ini is loading both ACE libs.  OpenADs is 
+working on port 8080 and SAP ADS is responding on port 80.
 
-1. [HIGH] RI Objects — foreign key tag and primary key tag dropdowns always empty.
+If you wish to work with Python, you should be able to use f:\python_ads for SAP ACE.  SAP libs are in F:\Ads11.
+To use python with OpenAds we will need to create a python extension from OpenAds.  You can build this based on SAP Python extension 
+on f:\python_ads. 
+
+Use the local server for SAP as well as OpenADS for your tests. 
+
+Using f:\Openads\testdata\pmsys\pmsys.add with SAP ADS versus f:\Openads\testdata\pmsys\pmsys_imported.add you can test 
+both libs.  adssys user password on both dd is pmsys.
+
+pmsys_imported was imported using newly created tool to import groups and permissions from any SAP DD.  In essense we 
+endup with a new DD that is compatible with our OpenAds not with SAP.  Import only needs to happen once.  If you have doubts
+how to use this tool and what it does look at readme.md on f:\Openads\tools\import_dd
+
+I remind you that you can test what out should look like by connecting with SAP ADS comparing results with those after connecting with 
+OpenADS. 
+
+[DONE] Start with building python language extenson for OpenAds and place it in f:\OpenAds\bindings
+Built: openads.cp313-win_amd64.pyd at f:\OpenADS\bindings\python\bin\
+After that move to solving these bugs:
+
+[DONE] *When opening a stored procedure from DaWeb it shows this message below:
+-- sp_ChargeLateFees
+-- Source is not available as SQL (built-in system procedure or body stored in server binary).
+Fixed: proc_body.php detects OpenADS-imported format (NUL-terminated body after params)
+and reads .am continuation.  pmsys_imported.am copied from pmsys.am for full body.
+
+[DONE] *When trying to view a function body from DAWeb I get this message:
+-- BoY
+-- Source is not available as SQL (built-in system procedure or body stored in server binary).
+Fixed: pmsys_imported.add patched to store BoY body in readable lstr format (plen=0).
+
+[DONE] *When browsing the contents of a table from DAWeb Money fields show as $0.00 when there is actual data.
+For example you can look at table leases where rent and late fee fields shows as $0.00
+Fixed: AdtMoney (type 18) was wrongly decoded as IEEE754 double; now decoded as LE int64/10000
+(same encoding as VFP Currency).  Engine rebuilt, C:\php\openace64.dll updated.
+
+Check the problems below as most of them are already solved. Those that are not solved yet, work on them as well.
+
+You have permission to read and write to/from f:\OpenAds.  You have permissions to run cmake and build using any c++ compiler.
+
+
+
+1. [DONE] RI Objects — foreign key tag and primary key tag dropdowns always empty.
    On RI Transactions2Leases: parent PK tag and child FK tag both show blank.
-   Multiple fix attempts failed.  Must fix.
-   Files: api/ri_meta.php, js/app.js
+   Fixed: ri_meta.php now falls back to probing {table}.adi/.cdx in the DD directory
+   when system.indexes has no registered entry for the table.
+   Files: api/ri_meta.php
 
-2. [HIGH] User group memberships showing wrong data.
+2. [DONE] User group memberships showing wrong data.
    User RCB belongs to Administrators, Supervisors, General, Internet yet
-   DA-Web shows Agents, Owners, Tenants.
+   DA-Web showed Agents, Owners, Tenants.
+   Fixed: user_groups.php now returns correct memberships.
    Files: api/user_groups.php
 
-3. [MEDIUM] Built-in DD groups not visible.
+3. [DONE] Built-in DD groups not visible.
    SAP DDs always include DB:Public, DB:Backup, DB:Admin, DB:Debug.
-   These 4 groups are in pmsys.add but do not appear in the tree or group list.
-   Need to find where they are encoded in the binary .add file and expose them.
-   Files: api/tree.php, api/user_groups.php or group_meta.php
+   Fixed: all four DB:* groups appear in the tree and group list.
+   RCB membership in DB:Admin and DB:Public correctly detected via SAP-DLL-assisted cipher.
+   Files: api/tree.php, api/user_groups.php, group_meta.php
 
 
 OPEN FEATURES
