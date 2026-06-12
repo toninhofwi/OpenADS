@@ -534,13 +534,19 @@
          <div id="user-grp-${tabId}" style="flex:0 0 160px;min-height:0;overflow:hidden;"></div>
          <div id="user-grp-builtin-${tabId}" style="border-bottom:2px solid #313244;background:#1e1e2e;min-height:22px;"></div>
          <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
-           <span style="font-size:12px;color:#89b4fa;font-weight:600;">Direct Permissions</span>
+           <button class="perm-tab-btn btn btn-sm" id="ptab-direct-${tabId}"
+                   style="background:#313244;color:#cdd6f4;border:1px solid #45475a;"
+                   data-ptab="direct">Direct Permissions</button>
+           <button class="perm-tab-btn btn btn-sm" id="ptab-effective-${tabId}"
+                   style="color:#a6adc8;border:1px solid transparent;"
+                   data-ptab="effective">Effective Permissions</button>
            ${inheritBadge}
            <button class="btn btn-sm btn-primary" id="save-perm-${tabId}" style="margin-left:auto;">&#128190; Save Changes</button>
            <span id="save-perm-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
-           <span style="font-size:11px;color:#585b70;">Alter/Drop columns are read-only</span>
+           <span id="perm-ro-note-${tabId}" style="font-size:11px;color:#585b70;">Alter/Drop columns are read-only</span>
          </div>
-         <div id="user-perm-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+         <div id="user-perm-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>
+         <div id="user-eff-${tabId}"  style="flex:1;min-height:0;overflow:hidden;display:none;"></div>`;
 
       // ── Built-in DB: group badges (read-only, cannot be edited via OpenADS) ──
       const builtins = groupsResp.builtinGroups || [];
@@ -681,10 +687,136 @@
           }
         });
       }
+
+      // ── Permission sub-tab switching (Direct / Effective) ─────────────────────
+      const permDirect  = document.getElementById('user-perm-' + tabId);
+      const permEff     = document.getElementById('user-eff-'  + tabId);
+      const savePermBtn = document.getElementById('save-perm-' + tabId);
+      const permRoNote  = document.getElementById('perm-ro-note-' + tabId);
+      const btnDirect   = document.getElementById('ptab-direct-'    + tabId);
+      const btnEff      = document.getElementById('ptab-effective-' + tabId);
+      let effLoaded = false;
+
+      const switchPermTab = (which) => {
+        const isDirect = which === 'direct';
+        if (permDirect) permDirect.style.display = isDirect  ? '' : 'none';
+        if (permEff)    permEff.style.display     = !isDirect ? '' : 'none';
+        if (savePermBtn) savePermBtn.style.display = isDirect  ? '' : 'none';
+        if (permRoNote)  permRoNote.style.display  = isDirect  ? '' : 'none';
+
+        const activeStyle   = 'background:#313244;color:#cdd6f4;border:1px solid #45475a;';
+        const inactiveStyle = 'color:#a6adc8;border:1px solid transparent;background:transparent;';
+        if (btnDirect) btnDirect.style.cssText   = isDirect  ? activeStyle : inactiveStyle;
+        if (btnEff)    btnEff.style.cssText       = !isDirect ? activeStyle : inactiveStyle;
+
+        if (!isDirect && !effLoaded) {
+          effLoaded = true;
+          loadEffectivePermissions(tabId, dd, userName, permsResp?.canInherit ?? false);
+        }
+      };
+
+      btnDirect?.addEventListener('click', () => switchPermTab('direct'));
+      btnEff?.addEventListener('click',    () => switchPermTab('effective'));
     })
     .catch(err => {
       if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
     });
+  }
+
+  // ── Effective permissions grid (read-only) ──────────────────────────────────
+  function loadEffectivePermissions(tabId, dd, userName, canInherit) {
+    const effEl = document.getElementById('user-eff-' + tabId);
+    if (!effEl) return;
+    effEl.innerHTML = '<div style="padding:8px;color:#a6adc8;font-size:12px;">Loading…</div>';
+
+    apiFetch(`api/user_effective_permissions.php?dd=${encodeURIComponent(dd)}&user=${encodeURIComponent(userName)}`)
+      .then(resp => {
+        if (resp.error) {
+          effEl.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+
+        const groups = resp.groups || [];
+        const groupList = groups.length
+          ? groups.map(g => `<span style="background:#313244;border-radius:3px;padding:1px 6px;font-size:11px;color:#cba6f7;">${escHtml(g)}</span>`).join(' ')
+          : '<span style="color:#585b70;font-size:11px;">no groups</span>';
+
+        const legend = canInherit
+          ? `<div style="padding:3px 6px;font-size:11px;color:#a6adc8;background:#181825;border-bottom:1px solid #313244;">
+               Inheriting from: ${groupList}
+               &nbsp;&nbsp;
+               <span style="color:#a6e3a1;">&#9679;</span> Direct
+               <span style="color:#89dceb;margin-left:6px;">&#9679;</span> Inherited
+               <span style="color:#89b4fa;margin-left:6px;">&#9679;</span> Direct + Inherited
+               <span style="color:#45475a;margin-left:6px;">&#9679;</span> Not granted
+             </div>`
+          : `<div style="padding:3px 6px;font-size:11px;color:#f38ba8;background:#181825;border-bottom:1px solid #313244;">
+               Inheritance is disabled for this user — effective permissions equal direct permissions only.
+             </div>`;
+
+        const TYPE_LABEL  = { 1:'Table', 4:'Field', 6:'View', 10:'Stored Proc', 18:'Function' };
+        const isExecType  = t => t === 10 || t === 18;
+        const isFieldType = t => t === 4;
+        const isSchemaType= t => t === 1 || t === 6;
+
+        const DASH = '<span style="color:#45475a;font-size:13px;display:block;text-align:center;">—</span>';
+
+        // Color by source: Direct=green, Inherited=cyan, Both=blue, None=red
+        const effCheck = (on, src) => {
+          if (!on) return `<span style="color:#45475a;font-size:16px;display:block;text-align:center;opacity:0.5;">✗</span>`;
+          const isDirect   = src.includes('Direct');
+          const isInherit  = src.split('+').some(s => s !== 'Direct' && s !== '');
+          let color;
+          if (isDirect && isInherit) color = '#89b4fa';   // blue  — both
+          else if (isDirect)         color = '#a6e3a1';   // green — direct only
+          else                       color = '#89dceb';   // cyan  — inherited only
+          const tip = src || '';
+          return `<span style="color:${color};font-size:16px;display:block;text-align:center;" title="${escHtml(tip)}">✓</span>`;
+        };
+
+        const effCol = (title, field, srcField) => ({
+          title, field, width: 72, headerSort: false,
+          formatter: (cell) => {
+            const row = cell.getRow().getData();
+            const t   = row.type;
+            if (field === 'canExec')   return isExecType(t)  ? effCheck(cell.getValue()==='Yes', row[srcField] || '') : DASH;
+            if (field === 'canDelete') return (isFieldType(t) || isExecType(t)) ? DASH : effCheck(cell.getValue()==='Yes', row[srcField] || '');
+            if (field === 'canAlter' || field === 'canDrop') return isSchemaType(t) ? effCheck(cell.getValue()==='Yes', row[srcField] || '') : DASH;
+            if (isExecType(t)) return DASH;
+            return effCheck(cell.getValue()==='Yes', !(isFieldType(t)) ? (row[srcField] || '') : '');
+          },
+        });
+
+        // Build a wrapper that holds the legend + the grid div
+        effEl.innerHTML = legend + `<div id="user-eff-grid-${tabId}" style="height:calc(100% - 28px);"></div>`;
+
+        new Tabulator('#user-eff-grid-' + tabId, { /* global Tabulator */
+          data: resp.data,
+          layout: 'fitDataFill',
+          pagination: 'local', paginationSize: 500, height: '100%',
+          placeholder: '(no permissions for this user)',
+          rowFormatter: row => {
+            if (row.getData().type === 4) row.getElement().style.background = '#181825';
+          },
+          columns: [
+            { title: 'Object', field: 'object', widthGrow: 3, headerSort: true },
+            { title: 'Parent', field: 'parent', width: 130, headerSort: true,
+              formatter: cell => cell.getValue() ? escHtml(cell.getValue()) : '' },
+            { title: 'Type', field: 'type', width: 100, headerSort: false,
+              formatter: cell => TYPE_LABEL[cell.getValue()] || `Type ${cell.getValue()}` },
+            effCol('Select',  'canSelect', 'srcSelect'),
+            effCol('Insert',  'canInsert', 'srcInsert'),
+            effCol('Update',  'canUpdate', 'srcUpdate'),
+            effCol('Delete',  'canDelete', 'srcDelete'),
+            effCol('Execute', 'canExec',   'srcExec'),
+            effCol('Alter',   'canAlter',  'srcAlter'),
+            effCol('Drop',    'canDrop',   'srcDrop'),
+          ],
+        });
+      })
+      .catch(err => {
+        if (effEl) effEl.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
   }
 
   // ── RI Object form tab ──────────────────────────────────────────────────────
