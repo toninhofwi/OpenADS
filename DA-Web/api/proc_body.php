@@ -191,6 +191,14 @@ for ($i = 0; $i < $total; $i++) {
     }
     $sqlBody = rtrim(substr($sqlBody, 0, $len), " \t\r\n");
 
+    // When no SQL body is present (built-in system procedure or empty definition),
+    // return a readable comment so the editor shows something meaningful.
+    if ($sqlBody === '') {
+        $paramNote = $inputParams !== '' ? "\n-- Parameters: {$inputParams}" : '';
+        $sqlBody = "-- {$objName}{$paramNote}\n-- Source is not available as SQL"
+                 . " (built-in system procedure or body stored in server binary).";
+    }
+
     $result = [
         'body'         => $sqlBody,
         'input_params' => $inputParams,
