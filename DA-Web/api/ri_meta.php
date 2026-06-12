@@ -50,34 +50,88 @@ function safeStr(mixed $v): string {
     return mb_convert_encoding($s, 'UTF-8', 'UTF-8');
 }
 
-// Fetch index tag names for a table via AdsTable::getIndexTags().
-function fetchTags(AdsConnection $conn, string $table): array {
-    if ($table === '') return [];
+// Read index tag names for a table from the binary .add file.
+// Walks Table → Index → Key record hierarchy; returns sorted tag names.
+function fetchTagsFromBinary(string $addPath, string $tableName): array {
+    $bin = @file_get_contents($addPath);
+    if ($bin === false || strlen($bin) < 40) return [];
+
+    $hdrLen = unpack('V', substr($bin, 0x20, 4))[1];
+    $recLen = unpack('V', substr($bin, 0x24, 4))[1];
+    if ($recLen === 0) return [];
+    $total = intdiv(strlen($bin) - $hdrLen, $recLen);
+
+    $idName   = [];   // obj_id  → name
+    $idType   = [];   // obj_id  → obj_type string
+    $idParent = [];   // obj_id  → parent_id
+
+    for ($i = 0; $i < $total; $i++) {
+        $base = $hdrLen + $i * $recLen;
+        if ($base + $recLen > strlen($bin)) break;
+        if (ord($bin[$base]) !== 0x04) continue;          // 0x04 = active
+        $oid = unpack('V', substr($bin, $base + 5, 4))[1];
+        $pid = unpack('V', substr($bin, $base + 9, 4))[1];
+        $ot  = rtrim(substr($bin, $base + 13, 10), " \0");
+        $nm  = rtrim(substr($bin, $base + 23, 200), " \0");
+        if ($nm !== '') $idName[$oid] = $nm;
+        $idType[$oid]   = $ot;
+        $idParent[$oid] = $pid;
+    }
+
+    // Find table obj_id by name (case-insensitive)
+    $tableId = null;
+    foreach ($idType as $oid => $ot) {
+        if ($ot === 'Table' && isset($idName[$oid]) &&
+            strcasecmp($idName[$oid], $tableName) === 0) {
+            $tableId = $oid;
+            break;
+        }
+    }
+    if ($tableId === null) return [];
+
+    // Collect Index obj_ids whose parent = table
+    $indexIds = [];
+    foreach ($idParent as $oid => $pid) {
+        if ($pid === $tableId && ($idType[$oid] ?? '') === 'Index') {
+            $indexIds[$oid] = true;
+        }
+    }
+
+    // Collect Key names whose parent = one of those Index records
     $tags = [];
-    try {
-        $tbl = AdsTable::open($conn, $table, 0);
-        foreach ($tbl->getIndexTags() as $t) {
-            $tag = trim((string)($t['tag'] ?? ''));
+    foreach ($idParent as $oid => $pid) {
+        if (isset($indexIds[$pid]) && ($idType[$oid] ?? '') === 'Key') {
+            $tag = $idName[$oid] ?? '';
             if ($tag !== '') $tags[] = $tag;
         }
-        $tbl->close();
-    } catch (Throwable $e) {}
+    }
+    sort($tags);
     return $tags;
 }
 
 try {
     $conn = AdsConnection::connect($opts);
 
+    $addPath = $c['path'];   // path to the .add file
+
     // ── Return all tables ──────────────────────────────────────────────────
     if ($action === 'tables') {
         $tables = [];
         $stmt = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
         while ($row = $stmt->fetchAssoc()) {
-            $t = safeStr($row['TABLE_NAME']);   // safeStr now trims
+            $t = safeStr($row['TABLE_NAME']);
             if ($t !== '') $tables[] = $t;
         }
         $conn->close();
         echo json_encode(['tables' => $tables], JSON_FLAGS);
+        exit;
+    }
+
+    // ── Return tag names for a table (used when user changes table select) ──
+    if ($action === 'tags') {
+        $table = trim($_GET['table'] ?? '');
+        $conn->close();
+        echo json_encode(['tags' => fetchTagsFromBinary($addPath, $table)], JSON_FLAGS);
         exit;
     }
 
@@ -114,9 +168,9 @@ try {
         ];
     }
 
-    // Embed index tags for both tables so client needs no extra round-trips
-    $parentTags = fetchTags($conn, $ri['parent']);
-    $childTags  = fetchTags($conn, $ri['child']);
+    // Embed index tags for both tables from the binary .add file
+    $parentTags = fetchTagsFromBinary($addPath, $ri['parent']);
+    $childTags  = fetchTagsFromBinary($addPath, $ri['child']);
 
     $conn->close();
     echo json_encode(['ri' => $ri, 'parentTags' => $parentTags, 'childTags' => $childTags], JSON_FLAGS);

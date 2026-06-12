@@ -995,9 +995,9 @@
         const tagSel = document.getElementById(tagSelectId);
         if (!tagSel) return;
         try {
-          const r = await apiFetch(`api/table_meta.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(tbl)}&kind=indexes`);
+          const r = await apiFetch(`api/ri_meta.php?dd=${encodeURIComponent(dd)}&action=tags&table=${encodeURIComponent(tbl)}`);
           if (r.error) console.warn('loadTags error for', tbl, ':', r.error);
-          const tags = (r.data || []).map(row => row.Tag || '').filter(Boolean);
+          const tags = r.tags || [];
           tagSel.innerHTML = tags.map(t => `<option>${escHtml(t)}</option>`).join('');
         } catch (e) { console.warn('loadTags fetch error:', e); }
       };
