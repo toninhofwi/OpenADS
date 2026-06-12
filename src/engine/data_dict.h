@@ -305,6 +305,10 @@ public:
     // Permission records.  Clients should prompt the user to run the import
     // tool; AdsConnect60 surfaces this as AE_SAP_PERMS_NEED_IMPORT (5174).
     bool has_sap_permissions() const noexcept { return has_sap_permissions_; }
+    // Deactivate all SAP-written Permission records (prop_null=true) and clear
+    // the flag.  Called by openads_import_dd after writing imported permissions
+    // so the dest file no longer triggers AE_SAP_PERMS_NEED_IMPORT (5174).
+    util::Result<void> clear_sap_permissions();
     const std::unordered_map<std::string, std::unordered_map<std::string, int>>&
         table_perms() const noexcept { return table_perms_; }
 

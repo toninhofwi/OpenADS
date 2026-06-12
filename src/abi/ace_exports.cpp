@@ -5076,6 +5076,83 @@ UNSIGNED32 AdsDDDropView(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return ok();
 }
 
+// ---------------------------------------------------------------------------
+// SAP ACE aliases not yet covered above
+// AdsDDAddView / AdsDDRemoveView — thin aliases for Create/Drop.
+// AdsDDGetPermissions / AdsDDGrantPermission / AdsDDRevokePermission —
+//   fine-grained object ACL helpers used by the php_advantage extension.
+// ---------------------------------------------------------------------------
+
+static const char* dd_type_name_from_code(UNSIGNED16 code) {
+    switch (code) {
+        case  1: return "Table";
+        case  6: return "View";
+        case 10: return "StoredProc";
+        case 18: return "Function";
+        default: return "Table";
+    }
+}
+
+UNSIGNED32 AdsDDAddView(ADSHANDLE hConn, UNSIGNED8* pucName,
+                         UNSIGNED8* pucComments, UNSIGNED8* pucSQL) {
+    return AdsDDCreateView(hConn, pucName, pucComments, pucSQL);
+}
+
+UNSIGNED32 AdsDDRemoveView(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    return AdsDDDropView(hConn, pucName);
+}
+
+UNSIGNED32 AdsDDGetPermissions(ADSHANDLE hConn,
+                                UNSIGNED8*  pucGrantee,
+                                UNSIGNED16  usObjectType,
+                                UNSIGNED8*  pucObjectName,
+                                UNSIGNED8*  /*pucParentName*/,
+                                UNSIGNED16  /*usGetInherited*/,
+                                UNSIGNED32* pulPermissions) {
+    if (pulPermissions == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pulPermissions = 0;
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto grantee = openads::abi::to_internal(pucGrantee,     0);
+    auto objname = openads::abi::to_internal(pucObjectName,  0);
+    auto objtype = dd_type_name_from_code(usObjectType);
+    for (const auto& pe : dd->permissions()) {
+        if (pe.grantee == grantee && pe.object_type == objtype && pe.object_name == objname) {
+            *pulPermissions = pe.bitmask;
+            break;
+        }
+    }
+    return ok();
+}
+
+UNSIGNED32 AdsDDGrantPermission(ADSHANDLE  hConn,
+                                 UNSIGNED16  usObjectType,
+                                 UNSIGNED8*  pucObjectName,
+                                 UNSIGNED8*  /*pucParentName*/,
+                                 UNSIGNED8*  pucGrantee,
+                                 UNSIGNED32  ulPermissions) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto objname = openads::abi::to_internal(pucObjectName, 0);
+    auto grantee = openads::abi::to_internal(pucGrantee,    0);
+    auto objtype = dd_type_name_from_code(usObjectType);
+    auto r = dd->grant_permission(objtype, objname, grantee, ulPermissions);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDRevokePermission(ADSHANDLE  hConn,
+                                  UNSIGNED16  usObjectType,
+                                  UNSIGNED8*  pucObjectName,
+                                  UNSIGNED8*  pucParentName,
+                                  UNSIGNED8*  pucGrantee,
+                                  UNSIGNED32  /*ulPermissions*/) {
+    // Revoke by granting a zero bitmask (deactivates existing record).
+    // The caller typically follows with a fresh AdsDDGrantPermission call.
+    return AdsDDGrantPermission(hConn, usObjectType, pucObjectName,
+                                pucParentName, pucGrantee, 0);
+}
+
 UNSIGNED32 AdsDDGetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                  UNSIGNED16 usProp, void* pBuf,
                                  UNSIGNED16* pusLen) {

@@ -472,17 +472,55 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
 
         } else if (rec.obj_type == "Relation" && !rec.obj_name.empty() &&
                    !rec.prop_null) {
-            auto parts = split_nul(rec.property);
-            while (parts.size() < 7) parts.emplace_back();
             RiEntry e;
-            e.name       = rec.obj_name;
-            e.parent     = parts[0];
-            e.child      = parts[1];
-            e.parent_tag = parts[2];
-            e.child_tag  = parts[3];
-            e.update_opt = parts[4];
-            e.delete_opt = parts[5];
-            e.fail_table = parts[6];
+            e.name = rec.obj_name;
+            // SAP binary .add stores only 4 bytes (parent table obj_id) in the declared
+            // property; the rest of the RI data lives in the undeclared part of the 273-byte
+            // property area:
+            //   +0:  parent_table_id  [4 LE uint32]
+            //   +4:  0x04 0x00
+            //   +6:  parent_pk_key_id [4 LE uint32]  (Key record → tag name)
+            //   +10: 0x04 0x00
+            //   +12: child_table_id   [4 LE uint32]
+            //   +16: 0x04 0x00
+            //   +18: child_fk_key_id  [4 LE uint32]  (Key record → tag name)
+            //   +22: 0x01 0x00
+            //   +24: update_rule      [1 byte]  1=Restrict 2=Cascade 3=SetNull
+            //   +25: delete_rule      [1 byte]
+            if (binary_format_ && rec.property.size() == 4 &&
+                base + 225 + 26 <= buf.size()) {
+                auto rule_str = [](uint8_t v) -> std::string {
+                    if (v == 2) return "Cascade";
+                    if (v == 3) return "SetNull";
+                    return "Restrict";
+                };
+                auto look = [&](uint32_t id) -> std::string {
+                    auto it = id_to_name.find(id);
+                    return (it != id_to_name.end()) ? it->second : "";
+                };
+                uint32_t par_tbl  = le32(buf, base + 225 +  0);
+                uint32_t par_key  = le32(buf, base + 225 +  6);
+                uint32_t chi_tbl  = le32(buf, base + 225 + 12);
+                uint32_t chi_key  = le32(buf, base + 225 + 18);
+                uint8_t  upd = static_cast<uint8_t>(buf[base + 225 + 24]);
+                uint8_t  del = static_cast<uint8_t>(buf[base + 225 + 25]);
+                e.parent     = look(par_tbl);
+                e.child      = look(chi_tbl);
+                e.parent_tag = look(par_key);
+                e.child_tag  = look(chi_key);
+                e.update_opt = rule_str(upd);
+                e.delete_opt = rule_str(del);
+            } else {
+                auto parts = split_nul(rec.property);
+                while (parts.size() < 7) parts.emplace_back();
+                e.parent     = parts[0];
+                e.child      = parts[1];
+                e.parent_tag = parts[2];
+                e.child_tag  = parts[3];
+                e.update_opt = parts[4];
+                e.delete_opt = parts[5];
+                e.fail_table = parts[6];
+            }
             ri_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "View" && !rec.obj_name.empty() &&
@@ -1325,9 +1363,12 @@ DataDict::add_user_to_group(const std::string& user,
         if (user_id == 0 || group_id == 0)
             return save();  // IDs not in DD yet — membership is in-memory only
         for (const auto& r : binary_recs_) {
-            if (r.active && r.obj_type == "Permission" &&
+            // Only count OpenADS-written (prop_null=false) records as "already exists".
+            // SAP-written records (prop_null=true) will be wiped by clear_sap_permissions;
+            // we must create a prop_null=false replacement even when they're present.
+            if (r.active && r.obj_type == "Permission" && !r.prop_null &&
                 r.parent_id == user_id && r.info1 == group_id)
-                return save();  // already exists
+                return save();  // already exists (OpenADS-written record)
         }
         char name_buf[9];
         std::snprintf(name_buf, sizeof(name_buf), "%08X", group_id);
@@ -1571,6 +1612,27 @@ DataDict::grant_permission(const std::string& obj_type,
         perm.info2     = bitmask;
         binary_recs_.push_back(std::move(perm));
     }
+    return save();
+}
+
+util::Result<void> DataDict::clear_sap_permissions() {
+    // Remove all SAP-written ACL Permission records (identified by prop_null=true).
+    // These are the encrypted binary blobs that openads_import_dd cannot decode via
+    // system.permissions SQL; leaving them in the file would keep has_sap_permissions_
+    // true and cause AdsConnect60 to return AE_SAP_PERMS_NEED_IMPORT (5174) forever.
+    if (binary_format_) {
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Permission" && r.prop_null)
+                r.active = false;
+        }
+    }
+    // Also purge from the in-memory permission list any entry that had no real bitmask
+    // (bitmask==0x80000000 sentinel from SAP).
+    permissions_.erase(
+        std::remove_if(permissions_.begin(), permissions_.end(),
+            [](const PermissionEntry& pe) { return pe.bitmask == 0x80000000u; }),
+        permissions_.end());
+    has_sap_permissions_ = false;
     return save();
 }
 

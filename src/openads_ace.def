@@ -370,7 +370,7 @@ EXPORTS
     AdsDDGetRefIntegrityProperty
     AdsDDSetRefIntegrityProperty
 
-    ; SAP ACE API name aliases — Add/Remove variants used by SAP-built clients.
+    ; SAP ACE API name aliases — Add/Remove and permission variants used by SAP-built clients.
     AdsDDAddProcedure
     AdsDDRemoveProcedure
     AdsDDGetProcedureProperty
@@ -379,4 +379,9 @@ EXPORTS
     AdsDDFindFirstObject
     AdsDDFindNextObject
     AdsDDFindClose
+    AdsDDAddView
+    AdsDDRemoveView
+    AdsDDGetPermissions
+    AdsDDGrantPermission
+    AdsDDRevokePermission
 
