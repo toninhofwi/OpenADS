@@ -1459,7 +1459,7 @@
 
     // Types that are intrinsically read-only (engine-managed counters / binary blobs)
     const READ_ONLY_TYPES = new Set([
-      'RowVersion', 'ModTime', 'AutoIncrement', 'Binary', 'Blob',
+      'RowVersion', 'ModTime', 'AutoIncrement', 'Binary', 'Blob', 'Varbinary',
     ]);
 
     // Build a Tabulator formatter for a field based on its BaseType.
@@ -1468,7 +1468,6 @@
       switch (baseType) {
         case 'Date':
         case 'AdtDate':
-          // PHP now returns "YYYY-MM-DD" — but guard against legacy "YYYYMMDD" too
           return (cell) => {
             const v = cell.getValue();
             if (!v) return '';
@@ -1480,7 +1479,8 @@
         case 'DateTime':
         case 'Timestamp':
         case 'AdtTimestamp':
-          // PHP now returns "YYYY-MM-DD HH:MM:SS" — guard against "YYYYMMDDHHMMSS" too
+        case 'ModTime':
+          // Engine returns "YYYYMMDDHHMMSS" for all timestamp types.
           return (cell) => {
             const v = cell.getValue();
             if (!v) return '';
@@ -1488,15 +1488,26 @@
             if (/^\d{14}$/.test(s))
               return s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8)+' '
                     +s.slice(8,10)+':'+s.slice(10,12)+':'+s.slice(12,14);
+            if (/^\d{8}$/.test(s))
+              return s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8);
             return escHtml(s);
           };
         case 'Time':
           return (cell) => escHtml(String(cell.getValue() ?? ''));
         case 'RowVersion':
-        case 'ModTime':
           return (cell) => {
             const v = cell.getValue();
             return v ? `<code style="font-size:11px">${escHtml(String(v))}</code>` : '';
+          };
+        case 'Money':
+          return (cell) => {
+            const v = cell.getValue();
+            if (v === null || v === undefined || v === '') return '';
+            const n = parseFloat(v);
+            if (isNaN(n)) return escHtml(String(v));
+            const abs = Math.abs(n);
+            const fmt = abs.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            return (n < 0 ? '-$' : '$') + fmt;
           };
         case 'Logical':
           return (cell) => {
@@ -1505,9 +1516,16 @@
             if (v === false || v === 0 || v === '0' || String(v).toUpperCase() === 'F') return '✗';
             return '';
           };
-        case 'Memo':
         case 'Binary':
         case 'Blob':
+        case 'Varbinary':
+          return (cell) => {
+            const v = cell.getValue();
+            if (!v || String(v).length === 0)
+              return '<span style="color:#6c7086;font-style:italic;">(empty)</span>';
+            return '<span style="color:#a6adc8;font-style:italic;">BLOB</span>';
+          };
+        case 'Memo':
           return 'textarea';
         default:
           return null;

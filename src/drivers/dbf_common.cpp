@@ -238,9 +238,33 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             break;
 
         case DbfFieldType::Date:
-        case DbfFieldType::DateTime:
             v.as_string = make_string(p, field.length);
             break;
+
+        case DbfFieldType::DateTime: {
+            // DBF T — 4-byte Julian Day Number (LE) + 4-byte ms-since-midnight (LE).
+            // Decode to "YYYYMMDDHHMMSS" to match AdtTimestamp output format.
+            if (field.length < 8) { v.as_string = make_string(p, field.length); break; }
+            std::uint32_t jdn = static_cast<std::uint32_t>(p[0])        |
+                               (static_cast<std::uint32_t>(p[1]) <<  8) |
+                               (static_cast<std::uint32_t>(p[2]) << 16) |
+                               (static_cast<std::uint32_t>(p[3]) << 24);
+            std::uint32_t ms  = static_cast<std::uint32_t>(p[4])        |
+                               (static_cast<std::uint32_t>(p[5]) <<  8) |
+                               (static_cast<std::uint32_t>(p[6]) << 16) |
+                               (static_cast<std::uint32_t>(p[7]) << 24);
+            if (jdn == 0 && ms == 0) { v.is_null = true; break; }
+            int y, mo, d;
+            jdn_to_ymd(jdn, y, mo, d);
+            unsigned hh  = ms / 3600000u;
+            unsigned mmv = (ms % 3600000u) / 60000u;
+            unsigned ss  = (ms % 60000u)   / 1000u;
+            char tmp[20];
+            std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d%02u%02u%02u",
+                          y, mo, d, hh, mmv, ss);
+            v.as_string = tmp;
+            break;
+        }
 
         case DbfFieldType::Logical: {
             char c = static_cast<char>(p[0]);
@@ -419,11 +443,43 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             v.as_double  = d;
             break;
         }
-        case DbfFieldType::RowVersion:
-        case DbfFieldType::ModTime:
-            // 8-byte binary counters: copy raw bytes verbatim, no space-trim.
-            v.as_string = std::string(reinterpret_cast<const char*>(p), field.length);
+        case DbfFieldType::ModTime: {
+            // ADT type 22: same physical layout as AdtTimestamp (4-byte JDN + 4-byte ms).
+            if (field.length < 8) { v.as_string = make_string(p, field.length); break; }
+            std::uint32_t jdn = static_cast<std::uint32_t>(p[0])        |
+                               (static_cast<std::uint32_t>(p[1]) <<  8) |
+                               (static_cast<std::uint32_t>(p[2]) << 16) |
+                               (static_cast<std::uint32_t>(p[3]) << 24);
+            std::uint32_t ms  = static_cast<std::uint32_t>(p[4])        |
+                               (static_cast<std::uint32_t>(p[5]) <<  8) |
+                               (static_cast<std::uint32_t>(p[6]) << 16) |
+                               (static_cast<std::uint32_t>(p[7]) << 24);
+            if (jdn == 0 && ms == 0) { v.is_null = true; break; }
+            int y, mo, d;
+            jdn_to_ymd(jdn, y, mo, d);
+            unsigned hh  = ms / 3600000u;
+            unsigned mmv = (ms % 3600000u) / 60000u;
+            unsigned ss  = (ms % 60000u)   / 1000u;
+            char tmp[20];
+            std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d%02u%02u%02u",
+                          y, mo, d, hh, mmv, ss);
+            v.as_string = tmp;
             break;
+        }
+        case DbfFieldType::RowVersion: {
+            // ADT type 21: 8-byte little-endian uint64 record-version counter.
+            if (field.length < 8) { v.as_string = make_string(p, field.length); break; }
+            std::uint64_t rv = static_cast<std::uint64_t>(p[0])
+                             | (static_cast<std::uint64_t>(p[1]) <<  8)
+                             | (static_cast<std::uint64_t>(p[2]) << 16)
+                             | (static_cast<std::uint64_t>(p[3]) << 24)
+                             | (static_cast<std::uint64_t>(p[4]) << 32)
+                             | (static_cast<std::uint64_t>(p[5]) << 40)
+                             | (static_cast<std::uint64_t>(p[6]) << 48)
+                             | (static_cast<std::uint64_t>(p[7]) << 56);
+            v.as_string = std::to_string(rv);
+            break;
+        }
 
         case DbfFieldType::Unknown:
             v.as_string = make_string(p, field.length);
