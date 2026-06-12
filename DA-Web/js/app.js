@@ -402,21 +402,23 @@
           container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
           return;
         }
+
+        const activeStyle   = 'background:#313244;color:#cdd6f4;border:1px solid #45475a;';
+        const inactiveStyle = 'color:#a6adc8;border:1px solid transparent;background:transparent;';
+
         container.innerHTML =
           `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
-             <button class="btn btn-sm btn-primary" id="save-group-${tabId}">&#128190; Save Changes</button>
+             <button class="btn btn-sm" id="gtab-perm-${tabId}"    style="${activeStyle}">Permissions</button>
+             <button class="btn btn-sm" id="gtab-members-${tabId}" style="${inactiveStyle}">Members</button>
+             <button class="btn btn-sm btn-primary" id="save-group-${tabId}" style="margin-left:auto;">&#128190; Save Changes</button>
              <span id="save-group-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
-             <span style="font-size:11px;color:#585b70;margin-left:8px;">Field rows reflect table-level permissions (set at table level to change)</span>
+             <span id="grp-perm-note-${tabId}" style="font-size:11px;color:#585b70;">Field rows reflect table-level permissions</span>
            </div>
-           <div id="group-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+           <div id="group-tbl-${tabId}"     style="flex:1;min-height:0;overflow:hidden;"></div>
+           <div id="group-members-${tabId}" style="flex:1;min-height:0;overflow:hidden;display:none;"></div>`;
 
-        // Object type → human label mapping (SAP ADS_DD_* codes)
+        // ── Permissions grid ───────────────────────────────────────────────────
         const TYPE_LABEL = { 1:'Table', 4:'Field', 6:'View', 10:'Stored Proc', 18:'Function' };
-
-        // Per-column N/A and editability rules:
-        //   isExecType   (10, 18) → only EXECUTE shown; DML columns show —
-        //   isFieldType  (4)      → SELECT/UPDATE/INSERT shown read-only; DELETE/EXECUTE show —
-        //   isSchemaType (1, 6)   → ALTER/DROP applicable; N/A for fields/exec
         const isExecType   = t => t === 10 || t === 18;
         const isFieldType  = t => t === 4;
         const isSchemaType = t => t === 1 || t === 6;
@@ -426,15 +428,13 @@
           ? `<span style="color:${editable?'#a6e3a1':'#6a9f7e'};font-size:16px;display:block;text-align:center;${editable?'cursor:pointer':'opacity:0.6'};">✓</span>`
           : `<span style="color:${editable?'#f38ba8':'#9a6f72'};font-size:16px;display:block;text-align:center;${editable?'cursor:pointer':'opacity:0.6'};">✗</span>`;
 
-        // readonly=true → display-only (no cellClick toggle)
         const permCol = (title, field, readonly = false) => ({
           title, field, width: 72, headerSort: false,
           formatter: (cell) => {
             const t = cell.getRow().getData().type;
-            if (field === 'canExec')  return isExecType(t)   ? check(cell.getValue()==='Yes', !readonly) : DASH;
+            if (field === 'canExec')   return isExecType(t)   ? check(cell.getValue()==='Yes', !readonly) : DASH;
             if (field === 'canDelete') return (isFieldType(t) || isExecType(t)) ? DASH : check(cell.getValue()==='Yes', !readonly);
             if (field === 'canAlter' || field === 'canDrop') return isSchemaType(t) ? check(cell.getValue()==='Yes', false) : DASH;
-            // canSelect / canInsert / canUpdate
             if (isExecType(t)) return DASH;
             return check(cell.getValue()==='Yes', !(isFieldType(t) || readonly));
           },
@@ -445,19 +445,18 @@
             if (field === 'canExec'   && !isExecType(t)) return;
             if (field !== 'canExec'   &&  isExecType(t)) return;
             if (field === 'canDelete' &&  isExecType(t)) return;
-            if ((field === 'canAlter' || field === 'canDrop')) return;  // DDL: read-only
+            if (field === 'canAlter'  || field === 'canDrop') return;
             cell.setValue(cell.getValue() === 'Yes' ? 'No' : 'Yes');
           },
         });
 
-        const grid = new Tabulator('#group-tbl-' + tabId, { /* global Tabulator */
+        const permGrid = new Tabulator('#group-tbl-' + tabId, { /* global Tabulator */
           data: resp.data,
           layout: 'fitDataFill',
-          pagination: 'local', paginationSize: 500, height: 'calc(100% - 34px)',
+          pagination: 'local', paginationSize: 500, height: '100%',
           placeholder: '(no objects)',
           rowFormatter: row => {
-            if (row.getData().type === 4)
-              row.getElement().style.background = '#181825';
+            if (row.getData().type === 4) row.getElement().style.background = '#181825';
           },
           columns: [
             { title: 'Object', field: 'object', widthGrow: 3, headerSort: true },
@@ -482,16 +481,116 @@
           try {
             const r = await apiFetch('api/save_group_meta.php', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ dd, group: groupName, rows: grid.getData() }),
+              body: JSON.stringify({ dd, group: groupName, rows: permGrid.getData() }),
             });
             if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : `Saved ${r.saved} permission(s)`;
           } catch (err) {
             if (msgEl) msgEl.textContent = `Error: ${err.message}`;
           }
         });
+
+        // ── Sub-tab switching ─────────────────────────────────────────────────
+        const permPanel    = document.getElementById('group-tbl-'     + tabId);
+        const membersPanel = document.getElementById('group-members-' + tabId);
+        const btnPerm      = document.getElementById('gtab-perm-'     + tabId);
+        const btnMembers   = document.getElementById('gtab-members-'  + tabId);
+        const permNote     = document.getElementById('grp-perm-note-' + tabId);
+        let membersLoaded  = false;
+
+        const switchGroupTab = (which) => {
+          const isPerm = which === 'perm';
+          if (permPanel)    permPanel.style.display    = isPerm  ? '' : 'none';
+          if (membersPanel) membersPanel.style.display = !isPerm ? '' : 'none';
+          if (saveBtn)      saveBtn.style.display      = isPerm  ? '' : 'none';
+          if (permNote)     permNote.style.display     = isPerm  ? '' : 'none';
+          if (msgEl)        msgEl.style.display        = isPerm  ? '' : 'none';
+          if (btnPerm)      btnPerm.style.cssText      = isPerm  ? activeStyle : inactiveStyle;
+          if (btnMembers)   btnMembers.style.cssText   = !isPerm ? activeStyle : inactiveStyle;
+
+          if (!isPerm && !membersLoaded) {
+            membersLoaded = true;
+            loadGroupMembers(tabId, dd, groupName);
+          }
+        };
+
+        btnPerm?.addEventListener('click',    () => switchGroupTab('perm'));
+        btnMembers?.addEventListener('click', () => switchGroupTab('members'));
       })
       .catch(err => {
         if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
+  }
+
+  // ── Group members grid (add / remove users from a group) ────────────────────
+  function loadGroupMembers(tabId, dd, groupName) {
+    const panel = document.getElementById('group-members-' + tabId);
+    if (!panel) return;
+    panel.innerHTML = '<div style="padding:8px;color:#a6adc8;font-size:12px;">Loading…</div>';
+
+    apiFetch(`api/group_members.php?dd=${encodeURIComponent(dd)}&group=${encodeURIComponent(groupName)}`)
+      .then(resp => {
+        if (resp.error) {
+          panel.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+
+        const currentSet = new Set((resp.members || []).map(u => u.toLowerCase()));
+        const available  = (resp.allUsers || []).filter(u => !currentSet.has(u.toLowerCase()));
+        const availMap   = Object.fromEntries(available.map(u => [u, u]));
+
+        panel.innerHTML =
+          `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+             <button class="btn btn-sm" id="grp-add-${tabId}">+ Add Member</button>
+             <button class="btn btn-sm" id="grp-del-${tabId}">&#8722; Remove Selected</button>
+             <button class="btn btn-sm btn-primary" id="grp-save-${tabId}" style="margin-left:auto;">&#128190; Save</button>
+             <span id="grp-save-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+           </div>
+           <div id="grp-mem-grid-${tabId}" style="height:calc(100% - 34px);"></div>`;
+
+        const memGrid = new Tabulator('#grp-mem-grid-' + tabId, { /* global Tabulator */
+          data: (resp.members || []).map(u => ({ user: u })),
+          layout: 'fitDataFill',
+          selectable: 1,
+          height: '100%',
+          placeholder: '(no members)',
+          columns: [{
+            title: 'User Name', field: 'user', widthGrow: 1,
+            editor: 'select',
+            editorParams: { values: availMap, autocomplete: true, allowEmpty: true },
+            headerSort: true,
+            formatter: v => escHtml(v.getValue()),
+          }],
+        });
+
+        document.getElementById('grp-add-' + tabId)?.addEventListener('click', () => {
+          const inGrid = new Set(memGrid.getData().map(r => (r.user || '').toLowerCase()));
+          const opts   = (resp.allUsers || []).filter(u => !inGrid.has(u.toLowerCase()));
+          if (opts.length === 0) return;
+          memGrid.addRow({ user: opts[0] }, false);
+        });
+
+        document.getElementById('grp-del-' + tabId)?.addEventListener('click', () =>
+          memGrid.getSelectedRows().forEach(r => r.delete()));
+
+        const saveMsg = document.getElementById('grp-save-msg-' + tabId);
+        document.getElementById('grp-save-' + tabId)?.addEventListener('click', async () => {
+          if (saveMsg) saveMsg.textContent = 'Saving…';
+          try {
+            const members = memGrid.getData().map(r => r.user).filter(u => u.trim() !== '');
+            const r = await apiFetch('api/save_group_members.php', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dd, group: groupName, members }),
+            });
+            if (saveMsg) saveMsg.textContent = r.error
+              ? `Error: ${r.error}`
+              : `Saved (+${r.added} −${r.removed})` + (r.errors?.length ? ` • ${r.errors[0]}` : '');
+          } catch (err) {
+            if (saveMsg) saveMsg.textContent = `Error: ${err.message}`;
+          }
+        });
+      })
+      .catch(err => {
+        if (panel) panel.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
       });
   }
 
@@ -746,7 +845,7 @@
                Inheriting from: ${groupList}
                &nbsp;&nbsp;
                <span style="color:#a6e3a1;">&#9679;</span> Direct
-               <span style="color:#89dceb;margin-left:6px;">&#9679;</span> Inherited
+               <span style="color:#cba6f7;margin-left:6px;">&#9679;</span> Inherited
                <span style="color:#89b4fa;margin-left:6px;">&#9679;</span> Direct + Inherited
                <span style="color:#45475a;margin-left:6px;">&#9679;</span> Not granted
              </div>`
@@ -767,9 +866,9 @@
           const isDirect   = src.includes('Direct');
           const isInherit  = src.split('+').some(s => s !== 'Direct' && s !== '');
           let color;
-          if (isDirect && isInherit) color = '#89b4fa';   // blue  — both
-          else if (isDirect)         color = '#a6e3a1';   // green — direct only
-          else                       color = '#89dceb';   // cyan  — inherited only
+          if (isDirect && isInherit) color = '#89b4fa';   // blue   — both
+          else if (isDirect)         color = '#a6e3a1';   // green  — direct only
+          else                       color = '#cba6f7';   // mauve  — inherited only
           const tip = src || '';
           return `<span style="color:${color};font-size:16px;display:block;text-align:center;" title="${escHtml(tip)}">✓</span>`;
         };
