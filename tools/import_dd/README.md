@@ -83,20 +83,27 @@ cmake --build build/ninja-macos --target openads_import_dd
 
 ## What it does
 
-1. Copies `--source` → `--dest` (unless `--no-copy`).
+1. Copies `--source` → `--dest` (unless `--no-copy`), including the companion
+   `.am` memo file (holds SQL body continuations for long stored procedures).
 2. Loads the SAP ACE shared library (`ace64.dll` / `libace64.so`).
 3. Connects to the **source** DD via the SAP LOCAL server.
 4. Queries `system.usergroupmembers WHERE Group_Name LIKE 'DB:%'` — collects
    every user that belongs to a DB:-built-in group (DB:Admin, DB:Backup,
    DB:Debug, DB:Public).
-5. Queries `SELECT * FROM system.permissions` — collects every fine-grained
+5. Queries `system.functions` — collects the return type, input parameters,
+   and SQL body for every user-defined function (SAP decrypts these on the fly).
+6. Queries `SELECT * FROM system.permissions` — collects every fine-grained
    ACL grant (table, view, stored procedure, function, database-level).
-6. Opens the **destination** copy with OpenADS `DataDict::open()`.
-7. Calls `add_user_to_group()` for each collected membership (auto-creates the
+7. Opens the **destination** copy with OpenADS `DataDict::open()`.
+8. Calls `add_user_to_group()` for each collected membership (auto-creates the
    Group record for DB: built-ins if none exists).
-8. Calls `grant_permission()` for each ACL row, deactivating the SAP
+9. Calls `grant_permission()` for each ACL row, deactivating the SAP
    `0x80000000`-sentinel record and writing an OpenADS-native bitmask record.
-9. Prints a JSON result to **stdout** and exits.
+10. Binary-patches each Function record in the dest `.add` file: overwrites the
+    SAP-encrypted property blob with a plain `lstr` layout (plen=0, followed by
+    length-prefixed strings for return type, input parameters, and body) so that
+    `proc_body.php` can display the function body without needing the SAP DLL.
+11. Prints a JSON result to **stdout** and exits.
 
 ---
 
@@ -122,9 +129,11 @@ openads_import_dd --source <sap.add>  --dest <copy.add>
 
 ## What is imported
 
-| Data | Source query | OpenADS write call |
+| Data | Source | OpenADS action |
 |---|---|---|
+| `.am` memo file | filesystem copy of `source.am` | copied to `dest.am` |
 | DB: group memberships | `system.usergroupmembers WHERE Group_Name LIKE 'DB:%'` | `add_user_to_group(user, group)` |
+| Function bodies | `system.functions` (SAP decrypts on the fly) | binary-patch dest `.add` with lstr layout |
 | Table / View / StoredProc / Function / Database ACL grants | `system.permissions` | `grant_permission(obj_type, obj_name, grantee, bitmask)` |
 
 The `ADS_PERMISSION_*` bitmask bits imported per ACL row:
@@ -193,8 +202,9 @@ exit code 1 = fatal error.
 ```json
 {
   "ok": true,
-  "db_memberships": 12,
-  "permissions": 47,
+  "memberships": 25,
+  "permissions": 559,
+  "function_bodies": 9,
   "warnings": []
 }
 ```

@@ -159,12 +159,13 @@ static std::string json_escape(const std::string& s) {
 
 static void emit_result(bool ok,
                         int memberships, int permissions,
+                        int function_bodies,
                         const std::string& error,
                         const std::vector<std::string>& warnings) {
     std::printf("{\"ok\":%s", ok ? "true" : "false");
     if (ok) {
-        std::printf(",\"memberships\":%d,\"permissions\":%d",
-                    memberships, permissions);
+        std::printf(",\"memberships\":%d,\"permissions\":%d,\"function_bodies\":%d",
+                    memberships, permissions, function_bodies);
     } else {
         std::printf(",\"error\":\"%s\"", json_escape(error).c_str());
     }
@@ -188,6 +189,17 @@ static std::string sap_field(const SapFuncs& f, ADSHANDLE hc, const char* name) 
     auto n = strlen(buf);
     while (n && buf[n-1] == ' ') buf[--n] = '\0';
     return buf;
+}
+
+// Variant with a larger buffer for potentially long fields (e.g. function bodies).
+static std::string sap_field_large(const SapFuncs& f, ADSHANDLE hc,
+                                    const char* name, std::size_t maxLen = 8192) {
+    std::vector<char> buf(maxLen + 1, '\0');
+    UNSIGNED32 len = static_cast<UNSIGNED32>(maxLen);
+    f.getField(hc, (UNSIGNED8*)name, (UNSIGNED8*)buf.data(), &len, 0);
+    // AdsGetField sets len to the actual byte count filled.
+    while (len && buf[len - 1] == ' ') --len;
+    return std::string(buf.data(), len);
 }
 
 
@@ -233,22 +245,31 @@ int main(int argc, char** argv) {
     }
 
     if (source.empty() || dest.empty() || user.empty()) {
-        emit_result(false, 0, 0,
+        emit_result(false, 0, 0, 0,
             "Usage: openads_import_dd --source <sap.add> --dest <copy.add> "
             "--user <name> --password <pw> [--sap-lib <path>] [--no-copy]",
             warnings);
         return 1;
     }
 
-    // ── Step 1: copy source → dest ──────────────────────────────────────────
+    // ── Step 1: copy source → dest (and companion .am memo file) ───────────────
     if (!no_copy) {
         std::error_code ec;
         fs::copy_file(source, dest, fs::copy_options::overwrite_existing, ec);
         if (ec) {
-            emit_result(false, 0, 0,
+            emit_result(false, 0, 0, 0,
                 "Cannot copy " + source + " → " + dest + ": " + ec.message(),
                 warnings);
             return 1;
+        }
+        // Also copy the companion .am memo file (holds SP body continuations).
+        auto srcAm = fs::path(source).replace_extension(".am");
+        auto dstAm = fs::path(dest).replace_extension(".am");
+        if (fs::exists(srcAm)) {
+            std::error_code ec2;
+            fs::copy_file(srcAm, dstAm, fs::copy_options::overwrite_existing, ec2);
+            if (ec2)
+                warnings.push_back("Cannot copy .am memo file: " + ec2.message());
         }
     }
 
@@ -268,7 +289,7 @@ int main(int argc, char** argv) {
         }
     }
     if (!sap) {
-        emit_result(false, 0, 0,
+        emit_result(false, 0, 0, 0,
             "Cannot load SAP ACE library: " + lib_error() +
             ". Specify the path with --sap-lib.",
             warnings);
@@ -298,7 +319,7 @@ int main(int argc, char** argv) {
     if (!f.connect || !f.disconnect || !f.execSQL || !f.close ||
         !f.createStmt || !f.atEOF || !f.skip || !f.getField) {
         lib_close(sap);
-        emit_result(false, 0, 0, "SAP library missing required exports.", warnings);
+        emit_result(false, 0, 0, 0, "SAP library missing required exports.", warnings);
         return 1;
     }
 
@@ -314,7 +335,7 @@ int main(int argc, char** argv) {
         char msg[128];
         std::snprintf(msg, sizeof(msg),
             "SAP connect failed (rc=%u). Check credentials and source path.", rc);
-        emit_result(false, 0, 0, msg, warnings);
+        emit_result(false, 0, 0, 0, msg, warnings);
         return 1;
     }
 
@@ -323,7 +344,7 @@ int main(int argc, char** argv) {
     if (rc != 0 || !hStmt) {
         f.disconnect(hConn);
         lib_close(sap);
-        emit_result(false, 0, 0, "AdsCreateSQLStatement failed.", warnings);
+        emit_result(false, 0, 0, 0, "AdsCreateSQLStatement failed.", warnings);
         return 1;
     }
 
@@ -353,6 +374,42 @@ int main(int argc, char** argv) {
             f.close(hc);
         } else {
             warnings.push_back("system.usergroupmembers query failed — group memberships skipped.");
+        }
+    }
+
+    // ── Step 5b: read user-defined function bodies from system.functions ────────
+    // SAP stores function bodies in an encrypted binary blob inside the .add
+    // record.  system.functions decrypts and returns the readable SQL body.
+    // We overwrite the encrypted blobs in the dest .add with a readable lstr
+    // layout so proc_body.php can display them without needing the SAP DLL.
+    //
+    // system.functions column names (SAP 11.x):
+    //   Name | Package | Return Type | Input Parameters | Implementation | Comment
+    struct FuncBody {
+        std::string name, return_type, input_params, body;
+    };
+    std::vector<FuncBody> func_bodies;
+    {
+        ADSHANDLE hc = 0;
+        rc = f.execSQL(hStmt,
+            (UNSIGNED8*)"SELECT Name, [Return Type], [Input Parameters], Implementation "
+                        "FROM system.functions ORDER BY Name",
+            &hc);
+        if (rc == 0 && hc) {
+            UNSIGNED16 eof = 0;
+            while (f.atEOF(hc, &eof) == 0 && !eof) {
+                FuncBody fb;
+                fb.name         = sap_field(f, hc, "Name");
+                fb.return_type  = sap_field(f, hc, "Return Type");
+                fb.input_params = sap_field(f, hc, "Input Parameters");
+                fb.body         = sap_field_large(f, hc, "Implementation");
+                if (!fb.name.empty())
+                    func_bodies.push_back(std::move(fb));
+                f.skip(hc, 1);
+            }
+            f.close(hc);
+        } else {
+            warnings.push_back("system.functions query failed — function bodies skipped.");
         }
     }
 
@@ -441,37 +498,151 @@ int main(int argc, char** argv) {
     lib_close(sap);
 
     // ── Step 7: open dest with OpenADS and write imported data ───────────────
-    auto opened = openads::engine::DataDict::open(dest);
-    if (!opened) {
-        emit_result(false, 0, 0,
-            "Cannot open dest DD: " + opened.error().message, warnings);
-        return 1;
-    }
-    auto dd = std::move(opened).value();
-
+    // Wrapped in a scope so DataDict (RAII) is destroyed — and the file fully
+    // flushed — before we binary-patch function bodies in Step 8.
     int written_memberships = 0;
-    for (const auto& m : memberships) {
-        auto r = dd.add_user_to_group(m.user, m.group);
-        if (r) ++written_memberships;
-        else warnings.push_back("add_user_to_group(" + m.user + "," + m.group + "): " + r.error().message);
-    }
-
     int written_perms = 0;
-    for (const auto& p : perms) {
-        auto r = dd.grant_permission(p.obj_type, p.obj_name, p.grantee, p.bitmask);
-        if (r) ++written_perms;
-        else warnings.push_back("grant_permission(" + p.obj_type + "," + p.obj_name + "," + p.grantee + "): " + r.error().message);
-    }
-
-    // Remove all SAP-written encrypted Permission records from the dest file.
-    // Even when system.permissions returned 0 rows (SAP stores real ACLs in
-    // encrypted blobs not exposed via SQL), the original SAP records must be
-    // deleted so OpenADS no longer raises AE_SAP_PERMS_NEED_IMPORT (5174).
     {
-        auto r = dd.clear_sap_permissions();
-        if (!r) warnings.push_back("clear_sap_permissions: " + r.error().message);
+        auto opened = openads::engine::DataDict::open(dest);
+        if (!opened) {
+            emit_result(false, 0, 0, 0,
+                "Cannot open dest DD: " + opened.error().message, warnings);
+            return 1;
+        }
+        auto dd = std::move(opened).value();
+
+        for (const auto& m : memberships) {
+            auto r = dd.add_user_to_group(m.user, m.group);
+            if (r) ++written_memberships;
+            else warnings.push_back("add_user_to_group(" + m.user + "," + m.group + "): " + r.error().message);
+        }
+
+        for (const auto& p : perms) {
+            auto r = dd.grant_permission(p.obj_type, p.obj_name, p.grantee, p.bitmask);
+            if (r) ++written_perms;
+            else warnings.push_back("grant_permission(" + p.obj_type + "," + p.obj_name + "," + p.grantee + "): " + r.error().message);
+        }
+
+        // Remove all SAP-written encrypted Permission records from the dest file.
+        // Even when system.permissions returned 0 rows (SAP stores real ACLs in
+        // encrypted blobs not exposed via SQL), the original SAP records must be
+        // deleted so OpenADS no longer raises AE_SAP_PERMS_NEED_IMPORT (5174).
+        auto rc2 = dd.clear_sap_permissions();
+        if (!rc2) warnings.push_back("clear_sap_permissions: " + rc2.error().message);
+    } // DataDict destroyed and file flushed here
+
+    // ── Step 8: binary-patch encrypted function bodies in dest .add ──────────
+    // SAP stores function bodies as encrypted blobs in the .add property area.
+    // OpenADS cannot decrypt them.  We overwrite them with a plain lstr layout:
+    //   plen = 0 (so proc_body.php starts reading at offset 0 in property)
+    //   property[0..1]   = le16(len(return_type))
+    //   property[2..]    = return_type bytes
+    //   next le16 + data = input_params
+    //   next le16 + data = body
+    // This matches the lstr branch in proc_body.php's Function handler.
+
+    int written_func_bodies = 0;
+    if (!func_bodies.empty()) {
+        auto write_u16_fn = [](std::uint8_t* p, std::uint16_t v) {
+            p[0] = static_cast<std::uint8_t>(v & 0xFF);
+            p[1] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
+        };
+        auto read_u32_fn = [](const std::uint8_t* p) -> std::uint32_t {
+            return static_cast<std::uint32_t>(p[0])
+                 | (static_cast<std::uint32_t>(p[1]) <<  8)
+                 | (static_cast<std::uint32_t>(p[2]) << 16)
+                 | (static_cast<std::uint32_t>(p[3]) << 24);
+        };
+
+        // Read dest .add into memory
+        std::vector<std::uint8_t> addData;
+        bool read_ok = false;
+        {
+            std::FILE* fh = std::fopen(dest.c_str(), "rb");
+            if (!fh) {
+                warnings.push_back("Cannot read dest .add for function body patch.");
+            } else {
+                std::fseek(fh, 0, SEEK_END);
+                long sz = std::ftell(fh);
+                std::rewind(fh);
+                if (sz > 0) {
+                    addData.resize(static_cast<std::size_t>(sz));
+                    std::fread(addData.data(), 1, addData.size(), fh);
+                    read_ok = true;
+                }
+                std::fclose(fh);
+            }
+        }
+
+        if (read_ok && addData.size() >= 40) {
+            std::uint32_t hdrLen = read_u32_fn(addData.data() + 0x20);
+            std::uint32_t recLen = read_u32_fn(addData.data() + 0x24);
+
+            if (recLen > 0 && hdrLen < addData.size()) {
+                std::uint32_t total = static_cast<std::uint32_t>(
+                    (addData.size() - hdrLen) / recLen);
+
+                for (std::uint32_t i = 0; i < total; ++i) {
+                    std::uint8_t* base = addData.data() + hdrLen + i * recLen;
+                    if (base[0] != 0x04) continue;
+
+                    // objType: bytes [13..22], 10 chars, space/NUL trimmed
+                    char objType[11] = {};
+                    std::memcpy(objType, base + 13, 10);
+                    for (int k = 9; k >= 0 && (objType[k] == ' ' || objType[k] == '\0'); --k)
+                        objType[k] = '\0';
+                    if (std::strcmp(objType, "Function") != 0) continue;
+
+                    // objName: bytes [23..222], 200 chars, space/NUL trimmed
+                    char objName[201] = {};
+                    std::memcpy(objName, base + 23, 200);
+                    for (int k = 199; k >= 0 && (objName[k] == ' ' || objName[k] == '\0'); --k)
+                        objName[k] = '\0';
+
+                    // Find matching FuncBody (case-insensitive)
+                    for (const auto& fb : func_bodies) {
+#ifdef _WIN32
+                        if (_stricmp(fb.name.c_str(), objName) != 0) continue;
+#else
+                        if (strcasecmp(fb.name.c_str(), objName) != 0) continue;
+#endif
+                        // Record layout: plen at [223..224], property at [225..497] (273 bytes).
+                        constexpr std::uint32_t PL = 273;
+                        write_u16_fn(base + 223, 0);    // plen = 0
+                        std::uint8_t* PS = base + 225;
+                        std::memset(PS, 0, PL);
+
+                        std::uint32_t pos = 0;
+                        auto write_lstr = [&](const std::string& s) {
+                            if (PL - pos < 2) return;
+                            auto slen = static_cast<std::uint16_t>(
+                                (std::min)(s.size(), static_cast<std::size_t>(PL - pos - 2)));
+                            write_u16_fn(PS + pos, slen);
+                            pos += 2;
+                            if (slen) std::memcpy(PS + pos, s.data(), slen);
+                            pos += slen;
+                        };
+
+                        write_lstr(fb.return_type);
+                        write_lstr(fb.input_params);
+                        write_lstr(fb.body);
+                        ++written_func_bodies;
+                        break;
+                    }
+                }
+            }
+
+            // Write patched .add back to disk
+            std::FILE* fh = std::fopen(dest.c_str(), "wb");
+            if (!fh) {
+                warnings.push_back("Cannot write patched .add for function bodies.");
+            } else {
+                std::fwrite(addData.data(), 1, addData.size(), fh);
+                std::fclose(fh);
+            }
+        }
     }
 
-    emit_result(true, written_memberships, written_perms, "", warnings);
+    emit_result(true, written_memberships, written_perms, written_func_bodies, "", warnings);
     return 0;
 }
