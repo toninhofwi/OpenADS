@@ -277,9 +277,9 @@ try {
     // ── Return all tables ──────────────────────────────────────────────────
     if ($action === 'tables') {
         $tables = [];
-        $stmt   = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
+        $stmt   = $conn->query("SELECT Name FROM system.tables ORDER BY Name");
         while ($row = $stmt->fetchAssoc()) {
-            $t = safeStr($row['TABLE_NAME']);
+            $t = safeStr($row['Name']);
             if ($t !== '') $tables[] = $t;
         }
         $conn->close();

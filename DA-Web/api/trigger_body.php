@@ -6,7 +6,7 @@
  *   Returns { triggers: [ { name, timing, event, priority, enabled, body } ] }
  *
  * Uses system.triggers virtual table for list + getTriggerProperty for full body.
- *   Property codes: 1401=event_mask(u32) 1402=timing(u32) 1405=proc_name(body) 1408=table
+ *   Property codes: 1401=event_mask(u32) 1402=timing(u32) 1404=body 1407=options(u32) 1408=table
  */
 header('Content-Type: application/json');
 session_start();
@@ -54,13 +54,22 @@ try {
 
     $triggers = [];
     foreach ($names as $trigName) {
-        // event_mask and timing come back as 4-byte LE integers
+        // event_mask, timing, and options come back as 4-byte LE integers
         $evRaw     = $dict->getTriggerProperty($trigName, 1401);
         $timRaw    = $dict->getTriggerProperty($trigName, 1402);
+        $optsRaw   = $dict->getTriggerProperty($trigName, 1407);
         $body      = $dict->getTriggerProperty($trigName, 1404);
+        $procBody  = $dict->getTriggerProperty($trigName, 1405);
+        // For NUL-delimited pmsys-imported triggers: SQL body is in proc (1405),
+        // container (1404) holds only the type code "1".  Use proc if container
+        // looks like a type indicator (length ≤ 4 and purely numeric/empty).
+        if (strlen(trim($body)) <= 4 && preg_match('/^[0-9]*$/', trim($body)) && strlen($procBody) > 4) {
+            $body = $procBody;
+        }
 
-        $eventMask = strlen($evRaw)  >= 4 ? unpack('V', substr($evRaw,  0, 4))[1] : 0;
-        $timing    = strlen($timRaw) >= 4 ? unpack('V', substr($timRaw, 0, 4))[1] : 0;
+        $eventMask = strlen($evRaw)   >= 4 ? unpack('V', substr($evRaw,   0, 4))[1] : 0;
+        $timing    = strlen($timRaw)  >= 4 ? unpack('V', substr($timRaw,  0, 4))[1] : 0;
+        $options   = strlen($optsRaw) >= 4 ? unpack('V', substr($optsRaw, 0, 4))[1] : 3;
 
         $triggers[] = [
             'name'       => $trigName,
@@ -69,6 +78,7 @@ try {
             'priority'   => 1,
             'enabled'    => 'Yes',
             'body'       => rtrim($body),
+            'options'    => $options,
             '_rawEvent'  => $eventMask,
             '_rawTiming' => $timing,
         ];

@@ -92,9 +92,9 @@ try {
     // ── Step 3: enumerate all objects and emit rows ─────────────────────────────
     // Tables + their fields (fields come from system.permissions directly)
     $tables = [];
-    $stmt = $conn->query('SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME');
+    $stmt = $conn->query('SELECT Name FROM system.tables ORDER BY Name');
     while ($row = $stmt->fetchAssoc()) {
-        $tables[] = trim($row['TABLE_NAME']);
+        $tables[] = trim($row['Name']);
     }
     $stmt->close();
 

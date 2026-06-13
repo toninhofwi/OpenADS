@@ -134,9 +134,9 @@ if ($action === 'category_children') {
     try {
         switch ($cat) {
             case 'tables':
-                $stmt = $conn->query("SELECT TABLE_NAME FROM system.tables ORDER BY TABLE_NAME");
+                $stmt = $conn->query("SELECT Name FROM system.tables ORDER BY Name");
                 while ($row = $stmt->fetchAssoc()) {
-                    $t = $row['TABLE_NAME'];
+                    $t = $row['Name'];
                     $nodes[] = [
                         'id'      => "tbl_{$ddName}_{$t}",
                         'text'    => $t,

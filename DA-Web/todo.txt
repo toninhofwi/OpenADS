@@ -19,19 +19,24 @@ how to use this tool and what it does look at readme.md on f:\Openads\tools\impo
 I remind you that you can test what out should look like by connecting with SAP ADS comparing results with those after connecting with 
 OpenADS. 
 
-When browsing a table's indexes, daWeb does not show if the index is UNIQUE, PRIMARY, COMPOUND, and key type. 
-In the case of attachments table, index AttachID is unique and also PRIMARY while foreignKey is not unique.  Only one key
-can be primary on any given table  Neither is descending or binary.  Index page size for each of them is 512.  
-You can connect using SAP Ads and see these properties on DD f:\openads\testdata\pmsys\pmsys.add.
-We need to make OpenADs API respond with these data and let it be consume by the php client and 
-by daWeb when connected to imported dd f:\Openads\testdata\pmsys\pmsys_imported.add.
+**Triggers can receive __old and __new cursors with corresponding state of the record before and after an update.  In case of insert only __new cursor
+option.  This is an option on SAP ADS.  We need to provide a way on daWeb when defining or modifying a trigger to check or or off these options.
+The options are:  include curosrs __new and __old, include memo and blob fields, use implicit transactions to maintain data integrity. 
+See how SAP Ads does it or reads it from.  These options are present on Data Architect and you can see the source for DA in C:\Program Files (x86)\Advantage 10.10\ARC\Source>
+Make sure reading and writing trigger properties are written on the OpenAds Engine not the client.  The client only needs to querry these 
+values from the server engine. 
 
-Furthermore, the OpenAds API needs to return data about the table and we need to show it on da-web.
-Execute select * from system.tables where name='leases' needs to return data as shown on file:
- file:///C:/Users/ADMINI~1/AppData/Local/Temp/2/expC215.htm
- 
-Make sure the OpenAds API ACE functions implement returning this data so that the same SQL returns as on file shown above.
-Notice it is from these table properties that we know if there is a primary key and what that key is.
+**When executing an insert or update on a table that has a trigger for update or insert, we need to confirm the trigger is executing.
+For example: table properties has an Insert, update, delete triggers that should insert a record on auditlog with detailed information 
+of what changed or what was inserted.   Notice some triggers call a stored procedure and these triggers may or may not receive __new and __old 
+cursors.  ADS makes these cursors available to any stored procedure called from inside a trigger that has them.
+
+Write tests doing inserts, updates, and deletes on all tables with triggers and confirm triggers fire without errors and execute expected results.
+Trigger and stored procedure code has been confirmed to be working with ADS SAP.
+
+**[new bug] When opening tables on the left side tree in DAWeb, I get an error: Adsconnection:Query 5063 column name not found table_name.  Something 
+broke or daWeb or php_OpenAds extension needs updating.
+
 
 You should be able to connect to SAP DD using remote as well as local servers.   OpenAds is only working as a Local server.  
 OpenADs remote server is still not running. 

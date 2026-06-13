@@ -1060,9 +1060,18 @@
     return `
       <div class="sql-panel" style="flex-direction:column;">
         <div style="flex:0 0 auto;min-height:120px;max-height:45%;overflow:auto;border-bottom:2px solid #313244;" id="trig-grid-wrap-${tabId}">
-          <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
+          <div style="padding:4px 6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#1e1e2e;border-bottom:1px solid #313244;">
             <button class="btn btn-sm btn-primary" id="save-trig-${tabId}">&#128190; Save Changes</button>
-            <span id="trig-save-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+            <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" id="trig-opt-values-${tabId}" checked> Pass __new/__old values
+            </label>
+            <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" id="trig-opt-memos-${tabId}" checked> Include memos/blobs
+            </label>
+            <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" id="trig-opt-notxn-${tabId}"> No implicit transaction
+            </label>
+            <span id="trig-save-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:4px;"></span>
           </div>
           <div id="trig-grid-${tabId}" style="width:100%;"></div>
         </div>
@@ -1140,7 +1149,10 @@
       });
 
       // Save button: saves tabulator row values + editor body for selected trigger
-      const saveMsgEl = document.getElementById('trig-save-msg-' + tabId);
+      const saveMsgEl  = document.getElementById('trig-save-msg-' + tabId);
+      const chkValues  = document.getElementById('trig-opt-values-' + tabId);
+      const chkMemos   = document.getElementById('trig-opt-memos-'  + tabId);
+      const chkNoTxn   = document.getElementById('trig-opt-notxn-'  + tabId);
       document.getElementById('save-trig-' + tabId)?.addEventListener('click', async () => {
         const editor = state.aceEditors[tabId];
         const label  = document.getElementById('trig-label-' + tabId)?.textContent || '';
@@ -1155,10 +1167,16 @@
           const sqlStart  = bodyLines.findIndex(l => !l.startsWith('-- '));
           const sqlBody   = bodyLines.slice(sqlStart < 0 ? 0 : sqlStart).join('\n').trim();
 
+          // Compute options bitmask from checkboxes
+          const opts = ((chkValues?.checked ? 0x01 : 0) |
+                        (chkMemos?.checked  ? 0x02 : 0) |
+                        (chkNoTxn?.checked  ? 0x04 : 0));
+
           const r = await apiFetch('api/save_trigger.php', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ dd, table, name: row.name,
-              event: row.event, timing: row.timing, enabled: row.enabled, body: sqlBody }),
+              event: row.event, timing: row.timing, enabled: row.enabled, body: sqlBody,
+              options: opts }),
           });
           if (saveMsgEl) saveMsgEl.textContent = r.error ? `Error: ${r.error}` : `Saved ${row.name}`;
         } catch (err) {
@@ -1173,6 +1191,11 @@
         const header = `-- Trigger: ${d.name}\n-- ${d.timing} ${d.event}\n\n`;
         editor.setValue(header + (body || '-- (body not available)'), -1);
         if (labelEl) labelEl.textContent = d.name;
+        // Update option checkboxes from trigger's options bitmask (default 0x03)
+        const opts = (typeof d.options === 'number') ? d.options : 0x03;
+        if (chkValues) chkValues.checked = !!(opts & 0x01);
+        if (chkMemos)  chkMemos.checked  = !!(opts & 0x02);
+        if (chkNoTxn)  chkNoTxn.checked  = !!(opts & 0x04);
       };
 
       grid.on('rowClick', (e, row) => loadTrigBody(row.getData()));

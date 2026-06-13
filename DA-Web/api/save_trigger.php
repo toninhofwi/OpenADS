@@ -2,29 +2,32 @@
 /**
  * api/save_trigger.php — save trigger property changes back to the DD.
  *
- * POST { dd, name, event, timing, enabled, body }
+ * POST { dd, name, event, timing, enabled, body, options }
  *   event:   1=INSERT  2=UPDATE  3=DELETE
  *   timing:  1=BEFORE  2=INSTEAD OF  4=AFTER
  *   enabled: "Yes"/"No"
  *   body:    SQL text
+ *   options: bitmask — 0x01=WANT_VALUES 0x02=WANT_MEMOS_AND_BLOBS 0x04=NO_TRANSACTION
  *
  * Uses AdsDDSetTriggerProperty:
  *   502 = ADS_DD_TRIGGER_EVENT      (event type string "1"/"2"/"3")
  *   1402 = timing                    (timing string "1"/"2"/"4")
  *   503 = ADS_DD_TRIGGER_CONTAINER  (body text)
  *   505 = ADS_DD_TRIGGER_ENABLED    ("Yes"/"No")
+ *   1407 = ADS_DD_TRIG_OPTIONS      (options bitmask string)
  */
 header('Content-Type: application/json');
 session_start();
 require_once __DIR__ . '/common.php';
 
 $body   = json_decode(file_get_contents('php://input'), true) ?? [];
-$ddName = trim($body['dd']      ?? '');
-$name   = trim($body['name']    ?? '');
-$event  = trim($body['event']   ?? '');   // "1" / "2" / "3"
-$timing = trim($body['timing']  ?? '');   // "1" / "2" / "4"
+$ddName  = trim($body['dd']      ?? '');
+$name    = trim($body['name']    ?? '');
+$event   = trim($body['event']   ?? '');   // "1" / "2" / "3"
+$timing  = trim($body['timing']  ?? '');   // "1" / "2" / "4"
 $enabled = trim($body['enabled'] ?? 'Yes');
-$sql    = $body['body']  ?? '';           // trigger body SQL
+$sql     = $body['body']    ?? '';          // trigger body SQL
+$options = isset($body['options']) ? (int)$body['options'] : null; // bitmask or null = don't update
 
 if (!isset($_SESSION['connections'][$ddName])) {
     http_response_code(401);
@@ -84,6 +87,12 @@ try {
     // ADS_DD_TRIGGER_CONTAINER (503) — SQL body
     if ($sql !== '') {
         $dict->setTriggerProperty($name, 503, $sql);
+        $saved++;
+    }
+
+    // Code 1407 — trigger options bitmask
+    if ($options !== null) {
+        $dict->setTriggerProperty($name, 1407, (string)$options);
         $saved++;
     }
 
