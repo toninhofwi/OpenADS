@@ -268,8 +268,8 @@ try {
         $primaryKeyTag = '';
         try {
             $dict2 = AdsDictionary::fromConnection($conn);
-            // ADS_DD_TABLE_PRIMARY_KEY = 209 (SAP-compatible code)
-            $primaryKeyTag = strtoupper(trim($dict2->getTableProperty($table, 209)));
+            // ADS_DD_TABLE_PRIMARY_KEY = 202
+            $primaryKeyTag = strtoupper(trim($dict2->getTableProperty($table, 202)));
         } catch (Throwable $e) {}
 
         try {
@@ -310,19 +310,22 @@ try {
         $pkTag = '';
         try {
             $dict2 = AdsDictionary::fromConnection($conn);
-            $pkTag = strtoupper(trim($dict2->getTableProperty($table, 209)));
+            // ADS_DD_TABLE_PRIMARY_KEY = 202
+            $pkTag = strtoupper(trim($dict2->getTableProperty($table, 202)));
         } catch (Throwable $e) {}
 
         foreach ($tags as $t) {
-            $isPrimary = ($pkTag !== '' && strtoupper($t['tag']) === $pkTag);
+            $tagUpper  = strtoupper($t['tag']);
+            $isPrimary = ($pkTag !== '' && $tagUpper === $pkTag);
+            $isUnique  = $isPrimary || !empty($t['unique']);
             $rows[] = [
                 'Tag'        => $t['tag'],
                 'Expression' => $t['expression'],
                 'Descending' => $t['descending'] ? 'Yes' : 'No',
-                'Unique'     => $isPrimary ? 'Yes' : '',
-                'Primary'    => $isPrimary ? 'Yes' : '',
-                'Binary'     => '',
-                'KeyType'    => '',
+                'Unique'     => $isUnique  ? 'Yes' : 'No',
+                'Primary'    => $isPrimary ? 'Yes' : 'No',
+                'Binary'     => 'No',
+                'KeyType'    => 'STR',
             ];
         }
     }

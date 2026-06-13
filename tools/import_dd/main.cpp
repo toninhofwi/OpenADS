@@ -449,6 +449,34 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── Step 5d: read table primary-key and default-index from SAP system.tables ──
+    struct TableProps {
+        std::string name, primary_key, default_index;
+    };
+    std::vector<TableProps> table_props_list;
+    {
+        ADSHANDLE hc = 0;
+        rc = f.execSQL(hStmt,
+            (UNSIGNED8*)"SELECT Name, Table_Primary_Key, Table_Default_Index "
+                        "FROM system.tables ORDER BY Name",
+            &hc);
+        if (rc == 0 && hc) {
+            UNSIGNED16 eof = 0;
+            while (f.atEOF(hc, &eof) == 0 && !eof) {
+                TableProps tp;
+                tp.name          = sap_field(f, hc, "Name");
+                tp.primary_key   = sap_field(f, hc, "Table_Primary_Key");
+                tp.default_index = sap_field(f, hc, "Table_Default_Index");
+                if (!tp.name.empty())
+                    table_props_list.push_back(std::move(tp));
+                f.skip(hc, 1);
+            }
+            f.close(hc);
+        } else {
+            warnings.push_back("system.tables query failed — table primary keys skipped.");
+        }
+    }
+
     // ── Step 6: read object permissions via AdsDDGetPermissions ─────────────
     // system.permissions SQL returns 0 rows for SAP binary .add files because
     // the real ACLs are stored in encrypted property blobs.  Use the
@@ -546,6 +574,13 @@ int main(int argc, char** argv) {
             return 1;
         }
         auto dd = std::move(opened).value();
+
+        for (const auto& tp : table_props_list) {
+            if (!tp.primary_key.empty())
+                dd.set_table_property(tp.name, 202, tp.primary_key);
+            if (!tp.default_index.empty())
+                dd.set_table_property(tp.name, 213, tp.default_index);
+        }
 
         for (const auto& m : memberships) {
             auto r = dd.add_user_to_group(m.user, m.group);

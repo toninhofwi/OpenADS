@@ -137,7 +137,8 @@ try {
     $primaryKeyTag = '';
     try {
         $dict = AdsDictionary::fromConnection($conn);
-        $primaryKeyTag = strtoupper(trim($dict->getTableProperty($table, 209)));
+        // ADS_DD_TABLE_PRIMARY_KEY = 202
+        $primaryKeyTag = strtoupper(trim($dict->getTableProperty($table, 202)));
     } catch (Throwable $e) {}
 
     try {
@@ -171,8 +172,8 @@ try {
     $tblProps  = [];
     try {
         $dict3 = AdsDictionary::fromConnection($conn);
-        // 209=Table_Primary_Key, 207=Table_Default_Index, 210=Table_Permission_Level
-        $propCodes = [209 => 'Table_Primary_Key', 207 => 'Table_Default_Index', 210 => 'Table_Permission_Level'];
+        // 202=Table_Primary_Key, 213=Table_Default_Index, 216=Table_Permission_Level
+        $propCodes = [202 => 'Table_Primary_Key', 213 => 'Table_Default_Index', 216 => 'Table_Permission_Level'];
         foreach ($propCodes as $code => $propName) {
             try {
                 $val = trim($dict3->getTableProperty($table, $code));

@@ -245,6 +245,7 @@ std::vector<std::uint8_t> parse_fmarker_all(const AdiIndex::Page& pg) {
 struct TagEntry {
     std::vector<std::uint8_t> fnums;  // 1-based field numbers (≥1 element)
     std::uint32_t             root_pg;
+    bool                      unique = false;  // bit 0 of byte[14] in per-tag header page
 };
 
 // Scan tag directory (page 2) and return all tag entries.
@@ -271,7 +272,12 @@ scan_tagdir(platform::File& adi_f) {
         auto fnums = parse_fmarker_all(fmk.value());
         if (fnums.empty()) continue;
 
-        tags.push_back({std::move(fnums), root_pg});
+        // Per-tag header is at page xx. Byte[14] bit 0 = unique flag.
+        bool uniq = false;
+        auto hdr_pg = read_one_page(adi_f, static_cast<std::uint32_t>(xx));
+        if (hdr_pg) uniq = (hdr_pg.value()[14] & 0x01u) != 0;
+
+        tags.push_back({std::move(fnums), root_pg, uniq});
     }
     return tags;
 }
@@ -440,7 +446,8 @@ util::Result<void> AdiIndex::apply_tag_(
     const std::vector<std::uint16_t>& fd_offsets,
     const std::vector<std::uint16_t>& fd_lengths,
     const std::vector<std::string>&   fd_names,
-    std::uint32_t hlen, std::uint32_t rlen)
+    std::uint32_t hlen, std::uint32_t rlen,
+    bool unique)
 {
     if (fnums.empty())
         return util::Error{5004, 0, "ADI tag has no field numbers", ""};
@@ -478,6 +485,7 @@ util::Result<void> AdiIndex::apply_tag_(
     adt_rec_len_   = rlen;
     key_total_len_ = total_key_len;
     entry_size_    = dense_entry_size(fld_length_);
+    unique_        = unique;
 
     if (char_key_) {
         char_key_padded_len_ = (total_key_len + 3u) & ~3u;
@@ -521,7 +529,7 @@ util::Result<void> AdiIndex::open(const std::string& path, IndexOpenMode mode) {
         names.push_back(fd.name);
     }
     return apply_tag_(tag.fnums, tag.root_pg, types, offsets, lengths, names,
-                      hlen, rlen);
+                      hlen, rlen, tag.unique);
 }
 
 util::Result<void> AdiIndex::open_named(const std::string& adi_path,
@@ -569,7 +577,7 @@ util::Result<void> AdiIndex::open_named(const std::string& adi_path,
         const auto& fd = fields.value()[fnum - 1];
         if (!name_eq(fd.name, field_name)) continue;
         return apply_tag_(tag.fnums, tag.root_pg, types, offsets, lengths, names,
-                          hlen, rlen);
+                          hlen, rlen, tag.unique);
     }
     return util::Error{5004, 0, "ADI tag not found: " + field_name, adi_path};
 }

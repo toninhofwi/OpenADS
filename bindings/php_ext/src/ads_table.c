@@ -488,7 +488,7 @@ PHP_METHOD(AdsTable, getIndexTags)
 
     UNSIGNED8  nameBuf[256];
     UNSIGNED8  exprBuf[1024];
-    UNSIGNED16 nameLen, exprLen, desc;
+    UNSIGNED16 nameLen, exprLen, desc, uniq;
     ADSHANDLE  hIndex;
     UNSIGNED16 i;
 
@@ -499,17 +499,19 @@ PHP_METHOD(AdsTable, getIndexTags)
 
         nameBuf[0] = '\0'; nameLen = (UNSIGNED16)sizeof(nameBuf);
         exprBuf[0] = '\0'; exprLen = (UNSIGNED16)sizeof(exprBuf);
-        desc = 0;
+        desc = 0; uniq = 0;
 
         AdsGetIndexName(hIndex, nameBuf, &nameLen);
         AdsGetIndexExpr(hIndex, exprBuf, &exprLen);
         AdsIsIndexDescending(hIndex, &desc);
+        AdsIsIndexUnique(hIndex, &uniq);
 
         zval entry;
         array_init(&entry);
         add_assoc_string(&entry, "tag",        (char *)nameBuf);
         add_assoc_string(&entry, "expression", (char *)exprBuf);
         add_assoc_bool(  &entry, "descending", desc != 0);
+        add_assoc_bool(  &entry, "unique",     uniq != 0);
         add_next_index_zval(return_value, &entry);
     }
 }

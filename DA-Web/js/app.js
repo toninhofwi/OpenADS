@@ -275,14 +275,14 @@
     return base || '';
   }
 
-  // Parse the input_params string returned by proc_body.php.
+  // Parse an input or output params string returned by proc_body.php.
   //
-  // Stored-proc format:  "Name,TYPE;Name,TYPE;"   (comma name/type, semicolon between)
-  // Function format:     "name TYPE, name TYPE"    (space name/type, comma between)
-  function parseParamStr(str, objType) {
+  // Stored-proc format:  "Name,TYPE;Name,TYPE;"        (e.g. "Month,SHORTINT;Year,Integer;")
+  //   TYPE may include a size: "Name,TYPE,SIZE;"        (e.g. "cField,CHAR,20;")
+  // Function format:     "name TYPE, name TYPE"          (space-separated, comma between)
+  function parseParamStr(str, objType, paramType = 'Input') {
     if (!str || !str.trim()) return [];
     if (objType === 'function') {
-      // Split by comma (between params); within each, first word = name, rest = type
       return str.replace(/\s+/g, ' ').trim().split(',')
         .filter(s => s.trim()).map((s, i) => {
           s = s.trim();
@@ -290,33 +290,39 @@
           const nm = sp >= 0 ? s.slice(0, sp).trim() : s;
           const dt = sp >= 0 ? s.slice(sp + 1).trim() : '';
           const { base, size, decimals } = parseDatatype(dt);
-          return { _id: 'p' + i, paramType: 'Input', name: nm, baseType: base, size, decimals };
+          return { _id: 'p' + i, paramType, name: nm, baseType: base, size, decimals };
         });
     } else {
-      // Stored proc: "Name,TYPE;Name,TYPE;"
+      // Stored proc: "Name,TYPE[,SIZE];Name,TYPE[,SIZE];"
       return str.split(';').filter(s => s.trim()).map((s, i) => {
-        const comma = s.indexOf(',');
-        const nm = comma >= 0 ? s.slice(0, comma).trim() : s.trim();
-        const dt = comma >= 0 ? s.slice(comma + 1).trim() : '';
-        const { base, size, decimals } = parseDatatype(dt);
-        return { _id: 'p' + i, paramType: 'Input', name: nm, baseType: base, size, decimals };
+        const parts = s.split(',').map(p => p.trim());
+        const nm = parts[0] || '';
+        // parts[1] = base type, parts[2] = optional size
+        const dt = parts.slice(1).join(','); // rejoin in case type had commas
+        // But size is actually the 3rd comma-separated segment
+        const baseType = parts[1] || '';
+        const sizeVal  = parts[2] ? parseInt(parts[2], 10) || 0 : 0;
+        const { base, size: parsedSize, decimals } = parseDatatype(baseType);
+        const size = sizeVal > 0 ? sizeVal : parsedSize;
+        return { _id: paramType[0].toLowerCase() + i, paramType, name: nm, baseType: base, size, decimals };
       });
     }
   }
 
-  // Serialize rows back to the format ADS expects.
-  function serializeParams(rows, objType) {
-    const input = rows.filter(r => r.paramType === 'Input' && r.name && r.baseType);
+  // Serialize rows back to "Name,TYPE;" (stored proc) or "name TYPE, …" (function).
+  function serializeParams(rows, objType, paramType = 'Input') {
+    const filtered = rows.filter(r => r.paramType === paramType && r.name && r.baseType);
     if (objType === 'function') {
-      // "name TYPE, name TYPE"
-      return input.map(r =>
+      return filtered.map(r =>
         `${r.name} ${serializeDatatype(r.baseType, r.size || 0, r.decimals || 0)}`
       ).join(', ');
     } else {
-      // "Name,TYPE;Name,TYPE;"
-      return input.map(r =>
-        `${r.name},${serializeDatatype(r.baseType, r.size || 0, r.decimals || 0)}`
-      ).join(';') + (input.length ? ';' : '');
+      // "Name,TYPE;Name,TYPE;" — include size as 3rd segment when > 0
+      return filtered.map(r => {
+        const base = r.baseType || '';
+        const sz   = r.size || 0;
+        return sz > 0 ? `${r.name},${base},${sz}` : `${r.name},${base}`;
+      }).join(';') + (filtered.length ? ';' : '');
     }
   }
 
@@ -326,9 +332,10 @@
     if (existing) { activateTab(existing.id); return; }
 
     const isFunc = type === 'function';
-    let body = `-- ${name}: source not available`;
-    let inputParams = [];
-    let returnType  = '';
+    let body         = `-- ${name}: source not available`;
+    let inputParams  = [];
+    let outputParams = [];
+    let returnType   = '';
 
     try {
       const resp = await apiFetch('api/proc_body.php', {
@@ -336,14 +343,15 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dd, type, name }),
       });
-      body        = resp.body?.trim() || body;
-      inputParams = parseParamStr(resp.input_params || '', type);
-      returnType  = resp.return_type || '';
+      body         = resp.body?.trim() || body;
+      inputParams  = parseParamStr(resp.input_params  || '', type, 'Input');
+      outputParams = parseParamStr(resp.output_params || '', type, 'Output');
+      returnType   = resp.return_type || '';
     } catch (err) {
       body = `-- Error loading ${name}: ${err.message}`;
     }
 
-    openSqlTab(dd, body, name, { objType: type, objName: name, inputParams, returnType });
+    openSqlTab(dd, body, name, { objType: type, objName: name, inputParams, outputParams, returnType });
   }
 
   function openMetaTab(dd, table, kind) {
@@ -2280,18 +2288,32 @@
       runBtn?.addEventListener('click', () => doExecuteSql(tabId, editor.getValue().trim()));
 
       // ── Parameter Tabulator grid ────────────────────────────────────────────
-      const typeValues = isFunc ? { Input: 'Input', Return: 'Return' } : { Input: 'Input' };
+      const typeValues = isFunc
+        ? { Input: 'Input', Return: 'Return' }
+        : { Input: 'Input', Output: 'Output' };
       const dtValues   = Object.fromEntries(ADS_TYPES.map(t => [t, t]));
 
-      // Build initial rows
+      // Build initial rows: input params first, then output params (for procs)
       const initRows = (tab.inputParams || []).map((p, i) => ({
-        _id: 'p' + i,
+        _id: 'i' + i,
         paramType: 'Input',
         name:      p.name,
         baseType:  p.baseType,
         size:      p.size || 0,
         decimals:  p.decimals || 0,
       }));
+      if (!isFunc) {
+        (tab.outputParams || []).forEach((p, i) => {
+          initRows.push({
+            _id: 'o' + i,
+            paramType: 'Output',
+            name:      p.name,
+            baseType:  p.baseType,
+            size:      p.size || 0,
+            decimals:  p.decimals || 0,
+          });
+        });
+      }
       if (isFunc && tab.returnType) {
         const { base, size, decimals } = parseDatatype(tab.returnType);
         initRows.push({ _id: 'ret', paramType: 'Return', name: '', baseType: base, size, decimals });
@@ -2344,7 +2366,8 @@
 
         const body = editor.getValue();
         const rows = grid.getData();
-        const inputParamsStr = serializeParams(rows, tab.objType);
+        const inputParamsStr  = serializeParams(rows, tab.objType, 'Input');
+        const outputParamsStr = !isFunc ? serializeParams(rows, tab.objType, 'Output') : '';
         const retRow = isFunc ? rows.find(r => r.paramType === 'Return') : null;
         const returnType = retRow
           ? serializeDatatype(retRow.baseType, retRow.size || 0, retRow.decimals || 0)
@@ -2356,17 +2379,19 @@
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({
               dd,
-              type:         tab.objType,
-              name:         tab.objName,
+              type:          tab.objType,
+              name:          tab.objName,
               body,
-              input_params: inputParamsStr,
-              return_type:  returnType,
+              input_params:  inputParamsStr,
+              output_params: outputParamsStr,
+              return_type:   returnType,
             }),
           });
           if (msgEl) { msgEl.textContent = 'Saved ✓'; setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000); }
           // Update cached tab state so re-opens reflect changes
-          tab.inputParams = parseParamStr(inputParamsStr, tab.objType);
-          tab.returnType  = returnType;
+          tab.inputParams  = parseParamStr(inputParamsStr,  tab.objType, 'Input');
+          tab.outputParams = parseParamStr(outputParamsStr, tab.objType, 'Output');
+          tab.returnType   = returnType;
         } catch (err) {
           if (msgEl) msgEl.textContent = 'Save failed: ' + err.message;
         }

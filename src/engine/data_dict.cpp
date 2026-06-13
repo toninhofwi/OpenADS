@@ -347,11 +347,19 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
 
         if (rec.obj_type == "Table" && !rec.obj_name.empty() &&
             !rec.prop_null && !rec.property.empty()) {
-            // Strip embedded null terminator from stored path.
-            std::string path = rec.property;
-            auto nul = path.find('\0');
-            if (nul != std::string::npos) path.resize(nul);
+            // OpenADS NUL-delimited format: path\0primary_key\0default_index\0comment
+            // SAP binary format: path NUL-terminated (additional bytes are binary/unknown)
+            auto parts = split_nul(rec.property);
+            std::string path = parts.empty() ? rec.property : parts[0];
             if (!path.empty()) tables_[rec.obj_name] = path;
+            // Only read extra properties if format looks like NUL-delimited text
+            // (parts.size() > 1 means there are additional NUL-separated strings)
+            if (parts.size() > 1 && !parts[1].empty()) {
+                TableProps& tp = table_props_[rec.obj_name];
+                if (parts.size() > 1) tp.primary_key   = parts[1];
+                if (parts.size() > 2) tp.default_index = parts[2];
+                if (parts.size() > 3) tp.comment        = parts[3];
+            }
 
         } else if (rec.obj_type == "Index" && !rec.obj_name.empty() &&
                    !rec.prop_null && !rec.property.empty()) {
@@ -1355,6 +1363,40 @@ std::string DataDict::resolve(const std::string& alias_or_path) const {
     return alias_or_path;
 }
 
+std::string DataDict::get_table_property(const std::string& alias, int prop_code) const {
+    auto it = table_props_.find(alias);
+    if (it == table_props_.end()) return {};
+    switch (prop_code) {
+        case 202: return it->second.primary_key;
+        case 213: return it->second.default_index;
+        case 'C': case 704: return it->second.comment;
+        default:  return {};
+    }
+}
+
+void DataDict::set_table_property(const std::string& alias, int prop_code,
+                                   const std::string& value) {
+    if (!has_alias(alias)) return;
+    TableProps& tp = table_props_[alias];
+    switch (prop_code) {
+        case 202: tp.primary_key   = value; break;
+        case 213: tp.default_index = value; break;
+        default: return;
+    }
+    if (binary_format_) {
+        std::string path = tables_.count(alias) ? tables_.at(alias) : "";
+        std::string prop = join_nul({path, tp.primary_key, tp.default_index, tp.comment});
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Table" && r.obj_name == alias) {
+                r.property  = std::move(prop);
+                r.prop_null = false;
+                save();
+                return;
+            }
+        }
+    }
+}
+
 util::Result<void>
 DataDict::add_index_file(const std::string& table_alias,
                          const std::string& index_path,
@@ -2227,7 +2269,18 @@ util::Result<void> DataDict::save_add_binary_() {
     // AdsDDSet*Property mutations are reflected even without re-creating.
     for (auto& r : binary_recs_) {
         if (!r.active) continue;
-        if (r.obj_type == "Procedure" || r.obj_type == "StoredProc") {
+        if (r.obj_type == "Table") {
+            auto tp_it = table_props_.find(r.obj_name);
+            auto tbl_it = tables_.find(r.obj_name);
+            if (tp_it != table_props_.end() && tbl_it != tables_.end()) {
+                const auto& tp = tp_it->second;
+                if (!tp.primary_key.empty() || !tp.default_index.empty()) {
+                    r.property  = join_nul({tbl_it->second, tp.primary_key,
+                                            tp.default_index, tp.comment});
+                    r.prop_null = false;
+                }
+            }
+        } else if (r.obj_type == "Procedure" || r.obj_type == "StoredProc") {
             auto it = procs_.find(r.obj_name);
             if (it != procs_.end()) {
                 const auto& e = it->second;

@@ -1,5 +1,6 @@
 #include "engine/table.h"
 
+#include "openads/error.h"
 #include "engine/index_expr.h"
 
 #include "drivers/adt/adt_driver.h"
@@ -146,6 +147,21 @@ util::Result<void> Table::sync_all_indexes_(
         // may not have a prior entry (fresh APPEND case).
         if (!prev_key.empty()) {
             (void)idx->erase(recno_, prev_key);
+        }
+        // Enforce uniqueness before inserting: seek for the new key and reject
+        // if another record already carries it.
+        if (idx->unique()) {
+            auto sr = idx->seek_key(new_key, /*soft=*/false);
+            if (sr) {
+                const auto& so = sr.value();
+                if (so.positioned &&
+                    so.hit == openads::drivers::SeekHit::Exact &&
+                    so.recno != recno_) {
+                    return util::Error{openads::AE_UNIQUE_INDEX_VIOLATION, 0,
+                        "duplicate key value in unique index '" +
+                        idx->expression() + "'", ""};
+                }
+            }
         }
         if (auto e = idx->insert(recno_, new_key); !e) {
             return e.error();

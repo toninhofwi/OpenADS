@@ -55,6 +55,12 @@ public:
     static util::Result<DataDict> create(const std::string& path);
 
     // ---- TABLE (M6) ------------------------------------------------------
+    struct TableProps {
+        std::string primary_key;    // tag name of primary key (ADS_DD_TABLE_PRIMARY_KEY=202)
+        std::string default_index;  // tag name of default index (ADS_DD_TABLE_DEFAULT_INDEX=213)
+        std::string comment;
+    };
+
     util::Result<void> add_table(const std::string& alias,
                                  const std::string& relative_path);
     util::Result<void> remove_table(const std::string& alias);
@@ -65,6 +71,10 @@ public:
     }
     const std::unordered_map<std::string, std::string>&
         tables() const noexcept { return tables_; }
+
+    std::string get_table_property(const std::string& alias, int prop_code) const;
+    void        set_table_property(const std::string& alias, int prop_code,
+                                   const std::string& value);
 
     // ---- INDEX (M10.1) ---------------------------------------------------
     struct IndexEntry {
@@ -371,6 +381,7 @@ private:
 
     std::string                                  path_;
     std::unordered_map<std::string, std::string> tables_;
+    std::unordered_map<std::string, TableProps>  table_props_;
     std::vector<IndexEntry>                      indexes_;
     std::unordered_set<std::string>              users_;
     std::unordered_set<std::string>              groups_;

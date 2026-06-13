@@ -89,7 +89,7 @@ public:
     std::string    name()       const override { return tag_name_; }
     std::string    expression() const override { return tag_name_; }
     bool           descending() const override { return false; }
-    bool           unique()     const override { return false; }
+    bool           unique()     const override { return unique_; }
     std::uint16_t  key_length() const override {
         return static_cast<std::uint16_t>(key_total_len_);
     }
@@ -160,7 +160,8 @@ private:
         const std::vector<std::uint16_t>& fd_offsets,
         const std::vector<std::uint16_t>& fd_lengths,
         const std::vector<std::string>&   fd_names,
-        std::uint32_t hlen, std::uint32_t rlen);
+        std::uint32_t hlen, std::uint32_t rlen,
+        bool unique);
 
 
     // ADI file + ADT companion file
@@ -174,6 +175,7 @@ private:
     std::uint16_t   adt_type_   = 0;  // type of first-component field
     std::uint16_t   fld_offset_ = 0;  // offset of first-component field in ADT record
     std::uint16_t   fld_length_ = 0;  // length of first-component field
+    bool            unique_     = false;
 
     // All key components (1 entry for simple, >1 for compound indexes).
     std::vector<FieldComp> key_fields_;

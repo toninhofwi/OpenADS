@@ -4570,9 +4570,13 @@ UNSIGNED32 AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
 
         case ADS_DD_TABLE_VALIDATION_EXPR:     // 200
         case ADS_DD_TABLE_VALIDATION_MSG:      // 201
-        case ADS_DD_TABLE_PRIMARY_KEY:         // 202
-        case ADS_DD_TABLE_DEFAULT_INDEX:       // 213
             return put_str({});
+
+        case ADS_DD_TABLE_PRIMARY_KEY:         // 202
+            return put_str(dd->get_table_property(alias, 202));
+
+        case ADS_DD_TABLE_DEFAULT_INDEX:       // 213
+            return put_str(dd->get_table_property(alias, 213));
 
         default:
             *pusLen = 0;
@@ -4581,14 +4585,22 @@ UNSIGNED32 AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
 }
 
 UNSIGNED32 AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
-                                 UNSIGNED16 /*usProp*/, void* /*pBuf*/,
-                                 UNSIGNED16 /*usLen*/) {
+                                 UNSIGNED16 usProp, void* pBuf,
+                                 UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto alias = openads::abi::to_internal(pucTable, 0);
     if (!dd->has_alias(alias))
         return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND),
                     alias.c_str());
+    // Only string properties are supported for set
+    if (usProp == ADS_DD_TABLE_PRIMARY_KEY || usProp == ADS_DD_TABLE_DEFAULT_INDEX) {
+        std::string val;
+        if (pBuf != nullptr && usLen > 0)
+            val.assign(static_cast<const char*>(pBuf), usLen);
+        dd->set_table_property(alias, static_cast<int>(usProp), val);
+        return ok();
+    }
     return fail(static_cast<int>(openads::AE_FUNCTION_NOT_AVAILABLE),
                 "AdsDDSetTableProperty");
 }
@@ -6995,66 +7007,95 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         std::uint8_t  decimals;
     };
 
+    // Builds a temporary ADT file (full-length field names, no 10-char truncation).
     auto build = [&](const std::vector<Col>& cols,
                      const std::vector<std::vector<std::string>>& rows)
                      -> std::string {
-        auto nf    = static_cast<std::uint16_t>(cols.size());
-        auto hlen  = static_cast<std::uint16_t>(32 + 32 * nf + 1);
-        std::uint32_t rlen = 1;
-        for (const auto& col : cols) rlen += col.length;
-        if (rlen > 0xFFFF) return "";
+        static const char kSig[] = "Advantage Table";  // 15 chars, no NUL
+
+        // Compute ADT storage sizes: CICHAR → col.length bytes, INTEGER → 4 bytes
+        struct FI { std::uint16_t adt_type; std::uint16_t storage; std::uint16_t rec_off; };
+        std::vector<FI> fi;
+        std::uint32_t rlen = 1;  // 1 byte delete flag
+        for (const auto& col : cols) {
+            FI f{};
+            if (col.type == 'N') { f.adt_type = 11; f.storage = 4; }
+            else if (col.type == 'L') { f.adt_type = 1; f.storage = 1; }
+            else { f.adt_type = 20; f.storage = col.length; }  // 'C' → CICHAR
+            f.rec_off = static_cast<std::uint16_t>(rlen);
+            rlen += f.storage;
+            fi.push_back(f);
+        }
+
+        auto nf      = static_cast<std::uint32_t>(cols.size());
+        auto hdr_len = static_cast<std::uint32_t>(400u + nf * 200u);
+        auto nr      = static_cast<std::uint32_t>(rows.size());
 
         std::vector<std::uint8_t> file;
-        std::array<std::uint8_t, 32> hdr{};
-        hdr[0] = 0x03;
-        stamp_dbf_header_today(hdr.data());
-        auto nr = static_cast<std::uint32_t>(rows.size());
-        hdr[4] = static_cast<std::uint8_t>( nr        & 0xFFu);
-        hdr[5] = static_cast<std::uint8_t>((nr >>  8) & 0xFFu);
-        hdr[6] = static_cast<std::uint8_t>((nr >> 16) & 0xFFu);
-        hdr[7] = static_cast<std::uint8_t>((nr >> 24) & 0xFFu);
-        hdr[8]  = static_cast<std::uint8_t>( hlen       & 0xFFu);
-        hdr[9]  = static_cast<std::uint8_t>((hlen >> 8) & 0xFFu);
-        hdr[10] = static_cast<std::uint8_t>( rlen       & 0xFFu);
-        hdr[11] = static_cast<std::uint8_t>((rlen >> 8) & 0xFFu);
+
+        // 400-byte ADT main header
+        std::array<std::uint8_t, 400> hdr{};
+        std::memcpy(hdr.data(), kSig, 15);
+        // rec_count at 24
+        hdr[24] = static_cast<std::uint8_t>( nr        & 0xFFu);
+        hdr[25] = static_cast<std::uint8_t>((nr >>  8) & 0xFFu);
+        hdr[26] = static_cast<std::uint8_t>((nr >> 16) & 0xFFu);
+        hdr[27] = static_cast<std::uint8_t>((nr >> 24) & 0xFFu);
+        // hdr_len at 32
+        hdr[32] = static_cast<std::uint8_t>( hdr_len        & 0xFFu);
+        hdr[33] = static_cast<std::uint8_t>((hdr_len >>  8) & 0xFFu);
+        hdr[34] = static_cast<std::uint8_t>((hdr_len >> 16) & 0xFFu);
+        hdr[35] = static_cast<std::uint8_t>((hdr_len >> 24) & 0xFFu);
+        // rec_len at 36
+        hdr[36] = static_cast<std::uint8_t>( rlen        & 0xFFu);
+        hdr[37] = static_cast<std::uint8_t>((rlen >>  8) & 0xFFu);
+        hdr[38] = static_cast<std::uint8_t>((rlen >> 16) & 0xFFu);
+        hdr[39] = static_cast<std::uint8_t>((rlen >> 24) & 0xFFu);
         file.insert(file.end(), hdr.begin(), hdr.end());
 
-        for (const auto& col : cols) {
-            std::array<std::uint8_t, 32> fd{};
-            std::size_t n = std::strlen(col.colname);
-            std::memcpy(fd.data(), col.colname, n > 10 ? 10 : n);
-            fd[11] = static_cast<std::uint8_t>(col.type);
-            fd[16] = col.length;
-            fd[17] = col.decimals;
+        // Field descriptors (200 bytes each)
+        for (std::size_t ci = 0; ci < cols.size(); ++ci) {
+            std::array<std::uint8_t, 200> fd{};
+            const char* nm = cols[ci].colname;
+            std::size_t nlen = std::strlen(nm);
+            if (nlen > 127u) nlen = 127u;
+            std::memcpy(fd.data(), nm, nlen);       // null-terminated within bytes 0-127
+            // fd[128] = flags = 0 (not nullable)
+            fd[129] = static_cast<std::uint8_t>( fi[ci].adt_type       & 0xFFu);
+            fd[130] = static_cast<std::uint8_t>((fi[ci].adt_type >>  8) & 0xFFu);
+            fd[131] = static_cast<std::uint8_t>( fi[ci].rec_off        & 0xFFu);
+            fd[132] = static_cast<std::uint8_t>((fi[ci].rec_off >>  8) & 0xFFu);
+            fd[135] = static_cast<std::uint8_t>( fi[ci].storage        & 0xFFu);
+            fd[136] = static_cast<std::uint8_t>((fi[ci].storage >>  8) & 0xFFu);
             file.insert(file.end(), fd.begin(), fd.end());
         }
-        file.push_back(0x0D);
 
+        // Records
         for (const auto& row : rows) {
-            file.push_back(' ');
+            std::vector<std::uint8_t> rec(rlen, 0x20u);  // space-fill
+            rec[0] = 0x04u;  // ADT active-record flag
             for (std::size_t ci = 0; ci < cols.size(); ++ci) {
                 const std::string& val = ci < row.size() ? row[ci] : "";
-                std::uint8_t len = cols[ci].length;
-                std::vector<std::uint8_t> cell(len, ' ');
-                char t = cols[ci].type;
-                if (t == 'L') {
-                    cell[0] = (val == "1" || val == "T" || val == "t") ? 'T' : 'F';
-                } else if (t == 'N') {
-                    std::string s = val.empty() ? "0" : val;
-                    if (s.size() > len) s.resize(len);
-                    std::size_t pad = len - s.size();
-                    std::memcpy(cell.data() + pad, s.data(), s.size());
-                } else {
-                    std::size_t n2 = std::min<std::size_t>(val.size(), len);
-                    std::memcpy(cell.data(), val.data(), n2);
+                std::uint8_t* dst = rec.data() + fi[ci].rec_off;
+                if (fi[ci].adt_type == 11u) {  // INTEGER: 4-byte LE int32
+                    std::int32_t iv = val.empty() ? 0
+                        : static_cast<std::int32_t>(std::stol(val));
+                    dst[0] = static_cast<std::uint8_t>( iv        & 0xFFu);
+                    dst[1] = static_cast<std::uint8_t>((iv >>  8) & 0xFFu);
+                    dst[2] = static_cast<std::uint8_t>((iv >> 16) & 0xFFu);
+                    dst[3] = static_cast<std::uint8_t>((iv >> 24) & 0xFFu);
+                } else if (fi[ci].adt_type == 1u) {  // LOGICAL: 1 byte
+                    dst[0] = (val == "1" || val == "T" || val == "t") ? 0x01u : 0x00u;
+                } else {  // CICHAR: space-padded
+                    std::size_t n2 = std::min<std::size_t>(val.size(), fi[ci].storage);
+                    std::memcpy(dst, val.data(), n2);
                 }
-                file.insert(file.end(), cell.begin(), cell.end());
             }
+            file.insert(file.end(), rec.begin(), rec.end());
         }
-        file.push_back(0x1A);
 
         char nb[64];
-        std::snprintf(nb, sizeof(nb), "_sys_%llx.dbf",
+        std::snprintf(nb, sizeof(nb), "_sys_%llx.adt",
             static_cast<unsigned long long>(
                 openads::platform::monotonic_nanos()));
         fs::path tmp = fs::path(c->data_dir()) / nb;
@@ -7078,14 +7119,45 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
     };
 
     if (sys_name == "tables") {
+        // Column set matches SAP ADS system.tables for compatibility.
         const std::vector<Col> cols = {
-            {"TABLE_NAME", 'C', 200, 0},
-            {"TABLE_TYPE", 'C',  10, 0},
-            {"TABLE_PATH", 'C', 250, 0},
+            {"Name",                    'C', 200, 0},
+            {"Table_Relative_Path",     'C', 250, 0},
+            {"Table_Type",              'N',   5, 0},
+            {"Table_Auto_Create",       'C',   6, 0},
+            {"Table_Primary_Key",       'C', 200, 0},
+            {"Table_Default_Index",     'C', 200, 0},
+            {"Table_Encryption",        'C',   6, 0},
+            {"Table_Permission_Level",  'N',   5, 0},
+            {"Table_Memo_Block_Size",   'N',   5, 0},
+            {"Table_Validation_Expr",   'C', 250, 0},
+            {"Table_Validation_Msg",    'C', 250, 0},
+            {"Comment",                 'C', 250, 0},
+            {"Triggers_Disabled",       'C',   6, 0},
+            {"Table_Caching",           'N',   5, 0},
+            {"Table_Trans_Free",        'C',   6, 0},
+            {"Table_WEB_delta",         'C',   6, 0},
+            {"Table_Concurrency_Enabled", 'C', 6, 0},
         };
+        namespace fs = std::filesystem;
         std::vector<std::vector<std::string>> rows;
-        for (const auto& kv : dd->tables())
-            rows.push_back({kv.first, ttype_from_path(kv.second), kv.second});
+        for (const auto& kv : dd->tables()) {
+            const std::string& alias = kv.first;
+            const std::string& rel   = kv.second;
+            // Infer table type from extension (3=ADT, 2=CDX/NTX)
+            std::string ext = fs::path(rel).extension().string();
+            for (auto& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            int ttype = (ext == ".adt") ? 3 : 2;
+            int perm = (c != nullptr && !c->username().empty())
+                       ? dd->get_effective_permission(c->username(), alias) : 4;
+            std::string pk   = dd->get_table_property(alias, 202);
+            std::string didx = dd->get_table_property(alias, 213);
+            rows.push_back({alias, rel, std::to_string(ttype),
+                            "True", pk, didx,
+                            "False", std::to_string(perm), "0",
+                            "", "", "",
+                            "False", "0", "False", "False", "False"});
+        }
         return build(cols, rows);
     }
     if (sys_name == "indexes") {
@@ -8093,7 +8165,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 if (resolved.empty())
                     return openads::util::Error{
                         openads::AE_NO_FILE_FOUND, 0, tname, ""};
-                ttype = openads::engine::TableType::Cdx;
+                ttype = openads::engine::TableType::Adt;
                 omode = openads::engine::OpenMode::Read;
                 lmode = openads::engine::LockingMode::Compatible;
             }
@@ -12901,6 +12973,7 @@ UNSIGNED32 AdsGetErrorString(UNSIGNED32 ulErrCode, UNSIGNED8* pucBuf, UNSIGNED16
         case openads::AE_LOCK_FAILED:               text = "Lock failed";                     break;
         case openads::AE_TABLE_CORRUPTED:           text = "Table corrupted";                 break;
         case openads::AE_RI_VIOLATION:              text = "Referential integrity violation";  break;
+        case openads::AE_UNIQUE_INDEX_VIOLATION:    text = "Duplicate key value in unique index"; break;
         case openads::AE_REMOTE_ERROR:              text = "Remote server error";              break;
         default:                                     text = "";                               break;
     }
@@ -13124,8 +13197,14 @@ UNSIGNED32 AdsIsIndexDescending(ADSHANDLE hIndex, UNSIGNED16* p) {
     *p = idx->descending() ? 1 : 0;
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsIsIndexUnique(ADSHANDLE, UNSIGNED16* p)
-    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsIsIndexUnique(ADSHANDLE hIndex, UNSIGNED16* p) {
+    if (p == nullptr) return openads::AE_INTERNAL_ERROR;
+    *p = 0;
+    auto* idx = iindex_for_handle(hIndex);
+    if (idx == nullptr) return openads::AE_INTERNAL_ERROR;
+    *p = idx->unique() ? 1 : 0;
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsIsNull(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsIsRecordInAOF(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
