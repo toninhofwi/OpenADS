@@ -175,6 +175,9 @@ public:
         std::uint32_t priority = 0;
         bool          enabled  = true;
         std::string   comment;
+        // ADS_TRIGOPTIONS bitmask (1407): 0x01=WANT_VALUES 0x02=WANT_MEMOS_AND_BLOBS 0x04=NO_TRANSACTION
+        // Default 0x03 = include __new/__old values + memos, use implicit transactions
+        std::uint32_t options   = 0x03;
     };
     util::Result<void> create_trigger(const TriggerEntry& e);
     util::Result<void> drop_trigger  (const std::string& name);

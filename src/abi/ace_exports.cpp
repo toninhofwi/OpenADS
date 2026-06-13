@@ -2543,6 +2543,92 @@ UNSIGNED32 AdsGetServerTime(ADSHANDLE  /*hConnect*/,
     return openads::AE_SUCCESS;
 }
 
+// ── Trigger execution ──────────────────────────────────────────────────────────
+// Fires all enabled triggers on `table_alias` matching `event_mask` (1=INSERT
+// 2=UPDATE 3=DELETE).  Trigger errors are swallowed — the original write is
+// never rolled back due to trigger failure.  Re-entrant firing is blocked with
+// a thread-local guard to prevent infinite recursion.
+
+namespace {
+thread_local bool tl_trigger_firing = false;
+
+// Find the connection handle for a given Connection pointer.
+Handle handle_for_conn(Connection* c) {
+    auto& s = state();
+    Handle found = 0;
+    s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+        if (found) return;
+        if (k == HandleKind::Connection && static_cast<Connection*>(p) == c)
+            found = h;
+    });
+    return found;
+}
+
+// Return the SQL body to execute for a trigger — prefer container unless it
+// looks like a short type code (e.g. "1"), in which case fall back to procedure.
+const std::string& trigger_sql_body(const openads::engine::DataDict::TriggerEntry& e) {
+    if (e.container.size() > 4) return e.container;
+    if (!e.procedure.empty())   return e.procedure;
+    return e.container;
+}
+
+void fire_triggers_(Handle hConn, Connection* conn,
+                    const std::string& table_alias, std::uint32_t event_mask) {
+    if (tl_trigger_firing) return; // prevent recursion
+    auto* dd = conn->dd();
+    if (!dd) return;
+
+    struct Trigger { const openads::engine::DataDict::TriggerEntry* e; };
+    std::vector<Trigger> matched;
+    for (const auto& [name, trig] : dd->triggers()) {
+        if (!trig.enabled) continue;
+        if (trig.event_mask != event_mask) continue;
+        // case-insensitive alias compare (tolower loop, same pattern as ri_alias_for_path)
+        const auto& ta = trig.table_alias;
+        if (ta.size() != table_alias.size()) continue;
+        bool match = true;
+        for (std::size_t i = 0; i < ta.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(ta[i])) !=
+                std::tolower(static_cast<unsigned char>(table_alias[i]))) {
+                match = false; break;
+            }
+        }
+        if (!match) continue;
+        matched.push_back({&trig});
+    }
+    if (matched.empty()) return;
+
+    tl_trigger_firing = true;
+    for (const auto& m : matched) {
+        const auto& sql_body = trigger_sql_body(*m.e);
+        if (sql_body.empty()) continue;
+
+        ADSHANDLE hStmt = 0;
+        if (AdsCreateSQLStatement(hConn, &hStmt) != openads::AE_SUCCESS) continue;
+
+        // Execute each statement in the body; a statement is delimited by ';' +
+        // newline/end.  For simple single-statement trigger bodies this loop runs
+        // once.  Complex stored-procedure SQL (DECLARE, IF, etc.) will fail
+        // individually — errors are swallowed.
+        ADSHANDLE hCursor = 0;
+        std::string body_copy = sql_body;
+        // Remove trailing garbage (non-printable bytes from .am file)
+        while (!body_copy.empty()) {
+            unsigned char last = static_cast<unsigned char>(body_copy.back());
+            if (last >= 0x20u || last == '\t' || last == '\n' || last == '\r') break;
+            body_copy.pop_back();
+        }
+        AdsExecuteSQLDirect(
+            hStmt,
+            reinterpret_cast<UNSIGNED8*>(const_cast<char*>(body_copy.c_str())),
+            &hCursor);
+        if (hCursor) AdsCloseTable(hCursor);
+        AdsCloseSQLStatement(hStmt);
+    }
+    tl_trigger_firing = false;
+}
+} // anonymous namespace
+
 UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->row_valid        = false;               // M12.17
@@ -2589,6 +2675,13 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     }
     auto r = t->flush();
     if (!r) return fail(r.error());
+    if (Connection* conn = conn_for_table(t)) {
+        std::string alias = ri_alias_for_path(conn, t->path());
+        if (!alias.empty()) {
+            Handle hConn = handle_for_conn(conn);
+            if (hConn) fire_triggers_(hConn, conn, alias, is_insert ? 1u : 2u);
+        }
+    }
     return ok();
 }
 
@@ -2609,6 +2702,13 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     }
     auto r = t->mark_deleted();
     if (!r) return fail(r.error());
+    if (Connection* conn = conn_for_table(t)) {
+        std::string alias = ri_alias_for_path(conn, t->path());
+        if (!alias.empty()) {
+            Handle hConn = handle_for_conn(conn);
+            if (hConn) fire_triggers_(hConn, conn, alias, 3u);
+        }
+    }
     return ok();
 }
 
@@ -4906,6 +5006,8 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         case 1406: /* ADS_DD_TRIG_PRIORITY (SAP ACE) */
             return put_u32(e.priority);
         case ADS_DD_TRIGGER_COMMENT:   return put_str(e.comment);
+        case 1407: /* ADS_DD_TRIG_OPTIONS (SAP ACE): 0x01=WANT_VALUES 0x02=WANT_MEMOS 0x04=NO_TRANSACTION */
+            return put_u32(e.options);
         default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
     }
 }
@@ -4959,6 +5061,8 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         case ADS_DD_TRIGGER_PRIORITY:
         case 1406: /* ADS_DD_TRIG_PRIORITY (SAP ACE) */
             parse_u32(e.priority); break;
+        case 1407: /* ADS_DD_TRIG_OPTIONS (SAP ACE): 0x01=WANT_VALUES 0x02=WANT_MEMOS 0x04=NO_TRANSACTION */
+            parse_u32(e.options); break;
         default:
             return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
     }
@@ -7084,8 +7188,8 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
                     dst[1] = static_cast<std::uint8_t>((iv >>  8) & 0xFFu);
                     dst[2] = static_cast<std::uint8_t>((iv >> 16) & 0xFFu);
                     dst[3] = static_cast<std::uint8_t>((iv >> 24) & 0xFFu);
-                } else if (fi[ci].adt_type == 1u) {  // LOGICAL: 1 byte
-                    dst[0] = (val == "1" || val == "T" || val == "t") ? 0x01u : 0x00u;
+                } else if (fi[ci].adt_type == 1u) {  // LOGICAL: 1 byte — 'T'(0x54)/'F'(0x46)
+                    dst[0] = (val == "1" || val == "T" || val == "t") ? 'T' : 'F';
                 } else {  // CICHAR: space-padded
                     std::size_t n2 = std::min<std::size_t>(val.size(), fi[ci].storage);
                     std::memcpy(dst, val.data(), n2);
@@ -7484,6 +7588,7 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
             {"PROC",         'C', 200, 0},
             {"PRIORITY",     'N',  10, 0},
             {"ENABLED",      'L',   1, 0},
+            {"TRIG_OPTIONS", 'N',  10, 0},
         };
         auto timing_str = [](std::uint32_t t) -> std::string {
             if (t == 1) return "BEFORE";
@@ -7506,7 +7611,8 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
                             event_str(e.event_mask),
                             e.container, e.procedure,
                             std::to_string(e.priority),
-                            e.enabled ? "T" : "F"});
+                            e.enabled ? "T" : "F",
+                            std::to_string(e.options)});
         }
         return build(cols, rows);
     }
@@ -8748,6 +8854,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
         }
         if (auto fl = tbl->flush(); !fl) return fail(fl.error());
+        // Fire AFTER UPDATE triggers (event_mask=2).
+        {
+            std::string alias = ri_alias_for_path(c, tbl->path());
+            if (!alias.empty()) {
+                Handle hConn = handle_for_conn(c);
+                if (hConn) fire_triggers_(hConn, c, alias, 2u);
+            }
+        }
         tbl->clear_filter();
         c->close_table(th.value());
         *phCursor = 0;
@@ -8855,6 +8969,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             (void)tbl->mark_deleted();
         }
         if (auto fl = tbl->flush(); !fl) return fail(fl.error());
+        // Fire AFTER DELETE triggers (event_mask=3).
+        {
+            std::string alias = ri_alias_for_path(c, tbl->path());
+            if (!alias.empty()) {
+                Handle hConn = handle_for_conn(c);
+                if (hConn) fire_triggers_(hConn, c, alias, 3u);
+            }
+        }
         tbl->clear_filter();
         c->close_table(th.value());
         *phCursor = 0;
@@ -8962,6 +9084,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 c->close_table(th.value());
                 return fail(fl.error());
             }
+            // Fire AFTER INSERT triggers (event_mask=1) for INSERT...SELECT.
+            {
+                std::string alias = ri_alias_for_path(c, tbl->path());
+                if (!alias.empty()) {
+                    Handle hConn = handle_for_conn(c);
+                    if (hConn) fire_triggers_(hConn, c, alias, 1u);
+                }
+            }
             AdsCloseTable(srcCur);
             c->close_table(th.value());
             *phCursor = 0;
@@ -9006,6 +9136,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (!r) return fail(r.error());
         }
         if (auto fl = tbl->flush(); !fl) return fail(fl.error());
+        // Fire AFTER INSERT triggers (event_mask=1).
+        {
+            std::string alias = ri_alias_for_path(c, tbl->path());
+            if (!alias.empty()) {
+                Handle hConn = handle_for_conn(c);
+                if (hConn) fire_triggers_(hConn, c, alias, 1u);
+            }
+        }
         c->close_table(th.value());
         *phCursor = 0;
         return ok();

@@ -549,8 +549,12 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                 // OpenADS NUL-delimited format:
                 //   OLD (7 parts): table_alias\0event_mask\0priority\0enabled\0container\0procedure\0comment
                 //   NEW (8 parts): table_alias\0event_mask\0timing\0priority\0enabled\0container\0procedure\0comment
+                //   NEW (9 parts): ...same + options
                 auto parts = split_nul(rec.property);
-                if (e.table_alias.empty() && parts.size() > 0) e.table_alias = parts[0];
+                // parts[0] is the authoritative table alias (stored in the NUL blob).
+                // The parent_id lookup gives "Database" for newly-created triggers,
+                // so always prefer parts[0] when it is non-empty.
+                if (parts.size() > 0 && !parts[0].empty()) e.table_alias = parts[0];
                 if (parts.size() > 1) try { e.event_mask = std::stoul(parts[1]); } catch (...) {}
                 if (parts.size() >= 8) {
                     // New format with timing in slot 2
@@ -560,6 +564,7 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                     if (parts.size() > 5) e.container = parts[5];
                     if (parts.size() > 6) e.procedure = parts[6];
                     if (parts.size() > 7) e.comment   = parts[7];
+                    if (parts.size() > 8) try { e.options = std::stoul(parts[8]); } catch (...) {}
                 } else {
                     // Old format without timing (timing defaults to 0)
                     try { e.priority = std::stoi(parts[2]);  } catch (...) {}
@@ -600,9 +605,9 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                 }
                 // Append .am continuation for SAP binary triggers
                 append_am(e.container, rec.more_property);
+                // SAP binary format does not store an enabled flag; default (true) stands.
             }
 
-            e.enabled = true;
             triggers_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Relation" && !rec.obj_name.empty() &&
@@ -1242,7 +1247,7 @@ util::Result<void> DataDict::load_() {
             field_props_[tbl][fld][trim(kv.substr(0, eq))] = trim(kv.substr(eq + 1));
 
         } else if (starts_with(line, "TRIGGER ")) {
-            // TRIGGER <name>=<table>;<event_mask>;<timing>;<priority>;<enabled>;<container>;<procedure>;<comment>
+            // TRIGGER <name>=<table>;<event_mask>;<timing>;<priority>;<enabled>;<container>;<procedure>;<comment>;<options>
             // (Legacy 7-field format: <table>;<event_mask>;<priority>;<enabled>;<container>;<proc>;<comment>)
             std::string body = line.substr(8);
             auto eq = body.find('=');
@@ -1256,7 +1261,7 @@ util::Result<void> DataDict::load_() {
                 else cur.push_back(c);
             }
             parts.push_back(cur);
-            while (parts.size() < 8) parts.emplace_back();
+            while (parts.size() < 9) parts.emplace_back();
             TriggerEntry e;
             e.name        = name;
             e.table_alias = parts[0];
@@ -1267,6 +1272,7 @@ util::Result<void> DataDict::load_() {
             e.container = parts[5];
             e.procedure = parts[6];
             e.comment   = parts[7];
+            if (!parts[8].empty()) try { e.options = static_cast<std::uint32_t>(std::stoul(parts[8])); } catch (...) {}
             if (!name.empty()) triggers_[name] = std::move(e);
 
         } else if (starts_with(line, "PROC ")) {
@@ -2011,7 +2017,8 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
                                std::to_string(e.timing),
                                std::to_string(e.priority),
                                e.enabled ? "1" : "0",
-                               e.container, e.procedure, e.comment});
+                               e.container, e.procedure, e.comment,
+                               std::to_string(e.options)});
         for (auto& r : binary_recs_) {
             if (r.active && r.obj_type == "Trigger" && r.obj_name == e.name) {
                 r.property = prop; r.prop_null = false;
@@ -2357,7 +2364,8 @@ util::Result<void> DataDict::save_add_binary_() {
                                          std::to_string(e.timing),
                                          std::to_string(e.priority),
                                          e.enabled ? "1" : "0",
-                                         e.container, e.procedure, e.comment});
+                                         e.container, e.procedure, e.comment,
+                                         std::to_string(e.options)});
                 r.prop_null = false;
             }
         } else if (r.obj_type == "Relation") {
@@ -2560,7 +2568,8 @@ util::Result<void> DataDict::save() {
                std::to_string(e.timing) + ";" +
                std::to_string(e.priority) + ";" +
                (e.enabled ? "1" : "0") + ";" +
-               e.container + ";" + e.procedure + ";" + e.comment + "\n";
+               e.container + ";" + e.procedure + ";" + e.comment + ";" +
+               std::to_string(e.options) + "\n";
     }
     for (auto& n : sorted_keys(procs_)) {
         const auto& e = procs_.at(n);
