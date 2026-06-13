@@ -55,7 +55,7 @@ rem (Harbour's ADS RDD) and OpenADS' ace64.lib.
 >> msvc.tmp echo "%HDIRL%\rddfpt.lib"
 >> msvc.tmp echo "%HDIRL%\hbsix.lib"
 >> msvc.tmp echo "%HDIRL%\rddads.lib"
->> msvc.tmp echo "%OPENADS_DLL%\ace64.lib"
+>> msvc.tmp echo "%OPENADS_DLL%\openace64.lib"
 >> msvc.tmp echo "%HDIRL%\hbdebug.lib"
 >> msvc.tmp echo "%HDIRL%\hbcommon.lib"
 >> msvc.tmp echo "%HDIRL%\hbpp.lib"
@@ -86,8 +86,8 @@ rem bare `link` can pick up a same-named tool from PATH).
 cl @msvc.tmp /Fe:%PRG%.exe /nologo /link /subsystem:windows /NODEFAULTLIB:libucrt /NODEFAULTLIB:msvcrt || goto :err
 if not exist %PRG%.exe goto :err
 
-echo [fwh] copying OpenADS ace64.dll next to the exe ...
-copy /y "%OPENADS_DLL%\ace64.dll" . >nul 2>&1
+echo [fwh] copying OpenADS openace64.dll next to the exe ...
+copy /y "%OPENADS_DLL%\openace64.dll" . >nul 2>&1
 
 echo [fwh] done: %PRG%.exe   (smoke run: %PRG%.exe /auto)
 endlocal & exit /b 0

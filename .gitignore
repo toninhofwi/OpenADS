@@ -67,6 +67,9 @@ examples/fivewin/*.ppo
 examples/fivewin/*.dir
 examples/fivewin/ace32.dll
 examples/fivewin/ace64.dll
+examples/fivewin/openace64.dll
+examples/fivewin/openace64.lib
+examples/fivewin/*.zip
 examples/fivewin/*.log
 examples/fivewin/*.ppo
 examples/fivewin/*.txlog
