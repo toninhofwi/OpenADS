@@ -79,6 +79,52 @@ std::string trim(std::string s) {
     return s.substr(b, e - b);
 }
 
+// Write `content` into am_buf, reusing the existing block if it fits; otherwise
+// appending at an 8-byte-aligned offset.  Returns {am_block, am_len}.
+static std::pair<uint32_t,uint32_t> put_am_block(
+        std::string& am_buf,
+        const std::array<std::uint8_t,9>& old_mp,
+        const std::string& content) {
+    uint32_t old_block = static_cast<uint32_t>(old_mp[0])
+                       | (static_cast<uint32_t>(old_mp[1]) <<  8)
+                       | (static_cast<uint32_t>(old_mp[2]) << 16)
+                       | (static_cast<uint32_t>(old_mp[3]) << 24);
+    uint32_t old_len   = static_cast<uint32_t>(old_mp[4])
+                       | (static_cast<uint32_t>(old_mp[5]) <<  8)
+                       | (static_cast<uint32_t>(old_mp[6]) << 16)
+                       | (static_cast<uint32_t>(old_mp[7]) << 24);
+    uint32_t new_len = static_cast<uint32_t>(content.size());
+    if (old_block > 0 && old_len >= new_len) {
+        std::size_t am_off = static_cast<std::size_t>(old_block) * 8;
+        if (am_off + old_len > am_buf.size())
+            am_buf.resize(am_off + old_len, '\0');
+        for (std::size_t k = 0; k < new_len; ++k)
+            am_buf[am_off + k] = content[k];
+        for (std::size_t k = new_len; k < static_cast<std::size_t>(old_len); ++k)
+            am_buf[am_off + k] = ' ';
+        return {old_block, new_len};
+    }
+    std::size_t cur = am_buf.size();
+    std::size_t aligned = ((cur + 7) / 8) * 8;
+    if (aligned > cur) am_buf.resize(aligned, '\0');
+    uint32_t blk = static_cast<uint32_t>(am_buf.size() / 8);
+    am_buf += content;
+    return {blk, new_len};
+}
+
+static void set_more_prop_(std::array<std::uint8_t,9>& mp,
+                            uint32_t blk, uint32_t len) {
+    mp[0] = static_cast<uint8_t>(blk);
+    mp[1] = static_cast<uint8_t>(blk >>  8);
+    mp[2] = static_cast<uint8_t>(blk >> 16);
+    mp[3] = static_cast<uint8_t>(blk >> 24);
+    mp[4] = static_cast<uint8_t>(len);
+    mp[5] = static_cast<uint8_t>(len >>  8);
+    mp[6] = static_cast<uint8_t>(len >> 16);
+    mp[7] = static_cast<uint8_t>(len >> 24);
+    mp[8] = 0;
+}
+
 } // namespace
 
 util::Result<DataDict> DataDict::open(const std::string& path) {
@@ -335,22 +381,90 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             ProcEntry e;
             e.name = rec.obj_name;
 
-            // Input params: the plen property field holds the param list (null-terminated).
-            if (!rec.prop_null && !rec.property.empty()) {
-                e.input_params = rec.property;
-                auto nul = e.input_params.find('\0');
-                if (nul != std::string::npos) e.input_params.resize(nul);
-            }
+            const std::size_t PS = base + 225;
+            const std::size_t PL = 273;
 
-            // SQL body: in the 273-byte property area beyond the plen bytes.
-            // Layout: [plen=inparams] [6×0xFF] [8 bytes binary] [spaces] [CRLF] [SQL] [NUL/end]
-            {
-                const std::size_t PS = base + 225;  // property data start in file
-                const std::size_t PL = 273;         // property area length
+            // OpenADS-written format: plen=273, property[0]=NUL, property[1..272]=SQL body start.
+            // .am layout: [SQL continuation]\0[input_params]\0[output_params]\0
+            // SAP-original format: plen=param_len (< 273), property[0..plen-1]=input_params,
+            //   followed by 0xFF markers + binary header + CRLF + SQL body.
+            bool is_openads = (!rec.prop_null && plen == 273 &&
+                               PS + PL <= buf.size() &&
+                               static_cast<uint8_t>(buf[PS]) == 0x00 &&
+                               (PL < 2 || static_cast<uint8_t>(buf[PS + 1]) >= 0x20));
+
+            if (is_openads) {
+                // Read inline SQL body start from property[1..272], strip trailing whitespace/NUL.
+                {
+                    std::string body_start = buf.substr(PS + 1, PL - 1);
+                    std::size_t l = body_start.size();
+                    while (l > 0) {
+                        unsigned char c = static_cast<unsigned char>(body_start[l - 1]);
+                        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0') --l;
+                        else break;
+                    }
+                    body_start.resize(l);
+                    e.procedure = std::move(body_start);
+                }
+                // Parse .am with NUL-delimited segments: body_cont\0in_params\0out_params\0
+                auto am_block = static_cast<uint32_t>(rec.more_property[0])
+                              | (static_cast<uint32_t>(rec.more_property[1]) <<  8)
+                              | (static_cast<uint32_t>(rec.more_property[2]) << 16)
+                              | (static_cast<uint32_t>(rec.more_property[3]) << 24);
+                auto am_len   = static_cast<uint32_t>(rec.more_property[4])
+                              | (static_cast<uint32_t>(rec.more_property[5]) <<  8)
+                              | (static_cast<uint32_t>(rec.more_property[6]) << 16)
+                              | (static_cast<uint32_t>(rec.more_property[7]) << 24);
+                if (am_block > 0 && am_len > 0) {
+                    std::size_t am_off = static_cast<std::size_t>(am_block) * 8;
+                    if (am_off < am_buf.size()) {
+                        std::size_t readable = std::min<std::size_t>(
+                            am_len, am_buf.size() - am_off);
+                        std::string chunk = am_buf.substr(am_off, readable);
+                        auto n0 = chunk.find('\0');
+                        if (n0 != std::string::npos) {
+                            // Body continuation up to first NUL.
+                            std::string cont = chunk.substr(0, n0);
+                            auto lc = cont.find_last_not_of(" \t\r\n");
+                            if (lc != std::string::npos) cont.resize(lc + 1);
+                            else cont.clear();
+                            e.procedure += cont;
+                            // input_params between NUL[0] and NUL[1].
+                            auto n1 = chunk.find('\0', n0 + 1);
+                            if (n1 != std::string::npos) {
+                                e.input_params = chunk.substr(n0 + 1, n1 - (n0 + 1));
+                                // output_params between NUL[1] and NUL[2].
+                                auto n2 = chunk.find('\0', n1 + 1);
+                                e.output_params = (n2 != std::string::npos)
+                                    ? chunk.substr(n1 + 1, n2 - (n1 + 1))
+                                    : chunk.substr(n1 + 1);
+                            }
+                        } else {
+                            // No NUL separator — backward-scan for binary padding.
+                            std::size_t lt = chunk.size();
+                            while (lt > 0) {
+                                unsigned char uc = static_cast<unsigned char>(chunk[lt - 1]);
+                                if ((uc >= 0x20u && uc <= 0x7Eu) ||
+                                    uc == '\t' || uc == '\n' || uc == '\r') break;
+                                --lt;
+                            }
+                            chunk.resize(lt);
+                            auto lc = chunk.find_last_not_of(" \t\r\n");
+                            if (lc != std::string::npos) chunk.resize(lc + 1);
+                            e.procedure += chunk;
+                        }
+                    }
+                }
+            } else {
+                // SAP-original: input_params at property[0..plen-1], body via 0xFF/CRLF scan.
+                if (!rec.prop_null && !rec.property.empty()) {
+                    e.input_params = rec.property;
+                    auto nul = e.input_params.find('\0');
+                    if (nul != std::string::npos) e.input_params.resize(nul);
+                }
                 if (PS + PL <= buf.size()) {
                     std::size_t pos = rec.prop_null ? 0u : static_cast<std::size_t>(plen);
                     while (pos < PL && static_cast<uint8_t>(buf[PS + pos]) == 0xFF) ++pos;
-                    // Find CR LF that precedes the SQL body
                     for (; pos + 1 < PL; ++pos) {
                         if (static_cast<uint8_t>(buf[PS + pos])   == 0x0D &&
                             static_cast<uint8_t>(buf[PS + pos+1]) == 0x0A) break;
@@ -367,11 +481,13 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                         e.procedure = std::move(body);
                     }
                 }
+                append_am(e.procedure, rec.more_property);
             }
-            append_am(e.procedure, rec.more_property);
             procs_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Function" && !rec.obj_name.empty()) {
+            // Preserve the raw plen so save can restore the correct preamble size.
+            binary_recs_.back().prop_plen = (plen == 0xFFFFu) ? 0u : plen;
             FunctionEntry e;
             e.name = rec.obj_name;
 
@@ -416,56 +532,67 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             functions_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Trigger" && !rec.obj_name.empty()) {
-            // SAP binary .add format for Trigger records (rec_len=524):
-            //   Property VarChar (plen bytes at base+225): bytes [0..3] = event type (LE uint32)
-            //   Property area (273 bytes at base+225..base+497):
-            //     [0..3]   event  (LE uint32): 1=INSERT 2=UPDATE 3=DELETE
-            //     [4..5]   0x04 (constant)
-            //     [6..7]   timing (LE uint16): 1=BEFORE 2=INSTEAD_OF 4=AFTER
-            //     [8..9]   0x00 (reserved/no-memos flag)
-            //     [10..11] 0x04 (constant)
-            //     [12..15] constant block (0x03 0x00 0x00 0x00)
-            //     [16..17] inline body length (LE uint16)
-            //     [18..]   inline body SQL text (up to 255 bytes)
-            //   More Property (9 bytes at base+498): am_block(4) + am_len(4) + pad
             TriggerEntry e;
             e.name        = rec.obj_name;
             e.table_alias = id_to_name.count(rec.parent_id) ? id_to_name.at(rec.parent_id) : "";
 
-            // Read event type (plen field, 4 bytes at base+225)
-            if (!rec.prop_null && rec.property.size() >= 4) {
-                e.event_mask = static_cast<uint32_t>(
-                    (static_cast<uint8_t>(rec.property[0]))       |
-                    (static_cast<uint8_t>(rec.property[1]) <<  8) |
-                    (static_cast<uint8_t>(rec.property[2]) << 16) |
-                    (static_cast<uint8_t>(rec.property[3]) << 24));
+            if (!rec.prop_null && !rec.property.empty() &&
+                static_cast<uint8_t>(rec.property[0]) >= 0x20) {
+                // OpenADS NUL-delimited format:
+                //   OLD (7 parts): table_alias\0event_mask\0priority\0enabled\0container\0procedure\0comment
+                //   NEW (8 parts): table_alias\0event_mask\0timing\0priority\0enabled\0container\0procedure\0comment
+                auto parts = split_nul(rec.property);
+                if (e.table_alias.empty() && parts.size() > 0) e.table_alias = parts[0];
+                if (parts.size() > 1) try { e.event_mask = std::stoul(parts[1]); } catch (...) {}
+                if (parts.size() >= 8) {
+                    // New format with timing in slot 2
+                    try { e.timing   = std::stoul(parts[2]); } catch (...) {}
+                    try { e.priority = std::stoi(parts[3]);  } catch (...) {}
+                    if (parts.size() > 4) e.enabled   = (parts[4] == "1");
+                    if (parts.size() > 5) e.container = parts[5];
+                    if (parts.size() > 6) e.procedure = parts[6];
+                    if (parts.size() > 7) e.comment   = parts[7];
+                } else {
+                    // Old format without timing (timing defaults to 0)
+                    try { e.priority = std::stoi(parts[2]);  } catch (...) {}
+                    if (parts.size() > 3) e.enabled   = (parts[3] == "1");
+                    if (parts.size() > 4) e.container = parts[4];
+                    if (parts.size() > 5) e.procedure = parts[5];
+                    if (parts.size() > 6) e.comment   = parts[6];
+                }
+            } else {
+                // SAP binary .add format for Trigger records (rec_len=524):
+                //   Property area (273 bytes at base+225..base+497):
+                //     [0..3]   event  (LE uint32): 1=INSERT 2=UPDATE 3=DELETE
+                //     [4..5]   0x04 (constant)
+                //     [6..7]   timing (LE uint16): 1=BEFORE 2=INSTEAD_OF 4=AFTER
+                //     [16..17] inline body length (LE uint16)
+                //     [18..]   inline body SQL text (up to 255 bytes)
+                if (!rec.prop_null && rec.property.size() >= 4) {
+                    e.event_mask = static_cast<uint32_t>(
+                        (static_cast<uint8_t>(rec.property[0]))       |
+                        (static_cast<uint8_t>(rec.property[1]) <<  8) |
+                        (static_cast<uint8_t>(rec.property[2]) << 16) |
+                        (static_cast<uint8_t>(rec.property[3]) << 24));
+                }
+                if (rec.property.size() >= 8) {
+                    e.timing = static_cast<uint32_t>(
+                        static_cast<uint8_t>(rec.property[6]) |
+                        (static_cast<uint8_t>(rec.property[7]) << 8));
+                }
+                if (!rec.prop_null && rec.property.size() >= 20) {
+                    std::string body = rec.property.substr(18);
+                    auto nul = body.find('\0');
+                    if (nul != std::string::npos) body.resize(nul);
+                    auto first = body.find_first_not_of(" \t\r\n");
+                    if (first != std::string::npos) body = body.substr(first);
+                    auto last  = body.find_last_not_of(" \t\r\n");
+                    if (last  != std::string::npos) body.resize(last + 1);
+                    e.container = std::move(body);
+                }
+                // Append .am continuation for SAP binary triggers
+                append_am(e.container, rec.more_property);
             }
-
-            // Read timing (bytes 6-7 in the full 273-byte property area)
-            const std::size_t PA = base + 225;  // property area start in file buffer
-            if (PA + 8 <= buf.size()) {
-                e.timing = static_cast<uint32_t>(
-                    static_cast<uint8_t>(buf[PA + 6]) |
-                    (static_cast<uint8_t>(buf[PA + 7]) << 8));
-            }
-
-            // Read inline body starting at property area byte 18
-            if (PA + 18 < buf.size()) {
-                std::size_t body_start = PA + 18;
-                std::size_t body_end   = PA + 273;
-                if (body_end > buf.size()) body_end = buf.size();
-                std::string body = buf.substr(body_start, body_end - body_start);
-                auto nul = body.find('\0');
-                if (nul != std::string::npos) body.resize(nul);
-                auto first = body.find_first_not_of(" \t\r\n");
-                if (first != std::string::npos) body = body.substr(first);
-                auto last  = body.find_last_not_of(" \t\r\n");
-                if (last  != std::string::npos) body.resize(last + 1);
-                e.container = std::move(body);
-            }
-
-            // Append .am continuation (same pattern as procs/functions)
-            append_am(e.container, rec.more_property);
 
             e.enabled = true;
             triggers_[e.name] = std::move(e);
@@ -1839,6 +1966,7 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
     triggers_[e.name] = e;
     if (binary_format_) {
         auto prop = join_nul({e.table_alias, std::to_string(e.event_mask),
+                               std::to_string(e.timing),
                                std::to_string(e.priority),
                                e.enabled ? "1" : "0",
                                e.container, e.procedure, e.comment});
@@ -1912,6 +2040,47 @@ util::Result<void> DataDict::drop_proc(const std::string& name) {
         for (auto& r : binary_recs_) {
             if (r.active && (r.obj_type == "Procedure" || r.obj_type == "StoredProc") &&
                 r.obj_name == name) {
+                r.active = false; break;
+            }
+        }
+    }
+    return save();
+}
+
+// ---------------------------------------------------------------------------
+// Functions
+// ---------------------------------------------------------------------------
+
+util::Result<void> DataDict::create_function(const FunctionEntry& e) {
+    if (e.name.empty())
+        return util::Error{5000, 0, "DD function name empty", ""};
+    functions_[e.name] = e;
+    if (binary_format_) {
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Function" && r.obj_name == e.name)
+                return save();
+        }
+        // New function record — preamble = empty (prop_plen=0).
+        BinaryRecord r;
+        r.active    = true;
+        r.obj_id    = binary_alloc_id_();
+        r.parent_id = binary_obj_id_of_("Database", "Database");
+        if (r.parent_id == 0) r.parent_id = 1;
+        r.obj_type  = "Function";
+        r.obj_name  = e.name;
+        r.property  = "";
+        r.prop_null = false;
+        r.prop_plen = 0;
+        binary_recs_.push_back(std::move(r));
+    }
+    return save();
+}
+
+util::Result<void> DataDict::drop_function(const std::string& name) {
+    functions_.erase(name);
+    if (binary_format_) {
+        for (auto& r : binary_recs_) {
+            if (r.active && r.obj_type == "Function" && r.obj_name == name) {
                 r.active = false; break;
             }
         }
@@ -2010,7 +2179,11 @@ std::string DataDict::serialize_binary_rec_(const BinaryRecord& r,
     } else {
         std::size_t max_data = prop_field_len - 2;
         std::size_t data_len = std::min(r.property.size(), max_data);
-        put_le16(rec, 223, static_cast<uint16_t>(data_len));
+        // prop_plen overrides the plen field (used for Function lstr format where plen
+        // = preamble size, not full property area size).
+        uint16_t plen_field = (r.prop_plen > 0) ? r.prop_plen
+                                                 : static_cast<uint16_t>(data_len);
+        put_le16(rec, 223, plen_field);
         for (std::size_t i = 0; i < data_len; ++i)
             rec[225 + i] = r.property[i];
     }
@@ -2027,6 +2200,29 @@ std::string DataDict::serialize_binary_rec_(const BinaryRecord& r,
 }
 
 util::Result<void> DataDict::save_add_binary_() {
+    // Read companion .am memo file for StoredProc body/params overflow.
+    std::string am_path;
+    {
+        auto dot = path_.rfind('.');
+        am_path = (dot != std::string::npos)
+                ? path_.substr(0, dot) + ".am"
+                : path_ + ".am";
+    }
+    std::string am_buf;
+    {
+        auto amf = platform::File::open(am_path, platform::OpenMode::ReadOnly);
+        if (amf) {
+            auto& amfile = amf.value();
+            auto sz = amfile.size();
+            if (sz && sz.value() > 0) {
+                am_buf.resize(static_cast<std::size_t>(sz.value()));
+                auto rr = amfile.read_at(0, am_buf.data(), am_buf.size());
+                if (rr && rr.value() < am_buf.size()) am_buf.resize(rr.value());
+            }
+        }
+    }
+    bool am_dirty = false;
+
     // Regenerate property fields for mutable object types so that
     // AdsDDSet*Property mutations are reflected even without re-creating.
     for (auto& r : binary_recs_) {
@@ -2035,15 +2231,77 @@ util::Result<void> DataDict::save_add_binary_() {
             auto it = procs_.find(r.obj_name);
             if (it != procs_.end()) {
                 const auto& e = it->second;
-                r.property  = join_nul({e.container, e.procedure,
-                                         e.input_params, e.output_params, e.comment});
+                // OpenADS format: inline property = NUL + first 272 body bytes (padded).
+                // .am block = body_rest + \0 + in_params + \0 + out_params + \0
+                const std::size_t PL = 273;
+                std::string prop(PL, ' ');
+                prop[0] = '\0';
+                std::size_t body_inline = e.procedure.size() < PL - 1
+                                        ? e.procedure.size() : PL - 1;
+                for (std::size_t k = 0; k < body_inline; ++k)
+                    prop[1 + k] = e.procedure[k];
+                r.property  = std::move(prop);
                 r.prop_null = false;
+
+                std::string in_norm = e.input_params;
+                if (!in_norm.empty() && in_norm.back() != ';') in_norm += ';';
+                std::string out_norm = e.output_params;
+                if (!out_norm.empty() && out_norm.back() != ';') out_norm += ';';
+                std::string am_content = e.procedure.substr(body_inline)
+                                       + '\0' + in_norm + '\0' + out_norm + '\0';
+                uint32_t blk, alen;
+                auto res = put_am_block(am_buf, r.more_property, am_content);
+                blk  = res.first;
+                alen = res.second;
+                set_more_prop_(r.more_property, blk, alen);
+                am_dirty = true;
+            }
+        } else if (r.obj_type == "Function") {
+            auto it = functions_.find(r.obj_name);
+            if (it != functions_.end()) {
+                const auto& e = it->second;
+                // Preamble: the original SAP binary metadata bytes before 0xFF markers.
+                // r.property holds those bytes (prop_plen bytes loaded from disk).
+                std::string preamble = r.property.substr(
+                    0, std::min<std::size_t>(r.prop_plen, r.property.size()));
+
+                // Build lstr: le16(len) + text + NUL
+                auto mk_lstr = [](const std::string& s) -> std::string {
+                    std::string ns = s + '\0';
+                    std::string out;
+                    out.push_back(static_cast<char>(ns.size() & 0xFF));
+                    out.push_back(static_cast<char>((ns.size() >> 8) & 0xFF));
+                    out += ns;
+                    return out;
+                };
+                std::string lstr_sect = std::string(6, '\xFF')
+                                      + mk_lstr(e.return_type)
+                                      + mk_lstr(e.input_params)
+                                      + "\x00\x00";  // body length = 0 (full body in .am)
+
+                // Build full 273-byte property area.
+                const std::size_t PL = 273;
+                std::string prop_area = preamble + lstr_sect;
+                if (prop_area.size() < PL) prop_area.resize(PL, ' ');
+                prop_area.resize(PL);
+
+                r.property  = std::move(prop_area);
+                r.prop_null = false;
+                r.prop_plen = static_cast<uint16_t>(preamble.size());
+
+                // Write full implementation to .am (body_length=0 in inline lstr).
+                auto res  = put_am_block(am_buf, r.more_property, e.implementation);
+                uint32_t blk  = res.first;
+                uint32_t alen = res.second;
+                set_more_prop_(r.more_property, blk, alen);
+                am_dirty = true;
             }
         } else if (r.obj_type == "Trigger") {
             auto it = triggers_.find(r.obj_name);
             if (it != triggers_.end()) {
                 const auto& e = it->second;
                 r.property  = join_nul({e.table_alias, std::to_string(e.event_mask),
+                                         std::to_string(e.timing),
                                          std::to_string(e.priority),
                                          e.enabled ? "1" : "0",
                                          e.container, e.procedure, e.comment});
@@ -2083,7 +2341,21 @@ util::Result<void> DataDict::save_add_binary_() {
     if (!wrote) return wrote.error();
     if (wrote.value() != out.size())
         return util::Error{5000, 0, "short write on binary .add", path_};
-    return file.sync();
+    if (auto s = file.sync(); !s) return s;
+
+    // Write updated .am file when StoredProc body/params were serialised.
+    if (am_dirty && !am_buf.empty()) {
+        auto amf = platform::File::open(am_path, platform::OpenMode::CreateRW);
+        if (!amf) return amf.error();
+        auto& amfile = amf.value();
+        auto amwrote = amfile.write_at(0, am_buf.data(), am_buf.size());
+        if (!amwrote) return amwrote.error();
+        if (amwrote.value() != am_buf.size())
+            return util::Error{5000, 0, "short write on .am memo file", am_path};
+        if (auto s = amfile.sync(); !s) return s;
+    }
+
+    return {};
 }
 
 util::Result<void> DataDict::create_group(const std::string& group) {

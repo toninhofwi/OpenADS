@@ -204,11 +204,15 @@ public:
         std::string return_type;
         std::string comment;
     };
+    util::Result<void> create_function(const FunctionEntry& e);
+    util::Result<void> drop_function  (const std::string& name);
     bool has_function(const std::string& name) const noexcept {
         return functions_.find(name) != functions_.end();
     }
     const std::unordered_map<std::string, FunctionEntry>&
         functions() const noexcept { return functions_; }
+    std::unordered_map<std::string, FunctionEntry>&
+        functions()       noexcept { return functions_; }
 
     // ---- Views (M-DD-VIEW) ----------------------------------------------
     struct ViewEntry {
@@ -346,6 +350,9 @@ private:
         std::string obj_name;           // up to 200 chars (trimmed)
         std::string property;           // raw VarChar bytes (may include \0)
         bool prop_null = true;          // true → stored as 0xFFFF
+        // When nonzero, overrides the plen field written to disk (used for Function lstr
+        // format where plen = preamble size, not full property size).
+        std::uint16_t prop_plen = 0;
         std::array<std::uint8_t, 9> more_property{};
         std::uint32_t info1 = 0;
         std::uint32_t info2 = 0;

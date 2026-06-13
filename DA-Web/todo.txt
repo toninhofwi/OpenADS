@@ -29,10 +29,29 @@ After that move to solving these bugs:
 Fixed: proc_body.php detects OpenADS-imported format (NUL-terminated body after params)
 and reads .am continuation.  pmsys_imported.am copied from pmsys.am for full body.
 
+[DONE] Issue above marked as done but procedure parameters are missing.  Procedure Sql body shows with non-human-readable characters at the end.
+These chars are probably parameters encoding.  Using your connection to f:\OpenAds\Testdata\pmsys\pmsys.add check parameters for each
+stored procedure and compare to parameters shown using OpenAds on newly imported dd f:\OpenAds\Testdata\pmsys\pmsys_imported.add.
+With stored procedures parameters can be of type input or output.  For example sp_GetPhysicalPath stored procedure has one single parameter
+and that parameter is an output parameter: databasepath of type memo.
+Fixed: import_dd now queries system.storedprocedures for Proc_Input/Proc_Output and patches them into .am after SQL body NUL.
+proc_body.php reads body up to first NUL, then input_params and output_params from subsequent NUL-delimited segments.
+app.js parseParamStr/serializeParams handle paramType (Input/Output); save_proc.php writes body\0in\0out\0 into .am.
+
 [DONE] *When trying to view a function body from DAWeb I get this message:
 -- BoY
 -- Source is not available as SQL (built-in system procedure or body stored in server binary).
 Fixed: pmsys_imported.add patched to store BoY body in readable lstr format (plen=0).
+Function property API (AdsDDGetFunctionProperty etc.) added end-to-end: engine → ABI → PHP ext → DA-Web.
+proc_body.php and save_proc.php now use AdsDictionary API (no binary file parsing).
+
+[DONE] Trigger event_mask and timing show as garbage or empty in system.triggers.
+Cause: binary loader read event_mask as LE uint32 from bytes 0-3, but OpenADS-created triggers store
+NUL-delimited text (table_alias\0event_mask\0...) in the property area.  Also timing was never
+included in the NUL-delimited save format.
+Fixed: loader now detects NUL-delimited format (byte[0]>=0x20) and parses correctly.  Save format
+updated to include timing as a third field.  Client-side binary parsing removed from trigger_body.php,
+table_meta.php, and gen_sql.php — all now use AdsDictionary API (getTriggerProperty 1401/1402/1404).
 
 [DONE] *When browsing the contents of a table from DAWeb Money fields show as $0.00 when there is actual data.
 For example you can look at table leases where rent and late fee fields shows as $0.00

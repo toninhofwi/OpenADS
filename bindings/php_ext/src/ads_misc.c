@@ -783,13 +783,18 @@ PHP_METHOD(AdsDictionary, getProcProperty)
     ads_dictionary_obj *dict = Z_ADS_DICT_P(ZEND_THIS);
     ADS_CHECK_DICT(dict);
 
-    char       buf[4096];
-    UNSIGNED16 usLen = (UNSIGNED16)(sizeof(buf) - 1);
+    /* Double-call: first get the required size, then allocate and fetch. */
+    UNSIGNED16 usLen = 0;
+    AdsDDGetProcProperty(dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, NULL, &usLen);
+    char *buf = emalloc((size_t)usLen + 1);
+    UNSIGNED16 copyLen = usLen;
     UNSIGNED32 ulRet = AdsDDGetProcProperty(
-        dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, buf, &usLen);
-    ADS_CHECK_RC(ulRet, "AdsDictionary::getProcProperty");
-    buf[usLen] = '\0';
-    RETURN_STRINGL(buf, (size_t)usLen);
+        dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, buf, &copyLen);
+    if (ulRet != AE_SUCCESS) { efree(buf); ADS_CHECK_RC(ulRet, "AdsDictionary::getProcProperty"); }
+    buf[copyLen] = '\0';
+    zend_string *ret = zend_string_init(buf, (size_t)copyLen, 0);
+    efree(buf);
+    RETURN_STR(ret);
 }
 
 PHP_METHOD(AdsDictionary, setProcProperty)
@@ -878,13 +883,18 @@ PHP_METHOD(AdsDictionary, getTriggerProperty)
     ads_dictionary_obj *dict = Z_ADS_DICT_P(ZEND_THIS);
     ADS_CHECK_DICT(dict);
 
-    char       buf[1024];
-    UNSIGNED16 usLen = (UNSIGNED16)(sizeof(buf) - 1);
+    /* Double-call: first get the required size, then allocate and fetch. */
+    UNSIGNED16 usLen = 0;
+    AdsDDGetTriggerProperty(dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, NULL, &usLen);
+    char *buf = emalloc((size_t)usLen + 1);
+    UNSIGNED16 copyLen = usLen;
     UNSIGNED32 ulRet = AdsDDGetTriggerProperty(
-        dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, buf, &usLen);
-    ADS_CHECK_RC(ulRet, "AdsDictionary::getTriggerProperty");
-    buf[usLen] = '\0';
-    RETURN_STRINGL(buf, (size_t)usLen);
+        dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, buf, &copyLen);
+    if (ulRet != AE_SUCCESS) { efree(buf); ADS_CHECK_RC(ulRet, "AdsDictionary::getTriggerProperty"); }
+    buf[copyLen] = '\0';
+    zend_string *ret = zend_string_init(buf, (size_t)copyLen, 0);
+    efree(buf);
+    RETURN_STR(ret);
 }
 
 PHP_METHOD(AdsDictionary, setTriggerProperty)
@@ -906,6 +916,105 @@ PHP_METHOD(AdsDictionary, setTriggerProperty)
         dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property,
         (void *)value, (UNSIGNED16)value_len);
     ADS_CHECK_RC(ulRet, "AdsDictionary::setTriggerProperty");
+}
+
+/* =====================================================================
+ * User-defined functions
+ * ===================================================================== */
+
+PHP_METHOD(AdsDictionary, createFunction)
+{
+    char *name;            size_t name_len;
+    char *container;       size_t container_len;
+    char *implementation;  size_t impl_len;
+    char *rettype  = "";   size_t rettype_len   = 0;
+    char *input    = "";   size_t input_len      = 0;
+    char *comment  = "";   size_t comment_len    = 0;
+
+    ZEND_PARSE_PARAMETERS_START(3, 6)
+        Z_PARAM_STRING(name, name_len)
+        Z_PARAM_STRING(container, container_len)
+        Z_PARAM_STRING(implementation, impl_len)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_STRING(rettype, rettype_len)
+        Z_PARAM_STRING(input, input_len)
+        Z_PARAM_STRING(comment, comment_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    ads_dictionary_obj *dict = Z_ADS_DICT_P(ZEND_THIS);
+    ADS_CHECK_DICT(dict);
+
+    UNSIGNED32 ulRet = AdsDDCreateFunction(
+        dict->hDict,
+        (UNSIGNED8 *)name,
+        (UNSIGNED8 *)container,
+        (UNSIGNED8 *)implementation,
+        (UNSIGNED8 *)rettype,
+        (UNSIGNED8 *)input,
+        (UNSIGNED8 *)comment);
+    ADS_CHECK_RC(ulRet, "AdsDictionary::createFunction");
+}
+
+PHP_METHOD(AdsDictionary, dropFunction)
+{
+    char *name;  size_t name_len;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STRING(name, name_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    ads_dictionary_obj *dict = Z_ADS_DICT_P(ZEND_THIS);
+    ADS_CHECK_DICT(dict);
+
+    UNSIGNED32 ulRet = AdsDDDropFunction(dict->hDict, (UNSIGNED8 *)name);
+    ADS_CHECK_RC(ulRet, "AdsDictionary::dropFunction");
+}
+
+PHP_METHOD(AdsDictionary, getFunctionProperty)
+{
+    char      *name;  size_t name_len;
+    zend_long  property;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STRING(name, name_len)
+        Z_PARAM_LONG(property)
+    ZEND_PARSE_PARAMETERS_END();
+
+    ads_dictionary_obj *dict = Z_ADS_DICT_P(ZEND_THIS);
+    ADS_CHECK_DICT(dict);
+
+    /* Double-call: first get the required size, then allocate and fetch. */
+    UNSIGNED16 usLen = 0;
+    AdsDDGetFunctionProperty(dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, NULL, &usLen);
+    char *buf = emalloc((size_t)usLen + 1);
+    UNSIGNED16 copyLen = usLen;
+    UNSIGNED32 ulRet = AdsDDGetFunctionProperty(
+        dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property, buf, &copyLen);
+    if (ulRet != AE_SUCCESS) { efree(buf); ADS_CHECK_RC(ulRet, "AdsDictionary::getFunctionProperty"); }
+    buf[copyLen] = '\0';
+    zend_string *ret = zend_string_init(buf, (size_t)copyLen, 0);
+    efree(buf);
+    RETURN_STR(ret);
+}
+
+PHP_METHOD(AdsDictionary, setFunctionProperty)
+{
+    char      *name;   size_t name_len;
+    zend_long  property;
+    char      *value;  size_t value_len;
+
+    ZEND_PARSE_PARAMETERS_START(3, 3)
+        Z_PARAM_STRING(name, name_len)
+        Z_PARAM_LONG(property)
+        Z_PARAM_STRING(value, value_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    ads_dictionary_obj *dict = Z_ADS_DICT_P(ZEND_THIS);
+    ADS_CHECK_DICT(dict);
+
+    UNSIGNED32 ulRet = AdsDDSetFunctionProperty(
+        dict->hDict, (UNSIGNED8 *)name, (UNSIGNED16)property,
+        (void *)value, (UNSIGNED16)value_len);
+    ADS_CHECK_RC(ulRet, "AdsDictionary::setFunctionProperty");
 }
 
 /* =====================================================================
@@ -1088,6 +1197,11 @@ static const zend_function_entry ads_dictionary_methods[] = {
     PHP_ME(AdsDictionary, dropTrigger,          arginfo_ads_dictionary_drop_trigger,          ZEND_ACC_PUBLIC)
     PHP_ME(AdsDictionary, getTriggerProperty,   arginfo_ads_dictionary_get_trigger_property,  ZEND_ACC_PUBLIC)
     PHP_ME(AdsDictionary, setTriggerProperty,   arginfo_ads_dictionary_set_trigger_property,  ZEND_ACC_PUBLIC)
+    /* user-defined functions */
+    PHP_ME(AdsDictionary, createFunction,       arginfo_ads_dictionary_create_function,       ZEND_ACC_PUBLIC)
+    PHP_ME(AdsDictionary, dropFunction,         arginfo_ads_dictionary_drop_function,         ZEND_ACC_PUBLIC)
+    PHP_ME(AdsDictionary, getFunctionProperty,  arginfo_ads_dictionary_get_function_property, ZEND_ACC_PUBLIC)
+    PHP_ME(AdsDictionary, setFunctionProperty,  arginfo_ads_dictionary_set_function_property, ZEND_ACC_PUBLIC)
     /* referential integrity */
     PHP_ME(AdsDictionary, createRefIntegrity,   arginfo_ads_dictionary_create_ref_integrity,  ZEND_ACC_PUBLIC)
     PHP_ME(AdsDictionary, removeRefIntegrity,   arginfo_ads_dictionary_remove_ref_integrity,  ZEND_ACC_PUBLIC)

@@ -118,6 +118,7 @@ EXPORTS
     AdsDDAddIndexFile
     AdsDDAddUserToGroup
     AdsDDCreateLink
+    AdsDDCreateFunction
     AdsDDCreateProcedure
     AdsDDCreateRefIntegrity
     AdsDDCreateTrigger
@@ -125,12 +126,14 @@ EXPORTS
     AdsDDCreateView
     AdsDDDeleteUser
     AdsDDDropLink
+    AdsDDDropFunction
     AdsDDDropProcedure
     AdsDDDropTrigger
     AdsDDDropView
     AdsDDGetDatabaseProperty
     AdsDDGetFieldProperty
     AdsDDGetIndexProperty
+    AdsDDGetFunctionProperty
     AdsDDGetProcProperty
     AdsDDGetTableProperty
     AdsDDGetTriggerProperty
@@ -144,6 +147,7 @@ EXPORTS
     AdsDDSetDatabaseProperty
     AdsDDSetFieldProperty
     AdsDDSetIndexProperty
+    AdsDDSetFunctionProperty
     AdsDDSetProcProperty
     AdsDDSetTableProperty
     AdsDDSetTriggerProperty

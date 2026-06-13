@@ -5068,6 +5068,99 @@ UNSIGNED32 AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
 }
 
 // ---------------------------------------------------------------------------
+// AdsDDCreateFunction / AdsDDDropFunction / AdsDDGet/SetFunctionProperty
+// Property codes: 700=body(implementation), 701=input_params, 702=return_type,
+//                 703=container, 704=comment
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDCreateFunction(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                UNSIGNED8* pucContainer,
+                                UNSIGNED8* pucImplementation,
+                                UNSIGNED8* pucRetType,
+                                UNSIGNED8* pucInParams,
+                                UNSIGNED8* pucComment) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    openads::engine::DataDict::FunctionEntry e;
+    e.name           = openads::abi::to_internal(pucName, 0);
+    e.container      = pucContainer      ? openads::abi::to_internal(pucContainer,      0) : "";
+    e.implementation = pucImplementation ? openads::abi::to_internal(pucImplementation, 0) : "";
+    e.return_type    = pucRetType        ? openads::abi::to_internal(pucRetType,        0) : "";
+    e.input_params   = pucInParams       ? openads::abi::to_internal(pucInParams,       0) : "";
+    e.comment        = pucComment        ? openads::abi::to_internal(pucComment,        0) : "";
+    if (e.name.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "function name empty");
+    auto r = dd->create_function(e);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDDropFunction(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_function(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto r = dd->drop_function(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDGetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                     UNSIGNED16 usProp, void* pBuf,
+                                     UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto* dd = dd_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_function(name)) {
+        *pusLen = 0;
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    }
+    const auto& e = dd->functions().at(name);
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    switch (usProp) {
+        case 700: return put_str(e.implementation);
+        case 701: return put_str(e.input_params);
+        case 702: return put_str(e.return_type);
+        case 703: return put_str(e.container);
+        case 704: return put_str(e.comment);
+        default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+}
+
+UNSIGNED32 AdsDDSetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                     UNSIGNED16 usProp, void* pBuf,
+                                     UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_function(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto& e = dd->functions().at(name);
+    std::string val = pBuf && usLen > 0
+        ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
+    switch (usProp) {
+        case 700: e.implementation = val; break;
+        case 701: e.input_params   = val; break;
+        case 702: e.return_type    = val; break;
+        case 703: e.container      = val; break;
+        case 704: e.comment        = val; break;
+        default: return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+    auto r = dd->save();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+// ---------------------------------------------------------------------------
 // AdsDDCreateView / AdsDDDropView / AdsDDGet/SetViewProperty
 // ---------------------------------------------------------------------------
 

@@ -413,6 +413,42 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── Step 5c: read stored-procedure input/output params from SAP ──────────
+    // SAP stores params in the property zone of each StoredProc record.  OpenADS
+    // loses them when it rewrites the record (join_nul truncates at 273 bytes).
+    // We query system.storedprocedures while the SAP connection is still open,
+    // then patch the dest .am continuation after step 8 so proc_body.php can
+    // read the params even though they no longer fit in the inline property area.
+    //
+    // SAP system.storedprocedures columns (version 11.x):
+    //   Name | Proc_Input | Proc_Output | SQL_Script | …
+    struct ProcParams {
+        std::string name, input_params, output_params;
+    };
+    std::vector<ProcParams> proc_params;
+    {
+        ADSHANDLE hc = 0;
+        rc = f.execSQL(hStmt,
+            (UNSIGNED8*)"SELECT Name, Proc_Input, Proc_Output "
+                        "FROM system.storedprocedures ORDER BY Name",
+            &hc);
+        if (rc == 0 && hc) {
+            UNSIGNED16 eof = 0;
+            while (f.atEOF(hc, &eof) == 0 && !eof) {
+                ProcParams pp;
+                pp.name          = sap_field(f, hc, "Name");
+                pp.input_params  = sap_field(f, hc, "Proc_Input");
+                pp.output_params = sap_field(f, hc, "Proc_Output");
+                if (!pp.name.empty() && (!pp.input_params.empty() || !pp.output_params.empty()))
+                    proc_params.push_back(std::move(pp));
+                f.skip(hc, 1);
+            }
+            f.close(hc);
+        } else {
+            warnings.push_back("system.storedprocedures query failed — SP params skipped.");
+        }
+    }
+
     // ── Step 6: read object permissions via AdsDDGetPermissions ─────────────
     // system.permissions SQL returns 0 rows for SAP binary .add files because
     // the real ACLs are stored in encrypted property blobs.  Use the
@@ -640,6 +676,183 @@ int main(int argc, char** argv) {
                 std::fwrite(addData.data(), 1, addData.size(), fh);
                 std::fclose(fh);
             }
+        }
+    }
+
+    // ── Step 8b: patch .am continuation with SP input/output params ──────────
+    // After OpenADS rewrites the dest .add, each StoredProc record has plen=273
+    // and its .am block contains:
+    //   [SQL body continuation] [NUL] [old SAP padding/binary garbage]
+    //
+    // We overwrite the bytes after the first NUL with:
+    //   [input_params] [NUL] [output_params] [NUL]
+    //
+    // proc_body.php then reads these after finding the first NUL in .am.
+    int written_proc_params = 0;
+    if (!proc_params.empty()) {
+        // Re-read .add (it was modified by DataDict above)
+        std::vector<std::uint8_t> addData2;
+        bool read_ok2 = false;
+        {
+            std::FILE* fh = std::fopen(dest.c_str(), "rb");
+            if (fh) {
+                std::fseek(fh, 0, SEEK_END);
+                long sz = std::ftell(fh);
+                std::rewind(fh);
+                if (sz > 0) {
+                    addData2.resize(static_cast<std::size_t>(sz));
+                    std::fread(addData2.data(), 1, addData2.size(), fh);
+                    read_ok2 = true;
+                }
+                std::fclose(fh);
+            }
+        }
+
+        // Build .am path: replace the last extension in dest with .am
+        std::string amDest;
+        {
+            auto sl  = dest.rfind('/');
+            auto bs  = dest.rfind('\\');
+            std::size_t lastSlash;
+            if      (sl == std::string::npos && bs == std::string::npos) lastSlash = std::string::npos;
+            else if (sl == std::string::npos) lastSlash = bs;
+            else if (bs == std::string::npos) lastSlash = sl;
+            else lastSlash = (sl > bs) ? sl : bs;
+            auto dot = dest.rfind('.');
+            if (dot == std::string::npos || (lastSlash != std::string::npos && dot < lastSlash))
+                amDest = dest + ".am";
+            else
+                amDest = dest.substr(0, dot) + ".am";
+        }
+        std::vector<std::uint8_t> amData;
+        bool am_read_ok = false;
+        {
+            std::FILE* fh = std::fopen(amDest.c_str(), "rb");
+            if (fh) {
+                std::fseek(fh, 0, SEEK_END);
+                long sz = std::ftell(fh);
+                std::rewind(fh);
+                if (sz > 0) {
+                    amData.resize(static_cast<std::size_t>(sz));
+                    std::fread(amData.data(), 1, amData.size(), fh);
+                    am_read_ok = true;
+                }
+                std::fclose(fh);
+            }
+        }
+
+        if (read_ok2 && am_read_ok && addData2.size() >= 40) {
+            auto read_u32_fn = [](const std::uint8_t* p) -> std::uint32_t {
+                return static_cast<std::uint32_t>(p[0])
+                     | (static_cast<std::uint32_t>(p[1]) <<  8)
+                     | (static_cast<std::uint32_t>(p[2]) << 16)
+                     | (static_cast<std::uint32_t>(p[3]) << 24);
+            };
+            auto write_u32_fn = [](std::uint8_t* p, std::uint32_t v) {
+                p[0] = static_cast<std::uint8_t>(v & 0xFF);
+                p[1] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
+                p[2] = static_cast<std::uint8_t>((v >> 16) & 0xFF);
+                p[3] = static_cast<std::uint8_t>((v >> 24) & 0xFF);
+            };
+
+            std::uint32_t hdrLen = read_u32_fn(addData2.data() + 0x20);
+            std::uint32_t recLen = read_u32_fn(addData2.data() + 0x24);
+            bool am_modified = false;
+
+            if (recLen > 0 && hdrLen < addData2.size()) {
+                std::uint32_t total2 = static_cast<std::uint32_t>(
+                    (addData2.size() - hdrLen) / recLen);
+
+                for (std::uint32_t i = 0; i < total2; ++i) {
+                    std::uint8_t* base = addData2.data() + hdrLen + i * recLen;
+                    if (base[0] != 0x04) continue;
+
+                    char objType[11] = {};
+                    std::memcpy(objType, base + 13, 10);
+                    for (int k = 9; k >= 0 && (objType[k] == ' ' || objType[k] == '\0'); --k)
+                        objType[k] = '\0';
+                    if (std::strcmp(objType, "StoredProc") != 0 &&
+                        std::strcmp(objType, "Procedure")  != 0) continue;
+
+                    char objName[201] = {};
+                    std::memcpy(objName, base + 23, 200);
+                    for (int k = 199; k >= 0 && (objName[k] == ' ' || objName[k] == '\0'); --k)
+                        objName[k] = '\0';
+
+                    // Find matching ProcParams entry
+                    const ProcParams* pp = nullptr;
+                    for (const auto& p2 : proc_params) {
+#ifdef _WIN32
+                        if (_stricmp(p2.name.c_str(), objName) == 0) { pp = &p2; break; }
+#else
+                        if (strcasecmp(p2.name.c_str(), objName) == 0) { pp = &p2; break; }
+#endif
+                    }
+                    if (!pp) continue;
+
+                    // Read am_block and am_len from more_property [498..505]
+                    std::uint32_t amBlock = read_u32_fn(base + 498);
+                    std::uint32_t amLen   = read_u32_fn(base + 502);
+                    if (amBlock == 0 || amLen == 0) continue;
+
+                    std::size_t amOff = static_cast<std::size_t>(amBlock) * 8;
+                    if (amOff >= amData.size()) continue;
+                    std::size_t amEnd = (std::min)(amOff + amLen, amData.size());
+
+                    // Find first NUL in the .am block (end of SQL body)
+                    std::size_t nulPos = amEnd; // not found sentinel
+                    for (std::size_t j = amOff; j < amEnd; ++j) {
+                        if (amData[j] == 0) { nulPos = j; break; }
+                    }
+                    if (nulPos == amEnd) continue; // no NUL → skip
+
+                    // Write input_params\0output_params\0 after the NUL
+                    std::string tail;
+                    tail += pp->input_params;
+                    tail += '\0';
+                    tail += pp->output_params;
+                    tail += '\0';
+
+                    std::size_t writeOff = nulPos + 1; // byte after the SQL-body NUL
+                    std::size_t avail    = amEnd - writeOff;
+                    if (tail.size() > avail) {
+                        // Params don't fit; extend .am buffer and update am_len
+                        std::size_t newEnd = writeOff + tail.size();
+                        if (newEnd > amData.size()) amData.resize(newEnd, 0);
+                        std::uint32_t newLen = static_cast<std::uint32_t>(
+                            (newEnd - amOff));
+                        write_u32_fn(base + 502, newLen);
+                    }
+                    std::memcpy(amData.data() + writeOff, tail.data(), tail.size());
+                    am_modified = true;
+                    ++written_proc_params;
+                }
+            }
+
+            if (am_modified) {
+                // Write patched .add back (am_len fields may have changed)
+                {
+                    std::FILE* fh = std::fopen(dest.c_str(), "wb");
+                    if (fh) {
+                        std::fwrite(addData2.data(), 1, addData2.size(), fh);
+                        std::fclose(fh);
+                    } else {
+                        warnings.push_back("Cannot write patched .add for SP params.");
+                    }
+                }
+                // Write patched .am
+                {
+                    std::FILE* fh = std::fopen(amDest.c_str(), "wb");
+                    if (fh) {
+                        std::fwrite(amData.data(), 1, amData.size(), fh);
+                        std::fclose(fh);
+                    } else {
+                        warnings.push_back("Cannot write patched .am for SP params.");
+                    }
+                }
+            }
+        } else if (!am_read_ok) {
+            warnings.push_back("Cannot read dest .am for SP param patch — params not written.");
         }
     }
 

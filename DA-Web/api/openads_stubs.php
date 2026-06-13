@@ -72,10 +72,20 @@ if (!extension_loaded('openads') && !class_exists('AdsConnection')) {
         // Index property codes: ADS_DD_INDEX_UNIQUE=408, ADS_DD_INDEX_DESCENDING=407, ADS_DD_INDEX_EXPR=401
         public function getIndexProperty(string $table, string $indexName, int $property): string {}
         public function setIndexProperty(string $table, string $indexName, int $property, string $value): void {}
-        // Trigger property codes: 502=event 1402=timing 503=container 505=enabled 506=priority 507=comment
+        // Trigger property codes: 1401=event_mask(u32) 1402=timing(u32) 1404=body(container) 1405=proc_name 1408=table
         public function getTriggerProperty(string $name, int $property): string {}
         public function setTriggerProperty(string $name, int $property, string $value): void {}
         public function createTrigger(string $name, string $table, int $type, string $container = '', string $procedure = '', int $priority = 1): void {}
         public function dropTrigger(string $name): void {}
+        // Proc property codes: 800=input_params 801=output_params 802=container 803=body 805=comment
+        public function getProcProperty(string $name, int $property): string {}
+        public function setProcProperty(string $name, int $property, string $value): void {}
+        public function createProcedure(string $name, string $container, string $procedure, string $input = '', string $output = '', string $comment = ''): void {}
+        public function dropProcedure(string $name): void {}
+        // Function property codes: 700=body 701=input_params 702=return_type 703=container 704=comment
+        public function getFunctionProperty(string $name, int $property): string {}
+        public function setFunctionProperty(string $name, int $property, string $value): void {}
+        public function createFunction(string $name, string $container, string $implementation, string $retType = '', string $input = '', string $comment = ''): void {}
+        public function dropFunction(string $name): void {}
     }
 }

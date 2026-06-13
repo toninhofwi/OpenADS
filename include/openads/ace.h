@@ -440,6 +440,25 @@ UNSIGNED32 AdsDDSetProcProperty      (ADSHANDLE   hConnect,
                                       UNSIGNED16  usPropertyID,
                                       void*       pvProperty,
                                       UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDCreateFunction         (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED8*  pucContainer,
+                                      UNSIGNED8*  pucImplementation,
+                                      UNSIGNED8*  pucRetType,
+                                      UNSIGNED8*  pucInParams,
+                                      UNSIGNED8*  pucComment);
+UNSIGNED32 AdsDDDropFunction           (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName);
+UNSIGNED32 AdsDDGetFunctionProperty    (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetFunctionProperty    (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
 UNSIGNED32 AdsDDGetRefIntegrityProperty(ADSHANDLE   hConnect,
                                       UNSIGNED8*  pucName,
                                       UNSIGNED16  usPropertyID,

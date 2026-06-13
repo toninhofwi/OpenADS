@@ -6,6 +6,7 @@
 header('Content-Type: application/json');
 session_start();
 require_once __DIR__ . '/common.php';
+require_once __DIR__ . '/openads_stubs.php';
 
 $ddName = trim($_GET['dd']    ?? '');
 $table  = trim($_GET['table'] ?? '');
@@ -27,10 +28,6 @@ $c    = $_SESSION['connections'][$ddName];
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
-
-// ── binary .add helpers ─────────────────────────────────────────────────────
-function le16b(string $d, int $o): int { return unpack('v', substr($d, $o, 2))[1]; }
-function le32b(string $d, int $o): int { return unpack('V', substr($d, $o, 4))[1]; }
 
 // ── DBF/ADT binary header field reader ─────────────────────────────────────
 // Returns array of ['Field', 'Type' (letter), 'Size', 'Dec'] from a .dbf or .adt file.
@@ -330,79 +327,33 @@ try {
         }
     }
 
-    // ── TRIGGERS — read directly from .add/.am binary for full body + correct timing ──
+    // ── TRIGGERS — via AdsDictionary API (full body, correct timing) ─────────
     else {
-        $addPath = $c['path'];
-        $amPath  = preg_replace('/\.[^.\/\\\\]+$/', '.am', $addPath);
-        $binData = @file_get_contents($addPath);
-        $am      = is_file($amPath) ? (@file_get_contents($amPath) ?: '') : '';
+        $dict2 = AdsDictionary::fromConnection($conn);
+        $stmt2 = $conn->query(
+            "SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '" .
+            addslashes($table) . "'"
+        );
+        $trigNames = [];
+        while ($trow = $stmt2->fetchAssoc()) $trigNames[] = $trow['TRIG_NAME'];
+        $stmt2->close();
 
-        if ($binData !== false) {
-            $hdrLen2 = le32b($binData, 0x20);
-            $recLen2 = le32b($binData, 0x24);
-            $total2  = $recLen2 > 0 ? intdiv(strlen($binData) - $hdrLen2, $recLen2) : 0;
-
-            // Build id→alias map
-            $idToName2 = [];
-            for ($j = 0; $j < $total2; $j++) {
-                $base2 = $hdrLen2 + $j * $recLen2;
-                if (ord($binData[$base2]) !== 0x04) continue;
-                $oid2 = le32b($binData, $base2 + 5);
-                $nm2  = rtrim(substr($binData, $base2 + 23, 200), " \0");
-                if ($nm2 !== '') $idToName2[$oid2] = $nm2;
-            }
-
-            for ($j = 0; $j < $total2; $j++) {
-                $base2 = $hdrLen2 + $j * $recLen2;
-                if (ord($binData[$base2]) !== 0x04) continue;
-                $ot2 = rtrim(substr($binData, $base2 + 13, 10), " \0");
-                if ($ot2 !== 'Trigger') continue;
-                $trigName2  = rtrim(substr($binData, $base2 + 23, 200), " \0");
-                $parentId2  = le32b($binData, $base2 + 9);
-                $tableAlias = $idToName2[$parentId2] ?? '';
-                if (strcasecmp($tableAlias, $table) !== 0) continue;
-
-                $PA2   = $base2 + 225;
-                $event2  = le32b($binData, $PA2 + 0);
-                $timing2 = le16b($binData, $PA2 + 6);
-
-                // Inline body: bytes 18+ of the property area
-                $inlineStart = $PA2 + 18;
-                $inlineEnd   = $PA2 + 273;
-                if ($inlineEnd > strlen($binData)) $inlineEnd = strlen($binData);
-                $inline2 = substr($binData, $inlineStart, $inlineEnd - $inlineStart);
-                $nul2 = strpos($inline2, "\0");
-                if ($nul2 !== false) $inline2 = substr($inline2, 0, $nul2);
-
-                // .am continuation
-                $amBlock2 = le32b($binData, $base2 + 498);
-                $amLen2   = le32b($binData, $base2 + 502);
-                $amPart   = '';
-                if ($amBlock2 > 0 && $amLen2 > 0 && $am !== '') {
-                    $amOff2 = $amBlock2 * 8;
-                    $amPart = substr($am, $amOff2, $amLen2);
-                    $l2 = strlen($amPart);
-                    while ($l2 > 0) {
-                        $b2 = ord($amPart[$l2 - 1]);
-                        if (($b2 >= 0x20 && $b2 <= 0x7E) || $b2 === 0x09 || $b2 === 0x0A || $b2 === 0x0D) break;
-                        $l2--;
-                    }
-                    $amPart = substr($amPart, 0, $l2);
-                }
-
-                $fullBody = rtrim($inline2 . $amPart);
-                $timingStr2 = match($timing2) { 1=>'BEFORE', 2=>'INSTEAD OF', 4=>'AFTER', default=>'' };
-                $eventStr2  = match($event2)  { 1=>'INSERT', 2=>'UPDATE', 3=>'DELETE', default=>'' };
-
-                $rows[] = [
-                    'Name'     => $trigName2,
-                    'Timing'   => $timingStr2,
-                    'Event'    => $eventStr2,
-                    'Enabled'  => 'Yes',
-                    'Priority' => 1,
-                    'Body'     => $fullBody,
-                ];
-            }
+        foreach ($trigNames as $trigName2) {
+            $evRaw   = $dict2->getTriggerProperty($trigName2, 1401);
+            $timRaw  = $dict2->getTriggerProperty($trigName2, 1402);
+            $body2   = $dict2->getTriggerProperty($trigName2, 1404);
+            $event2  = strlen($evRaw)  >= 4 ? unpack('V', substr($evRaw,  0, 4))[1] : 0;
+            $timing2 = strlen($timRaw) >= 4 ? unpack('V', substr($timRaw, 0, 4))[1] : 0;
+            $timingStr2 = match($timing2) { 1=>'BEFORE', 2=>'INSTEAD OF', 4=>'AFTER', default=>'' };
+            $eventStr2  = match($event2)  { 1=>'INSERT', 2=>'UPDATE', 3=>'DELETE', default=>'' };
+            $rows[] = [
+                'Name'     => $trigName2,
+                'Timing'   => $timingStr2,
+                'Event'    => $eventStr2,
+                'Enabled'  => 'Yes',
+                'Priority' => 1,
+                'Body'     => rtrim($body2),
+            ];
         }
         usort($rows, fn($a, $b) => strcmp($a['Name'], $b['Name']));
     }

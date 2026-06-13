@@ -481,6 +481,39 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_dictionary_set_trigger_prope
 ZEND_END_ARG_INFO()
 
 /* -----------------------------------------------------------------------
+ * AdsDictionary — user-defined functions
+ * --------------------------------------------------------------------- */
+
+/* createFunction(string $name, string $container, string $implementation,
+ *                string $retType="", string $input="", string $comment=""): void */
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_dictionary_create_function, 0, 3, IS_VOID, 0)
+    ZEND_ARG_TYPE_INFO(0, name,           IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO(0, container,      IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO(0, implementation, IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, retType, IS_STRING, 0, "\"\"")
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, input,   IS_STRING, 0, "\"\"")
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, comment, IS_STRING, 0, "\"\"")
+ZEND_END_ARG_INFO()
+
+/* dropFunction(string $name): void */
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_dictionary_drop_function, 0, 1, IS_VOID, 0)
+    ZEND_ARG_TYPE_INFO(0, name, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+/* getFunctionProperty(string $name, int $property): string */
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_dictionary_get_function_property, 0, 2, IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO(0, name,     IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO(0, property, IS_LONG,   0)
+ZEND_END_ARG_INFO()
+
+/* setFunctionProperty(string $name, int $property, string $value): void */
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_dictionary_set_function_property, 0, 3, IS_VOID, 0)
+    ZEND_ARG_TYPE_INFO(0, name,     IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO(0, property, IS_LONG,   0)
+    ZEND_ARG_TYPE_INFO(0, value,    IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+/* -----------------------------------------------------------------------
  * AdsDictionary — referential integrity
  * --------------------------------------------------------------------- */
 

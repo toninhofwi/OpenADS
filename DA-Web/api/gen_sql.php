@@ -10,6 +10,7 @@
 header('Content-Type: application/json');
 session_start();
 require_once __DIR__ . '/common.php';
+require_once __DIR__ . '/openads_stubs.php';
 
 $ddName = trim($_GET['dd']    ?? '');
 $table  = trim($_GET['table'] ?? '');
@@ -30,76 +31,29 @@ $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 
-// ── binary .add helpers ─────────────────────────────────────────────────────
-function gble16(string $d, int $o): int { return unpack('v', substr($d, $o, 2))[1]; }
-function gble32(string $d, int $o): int { return unpack('V', substr($d, $o, 4))[1]; }
-
-function readTriggersFromBinary(string $addPath, string $table): array {
-    $data = @file_get_contents($addPath);
-    if ($data === false) return [];
-    $amPath = preg_replace('/\.[^.\/\\\\]+$/', '.am', $addPath);
-    $am = is_file($amPath) ? (@file_get_contents($amPath) ?: '') : '';
-
-    $hdrLen = gble32($data, 0x20);
-    $recLen = gble32($data, 0x24);
-    if ($recLen === 0) return [];
-    $total = intdiv(strlen($data) - $hdrLen, $recLen);
-
-    $idToName = [];
-    for ($i = 0; $i < $total; $i++) {
-        $base = $hdrLen + $i * $recLen;
-        if (ord($data[$base]) !== 0x04) continue;
-        $oid = gble32($data, $base + 5);
-        $nm  = rtrim(substr($data, $base + 23, 200), " \0");
-        if ($nm !== '') $idToName[$oid] = $nm;
-    }
+// ── ADS trigger helper (returns trigger list via API) ────────────────────────
+function readTriggers(AdsConnection $conn, AdsDictionary $dict2, string $table): array {
+    $stmt = $conn->query(
+        "SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '" .
+        addslashes($table) . "'"
+    );
+    $names = [];
+    while ($row = $stmt->fetchAssoc()) $names[] = $row['TRIG_NAME'];
+    $stmt->close();
 
     $trigs = [];
-    for ($i = 0; $i < $total; $i++) {
-        $base = $hdrLen + $i * $recLen;
-        if (ord($data[$base]) !== 0x04) continue;
-        $ot = rtrim(substr($data, $base + 13, 10), " \0");
-        if ($ot !== 'Trigger') continue;
-        $trigName = rtrim(substr($data, $base + 23, 200), " \0");
-        $parentId = gble32($data, $base + 9);
-        if (strcasecmp($idToName[$parentId] ?? '', $table) !== 0) continue;
-
-        $PA     = $base + 225;
-        $event  = gble32($data, $PA + 0);
-        $timing = gble16($data, $PA + 6);
-
-        $inlineStart = $PA + 18;
-        $inlineEnd   = min($PA + 273, strlen($data));
-        $inline = substr($data, $inlineStart, $inlineEnd - $inlineStart);
-        $nul = strpos($inline, "\0");
-        if ($nul !== false) $inline = substr($inline, 0, $nul);
-
-        $amBlock = gble32($data, $base + 498);
-        $amLen2  = gble32($data, $base + 502);
-        $amPart  = '';
-        if ($amBlock > 0 && $amLen2 > 0 && $am !== '') {
-            $amOff  = $amBlock * 8;
-            $amPart = substr($am, $amOff, $amLen2);
-            $l = strlen($amPart);
-            while ($l > 0) {
-                $b = ord($amPart[$l - 1]);
-                if (($b >= 0x20 && $b <= 0x7E) || $b === 0x09 || $b === 0x0A || $b === 0x0D) break;
-                $l--;
-            }
-            $amPart = substr($amPart, 0, $l);
-        }
-
-        $timingStr = match($timing) { 1=>'BEFORE', 2=>'INSTEAD OF', 4=>'AFTER', default=>'' };
-        $eventStr  = match($event)  { 1=>'INSERT', 2=>'UPDATE', 3=>'DELETE', default=>'' };
-        $fullBody  = rtrim($inline . $amPart);
-
+    foreach ($names as $trigName) {
+        $evRaw   = $dict2->getTriggerProperty($trigName, 1401);
+        $timRaw  = $dict2->getTriggerProperty($trigName, 1402);
+        $body    = $dict2->getTriggerProperty($trigName, 1404);
+        $event   = strlen($evRaw)  >= 4 ? unpack('V', substr($evRaw,  0, 4))[1] : 0;
+        $timing  = strlen($timRaw) >= 4 ? unpack('V', substr($timRaw, 0, 4))[1] : 0;
         $trigs[] = [
             'name'    => $trigName,
-            'timing'  => $timingStr,
-            'event'   => $eventStr,
-            'body'    => $fullBody,
+            'timing'  => match($timing) { 1=>'BEFORE', 2=>'INSTEAD OF', 4=>'AFTER', default=>'' },
+            'event'   => match($event)  { 1=>'INSERT', 2=>'UPDATE', 3=>'DELETE', default=>'' },
+            'body'    => rtrim($body),
             'priority'=> 1,
-            'noMemos' => true,
         ];
     }
     return $trigs;
@@ -263,8 +217,9 @@ try {
         }
     } catch (Throwable $e) {}
 
-    // ── 5. Triggers — read from binary .add/.am for correct timing + full body ──
-    $trigs = readTriggersFromBinary($c['path'], $table);
+    // ── 5. Triggers — via AdsDictionary API ────────────────────────────────────
+    $dictTrig = AdsDictionary::fromConnection($conn);
+    $trigs    = readTriggers($conn, $dictTrig, $table);
     usort($trigs, fn($a, $b) => strcmp($a['name'], $b['name']));
 
     foreach ($trigs as $tr) {
@@ -273,7 +228,6 @@ try {
         $event  = $tr['event'];
         $body   = $tr['body'];
         $prio   = $tr['priority'];
-        $noMemos = $tr['noMemos'] ? "\n   NO MEMOS " : '';
 
         $lines[] = "CREATE TRIGGER [$name]";
         $lines[] = "   ON $table";
@@ -285,7 +239,7 @@ try {
         } else {
             $lines[] = "   -- (body unavailable)";
         }
-        $lines[] = "END $noMemos";
+        $lines[] = "END";
         $lines[] = "   PRIORITY $prio;";
         $lines[] = '';
         $lines[] = '';
