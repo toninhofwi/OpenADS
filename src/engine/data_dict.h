@@ -181,8 +181,30 @@ public:
     };
     util::Result<void> create_trigger(const TriggerEntry& e);
     util::Result<void> drop_trigger  (const std::string& name);
-    bool has_trigger(const std::string& name) const noexcept {
-        return triggers_.find(name) != triggers_.end();
+
+    // Look up a trigger by composite "table::name" key or by plain name.
+    // Returns nullptr if not found.
+    const TriggerEntry* find_trigger(const std::string& key) const noexcept {
+        auto it = triggers_.find(key);
+        if (it != triggers_.end()) return &it->second;
+        // If not a composite key, scan for first match by plain name.
+        if (key.find("::") == std::string::npos) {
+            for (const auto& kv : triggers_)
+                if (kv.second.name == key) return &kv.second;
+        }
+        return nullptr;
+    }
+    TriggerEntry* find_trigger(const std::string& key) noexcept {
+        auto it = triggers_.find(key);
+        if (it != triggers_.end()) return &it->second;
+        if (key.find("::") == std::string::npos) {
+            for (auto& kv : triggers_)
+                if (kv.second.name == key) return &kv.second;
+        }
+        return nullptr;
+    }
+    bool has_trigger(const std::string& key) const noexcept {
+        return find_trigger(key) != nullptr;
     }
     const std::unordered_map<std::string, TriggerEntry>&
         triggers() const noexcept { return triggers_; }

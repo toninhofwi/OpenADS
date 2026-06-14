@@ -4966,11 +4966,12 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
     if (dd == nullptr) { *pusLen = 0; return ok(); }
     auto name = openads::abi::to_internal(pucName, 0);
-    if (!dd->has_trigger(name)) {
+    const auto* ep = dd->find_trigger(name);
+    if (ep == nullptr) {
         *pusLen = 0;
         return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
     }
-    const auto& e = dd->triggers().at(name);
+    const auto& e = *ep;
 
     auto put_str = [&](const std::string& s) -> UNSIGNED32 {
         UNSIGNED16 n = static_cast<UNSIGNED16>(std::min<std::size_t>(s.size(), cap));
@@ -5018,9 +5019,10 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
-    if (!dd->has_trigger(name))
+    auto* ep = dd->find_trigger(name);
+    if (ep == nullptr)
         return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
-    auto& e = dd->triggers().at(name);
+    auto& e = *ep;
     std::string val = pBuf && usLen > 0
         ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
     // Helper: parse val as uint32 (numeric string or 4-byte LE binary).
@@ -7105,10 +7107,10 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
     namespace fs = std::filesystem;
 
     struct Col {
-        const char*   colname;
-        char          type;      // 'C', 'N', 'L'
-        std::uint8_t  length;
-        std::uint8_t  decimals;
+        const char*    colname;
+        char           type;      // 'C', 'N', 'L'
+        std::uint16_t  length;
+        std::uint8_t   decimals;
     };
 
     // Builds a temporary ADT file (full-length field names, no 10-char truncation).
@@ -7584,7 +7586,7 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
             {"EVENT_MASK",   'N',  10, 0},
             {"TIMING",       'C',  15, 0},
             {"EVENT",        'C',  20, 0},
-            {"CONTAINER",    'C', 250, 0},
+            {"CONTAINER",    'C', 4096, 0},
             {"PROC",         'C', 200, 0},
             {"PRIORITY",     'N',  10, 0},
             {"ENABLED",      'L',   1, 0},

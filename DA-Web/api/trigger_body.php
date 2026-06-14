@@ -54,18 +54,13 @@ try {
 
     $triggers = [];
     foreach ($names as $trigName) {
+        // Use composite "table::name" key so same-named triggers on different tables are distinct.
+        $trigKey = $table . '::' . $trigName;
         // event_mask, timing, and options come back as 4-byte LE integers
-        $evRaw     = $dict->getTriggerProperty($trigName, 1401);
-        $timRaw    = $dict->getTriggerProperty($trigName, 1402);
-        $optsRaw   = $dict->getTriggerProperty($trigName, 1407);
-        $body      = $dict->getTriggerProperty($trigName, 1404);
-        $procBody  = $dict->getTriggerProperty($trigName, 1405);
-        // For NUL-delimited pmsys-imported triggers: SQL body is in proc (1405),
-        // container (1404) holds only the type code "1".  Use proc if container
-        // looks like a type indicator (length ≤ 4 and purely numeric/empty).
-        if (strlen(trim($body)) <= 4 && preg_match('/^[0-9]*$/', trim($body)) && strlen($procBody) > 4) {
-            $body = $procBody;
-        }
+        $evRaw     = $dict->getTriggerProperty($trigKey, 1401);
+        $timRaw    = $dict->getTriggerProperty($trigKey, 1402);
+        $optsRaw   = $dict->getTriggerProperty($trigKey, 1407);
+        $body      = $dict->getTriggerProperty($trigKey, 1404);
 
         $eventMask = strlen($evRaw)   >= 4 ? unpack('V', substr($evRaw,   0, 4))[1] : 0;
         $timing    = strlen($timRaw)  >= 4 ? unpack('V', substr($timRaw,  0, 4))[1] : 0;

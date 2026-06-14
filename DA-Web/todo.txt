@@ -19,6 +19,21 @@ how to use this tool and what it does look at readme.md on f:\Openads\tools\impo
 I remind you that you can test what out should look like by connecting with SAP ADS comparing results with those after connecting with 
 OpenADS. 
 
+[DONE] OpenAds did not show complete trigger body.
+Fixed: Three root causes fixed in engine (data_dict.cpp) and import tool:
+1. SAP binary format: body read from buf[TPS+18] directly (bypassing plen=4 limit).
+2. triggers_ map collision: changed key to composite "table::name" to avoid same-named
+   triggers on different tables overwriting each other.
+3. join_nul 273-byte overflow: long bodies (>258 chars) now stored in .am with empty
+   inline body; append_am reads them back. Trailing-trim deferred to after .am append.
+Also: system.triggers CONTAINER column widened to 4096; trigger_body.php and
+save_trigger.php pass composite table::name keys to getTriggerProperty/setTriggerProperty.
+Test: tests/tools/get_sap_triggers.php comparison shows 5/5 triggers pass (6th skipped
+due to SAP PHP extension buffer overflow on the 2107-char Create Recurrance body). 
+
+Most items below have been solved.  you can mark them as [done].
+
+
 **Triggers can receive __old and __new cursors with corresponding state of the record before and after an update.  In case of insert only __new cursor
 option.  This is an option on SAP ADS.  We need to provide a way on daWeb when defining or modifying a trigger to check or or off these options.
 The options are:  include curosrs __new and __old, include memo and blob fields, use implicit transactions to maintain data integrity. 

@@ -573,6 +573,8 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                     if (parts.size() > 5) e.procedure = parts[5];
                     if (parts.size() > 6) e.comment   = parts[6];
                 }
+                // Long bodies are written to .am; append any continuation.
+                append_am(e.container, rec.more_property);
             } else {
                 // SAP binary .add format for Trigger records (rec_len=524):
                 //   Property area (273 bytes at base+225..base+497):
@@ -593,22 +595,44 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                         static_cast<uint8_t>(rec.property[6]) |
                         (static_cast<uint8_t>(rec.property[7]) << 8));
                 }
-                if (!rec.prop_null && rec.property.size() >= 20) {
-                    std::string body = rec.property.substr(18);
-                    auto nul = body.find('\0');
-                    if (nul != std::string::npos) body.resize(nul);
-                    auto first = body.find_first_not_of(" \t\r\n");
-                    if (first != std::string::npos) body = body.substr(first);
-                    auto last  = body.find_last_not_of(" \t\r\n");
-                    if (last  != std::string::npos) body.resize(last + 1);
-                    e.container = std::move(body);
+                // SAP binary triggers: plen covers only the first few fields (event_mask,
+                // timing) so rec.property may be only 4-8 bytes.  The inline SQL body
+                // at property[18..272] must be read directly from buf[] like Relation does.
+                //   [16..17] = LE uint16 inline body length
+                //   [18..272] = up to 255 bytes of SQL text
+                {
+                    const std::size_t TPS = base + 225;
+                    const std::size_t TPL = 273;
+                    if (TPS + TPL <= buf.size()) {
+                        uint16_t body_len = static_cast<uint16_t>(
+                            static_cast<uint8_t>(buf[TPS + 16]) |
+                            (static_cast<uint8_t>(buf[TPS + 17]) << 8));
+                        std::size_t read_len = (body_len > 0)
+                            ? std::min<std::size_t>(body_len, TPL - 18)
+                            : (TPL - 18);
+                        std::string body = buf.substr(TPS + 18, read_len);
+                        // Trim leading whitespace and NUL padding now; trailing trim
+                        // is deferred until after any .am continuation is appended so
+                        // we don't accidentally eat functional spaces at the boundary.
+                        auto nul = body.find('\0');
+                        if (nul != std::string::npos) body.resize(nul);
+                        auto first = body.find_first_not_of(" \t\r\n");
+                        if (first != std::string::npos) body = body.substr(first);
+                        e.container = std::move(body);
+                    }
                 }
-                // Append .am continuation for SAP binary triggers
+                // Append .am continuation (remainder when body > 255 bytes)
                 append_am(e.container, rec.more_property);
+                // Trim trailing whitespace/SAP alignment padding from the complete body.
+                {
+                    auto last = e.container.find_last_not_of(" \t\r\n");
+                    if (last != std::string::npos) e.container.resize(last + 1);
+                    else e.container.clear();
+                }
                 // SAP binary format does not store an enabled flag; default (true) stands.
             }
 
-            triggers_[e.name] = std::move(e);
+            triggers_[e.table_alias + "::" + e.name] = std::move(e);
 
         } else if (rec.obj_type == "Relation" && !rec.obj_name.empty() &&
                    !rec.prop_null) {
@@ -1273,7 +1297,11 @@ util::Result<void> DataDict::load_() {
             e.procedure = parts[6];
             e.comment   = parts[7];
             if (!parts[8].empty()) try { e.options = static_cast<std::uint32_t>(std::stoul(parts[8])); } catch (...) {}
-            if (!name.empty()) triggers_[name] = std::move(e);
+            if (!name.empty()) {
+                std::string key = !e.table_alias.empty()
+                                ? e.table_alias + "::" + name : name;
+                triggers_[key] = std::move(e);
+            }
 
         } else if (starts_with(line, "PROC ")) {
             // PROC <name>=<container>;<procedure>;<input>;<output>;<comment>
@@ -2011,7 +2039,7 @@ DataDict::get_field_property(const std::string& table,
 util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
     if (e.name.empty() || e.table_alias.empty())
         return util::Error{5000, 0, "DD trigger name/table empty", ""};
-    triggers_[e.name] = e;
+    triggers_[e.table_alias + "::" + e.name] = e;
     if (binary_format_) {
         auto prop = join_nul({e.table_alias, std::to_string(e.event_mask),
                                std::to_string(e.timing),
@@ -2019,8 +2047,17 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
                                e.enabled ? "1" : "0",
                                e.container, e.procedure, e.comment,
                                std::to_string(e.options)});
+        // Find the parent table's obj_id for disambiguation.
+        uint32_t tbl_id = 0;
+        for (const auto& br : binary_recs_) {
+            if (br.active && (br.obj_type == "Table" || br.obj_type == "TableAlias") &&
+                br.obj_name == e.table_alias) {
+                tbl_id = br.obj_id; break;
+            }
+        }
         for (auto& r : binary_recs_) {
-            if (r.active && r.obj_type == "Trigger" && r.obj_name == e.name) {
+            if (r.active && r.obj_type == "Trigger" && r.obj_name == e.name &&
+                (tbl_id == 0 || r.parent_id == tbl_id)) {
                 r.property = prop; r.prop_null = false;
                 return save();
             }
@@ -2040,10 +2077,38 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
 }
 
 util::Result<void> DataDict::drop_trigger(const std::string& name) {
-    triggers_.erase(name);
+    // Accept both composite "table::name" and plain name.
+    std::string plain_name = name;
+    std::string tbl_alias;
+    auto sep = name.find("::");
+    if (sep != std::string::npos) {
+        tbl_alias  = name.substr(0, sep);
+        plain_name = name.substr(sep + 2);
+    }
+    // Erase from map — try composite key first, then plain name scan.
+    auto comp_key = tbl_alias.empty() ? name : tbl_alias + "::" + plain_name;
+    if (triggers_.count(comp_key)) {
+        triggers_.erase(comp_key);
+    } else if (!tbl_alias.empty()) {
+        triggers_.erase(name);  // fallback
+    } else {
+        for (auto it = triggers_.begin(); it != triggers_.end(); ++it) {
+            if (it->second.name == plain_name) { triggers_.erase(it); break; }
+        }
+    }
     if (binary_format_) {
+        uint32_t tbl_id = 0;
+        if (!tbl_alias.empty()) {
+            for (const auto& br : binary_recs_) {
+                if (br.active && (br.obj_type == "Table" || br.obj_type == "TableAlias") &&
+                    br.obj_name == tbl_alias) {
+                    tbl_id = br.obj_id; break;
+                }
+            }
+        }
         for (auto& r : binary_recs_) {
-            if (r.active && r.obj_type == "Trigger" && r.obj_name == name) {
+            if (r.active && r.obj_type == "Trigger" && r.obj_name == plain_name &&
+                (tbl_id == 0 || r.parent_id == tbl_id)) {
                 r.active = false; break;
             }
         }
@@ -2272,6 +2337,14 @@ util::Result<void> DataDict::save_add_binary_() {
     }
     bool am_dirty = false;
 
+    // Build obj_id → obj_name map for Table records (used for trigger disambiguation).
+    std::unordered_map<uint32_t, std::string> rec_id_to_name;
+    for (const auto& br : binary_recs_) {
+        if (br.active && (br.obj_type == "Table" || br.obj_type == "TableAlias" ||
+                          br.obj_type == "Database"))
+            rec_id_to_name[br.obj_id] = br.obj_name;
+    }
+
     // Regenerate property fields for mutable object types so that
     // AdsDDSet*Property mutations are reflected even without re-creating.
     for (auto& r : binary_recs_) {
@@ -2357,15 +2430,39 @@ util::Result<void> DataDict::save_add_binary_() {
                 am_dirty = true;
             }
         } else if (r.obj_type == "Trigger") {
-            auto it = triggers_.find(r.obj_name);
+            // Resolve parent table alias to form composite key.
+            std::string tbl_alias;
+            {
+                auto pit = rec_id_to_name.find(r.parent_id);
+                if (pit != rec_id_to_name.end()) tbl_alias = pit->second;
+            }
+            std::string comp_key = tbl_alias.empty() ? r.obj_name
+                                                     : tbl_alias + "::" + r.obj_name;
+            auto it = triggers_.find(comp_key);
+            if (it == triggers_.end()) it = triggers_.find(r.obj_name);  // plain-name fallback
             if (it != triggers_.end()) {
                 const auto& e = it->second;
-                r.property  = join_nul({e.table_alias, std::to_string(e.event_mask),
-                                         std::to_string(e.timing),
-                                         std::to_string(e.priority),
-                                         e.enabled ? "1" : "0",
-                                         e.container, e.procedure, e.comment,
-                                         std::to_string(e.options)});
+                // Try to fit body inline; if it would cap at 273, overflow to .am.
+                auto prop_try = join_nul({e.table_alias, std::to_string(e.event_mask),
+                                          std::to_string(e.timing),
+                                          std::to_string(e.priority),
+                                          e.enabled ? "1" : "0",
+                                          e.container, e.procedure, e.comment,
+                                          std::to_string(e.options)});
+                if (prop_try.size() < 273) {
+                    r.property  = std::move(prop_try);
+                } else {
+                    // Body overflows 273-byte limit; store empty body inline, full body in .am.
+                    r.property  = join_nul({e.table_alias, std::to_string(e.event_mask),
+                                            std::to_string(e.timing),
+                                            std::to_string(e.priority),
+                                            e.enabled ? "1" : "0",
+                                            "", e.procedure, e.comment,
+                                            std::to_string(e.options)});
+                    auto res = put_am_block(am_buf, r.more_property, e.container);
+                    set_more_prop_(r.more_property, res.first, res.second);
+                    am_dirty = true;
+                }
                 r.prop_null = false;
             }
         } else if (r.obj_type == "Relation") {
@@ -2563,7 +2660,7 @@ util::Result<void> DataDict::save() {
     }
     for (auto& n : sorted_keys(triggers_)) {
         const auto& e = triggers_.at(n);
-        out += "TRIGGER " + n + "=" + e.table_alias + ";" +
+        out += "TRIGGER " + e.name + "=" + e.table_alias + ";" +
                std::to_string(e.event_mask) + ";" +
                std::to_string(e.timing) + ";" +
                std::to_string(e.priority) + ";" +

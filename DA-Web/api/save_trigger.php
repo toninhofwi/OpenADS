@@ -23,11 +23,15 @@ require_once __DIR__ . '/common.php';
 $body   = json_decode(file_get_contents('php://input'), true) ?? [];
 $ddName  = trim($body['dd']      ?? '');
 $name    = trim($body['name']    ?? '');
+$table   = trim($body['table']   ?? '');   // parent table — used for disambiguation
 $event   = trim($body['event']   ?? '');   // "1" / "2" / "3"
 $timing  = trim($body['timing']  ?? '');   // "1" / "2" / "4"
 $enabled = trim($body['enabled'] ?? 'Yes');
 $sql     = $body['body']    ?? '';          // trigger body SQL
 $options = isset($body['options']) ? (int)$body['options'] : null; // bitmask or null = don't update
+
+// Build composite key for disambiguation when same trigger name exists on multiple tables.
+$trigKey = ($table !== '') ? "$table::$name" : $name;
 
 if (!isset($_SESSION['connections'][$ddName])) {
     http_response_code(401);
@@ -70,13 +74,13 @@ try {
 
     // ADS_DD_TRIGGER_EVENT (502) — event type: 1=INSERT 2=UPDATE 3=DELETE
     if ($event !== '') {
-        $dict->setTriggerProperty($name, 502, eventCode($event));
+        $dict->setTriggerProperty($trigKey, 502, eventCode($event));
         $saved++;
     }
 
     // Code 1402 — timing: 1=BEFORE 2=INSTEAD_OF 4=AFTER
     if ($timing !== '') {
-        $dict->setTriggerProperty($name, 1402, timingCode($timing));
+        $dict->setTriggerProperty($trigKey, 1402, timingCode($timing));
         $saved++;
     }
 
@@ -86,13 +90,13 @@ try {
 
     // ADS_DD_TRIGGER_CONTAINER (503) — SQL body
     if ($sql !== '') {
-        $dict->setTriggerProperty($name, 503, $sql);
+        $dict->setTriggerProperty($trigKey, 503, $sql);
         $saved++;
     }
 
     // Code 1407 — trigger options bitmask
     if ($options !== null) {
-        $dict->setTriggerProperty($name, 1407, (string)$options);
+        $dict->setTriggerProperty($trigKey, 1407, (string)$options);
         $saved++;
     }
 
