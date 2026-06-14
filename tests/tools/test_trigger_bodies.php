@@ -58,11 +58,11 @@ function fetch_trigger_bodies(string $ddPath, string $password, string $connClas
     $bodies = [];
     try {
         $stmt = $conn->query(
-            "SELECT TRIG_NAME, TRIG_BODY FROM system.triggers ORDER BY TRIG_NAME"
+            "SELECT TRIG_NAME, CONTAINER FROM system.triggers ORDER BY TRIG_NAME"
         );
         while ($row = $stmt->fetchAssoc()) {
             $name = trim($row['TRIG_NAME'] ?? '');
-            $body = $row['TRIG_BODY'] ?? '';
+            $body = $row['CONTAINER'] ?? '';
             if ($name !== '') $bodies[$name] = $body;
         }
     } catch (Throwable $e) {

@@ -79,6 +79,123 @@ std::string trim(std::string s) {
     return s.substr(b, e - b);
 }
 
+// ---------------------------------------------------------------------------
+// Minimal JSON helpers for OpenADS proprietary .am storage (no external deps)
+// ---------------------------------------------------------------------------
+
+static std::string json_escape(const std::string& s) {
+    std::string r;
+    r.reserve(s.size() + 4);
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"':  r += "\\\""; break;
+            case '\\': r += "\\\\"; break;
+            case '\n': r += "\\n";  break;
+            case '\r': r += "\\r";  break;
+            case '\t': r += "\\t";  break;
+            default:
+                if (c < 0x20u) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                    r += buf;
+                } else {
+                    r += static_cast<char>(c);
+                }
+                break;
+        }
+    }
+    return r;
+}
+
+static std::string trigger_to_json(const DataDict::TriggerEntry& e) {
+    std::string j;
+    j.reserve(e.container.size() + 200);
+    j += "{\"fmt\":1,\"type\":\"Trigger\"";
+    j += ",\"name\":\"";      j += json_escape(e.name);        j += '"';
+    j += ",\"table\":\"";     j += json_escape(e.table_alias); j += '"';
+    j += ",\"event\":";       j += std::to_string(e.event_mask);
+    j += ",\"timing\":";      j += std::to_string(e.timing);
+    j += ",\"priority\":";    j += std::to_string(e.priority);
+    j += std::string(",\"enabled\":") + (e.enabled ? "true" : "false");
+    j += ",\"container\":\""; j += json_escape(e.container);   j += '"';
+    j += ",\"procedure\":\""; j += json_escape(e.procedure);   j += '"';
+    j += ",\"comment\":\"";   j += json_escape(e.comment);     j += '"';
+    j += ",\"options\":";     j += std::to_string(e.options);
+    j += '}';
+    return j;
+}
+
+// Minimal flat-object JSON parser.  Only handles string/number/bool values.
+static std::unordered_map<std::string,std::string> json_parse_flat(const std::string& s) {
+    std::unordered_map<std::string,std::string> m;
+    std::size_t i = 0, n = s.size();
+    auto skip_ws = [&]() {
+        while (i < n && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i;
+    };
+    auto read_str = [&]() -> std::string {
+        if (i >= n || s[i] != '"') return {};
+        ++i;
+        std::string r;
+        while (i < n && s[i] != '"') {
+            if (s[i] == '\\' && i+1 < n) {
+                ++i;
+                switch (s[i]) {
+                    case '"':  r += '"';  break;
+                    case '\\': r += '\\'; break;
+                    case 'n':  r += '\n'; break;
+                    case 'r':  r += '\r'; break;
+                    case 't':  r += '\t'; break;
+                    default:   r += s[i]; break;
+                }
+            } else { r += s[i]; }
+            ++i;
+        }
+        if (i < n) ++i;
+        return r;
+    };
+    skip_ws();
+    if (i >= n || s[i] != '{') return m;
+    ++i;
+    while (i < n) {
+        skip_ws();
+        if (s[i] == '}' || i >= n) break;
+        if (s[i] == ',') { ++i; continue; }
+        if (s[i] != '"') break;
+        std::string key = read_str();
+        skip_ws();
+        if (i >= n || s[i] != ':') break;
+        ++i; skip_ws();
+        std::string val;
+        if (i < n && s[i] == '"') {
+            val = read_str();
+        } else {
+            std::size_t st = i;
+            while (i < n && s[i] != ',' && s[i] != '}') ++i;
+            val = s.substr(st, i - st);
+            while (!val.empty() && (val.back()==' '||val.back()=='\t')) val.pop_back();
+        }
+        m[key] = std::move(val);
+    }
+    return m;
+}
+
+static bool json_to_trigger(const std::string& json,
+                             DataDict::TriggerEntry& e) {
+    auto m = json_parse_flat(json);
+    if (m.count("type") && m.at("type") != "Trigger") return false;
+    if (m.count("name"))      e.name        = m.at("name");
+    if (m.count("table"))     e.table_alias = m.at("table");
+    if (m.count("event"))     try { e.event_mask = std::stoul(m.at("event"));   } catch (...) {}
+    if (m.count("timing"))    try { e.timing     = std::stoul(m.at("timing"));  } catch (...) {}
+    if (m.count("priority"))  try { e.priority   = std::stoi (m.at("priority")); } catch (...) {}
+    if (m.count("enabled"))   e.enabled   = (m.at("enabled") == "true");
+    if (m.count("container")) e.container = m.at("container");
+    if (m.count("procedure")) e.procedure = m.at("procedure");
+    if (m.count("comment"))   e.comment   = m.at("comment");
+    if (m.count("options"))   try { e.options = std::stoul(m.at("options")); } catch (...) {}
+    return true;
+}
+
 // Write `content` into am_buf, reusing the existing block if it fits; otherwise
 // appending at an 8-byte-aligned offset.  Returns {am_block, am_len}.
 static std::pair<uint32_t,uint32_t> put_am_block(
@@ -545,6 +662,24 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             e.table_alias = id_to_name.count(rec.parent_id) ? id_to_name.at(rec.parent_id) : "";
 
             if (!rec.prop_null && !rec.property.empty() &&
+                static_cast<uint8_t>(rec.property[0]) == 0x08) {
+                // OpenADS proprietary JSON-in-.am format (sentinel byte 0x08)
+                auto am_block = static_cast<uint32_t>(rec.more_property[0])
+                              | (static_cast<uint32_t>(rec.more_property[1]) <<  8)
+                              | (static_cast<uint32_t>(rec.more_property[2]) << 16)
+                              | (static_cast<uint32_t>(rec.more_property[3]) << 24);
+                auto am_len   = static_cast<uint32_t>(rec.more_property[4])
+                              | (static_cast<uint32_t>(rec.more_property[5]) <<  8)
+                              | (static_cast<uint32_t>(rec.more_property[6]) << 16)
+                              | (static_cast<uint32_t>(rec.more_property[7]) << 24);
+                if (am_block > 0 && am_len > 0 && !am_buf.empty()) {
+                    std::size_t am_off = static_cast<std::size_t>(am_block) * 8;
+                    if (am_off + am_len <= am_buf.size()) {
+                        std::string json_text = am_buf.substr(am_off, am_len);
+                        json_to_trigger(json_text, e);
+                    }
+                }
+            } else if (!rec.prop_null && !rec.property.empty() &&
                 static_cast<uint8_t>(rec.property[0]) >= 0x20) {
                 // OpenADS NUL-delimited format:
                 //   OLD (7 parts): table_alias\0event_mask\0priority\0enabled\0container\0procedure\0comment
@@ -2427,27 +2562,13 @@ util::Result<void> DataDict::save_add_binary_() {
             auto it = triggers_.find(comp_key);
             if (it != triggers_.end()) {
                 const auto& e = it->second;
-                // Try to fit body inline; if it would cap at 273, overflow to .am.
-                auto prop_try = join_nul({e.table_alias, std::to_string(e.event_mask),
-                                          std::to_string(e.timing),
-                                          std::to_string(e.priority),
-                                          e.enabled ? "1" : "0",
-                                          e.container, e.procedure, e.comment,
-                                          std::to_string(e.options)});
-                if (prop_try.size() < 273) {
-                    r.property  = std::move(prop_try);
-                } else {
-                    // Body overflows 273-byte limit; store empty body inline, full body in .am.
-                    r.property  = join_nul({e.table_alias, std::to_string(e.event_mask),
-                                            std::to_string(e.timing),
-                                            std::to_string(e.priority),
-                                            e.enabled ? "1" : "0",
-                                            "", e.procedure, e.comment,
-                                            std::to_string(e.options)});
-                    auto res = put_am_block(am_buf, r.more_property, e.container);
-                    set_more_prop_(r.more_property, res.first, res.second);
-                    am_dirty = true;
-                }
+                // OpenADS proprietary format: full trigger data as JSON in .am.
+                // Sentinel byte 0x08 in the inline property signals this to the reader.
+                std::string json = trigger_to_json(e);
+                auto res = put_am_block(am_buf, r.more_property, json);
+                set_more_prop_(r.more_property, res.first, res.second);
+                am_dirty = true;
+                r.property  = std::string(1, '\x08');
                 r.prop_null = false;
             }
         } else if (r.obj_type == "Relation") {
