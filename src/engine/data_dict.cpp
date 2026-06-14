@@ -2077,31 +2077,17 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
 }
 
 util::Result<void> DataDict::drop_trigger(const std::string& name) {
-    // Accept both composite "table::name" and plain name.
-    std::string plain_name = name;
-    std::string tbl_alias;
+    // name must be composite "table::name".
     auto sep = name.find("::");
-    if (sep != std::string::npos) {
-        tbl_alias  = name.substr(0, sep);
-        plain_name = name.substr(sep + 2);
-    }
-    // Erase from map — try composite key first, then plain name scan.
-    auto comp_key = tbl_alias.empty() ? name : tbl_alias + "::" + plain_name;
-    if (triggers_.count(comp_key)) {
-        triggers_.erase(comp_key);
-    } else if (!tbl_alias.empty()) {
-        triggers_.erase(name);  // fallback
-    } else {
-        for (auto it = triggers_.begin(); it != triggers_.end(); ++it) {
-            if (it->second.name == plain_name) { triggers_.erase(it); break; }
-        }
-    }
+    std::string tbl_alias  = (sep != std::string::npos) ? name.substr(0, sep) : "";
+    std::string plain_name = (sep != std::string::npos) ? name.substr(sep + 2) : name;
+
+    triggers_.erase(name);
     if (binary_format_) {
         uint32_t tbl_id = 0;
         if (!tbl_alias.empty()) {
             for (const auto& br : binary_recs_) {
-                if (br.active && (br.obj_type == "Table" || br.obj_type == "TableAlias") &&
-                    br.obj_name == tbl_alias) {
+                if (br.active && br.obj_type == "Table" && br.obj_name == tbl_alias) {
                     tbl_id = br.obj_id; break;
                 }
             }
@@ -2439,7 +2425,6 @@ util::Result<void> DataDict::save_add_binary_() {
             std::string comp_key = tbl_alias.empty() ? r.obj_name
                                                      : tbl_alias + "::" + r.obj_name;
             auto it = triggers_.find(comp_key);
-            if (it == triggers_.end()) it = triggers_.find(r.obj_name);  // plain-name fallback
             if (it != triggers_.end()) {
                 const auto& e = it->second;
                 // Try to fit body inline; if it would cap at 273, overflow to .am.
