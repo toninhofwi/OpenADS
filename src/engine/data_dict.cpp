@@ -196,6 +196,96 @@ static bool json_to_trigger(const std::string& json,
     return true;
 }
 
+// Helper: read a JSON am block (shared by proc/func/view/trigger loaders).
+// Returns the raw bytes from am_buf at the block/len pointed to by more_property.
+static std::string read_am_json(const std::string& am_buf,
+                                 const std::array<std::uint8_t, 9>& mp) {
+    auto am_block = static_cast<uint32_t>(mp[0])
+                  | (static_cast<uint32_t>(mp[1]) <<  8)
+                  | (static_cast<uint32_t>(mp[2]) << 16)
+                  | (static_cast<uint32_t>(mp[3]) << 24);
+    auto am_len   = static_cast<uint32_t>(mp[4])
+                  | (static_cast<uint32_t>(mp[5]) <<  8)
+                  | (static_cast<uint32_t>(mp[6]) << 16)
+                  | (static_cast<uint32_t>(mp[7]) << 24);
+    if (am_block == 0 || am_len == 0 || am_buf.empty()) return {};
+    std::size_t am_off = static_cast<std::size_t>(am_block) * 8;
+    if (am_off + am_len > am_buf.size()) return {};
+    return am_buf.substr(am_off, am_len);
+}
+
+static std::string proc_to_json(const DataDict::ProcEntry& e) {
+    std::string j;
+    j.reserve(e.procedure.size() + 200);
+    j += "{\"fmt\":1,\"type\":\"Procedure\"";
+    j += ",\"name\":\"";      j += json_escape(e.name);          j += '"';
+    j += ",\"container\":\""; j += json_escape(e.container);     j += '"';
+    j += ",\"body\":\"";      j += json_escape(e.procedure);     j += '"';
+    j += ",\"input\":\"";     j += json_escape(e.input_params);  j += '"';
+    j += ",\"output\":\"";    j += json_escape(e.output_params); j += '"';
+    j += ",\"comment\":\"";   j += json_escape(e.comment);       j += '"';
+    j += '}';
+    return j;
+}
+
+static bool json_to_proc(const std::string& json, DataDict::ProcEntry& e) {
+    auto m = json_parse_flat(json);
+    if (m.count("type") && m.at("type") != "Procedure") return false;
+    if (m.count("name"))      e.name          = m.at("name");
+    if (m.count("container")) e.container     = m.at("container");
+    if (m.count("body"))      e.procedure     = m.at("body");
+    if (m.count("input"))     e.input_params  = m.at("input");
+    if (m.count("output"))    e.output_params = m.at("output");
+    if (m.count("comment"))   e.comment       = m.at("comment");
+    return true;
+}
+
+static std::string func_to_json(const DataDict::FunctionEntry& e) {
+    std::string j;
+    j.reserve(e.implementation.size() + 200);
+    j += "{\"fmt\":1,\"type\":\"Function\"";
+    j += ",\"name\":\"";      j += json_escape(e.name);           j += '"';
+    j += ",\"container\":\""; j += json_escape(e.container);      j += '"';
+    j += ",\"body\":\"";      j += json_escape(e.implementation); j += '"';
+    j += ",\"input\":\"";     j += json_escape(e.input_params);   j += '"';
+    j += ",\"return\":\"";    j += json_escape(e.return_type);    j += '"';
+    j += ",\"comment\":\"";   j += json_escape(e.comment);        j += '"';
+    j += '}';
+    return j;
+}
+
+static bool json_to_func(const std::string& json, DataDict::FunctionEntry& e) {
+    auto m = json_parse_flat(json);
+    if (m.count("type") && m.at("type") != "Function") return false;
+    if (m.count("name"))      e.name           = m.at("name");
+    if (m.count("container")) e.container      = m.at("container");
+    if (m.count("body"))      e.implementation = m.at("body");
+    if (m.count("input"))     e.input_params   = m.at("input");
+    if (m.count("return"))    e.return_type    = m.at("return");
+    if (m.count("comment"))   e.comment        = m.at("comment");
+    return true;
+}
+
+static std::string view_to_json(const DataDict::ViewEntry& e) {
+    std::string j;
+    j.reserve(e.sql.size() + 100);
+    j += "{\"fmt\":1,\"type\":\"View\"";
+    j += ",\"name\":\"";    j += json_escape(e.name);    j += '"';
+    j += ",\"sql\":\"";     j += json_escape(e.sql);     j += '"';
+    j += ",\"comment\":\""; j += json_escape(e.comment); j += '"';
+    j += '}';
+    return j;
+}
+
+static bool json_to_view(const std::string& json, DataDict::ViewEntry& e) {
+    auto m = json_parse_flat(json);
+    if (m.count("type") && m.at("type") != "View") return false;
+    if (m.count("name"))    e.name    = m.at("name");
+    if (m.count("sql"))     e.sql     = m.at("sql");
+    if (m.count("comment")) e.comment = m.at("comment");
+    return true;
+}
+
 // Write `content` into am_buf, reusing the existing block if it fits; otherwise
 // appending at an 8-byte-aligned offset.  Returns {am_block, am_len}.
 static std::pair<uint32_t,uint32_t> put_am_block(
@@ -506,10 +596,19 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             ProcEntry e;
             e.name = rec.obj_name;
 
+            if (!rec.prop_null && !rec.property.empty() &&
+                static_cast<uint8_t>(rec.property[0]) == 0x09) {
+                // OpenADS proprietary JSON-in-.am format (sentinel 0x09)
+                auto jtext = read_am_json(am_buf, rec.more_property);
+                if (!jtext.empty()) json_to_proc(jtext, e);
+                procs_[e.name] = std::move(e);
+                continue;
+            }
+
             const std::size_t PS = base + 225;
             const std::size_t PL = 273;
 
-            // OpenADS-written format: plen=273, property[0]=NUL, property[1..272]=SQL body start.
+            // OpenADS legacy format: plen=273, property[0]=NUL, property[1..272]=SQL body start.
             // .am layout: [SQL continuation]\0[input_params]\0[output_params]\0
             // SAP-original format: plen=param_len (< 273), property[0..plen-1]=input_params,
             //   followed by 0xFF markers + binary header + CRLF + SQL body.
@@ -615,6 +714,15 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             binary_recs_.back().prop_plen = (plen == 0xFFFFu) ? 0u : plen;
             FunctionEntry e;
             e.name = rec.obj_name;
+
+            if (!rec.prop_null && !rec.property.empty() &&
+                static_cast<uint8_t>(rec.property[0]) == 0x0A) {
+                // OpenADS proprietary JSON-in-.am format (sentinel 0x0A)
+                auto jtext = read_am_json(am_buf, rec.more_property);
+                if (!jtext.empty()) json_to_func(jtext, e);
+                functions_[e.name] = std::move(e);
+                continue;
+            }
 
             // Property area layout (273 bytes at base+225..base+497):
             // [plen binary metadata] [6×0xFF] [le16+rettype\0] [le16+inparams\0] [le16+body]
@@ -824,12 +932,19 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
 
         } else if (rec.obj_type == "View" && !rec.obj_name.empty() &&
                    !rec.prop_null) {
-            auto parts = split_nul(rec.property);
-            while (parts.size() < 2) parts.emplace_back();
             ViewEntry e;
-            e.name    = rec.obj_name;
-            e.comment = parts[0];
-            e.sql     = parts[1];
+            e.name = rec.obj_name;
+            if (!rec.property.empty() &&
+                static_cast<uint8_t>(rec.property[0]) == 0x0B) {
+                // OpenADS proprietary JSON-in-.am format (sentinel 0x0B)
+                auto jtext = read_am_json(am_buf, rec.more_property);
+                if (!jtext.empty()) json_to_view(jtext, e);
+            } else {
+                auto parts = split_nul(rec.property);
+                while (parts.size() < 2) parts.emplace_back();
+                e.comment = parts[0];
+                e.sql     = parts[1];
+            }
             views_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Field" && !rec.obj_name.empty()) {
@@ -2485,70 +2600,25 @@ util::Result<void> DataDict::save_add_binary_() {
             auto it = procs_.find(r.obj_name);
             if (it != procs_.end()) {
                 const auto& e = it->second;
-                // OpenADS format: inline property = NUL + first 272 body bytes (padded).
-                // .am block = body_rest + \0 + in_params + \0 + out_params + \0
-                const std::size_t PL = 273;
-                std::string prop(PL, ' ');
-                prop[0] = '\0';
-                std::size_t body_inline = e.procedure.size() < PL - 1
-                                        ? e.procedure.size() : PL - 1;
-                for (std::size_t k = 0; k < body_inline; ++k)
-                    prop[1 + k] = e.procedure[k];
-                r.property  = std::move(prop);
-                r.prop_null = false;
-
-                std::string in_norm = e.input_params;
-                if (!in_norm.empty() && in_norm.back() != ';') in_norm += ';';
-                std::string out_norm = e.output_params;
-                if (!out_norm.empty() && out_norm.back() != ';') out_norm += ';';
-                std::string am_content = e.procedure.substr(body_inline)
-                                       + '\0' + in_norm + '\0' + out_norm + '\0';
-                uint32_t blk, alen;
-                auto res = put_am_block(am_buf, r.more_property, am_content);
-                blk  = res.first;
-                alen = res.second;
-                set_more_prop_(r.more_property, blk, alen);
+                // OpenADS proprietary format: full procedure as JSON in .am.
+                std::string json = proc_to_json(e);
+                auto res = put_am_block(am_buf, r.more_property, json);
+                set_more_prop_(r.more_property, res.first, res.second);
                 am_dirty = true;
+                r.property  = std::string(1, '\x09');
+                r.prop_null = false;
             }
         } else if (r.obj_type == "Function") {
             auto it = functions_.find(r.obj_name);
             if (it != functions_.end()) {
                 const auto& e = it->second;
-                // Preamble: the original SAP binary metadata bytes before 0xFF markers.
-                // r.property holds those bytes (prop_plen bytes loaded from disk).
-                std::string preamble = r.property.substr(
-                    0, std::min<std::size_t>(r.prop_plen, r.property.size()));
-
-                // Build lstr: le16(len) + text + NUL
-                auto mk_lstr = [](const std::string& s) -> std::string {
-                    std::string ns = s + '\0';
-                    std::string out;
-                    out.push_back(static_cast<char>(ns.size() & 0xFF));
-                    out.push_back(static_cast<char>((ns.size() >> 8) & 0xFF));
-                    out += ns;
-                    return out;
-                };
-                std::string lstr_sect = std::string(6, '\xFF')
-                                      + mk_lstr(e.return_type)
-                                      + mk_lstr(e.input_params)
-                                      + "\x00\x00";  // body length = 0 (full body in .am)
-
-                // Build full 273-byte property area.
-                const std::size_t PL = 273;
-                std::string prop_area = preamble + lstr_sect;
-                if (prop_area.size() < PL) prop_area.resize(PL, ' ');
-                prop_area.resize(PL);
-
-                r.property  = std::move(prop_area);
-                r.prop_null = false;
-                r.prop_plen = static_cast<uint16_t>(preamble.size());
-
-                // Write full implementation to .am (body_length=0 in inline lstr).
-                auto res  = put_am_block(am_buf, r.more_property, e.implementation);
-                uint32_t blk  = res.first;
-                uint32_t alen = res.second;
-                set_more_prop_(r.more_property, blk, alen);
+                // OpenADS proprietary format: full function as JSON in .am.
+                std::string json = func_to_json(e);
+                auto res = put_am_block(am_buf, r.more_property, json);
+                set_more_prop_(r.more_property, res.first, res.second);
                 am_dirty = true;
+                r.property  = std::string(1, '\x0A');
+                r.prop_null = false;
             }
         } else if (r.obj_type == "Trigger") {
             // Resolve parent table alias to form composite key.
@@ -2583,7 +2653,12 @@ util::Result<void> DataDict::save_add_binary_() {
             auto it = views_.find(r.obj_name);
             if (it != views_.end()) {
                 const auto& e = it->second;
-                r.property  = join_nul({e.comment, e.sql});
+                // OpenADS proprietary format: full view as JSON in .am.
+                std::string json = view_to_json(e);
+                auto res = put_am_block(am_buf, r.more_property, json);
+                set_more_prop_(r.more_property, res.first, res.second);
+                am_dirty = true;
+                r.property  = std::string(1, '\x0B');
                 r.prop_null = false;
             }
         }
