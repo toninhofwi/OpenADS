@@ -15,7 +15,7 @@
     },
     {
         "name": "Pmsys-Imported",
-        "path": "f:\\OpenAds\\testdata\\pmsys\\pmsys_imported.add",
+        "path": "f:\\openads\\testdata\\pmsys\\pmsys_imported.add",
         "username": "adssys",
         "connType": "local",
         "entryType": "dd"

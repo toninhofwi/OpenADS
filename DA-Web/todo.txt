@@ -19,6 +19,31 @@ how to use this tool and what it does look at readme.md on f:\Openads\tools\impo
 I remind you that you can test what out should look like by connecting with SAP ADS comparing results with those after connecting with 
 OpenADS. 
 
+**Under a table name on the tree on the left, DAWeb needs to generate an SQL script to create the table and indexes.  Currently it is not 
+doing anything.  It used to work but now it has stoped working.  See the source code for SAP Data Architect here: C:\Program Files (x86)\Advantage 10.10\ARC\Source>
+Notice there is an option to generate SQL script.  Try it and see what SAP DA returns.  Make sure DAWeb returns the same script.  The DD 
+to work with with SAP ADS is in f:\OpenAds\testdata\pmsys\pmsys.add.    The DD to work with OpenAds and DAWeb is in 
+f:\Openads\testdata\pmsys\pmsys_imported.add.   The SQL script needs to load on the SQL dialog we already have setup.
+
+Notice OpenAds has a server that can load as a service.  Load the service and make your tests 
+with OpenAds Server using the remote server instead of the local server.   I remind you that SAP ADS service is already responding on port 6262.
+You will need to use an used port for OpenAds.  I suggest 16262.  To learn how to load and run the remote server read readme.md on our git repository 
+or locally.
+
+If you find problems connecting tot he remote server or loading it, report the problems and fix them.  I remind you that we have full source code for 
+OpenAds. 
+
+**Configure the SQL editor to recognize and color  anything after a double forward slash ( // )as comments.
+
+**Check functions body.  It doesn't show right.  For example NewSeqKey is missing a lot of code.  Compare pmsys.add functions with SAP ADS with 
+pmsys_imported.add with OpenAds.  Find the problem and fix it.  I remind you that we do not need to save everything in the new imported dd 
+teh same way as SAP ADS.  We are free to establish our own format as long as it faster and that we can decipher easily.  We are allowed to read 
+DD with SAP ADS and write to new imported DD with OpenAds.  There is no reason to fail and we don't have to reverse engineer much.
+
+** When opening a user's properties, it takes a considerable amount of time to open and show the groups this user belongs to and the permissions 
+table.  Why does it take this long?  Does it have to be that way.  Can we make it faster?
+
+
 [DONE] OpenAds did not show complete trigger body.
 Fixed: Three root causes fixed in engine (data_dict.cpp) and import tool:
 1. SAP binary format: body read from buf[TPS+18] directly (bypassing plen=4 limit).
