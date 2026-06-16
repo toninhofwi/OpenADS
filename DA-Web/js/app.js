@@ -1092,11 +1092,27 @@
       </div>`;
   }
 
+  // Set ACE editor to SQL mode with ADS-SQL extensions (// line comments, etc.)
+  function setAdsMode(editor) {
+    editor.session.setMode('ace/mode/sql');
+    try {
+      const tok = editor.session.bgTokenizer.tokenizer;
+      if (tok && tok.states && tok.states.start &&
+          !tok.states.start.some(r => r.regex === '//.*$')) {
+        tok.states.start.unshift({ token: 'comment', regex: '//.*$' });
+        editor.session.bgTokenizer.start(0);
+      }
+      const mode = editor.session.getMode();
+      if (mode && typeof mode.lineCommentStart === 'string')
+        mode.lineCommentStart = ['--', '//'];
+    } catch(_) {}
+  }
+
   function bindTriggerPanel(tabId, tab) {
     setTimeout(() => {
       const editor = ace.edit('sql-ace-' + tabId);
       editor.setTheme('ace/theme/dracula');
-      editor.session.setMode('ace/mode/sql');
+      setAdsMode(editor);
       editor.setOptions({
         showPrintMargin: false, useWorker: false, fontSize: '13px',
         fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
@@ -2151,7 +2167,7 @@
       ace.require('ace/ext/language_tools');
       const editor = ace.edit('sql-ace-' + tabId);
       editor.setTheme('ace/theme/dracula');
-      editor.session.setMode('ace/mode/sql');
+      setAdsMode(editor);
       editor.setOptions({
         enableBasicAutocompletion: true,
         enableSnippets: false,
@@ -2279,7 +2295,7 @@
       ace.require('ace/ext/language_tools');
       const editor = ace.edit('sql-ace-' + tabId);
       editor.setTheme('ace/theme/dracula');
-      editor.session.setMode('ace/mode/sql');
+      setAdsMode(editor);
       editor.setOptions({
         enableBasicAutocompletion: true,
         enableSnippets: false,

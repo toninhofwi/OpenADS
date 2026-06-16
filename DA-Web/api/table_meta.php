@@ -349,8 +349,10 @@ try {
             $timing2 = strlen($timRaw) >= 4 ? unpack('V', substr($timRaw, 0, 4))[1] : 0;
             $timingStr2 = match($timing2) { 1=>'BEFORE', 2=>'INSTEAD OF', 4=>'AFTER', default=>'' };
             $eventStr2  = match($event2)  { 1=>'INSERT', 2=>'UPDATE', 3=>'DELETE', default=>'' };
+            // TRIG_NAME is "table::name" composite key; display just the plain name
+            $dispName2 = strpos($trigName2, '::') !== false ? substr($trigName2, strpos($trigName2, '::') + 2) : $trigName2;
             $rows[] = [
-                'Name'     => $trigName2,
+                'Name'     => $dispName2,
                 'Timing'   => $timingStr2,
                 'Event'    => $eventStr2,
                 'Enabled'  => 'Yes',

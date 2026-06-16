@@ -68,8 +68,8 @@ try {
         $stmt->close();
     } catch (Throwable $e) {}
 
-    // ── Step 2: single pass over system.permissions ───────────────────────────────
-    // Collect rows for the user and all their groups in one table scan.
+    // ── Step 2: single pass over system.permissions (filtered to user + groups) ─────
+    // Collect rows for the user and all their groups in one filtered scan.
     // permMaps[grantee_lc][key] = permission row
     $userLc      = strtolower($userName);
     $groupsLcSet = [];
@@ -78,7 +78,13 @@ try {
     $permMaps   = [];   // lc_grantee => [ key => row ]
     $canInherit = false;
 
-    $stmt = $conn->query('SELECT * FROM system.permissions');
+    // Build IN clause to limit the scan to the user and their groups only.
+    // This avoids fetching all permissions for all users (3000+ rows → ~1s timeout).
+    $grantees = array_merge([$userName], $userGroups);
+    $inParts  = array_map(fn($g) => "'" . str_replace("'", "''", $g) . "'", $grantees);
+    $inClause = implode(',', $inParts);
+
+    $stmt = $conn->query("SELECT * FROM system.permissions WHERE GRANTEE IN ($inClause)");
     while ($row = $stmt->fetchAssoc()) {
         $granteeLc = strtolower(trim((string)($row['GRANTEE'] ?? '')));
         $isUser    = ($granteeLc === $userLc);

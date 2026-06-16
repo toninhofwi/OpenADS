@@ -48,8 +48,10 @@ function readTriggers(AdsConnection $conn, AdsDictionary $dict2, string $table):
         $body    = $dict2->getTriggerProperty($trigName, 1404);
         $event   = strlen($evRaw)  >= 4 ? unpack('V', substr($evRaw,  0, 4))[1] : 0;
         $timing  = strlen($timRaw) >= 4 ? unpack('V', substr($timRaw, 0, 4))[1] : 0;
+        // TRIG_NAME is "table::name" composite key; strip prefix for DDL output
+        $dispName = strpos($trigName, '::') !== false ? substr($trigName, strpos($trigName, '::') + 2) : $trigName;
         $trigs[] = [
-            'name'    => $trigName,
+            'name'    => $dispName,
             'timing'  => match($timing) { 1=>'BEFORE', 2=>'INSTEAD OF', 4=>'AFTER', default=>'' },
             'event'   => match($event)  { 1=>'INSERT', 2=>'UPDATE', 3=>'DELETE', default=>'' },
             'body'    => rtrim($body),

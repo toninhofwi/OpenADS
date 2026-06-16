@@ -54,8 +54,12 @@ try {
 
     $triggers = [];
     foreach ($names as $trigName) {
-        // Use composite "table::name" key so same-named triggers on different tables are distinct.
-        $trigKey = $table . '::' . $trigName;
+        // TRIG_NAME from system.triggers is the composite "table::name" key;
+        // pass it directly to getTriggerProperty (no need to prepend table name again).
+        $trigKey  = $trigName;
+        $dispName = strpos($trigName, '::') !== false
+            ? substr($trigName, strpos($trigName, '::') + 2)
+            : $trigName;
         // event_mask, timing, and options come back as 4-byte LE integers
         $evRaw     = $dict->getTriggerProperty($trigKey, 1401);
         $timRaw    = $dict->getTriggerProperty($trigKey, 1402);
@@ -67,7 +71,7 @@ try {
         $options   = strlen($optsRaw) >= 4 ? unpack('V', substr($optsRaw, 0, 4))[1] : 3;
 
         $triggers[] = [
-            'name'       => $trigName,
+            'name'       => $dispName,
             'timing'     => timing_str($timing),
             'event'      => event_str($eventMask),
             'priority'   => 1,
