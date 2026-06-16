@@ -182,17 +182,42 @@ public:
     util::Result<void> create_trigger(const TriggerEntry& e);
     util::Result<void> drop_trigger  (const std::string& name);
 
-    // Look up a trigger by composite "table::name" key.  Returns nullptr if not found.
+    // Look up a trigger by "table::name" key or plain name.
+    // Plain name fallback: scans for a unique match; returns nullptr if ambiguous.
     const TriggerEntry* find_trigger(const std::string& key) const noexcept {
         auto it = triggers_.find(key);
-        return (it != triggers_.end()) ? &it->second : nullptr;
+        if (it != triggers_.end()) return &it->second;
+        if (key.find("::") == std::string::npos) {
+            const TriggerEntry* found = nullptr;
+            for (const auto& kv : triggers_) {
+                auto sep = kv.first.find("::");
+                if (sep != std::string::npos && kv.first.substr(sep + 2) == key) {
+                    if (found) return nullptr;
+                    found = &kv.second;
+                }
+            }
+            return found;
+        }
+        return nullptr;
     }
     TriggerEntry* find_trigger(const std::string& key) noexcept {
         auto it = triggers_.find(key);
-        return (it != triggers_.end()) ? &it->second : nullptr;
+        if (it != triggers_.end()) return &it->second;
+        if (key.find("::") == std::string::npos) {
+            TriggerEntry* found = nullptr;
+            for (auto& kv : triggers_) {
+                auto sep = kv.first.find("::");
+                if (sep != std::string::npos && kv.first.substr(sep + 2) == key) {
+                    if (found) return nullptr;
+                    found = &kv.second;
+                }
+            }
+            return found;
+        }
+        return nullptr;
     }
     bool has_trigger(const std::string& key) const noexcept {
-        return triggers_.count(key) > 0;
+        return find_trigger(key) != nullptr;
     }
     const std::unordered_map<std::string, TriggerEntry>&
         triggers() const noexcept { return triggers_; }

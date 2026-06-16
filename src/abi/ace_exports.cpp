@@ -7607,7 +7607,11 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         std::vector<std::vector<std::string>> rows;
         for (const auto& kv : dd->triggers()) {
             const auto& e = kv.second;
-            rows.push_back({e.name, e.table_alias,
+            // TRIG_NAME returns the composite "table::name" key so clients can
+            // pass it directly to AdsDDGetTriggerProperty (plain names are
+            // ambiguous when the same name appears in multiple tables).
+            std::string trig_key = e.table_alias + "::" + e.name;
+            rows.push_back({trig_key, e.table_alias,
                             std::to_string(e.event_mask),
                             timing_str(e.timing),
                             event_str(e.event_mask),

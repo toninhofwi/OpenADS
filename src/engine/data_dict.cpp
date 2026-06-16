@@ -761,7 +761,23 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                     if (l != std::string::npos) e.implementation.resize(l + 1);
                 }
             }
-            append_am(e.implementation, rec.more_property);
+            // If the .am slot was previously written as JSON-in-.am (by save_add_binary_)
+            // but the binary sentinel byte was not updated (e.g., import/partial write),
+            // recover by parsing the JSON instead of appending it as body continuation.
+            {
+                auto jtext = read_am_json(am_buf, rec.more_property);
+                if (!jtext.empty() && jtext.front() == '{') {
+                    FunctionEntry je;
+                    je.name = e.name;
+                    if (json_to_func(jtext, je) && !je.implementation.empty()) {
+                        e = std::move(je);  // use JSON data (complete and correct)
+                    } else {
+                        append_am(e.implementation, rec.more_property);
+                    }
+                } else {
+                    append_am(e.implementation, rec.more_property);
+                }
+            }
             functions_[e.name] = std::move(e);
 
         } else if (rec.obj_type == "Trigger" && !rec.obj_name.empty()) {
@@ -2327,12 +2343,20 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
 }
 
 util::Result<void> DataDict::drop_trigger(const std::string& name) {
-    // name must be composite "table::name".
+    // Accept composite "table::name" or plain name (fallback via find_trigger).
     auto sep = name.find("::");
     std::string tbl_alias  = (sep != std::string::npos) ? name.substr(0, sep) : "";
     std::string plain_name = (sep != std::string::npos) ? name.substr(sep + 2) : name;
 
-    triggers_.erase(name);
+    // Resolve composite key for erase (handles plain-name callers).
+    std::string erase_key = name;
+    if (sep == std::string::npos) {
+        const auto* ep = find_trigger(name);
+        if (ep) erase_key = ep->table_alias + "::" + ep->name;
+        if (!tbl_alias.empty()); // already "" when plain name
+        else if (ep) tbl_alias = ep->table_alias;
+    }
+    triggers_.erase(erase_key);
     if (binary_format_) {
         uint32_t tbl_id = 0;
         if (!tbl_alias.empty()) {
