@@ -78,14 +78,17 @@ std::uint32_t char_tree_entry_page(const std::uint8_t* pg, int idx,
 }
 
 // ── Dense-leaf entry: starts at offset 24 ────────────────────────────────────
-// Format: recno[1](byte) + key_or_dup_trail[1 or 2]
-// entry_sz = dense_entry_size(fld_length): 2 for 1-byte fields, 3 for wider
+// Format (entry_sz=3, wider key fields): recno[2 LE] + type_byte[1]
+// Format (entry_sz=2, 1-byte key fields): recno[1] + key_flags[1]
+// Confirmed by probe against SAP ACE ground truth (propertytransactions, 12331 rows).
 
 std::uint32_t dense_entry_recno(const std::uint8_t* pg, int idx,
                                 std::uint32_t entry_sz) noexcept {
     const std::uint8_t* e = pg + ADI_DENSE_ENTRY_START
                             + static_cast<std::uint32_t>(idx) * entry_sz;
-    return e[0];  // 1-byte record number
+    if (entry_sz >= 3)
+        return static_cast<std::uint32_t>(e[0]) | (static_cast<std::uint32_t>(e[1]) << 8);
+    return e[0];  // 2-byte entry: recno in byte 0, byte 1 is key-flags
 }
 
 // ── Key encoding ─────────────────────────────────────────────────────────────
@@ -669,61 +672,71 @@ util::Result<SeekOutcome> AdiIndex::prev() {
 
 // ── AdiIndex::seek_key ───────────────────────────────────────────────────────
 //
-// Navigates the 3-level B-tree (root → sparse → dense) using the 8-byte
-// sign-flipped BE float64 key.  Within the dense leaf the position is found
-// by comparing actual ADT field values (since dense leaves don't store keys).
+// Descends the B-tree from root to a dense leaf page, then linear-scans that
+// leaf (and its right sibling if needed) by reading actual ADT field values.
+// Handles both char-key (padded, memcmp) and numeric (8-byte sign-flipped BE).
 
 util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) {
-    // Character-key binary seek is not yet implemented: fall back to leftmost.
-    // Callers that need accurate seek on char-key ADI tags must use a full scan.
-    if (char_key_) {
-        return navigate_leftmost_();
-    }
-    if (key.size() != 8) {
-        return navigate_leftmost_();
-    }
-
     Page pg{};
-
-    // ── Level 1 (branch/root) → find the sparse-leaf or dense-leaf child ──
-    if (auto r = read_adi_page_(root_page_, pg); !r) return r.error();
-    std::uint16_t lv  = page_level(pg.data());
-    std::uint16_t cnt = page_count(pg.data());
-    if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
-
-    // Walk non-leaf branch pages (level 1) until sparse leaf (level 0) or dense.
-    while (lv != ADI_LVL_SPARSE && !is_dense_leaf(lv)) {
-        int chosen = cnt - 1;
-        for (int i = 0; i < cnt; ++i) {
-            const std::uint8_t* ek = tree_entry_key(pg.data(), i);
-            if (std::memcmp(key.data(), ek, 8) <= 0) { chosen = i; break; }
-        }
-        std::uint32_t child = tree_entry_page(pg.data(), chosen);
-        if (auto r = read_adi_page_(child, pg); !r) return r.error();
-        lv  = page_level(pg.data());
-        cnt = page_count(pg.data());
-        if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
-    }
-
     std::uint32_t dense_pg = ADI_INVALID_PAGE;
 
-    if (lv == ADI_LVL_SPARSE) {
-        // Level 0 (sparse leaf): each entry points to a dense leaf.
-        // Find the first sparse entry whose key >= seek key.
-        int chosen = cnt - 1;
-        for (int i = 0; i < cnt; ++i) {
-            const std::uint8_t* ek = tree_entry_key(pg.data(), i);
-            if (std::memcmp(key.data(), ek, 8) <= 0) { chosen = i; break; }
+    if (char_key_) {
+        // Char-key ADI: branch (lv=1) → dense (lv=2); no sparse leaf level.
+        // Branch entry key occupies char_key_padded_len_ bytes; incoming key
+        // is key_total_len_ bytes (raw field length, ≤ padded length).
+        std::uint32_t cur = root_page_;
+        for (;;) {
+            if (auto r = read_adi_page_(cur, pg); !r) return r.error();
+            std::uint16_t lv  = page_level(pg.data());
+            std::uint16_t cnt = page_count(pg.data());
+            if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
+            if (is_dense_leaf(lv)) { dense_pg = cur; break; }
+            // Branch: take first entry whose key >= seek key.
+            int chosen = static_cast<int>(cnt) - 1;
+            for (int i = 0; i < static_cast<int>(cnt); ++i) {
+                const std::uint8_t* ek = pg.data() + ADI_TREE_ENTRY_START
+                    + static_cast<std::uint32_t>(i) * branch_entry_sz_;
+                if (std::memcmp(key.data(), ek, key_total_len_) <= 0) {
+                    chosen = i; break;
+                }
+            }
+            cur = branch_entry_page_(pg.data(), chosen);
         }
-        dense_pg = tree_entry_page(pg.data(), chosen);
     } else {
-        // Root IS the dense leaf (tiny single-page index).
-        dense_pg = root_page_;
-        if (auto r = read_adi_page_(dense_pg, pg); !r) return r.error();
-        cnt = page_count(pg.data());
+        // Numeric-key ADI: branch (lv=1) → sparse (lv=0) → dense (lv=3).
+        if (key.size() != 8) return navigate_leftmost_();
+
+        if (auto r = read_adi_page_(root_page_, pg); !r) return r.error();
+        std::uint16_t lv  = page_level(pg.data());
+        std::uint16_t cnt = page_count(pg.data());
+        if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
+
+        while (lv != ADI_LVL_SPARSE && !is_dense_leaf(lv)) {
+            int chosen = static_cast<int>(cnt) - 1;
+            for (int i = 0; i < static_cast<int>(cnt); ++i) {
+                const std::uint8_t* ek = tree_entry_key(pg.data(), i);
+                if (std::memcmp(key.data(), ek, 8) <= 0) { chosen = i; break; }
+            }
+            std::uint32_t child = tree_entry_page(pg.data(), chosen);
+            if (auto r = read_adi_page_(child, pg); !r) return r.error();
+            lv  = page_level(pg.data());
+            cnt = page_count(pg.data());
+            if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
+        }
+
+        if (lv == ADI_LVL_SPARSE) {
+            int chosen = static_cast<int>(cnt) - 1;
+            for (int i = 0; i < static_cast<int>(cnt); ++i) {
+                const std::uint8_t* ek = tree_entry_key(pg.data(), i);
+                if (std::memcmp(key.data(), ek, 8) <= 0) { chosen = i; break; }
+            }
+            dense_pg = tree_entry_page(pg.data(), chosen);
+        } else {
+            dense_pg = root_page_;  // root IS the dense leaf
+        }
     }
 
-    // Dense leaf: linear scan comparing ADT field values against the seek key.
+    // ── Dense leaf: linear scan via ADT field read ────────────────────────────
     if (auto r = load_dense_leaf_(dense_pg); !r) return r.error();
 
     for (int i = 0; i < static_cast<int>(cur_cnt_); ++i) {
@@ -733,8 +746,8 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
         int cmp = compare_keys_(ck.value(), key);
         if (cmp > 0) {
             if (soft) {
-                cur_idx_ = i;
-                cur_recno_ = rno;
+                cur_idx_     = i;
+                cur_recno_   = rno;
                 current_key_ = std::move(ck).value();
                 SeekOutcome o;
                 o.hit        = SeekHit::AfterKey;
@@ -745,8 +758,8 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
             SeekOutcome o; o.hit = SeekHit::AfterEnd; return o;
         }
         if (cmp == 0) {
-            cur_idx_ = i;
-            cur_recno_ = rno;
+            cur_idx_     = i;
+            cur_recno_   = rno;
             current_key_ = std::move(ck).value();
             return make_positioned_();
         }
