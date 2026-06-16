@@ -10,20 +10,48 @@ static zend_object *ads_statement_create_object(zend_class_entry *ce)
 {
     ads_statement_obj *obj = (ads_statement_obj *)
         zend_object_alloc(sizeof(ads_statement_obj), ce);
-    obj->hStmt     = 0;
-    obj->hCursor   = 0;
-    obj->numFields = 0;
-    obj->executed  = 0;
-    obj->eof       = 0;
+    obj->hStmt      = 0;
+    obj->hCursor    = 0;
+    obj->numFields  = 0;
+    obj->executed   = 0;
+    obj->eof        = 0;
+    obj->fieldNames = NULL;
     zend_object_std_init(&obj->std, ce);
     object_properties_init(&obj->std, ce);
     obj->std.handlers = &ads_statement_handlers;
     return &obj->std;
 }
 
+/* Populate stmt->fieldNames[] once from AdsGetFieldName (called on first use). */
+static void ads_stmt_cache_field_names(ads_statement_obj *stmt)
+{
+    UNSIGNED16 i;
+    if (stmt->fieldNames || stmt->numFields == 0) return;
+    stmt->fieldNames = (char **)emalloc(sizeof(char *) * stmt->numFields);
+    for (i = 0; i < stmt->numFields; i++) {
+        char nameBuf[256];
+        UNSIGNED16 nameLen = (UNSIGNED16)(sizeof(nameBuf) - 1);
+        if (AdsGetFieldName(stmt->hCursor, (UNSIGNED16)(i + 1),
+                            (UNSIGNED8 *)nameBuf, &nameLen) == AE_SUCCESS) {
+            nameBuf[nameLen] = '\0';
+            stmt->fieldNames[i] = estrdup(nameBuf);
+        } else {
+            stmt->fieldNames[i] = estrdup("");
+        }
+    }
+}
+
 static void ads_statement_free_object(zend_object *obj)
 {
     ads_statement_obj *intern = ads_stmt_from_obj(obj);
+    if (intern->fieldNames) {
+        UNSIGNED16 i;
+        for (i = 0; i < intern->numFields; i++) {
+            if (intern->fieldNames[i]) efree(intern->fieldNames[i]);
+        }
+        efree(intern->fieldNames);
+        intern->fieldNames = NULL;
+    }
     if (intern->hCursor != 0) {
         AdsCloseTable(intern->hCursor);
         intern->hCursor = 0;
@@ -42,22 +70,18 @@ static void ads_statement_free_object(zend_object *obj)
 static int ads_stmt_read_row_assoc(ads_statement_obj *stmt, zval *retval)
 {
     UNSIGNED16 i;
-    char       nameBuf[256];
-    UNSIGNED16 nameLen;
     zval       fieldVal;
+
+    /* Populate name cache on first call (eliminates AdsGetFieldName per row). */
+    ads_stmt_cache_field_names(stmt);
 
     array_init(retval);
 
-    for (i = 1; i <= stmt->numFields; i++) {
-        nameLen = (UNSIGNED16)(sizeof(nameBuf) - 1);
-        if (AdsGetFieldName(stmt->hCursor, i, (UNSIGNED8 *)nameBuf, &nameLen)
-                != AE_SUCCESS) {
-            continue;
-        }
-        nameBuf[nameLen] = '\0';
-
-        ads_get_field_zval(stmt->hCursor, nameBuf, &fieldVal);
-        add_assoc_zval(retval, nameBuf, &fieldVal);
+    for (i = 0; i < stmt->numFields; i++) {
+        const char *name = stmt->fieldNames ? stmt->fieldNames[i] : "";
+        if (!name || name[0] == '\0') continue;
+        ads_get_field_zval(stmt->hCursor, name, &fieldVal);
+        add_assoc_zval(retval, name, &fieldVal);
     }
 
     return 1;
@@ -69,21 +93,16 @@ static int ads_stmt_read_row_assoc(ads_statement_obj *stmt, zval *retval)
 static int ads_stmt_read_row_numeric(ads_statement_obj *stmt, zval *retval)
 {
     UNSIGNED16 i;
-    char       nameBuf[256];
-    UNSIGNED16 nameLen;
     zval       fieldVal;
+
+    ads_stmt_cache_field_names(stmt);
 
     array_init(retval);
 
-    for (i = 1; i <= stmt->numFields; i++) {
-        nameLen = (UNSIGNED16)(sizeof(nameBuf) - 1);
-        if (AdsGetFieldName(stmt->hCursor, i, (UNSIGNED8 *)nameBuf, &nameLen)
-                != AE_SUCCESS) {
-            continue;
-        }
-        nameBuf[nameLen] = '\0';
-
-        ads_get_field_zval(stmt->hCursor, nameBuf, &fieldVal);
+    for (i = 0; i < stmt->numFields; i++) {
+        const char *name = stmt->fieldNames ? stmt->fieldNames[i] : "";
+        if (!name || name[0] == '\0') continue;
+        ads_get_field_zval(stmt->hCursor, name, &fieldVal);
         add_next_index_zval(retval, &fieldVal);
     }
 
@@ -203,6 +222,14 @@ PHP_METHOD(AdsStatement, close)
     ZEND_PARSE_PARAMETERS_NONE();
 
     ads_statement_obj *stmt = Z_ADS_STMT_P(ZEND_THIS);
+    if (stmt->fieldNames) {
+        UNSIGNED16 i;
+        for (i = 0; i < stmt->numFields; i++) {
+            if (stmt->fieldNames[i]) efree(stmt->fieldNames[i]);
+        }
+        efree(stmt->fieldNames);
+        stmt->fieldNames = NULL;
+    }
     if (stmt->hCursor != 0) {
         AdsCloseTable(stmt->hCursor);
         stmt->hCursor = 0;

@@ -76,6 +76,8 @@ typedef struct {
     UNSIGNED16  numFields;
     zend_bool   executed;
     zend_bool   eof;
+    /* Cached field names (populated once on first fetch, avoid AdsGetFieldName per row) */
+    char      **fieldNames;   /* NULL until initialized; array of numFields C strings */
     zend_object std;
 } ads_statement_obj;
 
