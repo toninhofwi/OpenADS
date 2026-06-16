@@ -605,9 +605,10 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY.
   ADM memos (256-byte fixed blocks) auto-attach when a table carries
   Memo or Binary fields; the 9-byte in-record reference is resolved
-  transparently. **Not yet supported:** ADT table creation via
-  `AdsCreateTable(ADS_ADT)` (creates DBF format); ADI index files;
-  SAP proprietary ADT encryption.
+  transparently. `AdsCreateTable(ADS_ADT)` creates a native `.adt`
+  file with correct field descriptors; a companion `.adm` is created
+  automatically when Memo or Binary fields are present.
+  **Not yet supported:** SAP proprietary ADT encryption.
 - **DBF maintenance** — `AdsZapTable` empties a DBF + clears every
   bound index in lockstep; `AdsPackTable` compacts deleted records
   out of the DBF (Clipper semantics: leaves indexes stale, caller
@@ -630,6 +631,12 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   creation via `AdsCreateIndex61`, multi-file binding (M9.14 — apps
   can bundle several `.ntx` files on a single `USE` and swap focus
   between them without losing the parked tags' write sync).
+- **ADI index** — SAP proprietary B+tree index format paired with
+  `.adt` tables. `AdsOpenTable` auto-opens the `.adi` sidecar; every
+  ADT mutation auto-syncs through the ADI index alongside CDX / NTX.
+  Full read+write: seek, insert, erase, flush, leaf page splits with
+  sibling-link maintenance, branch promotion (`promote_split_`), and
+  fixed-root copy-up splits. Both char-key and numeric-key variants.
 - **Compound key expressions** — `UPPER(field)`, `LOWER(field)`,
   `LTRIM` / `RTRIM` / `ALLTRIM`, `STR(n)` / `STR(n,len)` /
   `STR(n,len,dec)`, `DTOS(date)`, `SUBSTR(s,start[,len])`,
@@ -652,8 +659,10 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   savepoints, multi-table commit, rollback marks appended records as
   deleted (Clipper convention) and writes back before-images for
   modified rows.
-- **AES-128 / AES-256 ECB** — vendored tiny-AES-c (Unlicense),
-  validated against FIPS-197 + NIST SP 800-38A.
+- **AES-128 / AES-256 ECB primitive** — vendored tiny-AES-c (Unlicense),
+  validated against FIPS-197 + NIST SP 800-38A. Used as a direct block
+  cipher and as the keystream generator for the AES-256-CTR per-record
+  table encryption added in M11.2 (DBF only, OpenADS-specific format).
 - **Memo (DBT / FPT)** — read + write round-trip;
   `Connection::open_table` auto-attaches the right memo store based on
   the DBF signature (`0x03` → no memo, `0x30` → CDX with FPT memo).
@@ -680,11 +689,11 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   a group grant is stored in opaque encrypted blobs that OpenADS cannot decode;
   the engine approximates these as full access. OpenADS-created grants store
   exact ADS_PERMISSION bitmasks and are fully accurate.
-  **DA-Web** — `DA-Web/` is a PHP web application that manages OpenADS data
-  dictionaries through a browser: browse tables, views, stored procedures,
-  functions, triggers, RI objects, users, groups; execute ad-hoc SQL; edit
-  table structure; generate DDL scripts. Powered by the `php_openads` native
-  PHP extension.
+  **DA-Web** — a companion web administration tool (separate from OpenADS
+  core) that manages data dictionaries through a browser: browse tables,
+  views, stored procedures, functions, triggers, RI objects, users, groups;
+  execute ad-hoc SQL; edit table structure; generate DDL scripts. Powered by
+  the `php_openads` native PHP extension over the OpenADS TCP wire protocol.
 - **Locking** — OS byte-range locks with the same ranges as the
   original ACE so installs can coexist during migration. Lock
   acquires are non-blocking (`LockFileEx LOCKFILE_FAIL_IMMEDIATELY`
@@ -834,8 +843,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
   `AdsCreateFTSIndex` accept a `usPageSize` argument. NTX (1024)
   and FoxPro CDX (512) are fixed-size by their on-disk format —
   matching the behaviour of the original ACE — so OpenADS records
-  the value but doesn't change the layout. Variable page sizes will
-  land alongside the proprietary ADI driver in 0.3.x.
+  the value but doesn't change the layout. Variable page sizes for
+  ADI are a future milestone; the ADI B+tree driver itself is complete.
 
 ### 0.3.x — proprietary formats + advanced SQL (IN PROGRESS)
 
@@ -909,7 +918,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.52-done` | SQL multi-row `INSERT INTO t (cols) VALUES (...), (...), ...` — appends one record per tuple. |
 | `m10.53-done` | SQL `NULLIF(a,b)` / `COALESCE(a,b,...)` / `IFNULL(expr,default)` — null-handling helpers in projection (empty string = NULL by convention). |
 | `m10.54-done` | SQL aggregate `<agg>(...) FILTER (WHERE <expr>)` — per-slot row filter; CountStar with FILTER uses the filtered count, others always do. |
-| `m4-adt-done` | **ADT / ADM read+write** — `AdtDriver` (`.adt`) + `AdmMemo` (`.adm`) implement the full IDriver / IMemoStore interfaces. All 13 ADT field type codes supported (CHAR, CICHAR, LOGICAL, DATE/JDN, DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY). ADM auto-attaches on `AdsOpenTable` when Memo/Binary fields are present; `Connection::open_table` extends the existing `has_memo_field` scan to include Binary. `AdsCreateTable(ADS_ADT)` still creates a DBF; ADI index files deferred to a later milestone. |
+| `m4-adt-done` | **ADT / ADM read+write** — `AdtDriver` (`.adt`) + `AdmMemo` (`.adm`) implement the full IDriver / IMemoStore interfaces. All 13 ADT field type codes supported (CHAR, CICHAR, LOGICAL, DATE/JDN, DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY). ADM auto-attaches on `AdsOpenTable` when Memo/Binary fields are present; `Connection::open_table` extends the existing `has_memo_field` scan to include Binary. `AdsCreateTable(ADS_ADT)` creates a native `.adt` file with correct field descriptors; companion `.adm` auto-created for Memo/Binary fields. |
 | `m12.2-done`  | Phase 2 TCP socket layer — `network/socket.{h,_win32.cpp,_posix.cpp}`. listen / accept / connect / send / recv / close + ephemeral-port binding. Win32 links ws2_32. |
 | `m12.3-done`  | Phase 2 server skeleton — `network/server` spawns an accept thread + per-connection session thread. Dispatches Hello → HelloAck (version), Connect → ConnectAck (data_dir echo), Disconnect → close, others → Error frame. recv_exact / read_frame / write_frame helpers exposed for M12.4 / M12.5. |
 | `m12.4-done`  | Phase 2 remote read-only table ops — server proxies OpenTable / GotoTop / Skip / GetField / GetRecordCount / AtEOF / CloseTable. Per-session engine::Connection + 32-bit table-id map. |
@@ -923,19 +932,13 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m12.12-done` | Phase 2 real TLS — vendored mbedtls 3.6 LTS (Apache 2.0) via `OPENADS_WITH_TLS` CMake option (OFF by default). When enabled, `AdsConnect60("tls://host:port/<dir>", ...)` opens a real `MbedTlsTransport` instead of returning AE_FUNCTION_NOT_AVAILABLE. `connect_tls(host, port, TlsConfig)` returns a `unique_ptr<ITransport>` ready for `read_frame` / `write_frame`. Server-side TLS termination is queued for v1.0.x (mbedtls 3.6 doesn't expose a supported way to adopt an externally-accepted fd; deployments today should front the server with a TLS proxy if needed). |
 | `m12.13-done` | Phase 2 transport abstraction — `network/transport.h` defines a polymorphic `ITransport` surface (`send` / `recv` / `close` / `valid`); `PlainTransport` is the only concrete impl today. `read_frame` / `write_frame` carry both `Socket&` and `ITransport&` overloads so existing call sites stay one-liner while the v0.4.0 `TlsTransport` plugs in without touching the server / client business logic. |
 | docs (M12)    | `docs/wire-protocol.md` — formal spec of every opcode + payload format, error-frame layout, transport notes, and versioning policy. Reference for non-C++ clients (Python, Go, Rust, Harbour AEP) that want to talk to an OpenADS server without reading the C++ source. |
+| `m-adi-rw-done` | **ADI B+tree read+write** — full `insert` / `erase` / `flush` path on `.adi` sidecar indexes; leaf page splits with sibling-link maintenance; `promote_split_` propagates splits up the branch level with recursive branch splits and fixed-root copy-up; char-key and numeric-key variants. `AdsOpenTable` continues to auto-attach the sidecar; mutations sync through the ADI B+tree alongside CDX / NTX auto-sync. |
 
 #### Still planned for 0.3.x
 
 - **VFP** NULL-bitmap extension — the `0x32` autoinc / null-flag
   header byte stays deferred. Autoinc (M10.11) and V / Q types
   (M11.1) are real today.
-- **ADI index files** — the proprietary SAP B+tree index format that
-  pairs with `.adt` tables. `AdsOpenTable` auto-opens an `.adi`
-  sidecar when one is present, but full ADI read/write via
-  `AdsOpenIndex` is not yet implemented. `.adt` tables are fully
-  usable today via CDX or NTX sidecar indexes.
-- **ADT table creation** — `AdsCreateTable` with `ADS_ADT` currently
-  falls back to DBF format. Creating a native `.adt` file is deferred.
 - **ADT encryption** — SAP's proprietary per-record encryption for
   `.adt` files is not implemented. OpenADS' own AES-256-CTR encryption
   (M11.2) applies to DBF files only.
@@ -968,7 +971,7 @@ the complete Phase 2 scope:
 | SQL | Full Advantage SQL dialect (parser + planner + executor + xBase UDFs + AEP host for external stored procedures). |
 | Concurrency | OS *byte-range* locking with ranges identical to ACE — coexistence with original ACE installations during migration. |
 | Data Dictionary (`.add`) | Full support: member tables, users/groups/permissions, RI, views, procedures, links, validations, defaults. |
-| Encryption | AES-128 / AES-256 (ADS 9+ format). The legacy proprietary cipher is out of scope for phase 1. |
+| Encryption | AES-128 / AES-256 ECB primitive (vendored tiny-AES-c). Table encryption (M11.2) uses AES-256-CTR on top (DBF only, OpenADS-specific — not byte-compatible with SAP ADS format). SAP proprietary encryption is out of scope. |
 | Transactions (TPS) | Multi-table ACID, savepoints, crash recovery via write-ahead log. |
 | Platforms | Windows (x86 + x64), Linux, macOS, BSD. |
 | Language / build | C++17 with `extern "C"` external ABI. CMake + GitHub Actions. |
@@ -1937,12 +1940,13 @@ GitHub Actions:
 | **M1 — DBF read** | ✅ `dbf_common` + CDX driver read-only. `AdsConnect60` / `AdsOpenTable` / `AdsGotoTop` / `AdsSkip` / `AdsGetField` work over a CDX-typed DBF. |
 | **M2 — DBF write + lock** | ✅ Append / update / delete + `LockMgr` Compatible mode. NTX driver. Single-process integrity tests. |
 | **M3 — indexes** | ✅ CDX read / write, NTX read / write. Multi-level B+tree split, `dbSeek`, compound key expressions, AOF / Rushmore filter. |
-| **M4 — ADT + memo** | ✅ ADT / ADM read+write (all 13 field types), `.fpt` / `.dbt` memo stores. VFP driver (V/Q/autoinc/NULL bitmap). AES-128/256 ECB encryption. |
+| **M4 — ADT + memo** | ✅ ADT / ADM read+write (all 13 field types), `.fpt` / `.dbt` memo stores. `AdsCreateTable(ADS_ADT)` creates native `.adt` files. VFP driver (V/Q/autoinc/NULL bitmap). AES-128/256 ECB block-cipher primitive. |
+| **ADI — B+tree index** | ✅ ADI read+write complete (post-rc29) — seek, insert, erase, flush, leaf+branch page splits, `promote_split_` branch promotion, fixed-root copy-up; char-key and numeric-key variants. |
 | **M5 — TPS** | ✅ TxLog WAL + crash recovery, savepoints, multi-table atomicity, group commit, Compatible-mode `.lsnmap` overlay. |
 | **M6 — DD** | ✅ Full binary `.add` / `.am` / `.ai` parser + OpenADS-native text format. Users, groups, permissions, RI, views, triggers, stored procedures, links. Server-side trigger / RI / permission enforcement. |
 | **M7 — SQL** | ✅ Full Advantage SQL — 50+ milestones: SELECT / DML / DDL, all JOIN types, aggregates, window functions, subqueries, CTEs, derived tables, GROUP BY / HAVING, UNION, DISTINCT, LIMIT, xBase UDFs, AEP host. |
 | **M8 — Conformance** | ✅ Harbour `rddtst.prg` 442/442 PASS. Byte-compat CI green. Tagged `v0.1.0` → `v1.0.0-rc29+`. |
-| **M12 — TCP server** | ✅ `openads_serverd` wire protocol — Hello/Connect/OpenTable/ExecuteSQL/Fetch/Disconnect/Error, auth, ACE error-code propagation, batch fetch, TLS client. DA-Web and `php_openads` in production over TCP. |
+| **M12 — TCP server** | ✅ `openads_serverd` wire protocol — Hello/Connect/OpenTable/ExecuteSQL/Fetch/Disconnect/Error, auth, ACE error-code propagation, batch fetch, TLS client. `php_openads` PHP extension client in production over TCP. |
 
 ## Next steps
 
@@ -1954,20 +1958,22 @@ All Phase 1 milestones (M0–M8) are complete. See the release table at the top 
 | **M1 — DBF read (CDX)** | ✅ Done — `0.1.0` |
 | **M2 — DBF write + LockMgr** | ✅ Done — `0.1.0` |
 | **M3 — Indexes (CDX/NTX/AOF)** | ✅ Done — M3.6 + M3.10 closed all known-issues; byte-compat CI green |
-| **M4 — ADT + memo + VFP + AES** | ✅ Done — `v1.0.0-rc28`; all 13 ADT field types; ADM; FPT/DBT; VFP V/Q/autoinc/NULL-bitmap; AES-256-CTR |
+| **M4 — ADT + memo + VFP + AES** | ✅ Done — post-rc28; all 13 ADT field types; `AdsCreateTable(ADS_ADT)` creates native `.adt`; ADM; FPT/DBT; VFP V/Q/autoinc/NULL-bitmap; AES-128/256 ECB primitive (AES-256-CTR table encryption is M11.2) |
+| **ADI — B+tree index read+write** | ✅ Done — post-rc29; seek / insert / erase / flush; leaf+branch page splits; `promote_split_` branch promotion; fixed-root copy-up; char-key and numeric-key variants |
 | **M5 — TPS / WAL** | ✅ Done — group commit, Compatible-mode `.lsnmap`, savepoints, crash recovery |
 | **M6 — Data Dictionary** | ✅ Done — binary `.add`/`.am`/`.ai` parser + OpenADS-native text format; full CRUD; server-side trigger/RI/permission enforcement |
 | **M7 — SQL engine** | ✅ Done — 50+ milestones; full Advantage SQL dialect; xBase UDFs; AEP host |
 | **M8 — Conformance + 0.1.0** | ✅ Done — `rddtst.prg` 442/442 PASS; byte-compat CI green; tagged `v0.1.0` → `post-rc29` |
-| **M12 — TCP server** | ✅ Done — `openads_serverd` + `php_openads` + DA-Web in production |
+| **M12 — TCP server** | ✅ Done — `openads_serverd` + `php_openads` PHP extension client in production |
 
-### Snapshot (post-rc29, 2026-06-03)
+### Snapshot (post-rc29, 2026-06-16)
 
 - **517 doctest cases passing** on Windows MSVC Release (cross-platform CI green on Ubuntu 24.04 clang + macOS AppleClang).
 - **231 `Ads*` entry points exported** — all entry points Harbour `rddads.lib` references resolve; DD CRUD surface is real, `AdsMg*` returns live telemetry, the rest are silent-success stubs.
 - **Drop-in DLL:** `ace64.dll` (Win x64) + `ace32.dll` (Win x86) from the `openads_ace` SHARED target, plus 6 legacy MSVC2013-era CRT shims (`_dclass`, `_dsign`, `_wfsopen`, `_getch`, `_kbhit`, `_eof`).
 - **Full Harbour `rddtst.prg` 442/442 PASS (2026-05-08).**
-- **TCP server in production:** `openads_serverd` serves the OpenADS wire protocol; `DA-Web` connects via `tcp://localhost:16262/path.add`.
+- **TCP server in production:** `openads_serverd` serves the OpenADS wire protocol; `php_openads` PHP extension client connects via `tcp://host:port/path.add`.
+- **ADI B+tree write path complete** — `insert` / `erase` / `flush`, leaf and branch page splits, `promote_split_` branch promotion, fixed-root copy-up; char-key and numeric-key variants smoke-tested against `pmsys_imported.add`.
 
 ### Working on a milestone
 
