@@ -8,6 +8,7 @@
 #pragma comment(lib, "ws2_32.lib")
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 
 namespace openads::network {
@@ -114,19 +115,35 @@ util::Result<Socket> accept_one(Socket& listener) {
 util::Result<Socket> connect_tcp(const std::string& host,
                                   std::uint16_t port) {
     if (auto r = network_init(); !r) return r.error();
-    SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == INVALID_SOCKET) {
-        return util::Error{5000, WSAGetLastError(),
-                           "socket() failed", ""};
+
+    // Use getaddrinfo so hostnames (e.g. "localhost") are resolved properly;
+    // InetPtonA only accepts dotted-decimal strings and silently produces
+    // addr 0.0.0.0 for symbolic names.
+    char portbuf[8];
+    std::snprintf(portbuf, sizeof(portbuf), "%u", port);
+    addrinfo hints{};
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    addrinfo* ai = nullptr;
+    int gai = ::getaddrinfo(host.c_str(), portbuf, &hints, &ai);
+    if (gai != 0 || ai == nullptr) {
+        return util::Error{5000, gai, "getaddrinfo() failed", host};
     }
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(port);
-    InetPtonA(AF_INET, host.c_str(), &addr.sin_addr);
-    if (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) ==
-        SOCKET_ERROR) {
-        int e = WSAGetLastError(); closesocket(s);
-        return util::Error{5000, e, "connect() failed", host};
+
+    SOCKET s = INVALID_SOCKET;
+    for (addrinfo* cur = ai; cur != nullptr; cur = cur->ai_next) {
+        s = ::socket(cur->ai_family, cur->ai_socktype, cur->ai_protocol);
+        if (s == INVALID_SOCKET) continue;
+        if (::connect(s, cur->ai_addr, static_cast<int>(cur->ai_addrlen)) != SOCKET_ERROR)
+            break;
+        closesocket(s);
+        s = INVALID_SOCKET;
+    }
+    ::freeaddrinfo(ai);
+
+    if (s == INVALID_SOCKET) {
+        return util::Error{5000, WSAGetLastError(), "connect() failed", host};
     }
     disable_nagle(s);
     Socket out;

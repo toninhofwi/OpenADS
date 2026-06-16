@@ -49,6 +49,10 @@ public:
                         const std::string& password);
     bool require_auth() const noexcept;
 
+    // Set the data root directory. Relative paths from Connect frames
+    // are resolved under this directory.
+    void set_data_dir(const std::string& dir) { data_dir_ = dir; }
+
     // studio.web.0.4 — observable session info exposed for the
     // Studio "Sessions" tab. Snapshot is taken under a mutex so
     // concurrent reads from the HTTP console are safe.
@@ -80,6 +84,9 @@ private:
     std::thread              accept_thread_;
     mutable std::mutex       sessions_mu_;
     std::vector<std::thread> sessions_;
+
+    // Data root directory: relative client paths are resolved under it.
+    std::string                                   data_dir_;
 
     // M12.9 — credential map (user -> password). Read-only after
     // start() returns; set up at construction time / before start.

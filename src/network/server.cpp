@@ -428,9 +428,11 @@ void Server::session_loop(Socket s) {
     auto ensure_abi_conn = [&]() -> bool {
         if (abi_conn != 0) return true;
         if (!sess_conn) return false;
-        const std::string& dir = sess_conn->data_dir();
-        std::vector<UNSIGNED8> srvbuf(dir.size() + 1);
-        std::memcpy(srvbuf.data(), dir.c_str(), dir.size() + 1);
+        // Prefer the full .add path so the ABI connection inherits the DD.
+        const std::string& conn_path = sess_conn->dd_path().empty()
+            ? sess_conn->data_dir() : sess_conn->dd_path();
+        std::vector<UNSIGNED8> srvbuf(conn_path.size() + 1);
+        std::memcpy(srvbuf.data(), conn_path.c_str(), conn_path.size() + 1);
         return AdsConnect60(srvbuf.data(), ADS_LOCAL_SERVER,
                             nullptr, nullptr, 0, &abi_conn) == 0;
     };
@@ -773,7 +775,15 @@ void Server::session_loop(Socket s) {
                         break;
                     }
                 }
-                auto co = openads::session::Connection::open(dir);
+                // Resolve relative client paths under the server's data root.
+                std::string resolved = dir;
+                if (!data_dir_.empty()) {
+                    namespace fs = std::filesystem;
+                    fs::path cp(dir);
+                    if (cp.is_relative())
+                        resolved = (fs::path(data_dir_) / cp).string();
+                }
+                auto co = openads::session::Connection::open(resolved);
                 if (!co) {
                     reply = err("Connect: connection open failed",
                                 static_cast<UNSIGNED32>(co.error().code));
@@ -1709,11 +1719,7 @@ void Server::session_loop(Socket s) {
             case Opcode::ExecuteSQL: {
                 if (!sess_conn) { reply = err("ExecuteSQL: not connected"); break; }
                 if (abi_conn == 0) {
-                    const std::string& dir = sess_conn->data_dir();
-                    std::vector<UNSIGNED8> srvbuf(dir.size() + 1);
-                    std::memcpy(srvbuf.data(), dir.c_str(), dir.size() + 1);
-                    if (AdsConnect60(srvbuf.data(), ADS_LOCAL_SERVER,
-                                     nullptr, nullptr, 0, &abi_conn) != 0) {
+                    if (!ensure_abi_conn()) {
                         reply = err("ExecuteSQL: AdsConnect60 failed");
                         break;
                     }

@@ -48,7 +48,9 @@ public:
                                    engine::TableType  type =
                                        engine::TableType::Cdx);
 
-    const std::string& data_dir() const noexcept { return data_dir_; }
+    const std::string& data_dir()  const noexcept { return data_dir_; }
+    // Full path to the .add DD file if one was opened (empty otherwise).
+    const std::string& dd_path()   const noexcept { return dd_path_; }
 
     // Transaction surface (M5).
     util::Result<void> begin_tx();
@@ -133,6 +135,7 @@ private:
                                    engine::TableType&  type);
 
     std::string                                                data_dir_;
+    std::string                                                dd_path_;   // full .add path if DD opened
     std::unordered_map<Handle, std::unique_ptr<engine::Table>> tables_;
     std::unordered_map<Handle, std::string>                    table_paths_;
     Handle                                                     next_table_handle_ = 1;

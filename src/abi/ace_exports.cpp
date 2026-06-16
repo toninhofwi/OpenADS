@@ -175,6 +175,17 @@ cursor_projections() {
     return m;
 }
 
+// Remote SQL cursors map — moved out of AdsExecuteSQLDirect so that
+// AdsDisconnect can reach it to null out rt->conn before the
+// RemoteConnection is freed, preventing use-after-free in AdsCloseTable.
+std::unordered_map<Handle,
+    std::unique_ptr<openads::network::RemoteTable>>&
+remote_sql_cursors_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::network::RemoteTable>> m;
+    return m;
+}
+
 const std::vector<std::uint16_t>*
 projection_for(ADSHANDLE h) {
     auto& m = cursor_projections();
@@ -837,6 +848,13 @@ UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
         std::lock_guard<std::recursive_mutex> lk_local(s_local.mu);
         if (auto* rc = s_local.registry.lookup<openads::network::RemoteConnection>(
                 hConnect, HandleKind::RemoteConnection)) {
+            // Null out rt->conn on any open SQL cursors that reference this
+            // connection so AdsCloseTable can detect the dangling case and
+            // skip the wire op rather than crashing with a use-after-free.
+            for (auto& kv : remote_sql_cursors_map()) {
+                if (kv.second && kv.second->conn == rc)
+                    kv.second->conn = nullptr;
+            }
             rc->disconnect();
             return ok();
         }
@@ -1897,7 +1915,14 @@ UNSIGNED32 AdsCloseAllTables(void) {
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     {
         if (auto* rt = get_remote_table(hTable)) {
-            (void)rt->conn->close_table(rt->id);
+            // conn is nulled out by AdsDisconnect before the RemoteConnection
+            // is freed; skip the wire close op if the connection is already gone.
+            if (rt->conn != nullptr)
+                (void)rt->conn->close_table(rt->id);
+            auto& s2 = state();
+            std::lock_guard<std::recursive_mutex> lk2(s2.mu);
+            s2.registry.release(hTable);
+            remote_sql_cursors_map().erase(hTable);
             return ok();
         }
     }
@@ -2917,7 +2942,28 @@ UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
-                        UNSIGNED16 /*usOption*/) {
+                        UNSIGNED16 usOption) {
+    // Remote cursor: delegate through AdsGetField which reads from the row cache.
+    if (get_remote_table(hTable) != nullptr) {
+        UNSIGNED32 raw_len = (pulLen && *pulLen > 0) ? *pulLen : 65536;
+        std::vector<UNSIGNED8> tmp(raw_len + 1, 0);
+        if (AdsGetField(hTable, pucField, tmp.data(), &raw_len, usOption) != 0)
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        // Trim trailing spaces (ADS_TRIM behaviour) then copy to caller.
+        std::string s(reinterpret_cast<char*>(tmp.data()), raw_len);
+        auto last = s.find_last_not_of(' ');
+        if (last != std::string::npos) s.erase(last + 1);
+        else s.clear();
+        UNSIGNED32 cap = pulLen ? *pulLen : 0;
+        UNSIGNED32 n   = cap > 0 ? std::min<UNSIGNED32>(cap - 1,
+                                    static_cast<UNSIGNED32>(s.size())) : 0;
+        if (pucBuf != nullptr && cap > 0) {
+            if (n > 0) std::memcpy(pucBuf, s.data(), n);
+            pucBuf[n] = '\0';
+        }
+        if (pulLen) *pulLen = static_cast<UNSIGNED32>(s.size());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -8244,15 +8290,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         }
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
-        static std::unordered_map<Handle,
-            std::unique_ptr<openads::network::RemoteTable>>
-                remote_sql_cursors;
         auto rt = std::make_unique<openads::network::RemoteTable>();
         rt->conn = it->second->remote;
         rt->id   = cur_id;
         Handle h = s.registry.register_object(
             HandleKind::RemoteTable, rt.get());
-        remote_sql_cursors[h] = std::move(rt);
+        remote_sql_cursors_map()[h] = std::move(rt);
         *phCursor = h;
         return ok();
     }

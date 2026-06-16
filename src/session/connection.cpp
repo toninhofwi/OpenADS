@@ -47,6 +47,7 @@ util::Result<Connection> Connection::open(const std::string& data_dir) {
 
     if (is_add) {
         if (fs::exists(p, ec)) {
+            c.dd_path_ = fs::absolute(p).string();
             auto dd = engine::DataDict::open(p.string());
             if (!dd) return dd.error();
             c.dd_ = std::move(dd).value();

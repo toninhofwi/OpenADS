@@ -106,6 +106,8 @@ bool parse_args(int argc, char** argv, Args& out) {
 // (signal handler on POSIX / SCM stop control on Windows).
 int run_server(const Args& args, bool console) {
     openads::network::Server srv;
+    if (!args.data_dir.empty() && args.data_dir != ".")
+        srv.set_data_dir(args.data_dir);
     auto r = srv.start(args.host, args.port);
     if (!r) {
         std::fprintf(stderr, "server start failed: %s (sub=%d)\n",
