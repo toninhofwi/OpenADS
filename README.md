@@ -221,6 +221,79 @@ For FiveWin (FWH) GUI apps `hbmk2` is not enough — see
 that mirrors FWH's stock build script with the two extra link
 entries (`rddads.lib` + OpenADS' `ace64.lib`).
 
+### Migrating from SAP ADS — DLL architecture
+
+SAP Advantage Database Server splits its client-side runtime into
+**two separate DLLs**:
+
+| SAP DLL | Role |
+|---|---|
+| `ACE64.dll` | API surface — provides `AdsConnect60`, `AdsGetField`, etc. Acts as a thin dispatcher. |
+| `AdsLoc64.dll` | The actual database engine (file I/O, SQL, indexes, transactions). Loaded into your process when the connection type is `ADS_LOCAL_SERVER`. |
+
+When your application calls `AdsConnect60(..., ADS_LOCAL_SERVER, ...)`,
+`ACE64.dll` loads `AdsLoc64.dll` into your process and the full
+engine runs in-process. When you use `ADS_REMOTE_SERVER`, `ACE64.dll`
+instead talks to the ADS server process over TCP and
+`AdsLoc64.dll` is not involved at all.
+
+**OpenADS collapses both roles into one DLL:**
+
+| OpenADS DLL | Role |
+|---|---|
+| `ace64.dll` (also shipped as `openace64.dll`) | API surface **and** full database engine — handles both local and remote connections. |
+
+- **Local path** (e.g. `C:\data\mydb.add`): the engine runs
+  in-process, exactly as `AdsLoc64.dll` did under SAP.
+- **Remote path** (e.g. `tcp://host:16262/data/mydb.add`): the DLL
+  acts as a wire-protocol client and delegates work to the
+  `openads_serverd` process, exactly as `ACE64.dll` did when talking
+  to the ADS server.
+
+There is no separate "local engine DLL" to deploy.
+
+#### What this means for Harbour / Delphi / C++ / .NET applications
+
+**Good news — your code does not change.** `AdsConnect60`,
+`AdsGetField`, and the rest of the `Ads*` entry-point surface have
+identical signatures. You replace `ACE64.dll` + `AdsLoc64.dll` with
+OpenADS' single `ace64.dll` on your application's `PATH` and every
+call lands on the new engine without recompiling.
+
+| Language / framework | What to swap |
+|---|---|
+| **Harbour / rddads** | Put OpenADS `ace64.dll` ahead of any SAP copy on `PATH`; `contrib/rddads` links against `ace64.lib` (same name). |
+| **Delphi** | Replace `ACE64.dll` in your deploy folder; your `LoadLibrary` / `GetProcAddress` calls or the Advantage Delphi Components resolve the same entry points. |
+| **C / C++** | Link against OpenADS' `ace64.lib` import library (same exports as the SAP one); swap the runtime DLL. |
+| **.NET (AdsDataProvider / X#)** | The managed driver calls into `ACE64.dll` via P/Invoke; dropping OpenADS' `ace64.dll` into the same directory is sufficient. |
+
+The `ADS_LOCAL_SERVER` vs `ADS_REMOTE_SERVER` flag still matters —
+it determines whether the engine runs in-process or routes to the
+server daemon — but the connection string and every subsequent
+`Ads*` call look exactly the same as before.
+
+#### PHP — a special case
+
+SAP's official PHP extension (`php_ads.dll`) stopped being compatible
+with PHP after version 5.2, which reached end-of-life in 2011. It
+was never updated for modern PHP and is unusable today.
+
+A fully working, modern PHP extension was developed independently
+by Reinaldo Crespo and is freely available at
+[github.com/reinaldocrespo/php_advantage](https://github.com/reinaldocrespo/php_advantage).
+This extension targets PHP 8.x (ZTS / NTS, x64), exposes the full
+`Ads*` ABI surface including a 40-method `AdsDictionary` class, and
+works against the **original SAP ACE64** runtime.
+
+OpenADS ships its own PHP extension (`php_openads.dll`) built on
+top of that same foundation. It loads `openace64.dll` instead of
+SAP's `ACE64.dll` and is packaged as a native Zend extension
+(`bindings/php_ext/`). One code path covers both local file paths
+and `tcp://` / `tls://` remote connections. If you are on PHP 8.x
+and migrating from SAP ADS, `php_openads.dll` + `openace64.dll`
+is the supported replacement pair; the API surface it exposes is
+compatible with what `php_advantage` exposes against SAP ACE64.
+
 ### Studio web console (in-process, LocalServer mode)
 
 OpenADS ships a single-page web admin console (Studio) that lists
