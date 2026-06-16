@@ -31,10 +31,37 @@ std::uint32_t u32_be(const std::uint8_t* p) noexcept {
          |  static_cast<std::uint32_t>(p[3]);
 }
 
+void set_u16_le(std::uint8_t* p, std::uint16_t v) noexcept {
+    p[0] = static_cast<std::uint8_t>(v);
+    p[1] = static_cast<std::uint8_t>(v >> 8);
+}
+
+void set_u32_le(std::uint8_t* p, std::uint32_t v) noexcept {
+    p[0] = static_cast<std::uint8_t>(v);
+    p[1] = static_cast<std::uint8_t>(v >>  8);
+    p[2] = static_cast<std::uint8_t>(v >> 16);
+    p[3] = static_cast<std::uint8_t>(v >> 24);
+}
+
+void set_u32_be(std::uint8_t* p, std::uint32_t v) noexcept {
+    p[0] = static_cast<std::uint8_t>(v >> 24);
+    p[1] = static_cast<std::uint8_t>(v >> 16);
+    p[2] = static_cast<std::uint8_t>(v >>  8);
+    p[3] = static_cast<std::uint8_t>(v);
+}
+
+// Dense entry recno from a raw byte buffer (not a Page), given 0-based idx.
+std::uint32_t dense_recno_from_buf(const std::uint8_t* base, std::uint32_t idx,
+                                   std::uint32_t esz) noexcept {
+    const std::uint8_t* e = base + idx * esz;
+    if (esz >= 3)
+        return static_cast<std::uint32_t>(e[0]) | (static_cast<std::uint32_t>(e[1]) << 8);
+    return e[0];
+}
+
 platform::OpenMode map_open_mode(IndexOpenMode m) noexcept {
-    return (m == IndexOpenMode::ReadOnly)
-               ? platform::OpenMode::ReadOnly
-               : platform::OpenMode::OpenExisting;
+    if (m == IndexOpenMode::ReadOnly) return platform::OpenMode::ReadOnly;
+    return platform::OpenMode::OpenExisting;
 }
 
 // Derive .adt path from .adi path
@@ -503,6 +530,7 @@ util::Result<void> AdiIndex::apply_tag_(
 // ─────────────────────────────────────────────────────────────────────────────
 
 util::Result<void> AdiIndex::open(const std::string& path, IndexOpenMode mode) {
+    mode_ = mode;
     auto fi = platform::File::open(path, map_open_mode(mode));
     if (!fi) return fi.error();
     adi_file_ = std::move(fi).value();
@@ -538,6 +566,7 @@ util::Result<void> AdiIndex::open(const std::string& path, IndexOpenMode mode) {
 util::Result<void> AdiIndex::open_named(const std::string& adi_path,
                                         IndexOpenMode       mode,
                                         const std::string&  field_name) {
+    mode_ = mode;
     auto fi = platform::File::open(adi_path, map_open_mode(mode));
     if (!fi) return fi.error();
     adi_file_ = std::move(fi).value();
@@ -703,36 +732,24 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
             cur = branch_entry_page_(pg.data(), chosen);
         }
     } else {
-        // Numeric-key ADI: branch (lv=1) → sparse (lv=0) → dense (lv=3).
+        // Numeric-key ADI: descend until we hit a dense leaf.
+        // Works for any depth (branch→dense, branch→sparse→dense, root=dense).
         if (key.size() != 8) return navigate_leftmost_();
 
-        if (auto r = read_adi_page_(root_page_, pg); !r) return r.error();
-        std::uint16_t lv  = page_level(pg.data());
-        std::uint16_t cnt = page_count(pg.data());
-        if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
-
-        while (lv != ADI_LVL_SPARSE && !is_dense_leaf(lv)) {
-            int chosen = static_cast<int>(cnt) - 1;
-            for (int i = 0; i < static_cast<int>(cnt); ++i) {
-                const std::uint8_t* ek = tree_entry_key(pg.data(), i);
-                if (std::memcmp(key.data(), ek, 8) <= 0) { chosen = i; break; }
-            }
-            std::uint32_t child = tree_entry_page(pg.data(), chosen);
-            if (auto r = read_adi_page_(child, pg); !r) return r.error();
-            lv  = page_level(pg.data());
-            cnt = page_count(pg.data());
+        std::uint32_t cur = root_page_;
+        for (;;) {
+            if (auto r = read_adi_page_(cur, pg); !r) return r.error();
+            std::uint16_t lv  = page_level(pg.data());
+            std::uint16_t cnt = page_count(pg.data());
             if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
-        }
-
-        if (lv == ADI_LVL_SPARSE) {
+            if (is_dense_leaf(lv)) { dense_pg = cur; break; }
+            // Branch (lv=1) or sparse leaf (lv=0): pick child by key comparison.
             int chosen = static_cast<int>(cnt) - 1;
             for (int i = 0; i < static_cast<int>(cnt); ++i) {
                 const std::uint8_t* ek = tree_entry_key(pg.data(), i);
                 if (std::memcmp(key.data(), ek, 8) <= 0) { chosen = i; break; }
             }
-            dense_pg = tree_entry_page(pg.data(), chosen);
-        } else {
-            dense_pg = root_page_;  // root IS the dense leaf
+            cur = tree_entry_page(pg.data(), chosen);
         }
     }
 
@@ -780,6 +797,504 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
         }
     }
     SeekOutcome o; o.hit = SeekHit::AfterEnd; return o;
+}
+
+// ── AdiIndex::write_adi_page_ ────────────────────────────────────────────────
+
+util::Result<void> AdiIndex::write_adi_page_(std::uint32_t page_no,
+                                             const Page& buf) {
+    auto r = adi_file_.write_at(
+        static_cast<std::uint64_t>(page_no) * ADI_PAGE_SIZE,
+        buf.data(), buf.size());
+    if (!r) return r.error();
+    if (r.value() != ADI_PAGE_SIZE)
+        return util::Error{5000, 0, "short ADI page write", ""};
+    return {};
+}
+
+// ── AdiIndex::alloc_page_ ───────────────────────────────────────────────────
+
+util::Result<std::uint32_t> AdiIndex::alloc_page_() {
+    auto sz = adi_file_.size();
+    if (!sz) return sz.error();
+    return static_cast<std::uint32_t>(sz.value() / ADI_PAGE_SIZE);
+}
+
+// ── AdiIndex::build_dense_entry_ ────────────────────────────────────────────
+
+void AdiIndex::build_dense_entry_(std::uint8_t* dst, std::uint32_t recno,
+                                  const std::string& ikey) const noexcept {
+    if (entry_size_ >= 3) {
+        dst[0] = static_cast<std::uint8_t>(recno);
+        dst[1] = static_cast<std::uint8_t>(recno >> 8);
+        dst[2] = 0x00;  // type/flags byte — unknown; 0 works for new inserts
+    } else {
+        // 2-byte entry: recno(1) + key_flags(1).  For LOGICAL fields the
+        // key_flags byte encodes the boolean value (0x00=false, 0x40=true).
+        dst[0] = static_cast<std::uint8_t>(recno);
+        dst[1] = ikey.empty() ? std::uint8_t{0}
+                              : static_cast<std::uint8_t>(ikey[0]);
+    }
+}
+
+// ── AdiIndex::branch_key_at_ ────────────────────────────────────────────────
+
+std::string AdiIndex::branch_key_at_(const std::uint8_t* pg, int idx) const noexcept {
+    const std::uint8_t* e = pg + ADI_TREE_ENTRY_START
+                            + static_cast<std::uint32_t>(idx) * branch_entry_sz_;
+    if (char_key_)
+        return std::string(reinterpret_cast<const char*>(e), key_total_len_);
+    return std::string(reinterpret_cast<const char*>(e), 8);
+}
+
+// ── AdiIndex::promote_split_ ─────────────────────────────────────────────────
+//
+// Push a split result up the path stack.  Called after a leaf split with:
+//   left_pg  – page that ALREADY holds the left half (unchanged or rewritten)
+//   left_max – max key of left_pg's subtree
+//   right_pg – newly allocated page holding the right half
+//   right_max – max key of right_pg's subtree
+//
+// If path is empty the root page is rewritten as a 2-entry branch.
+// Otherwise pops the top frame, inserts right_pg into the parent branch,
+// and may trigger a branch split (recursive call).
+
+util::Result<void> AdiIndex::promote_split_(
+    std::vector<PathFrame>& path,
+    std::uint32_t left_pg,  const std::string& left_max,
+    std::uint32_t right_pg, const std::string& right_max)
+{
+    const std::uint32_t max_branch = (ADI_PAGE_SIZE - ADI_TREE_ENTRY_START)
+                                     / branch_entry_sz_;
+
+    auto write_branch_entry = [&](std::uint8_t* dst, const std::string& key,
+                                  std::uint32_t page_no) {
+        if (char_key_) {
+            // padded_key[char_key_padded_len_] + cum[4 LE]=0 + page[1]
+            std::memset(dst, 0, branch_entry_sz_);
+            std::size_t klen = std::min((std::size_t)key_total_len_, key.size());
+            std::memcpy(dst, key.data(), klen);
+            dst[char_key_padded_len_ + 4] = static_cast<std::uint8_t>(page_no & 0xFFu);
+        } else {
+            // key[8 BE] + cum[4 BE]=0 + page[4 BE]
+            std::memset(dst, 0, 16);
+            std::size_t klen = std::min<std::size_t>(8, key.size());
+            std::memcpy(dst, key.data(), klen);
+            set_u32_be(dst + 12, page_no);
+        }
+    };
+
+    if (path.empty()) {
+        // Root was the leaf (or we've bubbled all the way up).
+        // Rewrite root_page_ as a 2-entry branch.
+        Page root{};
+        set_u16_le(root.data(), ADI_LVL_BRANCH);
+        set_u16_le(root.data() + 2, 2);
+        set_u32_le(root.data() + 4, ADI_INVALID_PAGE);
+        set_u32_le(root.data() + 8, ADI_INVALID_PAGE);
+        write_branch_entry(root.data() + ADI_TREE_ENTRY_START,
+                           left_max,  left_pg);
+        write_branch_entry(root.data() + ADI_TREE_ENTRY_START + branch_entry_sz_,
+                           right_max, right_pg);
+        return write_adi_page_(root_page_, root);
+    }
+
+    // Pop parent frame.
+    PathFrame frame = path.back();
+    path.pop_back();
+
+    // Read the parent branch page.
+    Page parent{};
+    if (auto r = read_adi_page_(frame.page_no, parent); !r) return r;
+
+    std::uint16_t par_cnt = page_count(parent.data());
+
+    // Build a combined branch-entry buffer: all existing entries plus the new
+    // right child entry.  We also update the existing entry[frame.entry_idx]
+    // key to reflect the new left_max.
+    std::uint32_t total = par_cnt + 1;
+    std::vector<std::uint8_t> combo(total * branch_entry_sz_);
+
+    std::uint8_t* src = parent.data() + ADI_TREE_ENTRY_START;
+    // Copy entries [0..entry_idx], updating the chosen entry's key.
+    for (int i = 0; i <= frame.entry_idx; ++i) {
+        std::uint8_t* dst = combo.data() + i * branch_entry_sz_;
+        std::memcpy(dst, src + i * branch_entry_sz_, branch_entry_sz_);
+        if (i == frame.entry_idx) {
+            // Update this entry's key to left_max; page pointer stays.
+            std::size_t klen = std::min((std::size_t)(char_key_ ? key_total_len_ : 8u),
+                                        left_max.size());
+            std::memcpy(dst, left_max.data(), klen);
+            if (char_key_ && key_total_len_ < char_key_padded_len_)
+                std::memset(dst + key_total_len_, 0,
+                            char_key_padded_len_ - key_total_len_);
+        }
+    }
+    // New entry for right child at entry_idx+1
+    write_branch_entry(combo.data() + (frame.entry_idx + 1) * branch_entry_sz_,
+                       right_max, right_pg);
+    // Copy remaining entries [entry_idx+1..par_cnt-1] shifted right by one.
+    for (std::uint32_t i = frame.entry_idx + 1; i < par_cnt; ++i) {
+        std::memcpy(combo.data() + (i + 1) * branch_entry_sz_,
+                    src + i * branch_entry_sz_, branch_entry_sz_);
+    }
+
+    if (total <= max_branch) {
+        // Fits: write updated parent.
+        set_u16_le(parent.data() + 2, static_cast<std::uint16_t>(total));
+        std::memcpy(src, combo.data(), total * branch_entry_sz_);
+        return write_adi_page_(frame.page_no, parent);
+    }
+
+    // Branch is full: split it.
+    std::uint32_t left_cnt  = total / 2;
+    std::uint32_t right_cnt = total - left_cnt;
+
+    // Extract max key from a combo-buffer branch entry (no ADT read needed).
+    auto combo_key = [&](std::uint32_t idx) -> std::string {
+        const std::uint8_t* e = combo.data() + idx * branch_entry_sz_;
+        std::size_t klen = char_key_ ? key_total_len_ : 8u;
+        return std::string(reinterpret_cast<const char*>(e), klen);
+    };
+    std::string new_left_max  = combo_key(left_cnt - 1);
+    std::string new_right_max = combo_key(total - 1);
+
+    // Allocate right branch page.
+    auto rp_r = alloc_page_();
+    if (!rp_r) return rp_r.error();
+    std::uint32_t right_branch_pg = rp_r.value();
+
+    // Rewrite parent (left half).
+    set_u16_le(parent.data() + 2, static_cast<std::uint16_t>(left_cnt));
+    std::memcpy(src, combo.data(), left_cnt * branch_entry_sz_);
+    if (auto r = write_adi_page_(frame.page_no, parent); !r) return r;
+
+    // Write right branch page.
+    Page right_branch{};
+    set_u16_le(right_branch.data(), ADI_LVL_BRANCH);
+    set_u16_le(right_branch.data() + 2, static_cast<std::uint16_t>(right_cnt));
+    set_u32_le(right_branch.data() + 4, ADI_INVALID_PAGE);
+    set_u32_le(right_branch.data() + 8, ADI_INVALID_PAGE);
+    std::memcpy(right_branch.data() + ADI_TREE_ENTRY_START,
+                combo.data() + left_cnt * branch_entry_sz_,
+                right_cnt * branch_entry_sz_);
+    if (auto r = write_adi_page_(right_branch_pg, right_branch); !r) return r;
+
+    // Recurse: promote branch split.
+    return promote_split_(path,
+                          frame.page_no, new_left_max,
+                          right_branch_pg, new_right_max);
+}
+
+// ── AdiIndex::insert ─────────────────────────────────────────────────────────
+
+util::Result<void> AdiIndex::insert(std::uint32_t recno,
+                                    const std::string& key) {
+    if (mode_ == IndexOpenMode::ReadOnly)
+        return util::Error{5000, 0, "ADI index is read-only", ""};
+
+    // Normalise key to key_total_len_ bytes.
+    std::string ikey = key;
+    if (char_key_) {
+        if (ikey.size() < key_total_len_)
+            ikey.append(key_total_len_ - ikey.size(), ' ');
+        else
+            ikey.resize(key_total_len_);
+    } else {
+        ikey.resize(8, '\0');
+    }
+
+    // ── Descend from root, building the path stack ───────────────────────────
+    std::vector<PathFrame> path;
+    Page pg{};
+    std::uint32_t cur = root_page_;
+
+    for (;;) {
+        if (auto r = read_adi_page_(cur, pg); !r) return r.error();
+        std::uint16_t lv  = page_level(pg.data());
+        std::uint16_t cnt = page_count(pg.data());
+        if (is_dense_leaf(lv)) break;
+
+        int chosen = cnt ? static_cast<int>(cnt) - 1 : 0;
+        if (char_key_) {
+            for (int i = 0; i < static_cast<int>(cnt); ++i) {
+                const std::uint8_t* ek = pg.data() + ADI_TREE_ENTRY_START
+                    + static_cast<std::uint32_t>(i) * branch_entry_sz_;
+                if (std::memcmp(ikey.data(), ek, key_total_len_) <= 0) {
+                    chosen = i; break;
+                }
+            }
+        } else {
+            for (int i = 0; i < static_cast<int>(cnt); ++i) {
+                if (std::memcmp(ikey.data(), tree_entry_key(pg.data(), i), 8) <= 0) {
+                    chosen = i; break;
+                }
+            }
+        }
+        path.push_back({cur, cnt, chosen});
+        cur = branch_entry_page_(pg.data(), chosen);
+    }
+
+    std::uint16_t leaf_lv  = page_level(pg.data());
+    std::uint16_t leaf_cnt = page_count(pg.data());
+    const std::uint32_t max_ents =
+        (ADI_PAGE_SIZE - ADI_DENSE_ENTRY_START) / entry_size_;
+
+    // ── Binary-search for the insertion position ─────────────────────────────
+    int pos;
+    {
+        int lo = 0, hi = static_cast<int>(leaf_cnt);
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            std::uint32_t mrec = dense_entry_recno(pg.data(), mid, entry_size_);
+            auto mk = key_for_recno_(mrec);
+            if (!mk) return mk.error();
+            int cmp = compare_keys_(mk.value(), ikey);
+            if (cmp < 0 || (cmp == 0 && mrec < recno)) lo = mid + 1;
+            else hi = mid;
+        }
+        pos = lo;
+    }
+
+    // ── Simple insert (leaf not full) ────────────────────────────────────────
+    if (leaf_cnt < max_ents) {
+        std::uint8_t* base = pg.data() + ADI_DENSE_ENTRY_START;
+        std::uint32_t move_n = leaf_cnt - static_cast<std::uint32_t>(pos);
+        if (move_n > 0)
+            std::memmove(base + (pos + 1) * entry_size_,
+                         base + pos         * entry_size_,
+                         move_n * entry_size_);
+        build_dense_entry_(base + pos * entry_size_, recno, ikey);
+        set_u16_le(pg.data() + 2, leaf_cnt + 1);
+
+        // Keep cursor consistent.
+        if (cur_pg_ == cur) {
+            cur_page_ = pg;
+            cur_cnt_  = leaf_cnt + 1;
+            if (cur_idx_ >= pos) ++cur_idx_;
+        }
+        return write_adi_page_(cur, pg);
+    }
+
+    // ── Leaf is full: build combined buffer and split ─────────────────────────
+    std::vector<std::uint8_t> combo((max_ents + 1) * entry_size_);
+    std::uint8_t* base = pg.data() + ADI_DENSE_ENTRY_START;
+    std::memcpy(combo.data(),
+                base,
+                static_cast<std::uint32_t>(pos) * entry_size_);
+    build_dense_entry_(combo.data() + pos * entry_size_, recno, ikey);
+    std::memcpy(combo.data() + (pos + 1) * entry_size_,
+                base + pos * entry_size_,
+                (max_ents - static_cast<std::uint32_t>(pos)) * entry_size_);
+
+    const std::uint32_t total   = max_ents + 1;
+    const std::uint32_t lft_cnt = total / 2;
+    const std::uint32_t rgt_cnt = total - lft_cnt;
+
+    std::uint32_t orig_lsib = page_lsib(pg.data());
+    std::uint32_t orig_rsib = page_rsib(pg.data());
+
+    if (path.empty()) {
+        // Root is the dense leaf.  Allocate TWO new pages; root becomes branch.
+        // Must allocate and WRITE left page before allocating right (file size grows).
+        auto lp_r = alloc_page_();
+        if (!lp_r) return lp_r.error();
+        std::uint32_t left_pg = lp_r.value();
+
+        // We don't know right_pg yet, so write left with a placeholder rsib,
+        // then patch it after allocating right.
+        Page left_page = pg;  // copy header (lv, sub-header, etc.)
+        set_u16_le(left_page.data() + 2, static_cast<std::uint16_t>(lft_cnt));
+        set_u32_le(left_page.data() + 4, orig_lsib);
+        set_u32_le(left_page.data() + 8, ADI_INVALID_PAGE);  // filled in below
+        std::memcpy(left_page.data() + ADI_DENSE_ENTRY_START,
+                    combo.data(), lft_cnt * entry_size_);
+        if (auto r = write_adi_page_(left_pg, left_page); !r) return r;
+        // File has grown; now allocate right page.
+        auto rp_r = alloc_page_();
+        if (!rp_r) return rp_r.error();
+        std::uint32_t right_pg = rp_r.value();
+        // Patch left_page.rsib.
+        set_u32_le(left_page.data() + 8, right_pg);
+        if (auto r = write_adi_page_(left_pg, left_page); !r) return r;
+
+        // Build right leaf.
+        Page right_page{};
+        set_u16_le(right_page.data(), leaf_lv);
+        set_u16_le(right_page.data() + 2, static_cast<std::uint16_t>(rgt_cnt));
+        set_u32_le(right_page.data() + 4, left_pg);
+        set_u32_le(right_page.data() + 8, orig_rsib);
+        std::memcpy(right_page.data() + 12, pg.data() + 12, 12);  // sub-header
+        std::memcpy(right_page.data() + ADI_DENSE_ENTRY_START,
+                    combo.data() + lft_cnt * entry_size_,
+                    rgt_cnt * entry_size_);
+        if (auto r = write_adi_page_(right_pg, right_page); !r) return r;
+
+        // Update old right sibling's lsib pointer.
+        if (orig_rsib != ADI_INVALID_PAGE) {
+            Page rsib_pg{};
+            if (auto r = read_adi_page_(orig_rsib, rsib_pg); !r) return r;
+            set_u32_le(rsib_pg.data() + 4, right_pg);
+            if (auto r = write_adi_page_(orig_rsib, rsib_pg); !r) return r;
+        }
+
+        // Invalidate cursor (root content changed completely).
+        cur_pg_ = ADI_INVALID_PAGE; cur_idx_ = -1; cur_cnt_ = 0;
+
+        // Get max keys then rewrite root as branch.
+        auto left_max = key_for_recno_(dense_recno_from_buf(
+            combo.data(), lft_cnt - 1, entry_size_));
+        if (!left_max) return left_max.error();
+        auto right_max = key_for_recno_(dense_recno_from_buf(
+            combo.data(), total - 1, entry_size_));
+        if (!right_max) return right_max.error();
+
+        return promote_split_(path, left_pg,  left_max.value(),
+                                    right_pg, right_max.value());
+    }
+
+    // Non-root split: left half stays in cur, right half goes to new page.
+    auto rp_r = alloc_page_();
+    if (!rp_r) return rp_r.error();
+    std::uint32_t right_pg = rp_r.value();
+
+    // Rewrite cur (left leaf) with left half.
+    set_u16_le(pg.data() + 2, static_cast<std::uint16_t>(lft_cnt));
+    set_u32_le(pg.data() + 8, right_pg);
+    std::memcpy(pg.data() + ADI_DENSE_ENTRY_START,
+                combo.data(), lft_cnt * entry_size_);
+    if (auto r = write_adi_page_(cur, pg); !r) return r;
+
+    // Build and write right leaf.
+    Page right_page{};
+    set_u16_le(right_page.data(), leaf_lv);
+    set_u16_le(right_page.data() + 2, static_cast<std::uint16_t>(rgt_cnt));
+    set_u32_le(right_page.data() + 4, cur);
+    set_u32_le(right_page.data() + 8, orig_rsib);
+    std::memcpy(right_page.data() + 12, pg.data() + 12, 12);  // sub-header
+    std::memcpy(right_page.data() + ADI_DENSE_ENTRY_START,
+                combo.data() + lft_cnt * entry_size_,
+                rgt_cnt * entry_size_);
+    if (auto r = write_adi_page_(right_pg, right_page); !r) return r;
+
+    // Update orig_rsib.lsib.
+    if (orig_rsib != ADI_INVALID_PAGE) {
+        Page rsib_pg{};
+        if (auto r = read_adi_page_(orig_rsib, rsib_pg); !r) return r;
+        set_u32_le(rsib_pg.data() + 4, right_pg);
+        if (auto r = write_adi_page_(orig_rsib, rsib_pg); !r) return r;
+    }
+
+    // Cursor may be in either half; invalidate to be safe.
+    if (cur_pg_ == cur) {
+        cur_page_ = pg;
+        cur_cnt_  = static_cast<std::uint16_t>(lft_cnt);
+        cur_rsib_ = right_pg;
+        if (cur_idx_ >= static_cast<std::int32_t>(lft_cnt)) {
+            cur_pg_  = ADI_INVALID_PAGE;
+            cur_idx_ = -1;
+        }
+    }
+
+    auto left_max = key_for_recno_(dense_recno_from_buf(
+        combo.data(), lft_cnt - 1, entry_size_));
+    if (!left_max) return left_max.error();
+    auto right_max = key_for_recno_(dense_recno_from_buf(
+        combo.data(), total - 1, entry_size_));
+    if (!right_max) return right_max.error();
+
+    return promote_split_(path, cur,      left_max.value(),
+                                right_pg, right_max.value());
+}
+
+// ── AdiIndex::erase ──────────────────────────────────────────────────────────
+
+util::Result<void> AdiIndex::erase(std::uint32_t recno, const std::string& key) {
+    if (mode_ == IndexOpenMode::ReadOnly)
+        return util::Error{5000, 0, "ADI index is read-only", ""};
+
+    // Normalise key.
+    std::string ikey = key;
+    if (char_key_) {
+        if (ikey.size() < key_total_len_)
+            ikey.append(key_total_len_ - ikey.size(), ' ');
+        else
+            ikey.resize(key_total_len_);
+    } else {
+        ikey.resize(8, '\0');
+    }
+
+    // Seek to the correct dense leaf (soft=true: positions at or after key).
+    auto sk = seek_key(ikey, /*soft=*/true);
+    if (!sk) return sk.error();
+    if (sk.value().hit == SeekHit::AfterEnd || !sk.value().positioned)
+        return util::Error{5044, 0, "ADI: key not found for erase", ""};
+
+    // Scan forward from the seek position to find the exact (key, recno) entry.
+    for (;;) {
+        if (cur_pg_ == ADI_INVALID_PAGE) break;
+        for (int i = cur_idx_; i < static_cast<int>(cur_cnt_); ++i) {
+            std::uint32_t erec = dense_entry_recno(cur_page_.data(), i, entry_size_);
+            auto ek = key_for_recno_(erec);
+            if (!ek) return ek.error();
+            int cmp = compare_keys_(ek.value(), ikey);
+            if (cmp > 0)
+                return util::Error{5044, 0, "ADI: key not found for erase", ""};
+            if (cmp == 0 && erec == recno) {
+                // Found — remove entry i.
+                std::uint8_t* base = cur_page_.data() + ADI_DENSE_ENTRY_START;
+                std::uint32_t move_n = static_cast<std::uint32_t>(cur_cnt_) - 1
+                                       - static_cast<std::uint32_t>(i);
+                if (move_n > 0)
+                    std::memmove(base + i * entry_size_,
+                                 base + (i + 1) * entry_size_,
+                                 move_n * entry_size_);
+                --cur_cnt_;
+                set_u16_le(cur_page_.data() + 2, cur_cnt_);
+
+                // Adjust cursor index.
+                if (cur_idx_ >= static_cast<int>(cur_cnt_)) {
+                    cur_idx_ = static_cast<int>(cur_cnt_) - 1;
+                }
+
+                // Remember the page number before we potentially clear cur_pg_.
+                std::uint32_t write_pg = cur_pg_;
+
+                if (cur_cnt_ == 0) {
+                    // Page is now empty: bypass it in sibling links.
+                    std::uint32_t lsib = page_lsib(cur_page_.data());
+                    std::uint32_t rsib = page_rsib(cur_page_.data());
+                    if (lsib != ADI_INVALID_PAGE) {
+                        Page lp{};
+                        if (auto r = read_adi_page_(lsib, lp); !r) return r;
+                        set_u32_le(lp.data() + 8, rsib);
+                        if (auto r = write_adi_page_(lsib, lp); !r) return r;
+                    }
+                    if (rsib != ADI_INVALID_PAGE) {
+                        Page rp{};
+                        if (auto r = read_adi_page_(rsib, rp); !r) return r;
+                        set_u32_le(rp.data() + 4, lsib);
+                        if (auto r = write_adi_page_(rsib, rp); !r) return r;
+                    }
+                    cur_pg_  = ADI_INVALID_PAGE;
+                    cur_idx_ = -1;
+                }
+
+                return write_adi_page_(write_pg, cur_page_);
+            }
+        }
+        // Not on this leaf: advance to right sibling.
+        if (cur_rsib_ == ADI_INVALID_PAGE) break;
+        if (auto r = load_dense_leaf_(cur_rsib_); !r) return r.error();
+        cur_idx_ = 0;
+    }
+    return util::Error{5044, 0, "ADI: key not found for erase", ""};
+}
+
+// ── AdiIndex::flush ──────────────────────────────────────────────────────────
+
+util::Result<void> AdiIndex::flush() {
+    return adi_file_.sync();
 }
 
 } // namespace openads::drivers::adi

@@ -102,13 +102,11 @@ public:
     util::Result<SeekOutcome> prev()                                 override;
     std::string current_key() const override { return current_key_; }
 
-    util::Result<void> insert(std::uint32_t, const std::string&) override {
-        return util::Error{5000, 0, "ADI index is read-only", ""};
-    }
-    util::Result<void> erase(std::uint32_t, const std::string&) override {
-        return util::Error{5000, 0, "ADI index is read-only", ""};
-    }
-    util::Result<void> flush() override { return {}; }
+    util::Result<void> insert(std::uint32_t recno,
+                              const std::string& key) override;
+    util::Result<void> erase (std::uint32_t recno,
+                              const std::string& key) override;
+    util::Result<void> flush() override;
 
     // Multi-tag API (mirrors CdxIndex)
     static util::Result<std::vector<std::string>>
@@ -119,8 +117,31 @@ public:
                                   const std::string&  field_name);
 
 private:
+    // Read / write a 512-byte page from/to the ADI file
+    util::Result<void> read_adi_page_ (std::uint32_t page_no, Page& buf);
+    util::Result<void> write_adi_page_(std::uint32_t page_no, const Page& buf);
+
+    // Allocate a new page at end-of-file; returns its page number.
+    util::Result<std::uint32_t> alloc_page_();
+
+    // Build a dense-leaf entry (entry_size_ bytes) at dst.
+    void build_dense_entry_(std::uint8_t* dst, std::uint32_t recno,
+                            const std::string& ikey) const noexcept;
+
+    // Extract key bytes from a branch-page entry at index idx.
+    std::string branch_key_at_(const std::uint8_t* pg, int idx) const noexcept;
+
+    // Frame recorded while descending a branch during insert.
+    struct PathFrame { std::uint32_t page_no; std::uint16_t cnt; int entry_idx; };
+
+    // After a leaf or branch split: push (left_max_key, right_pg, right_max_key)
+    // into the parent level, splitting branches recursively as needed.
+    util::Result<void> promote_split_(
+        std::vector<PathFrame>& path,
+        std::uint32_t left_pg,  const std::string& left_max,
+        std::uint32_t right_pg, const std::string& right_max);
+
     // Read a 512-byte page from the ADI file into buf
-    util::Result<void> read_adi_page_(std::uint32_t page_no, Page& buf);
 
     // Load the dense leaf at page_no into cur_page_ and update cursor metadata
     util::Result<void> load_dense_leaf_(std::uint32_t page_no);
@@ -163,6 +184,9 @@ private:
         std::uint32_t hlen, std::uint32_t rlen,
         bool unique);
 
+
+    // Open mode (set by open / open_named)
+    IndexOpenMode   mode_ = IndexOpenMode::ReadOnly;
 
     // ADI file + ADT companion file
     platform::File  adi_file_;
