@@ -669,10 +669,20 @@ html, body {
   text-align: center;
   user-select: none;
 }
-.tbl-btn:hover { background: #45475a; color: #cdd6f4; }
+.tbl-btn:hover:not([disabled]) { background: #45475a; color: #cdd6f4; }
+.tbl-btn[disabled] { opacity: 0.35; cursor: not-allowed; }
 .tbl-btn.tbl-btn-confirm { color: #a6e3a1; border-color: #a6e3a1; }
-.tbl-btn.tbl-btn-confirm:hover { background: #a6e3a1; color: #1e1e2e; }
+.tbl-btn.tbl-btn-confirm:hover:not([disabled]) { background: #a6e3a1; color: #1e1e2e; }
+.tbl-btn.tbl-btn-save:not([disabled]) { color: #89b4fa; border-color: #89b4fa; }
+.tbl-btn.tbl-btn-save:hover:not([disabled]) { background: #89b4fa; color: #1e1e2e; }
 .tbl-btn-sep { width: 1px; background: #45475a; height: 16px; margin: 0 3px; flex-shrink: 0; }
+
+/* Dirty (unsaved) cell highlight */
+.tabulator-cell.cell-dirty { background: rgba(250, 179, 135, 0.18) !important; }
+.tabulator-row.tabulator-selected .tabulator-cell.cell-dirty { background: rgba(250, 179, 135, 0.30) !important; }
+/* PK columns get a subtle indicator */
+.tabulator-cell.cell-pk { cursor: default; }
+.tabulator-col[data-field].col-pk .tabulator-col-content { opacity: 0.7; }
 
 /* ── SQL script list (Open SQL Script modal) ──────────────────────────────── */
 .script-row {

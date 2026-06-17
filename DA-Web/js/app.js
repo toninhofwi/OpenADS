@@ -1632,6 +1632,7 @@
               if (inst.pendingRow && cell.getRow() === inst.pendingRow) return true;
               return !isPk;
             },
+            cssClass: isPk ? 'cell-pk' : '',
           };
           if (isPk)    col.headerTooltip = 'Primary key — read only';
           if (isROType) col.headerTooltip = baseType + ' — read only';
@@ -1698,6 +1699,17 @@
         saveEditsBtn: bar.querySelector('[data-act="save-edits"]'),
       };
 
+      // Warn if table has no PK — edits cannot be saved without one
+      if (pkFieldsUpper.size === 0) {
+        const noPkWarn = document.createElement('span');
+        noPkWarn.title = 'No primary key — row edits cannot be saved';
+        noPkWarn.style.cssText = 'font-size:11px;color:#f38ba8;margin-left:4px;cursor:default;';
+        noPkWarn.textContent = '⚠ No PK';
+        bar.appendChild(noPkWarn);
+        const saveBtn = bar.querySelector('[data-act="save-edits"]');
+        if (saveBtn) saveBtn.disabled = true;
+      }
+
       // Capture original row data when a cell editor opens (before value changes)
       tbl.on('cellEditing', (cell) => {
         const inst = tblState[tabId];
@@ -1709,12 +1721,13 @@
         }
       });
 
-      // Enable Save button after any cell is changed
+      // Enable Save button and mark cell dirty after any cell is changed
       tbl.on('cellEdited', (cell) => {
         const inst = tblState[tabId];
         if (!inst) return;
         if (cell.getRow() === inst.pendingRow) return;
         if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = false;
+        cell.getElement()?.classList.add('cell-dirty');
       });
 
       // When a seek is active the server already returned rows starting at the match;
@@ -1789,8 +1802,13 @@
     switch (act) {
       case 'save-edits': {
         if (!inst.dirtyRows || inst.dirtyRows.size === 0) return;
+        if (inst.pkFields.length === 0) {
+          setStatus('Cannot save: no primary key defined for this table', 'error');
+          return;
+        }
         const jobs = [];
-        for (const [row, { orig }] of inst.dirtyRows) {
+        const rowEntries = [...inst.dirtyRows.entries()];
+        for (const [row, { orig }] of rowEntries) {
           jobs.push(
             apiFetch('api/row_ops.php', {
               method: 'POST',
@@ -1799,16 +1817,24 @@
                 action: 'update', dd: inst.dd, table: inst.table,
                 orig, row: row.getData(), pkFields: inst.pkFields,
               }),
-            }).catch(e => ({ error: e.message }))
+            })
+            .then(() => ({ row, ok: true }))
+            .catch(e => ({ row, error: e.message }))
           );
         }
         Promise.all(jobs).then(results => {
-          const errs = results.filter(r => r.error).map(r => r.error);
-          inst.dirtyRows.clear();
-          if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = true;
+          const errs = results.filter(r => r.error);
+          const saved = results.filter(r => r.ok);
+          // Clear dirty highlighting and tracking for successful rows
+          saved.forEach(({ row }) => {
+            row.getCells().forEach(c => c.getElement()?.classList.remove('cell-dirty'));
+            inst.dirtyRows.delete(row);
+          });
+          if (inst.dirtyRows.size === 0 && inst.saveEditsBtn)
+            inst.saveEditsBtn.disabled = true;
           setStatus(errs.length
-            ? `Save errors: ${errs.join('; ')}`
-            : `Saved ${results.length} row(s)`);
+            ? `${errs.length} row(s) failed: ${errs.map(r => r.error).join('; ')}`
+            : `Saved ${saved.length} row(s)`);
         });
         break;
       }
