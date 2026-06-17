@@ -28,11 +28,13 @@
 #include "engine/data_dict.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -477,6 +479,37 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── Step 5e: read trigger timing from SAP system.triggers ────────────────
+    // SAP stores Trig_Trigger_Type (1=BEFORE 2=INSTEAD_OF 4=AFTER) in the DD
+    // binary property area.  OpenADS reconstructs triggers from the binary but
+    // may not capture timing correctly; we read it via SQL and patch the .am
+    // JSON after the DataDict scope closes (Step 8c).
+    struct TriggerTiming { std::string name, table_name; std::uint32_t timing = 0; };
+    std::vector<TriggerTiming> trigger_timings;
+    {
+        ADSHANDLE hc = 0;
+        rc = f.execSQL(hStmt,
+            (UNSIGNED8*)"SELECT Name, Trig_TableName, Trig_Trigger_Type "
+                        "FROM system.triggers ORDER BY Trig_TableName, Name",
+            &hc);
+        if (rc == 0 && hc) {
+            UNSIGNED16 eof = 0;
+            while (f.atEOF(hc, &eof) == 0 && !eof) {
+                TriggerTiming tt;
+                tt.name       = sap_field(f, hc, "Name");
+                tt.table_name = sap_field(f, hc, "Trig_TableName");
+                tt.timing     = static_cast<std::uint32_t>(
+                                    std::atoi(sap_field(f, hc, "Trig_Trigger_Type").c_str()));
+                if (!tt.name.empty() && !tt.table_name.empty())
+                    trigger_timings.push_back(std::move(tt));
+                f.skip(hc, 1);
+            }
+            f.close(hc);
+        } else {
+            warnings.push_back("system.triggers query failed — trigger timings skipped.");
+        }
+    }
+
     // ── Step 6: read object permissions via AdsDDGetPermissions ─────────────
     // system.permissions SQL returns 0 rows for SAP binary .add files because
     // the real ACLs are stored in encrypted property blobs.  Use the
@@ -888,6 +921,142 @@ int main(int argc, char** argv) {
             }
         } else if (!am_read_ok) {
             warnings.push_back("Cannot read dest .am for SP param patch — params not written.");
+        }
+    }
+
+    // ── Step 8c: patch trigger timing in dest .am JSON blocks ────────────────
+    // OpenADS rewrites triggers with timing=0 when it converts SAP binary records
+    // to JSON-in-.am format.  Patch the "timing":N field in each trigger's JSON
+    // block using the authoritative values read from SAP system.triggers (Step 5e).
+    if (!trigger_timings.empty()) {
+        // Build (table_lower → (name → timing)) lookup
+        struct TimingKey { std::string table_lower, name; };
+        std::vector<std::pair<TimingKey, std::uint32_t>> timing_map;
+        for (const auto& tt : trigger_timings) {
+            std::string tl = tt.table_name;
+            for (auto& c : tl) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            timing_map.push_back({{tl, tt.name}, tt.timing});
+        }
+
+        // Re-derive .am path
+        std::string amDest8c;
+        {
+            auto dot = dest.rfind('.');
+            auto sl  = dest.find_last_of("/\\");
+            if (dot == std::string::npos || (sl != std::string::npos && dot < sl))
+                amDest8c = dest + ".am";
+            else
+                amDest8c = dest.substr(0, dot) + ".am";
+        }
+
+        auto read_u32_8c = [](const std::uint8_t* p) -> std::uint32_t {
+            return static_cast<std::uint32_t>(p[0])
+                 | (static_cast<std::uint32_t>(p[1]) <<  8)
+                 | (static_cast<std::uint32_t>(p[2]) << 16)
+                 | (static_cast<std::uint32_t>(p[3]) << 24);
+        };
+
+        auto load_file = [](const std::string& path, std::vector<std::uint8_t>& out) -> bool {
+            std::FILE* fh = std::fopen(path.c_str(), "rb");
+            if (!fh) return false;
+            std::fseek(fh, 0, SEEK_END);
+            long sz = std::ftell(fh);
+            std::rewind(fh);
+            if (sz > 0) { out.resize(static_cast<std::size_t>(sz)); std::fread(out.data(), 1, out.size(), fh); }
+            std::fclose(fh);
+            return !out.empty();
+        };
+
+        std::vector<std::uint8_t> addData8c, amData8c;
+        if (load_file(dest, addData8c) && load_file(amDest8c, amData8c) && addData8c.size() >= 40) {
+            std::uint32_t hdr8c = read_u32_8c(addData8c.data() + 0x20);
+            std::uint32_t rec8c = read_u32_8c(addData8c.data() + 0x24);
+            bool am8c_mod = false;
+
+            if (rec8c > 0 && hdr8c < addData8c.size()) {
+                std::uint32_t tot8c = static_cast<std::uint32_t>((addData8c.size() - hdr8c) / rec8c);
+
+                // Build obj_id → table_name_lower map from Table records
+                std::unordered_map<std::uint32_t, std::string> id_to_tbl;
+                for (std::uint32_t i = 0; i < tot8c; ++i) {
+                    const std::uint8_t* b = addData8c.data() + hdr8c + i * rec8c;
+                    if (b[0] != 0x04) continue;
+                    char tp[11] = {};
+                    std::memcpy(tp, b + 13, 10);
+                    for (int k = 9; k >= 0 && (tp[k] == ' ' || tp[k] == '\0'); --k) tp[k] = '\0';
+                    if (std::strcmp(tp, "Table") != 0 && std::strcmp(tp, "ADSTable") != 0) continue;
+                    std::uint32_t oid = read_u32_8c(b + 5);
+                    char nm[201] = {};
+                    std::memcpy(nm, b + 23, 200);
+                    for (int k = 199; k >= 0 && (nm[k] == ' ' || nm[k] == '\0'); --k) nm[k] = '\0';
+                    std::string tl = nm;
+                    for (auto& c : tl) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    id_to_tbl[oid] = tl;
+                }
+
+                for (std::uint32_t i = 0; i < tot8c; ++i) {
+                    std::uint8_t* b = addData8c.data() + hdr8c + i * rec8c;
+                    if (b[0] != 0x04) continue;
+                    char tp[11] = {};
+                    std::memcpy(tp, b + 13, 10);
+                    for (int k = 9; k >= 0 && (tp[k] == ' ' || tp[k] == '\0'); --k) tp[k] = '\0';
+                    if (std::strcmp(tp, "Trigger") != 0) continue;
+
+                    std::uint16_t plen = static_cast<std::uint16_t>(b[223] | (b[224] << 8));
+                    if (plen < 1 || b[225] != 0x08) continue;  // not OpenADS JSON format
+
+                    std::uint32_t pid = read_u32_8c(b + 9);
+                    auto tbl_it = id_to_tbl.find(pid);
+                    if (tbl_it == id_to_tbl.end()) continue;
+                    const std::string& tbl_lower = tbl_it->second;
+
+                    char nm[201] = {};
+                    std::memcpy(nm, b + 23, 200);
+                    for (int k = 199; k >= 0 && (nm[k] == ' ' || nm[k] == '\0'); --k) nm[k] = '\0';
+                    std::string trig_name = nm;
+
+                    std::uint32_t correct_timing = 0;
+                    for (const auto& kv : timing_map) {
+                        if (kv.first.table_lower == tbl_lower && kv.first.name == trig_name) {
+                            correct_timing = kv.second;
+                            break;
+                        }
+                    }
+                    if (correct_timing == 0) continue;
+
+                    std::uint32_t amBlk = read_u32_8c(b + 498);
+                    std::uint32_t amLen = read_u32_8c(b + 502);
+                    if (amBlk == 0 || amLen == 0) continue;
+                    std::size_t amOff = static_cast<std::size_t>(amBlk) * 8;
+                    if (amOff + amLen > amData8c.size()) continue;
+
+                    std::string js(reinterpret_cast<char*>(amData8c.data() + amOff), amLen);
+                    const std::string key8c = "\"timing\":";
+                    std::size_t kp = js.find(key8c);
+                    if (kp == std::string::npos) continue;
+                    std::size_t vs = kp + key8c.size(), ve = vs;
+                    while (ve < js.size() && std::isdigit(static_cast<unsigned char>(js[ve]))) ++ve;
+                    std::string old_v = js.substr(vs, ve - vs);
+                    std::string new_v = std::to_string(correct_timing);
+                    if (old_v == new_v) continue;
+                    if (old_v.size() != new_v.size()) {
+                        warnings.push_back("trigger timing: digit length mismatch for " + trig_name);
+                        continue;
+                    }
+                    std::memcpy(amData8c.data() + amOff + vs, new_v.data(), new_v.size());
+                    am8c_mod = true;
+                }
+
+                if (am8c_mod) {
+                    std::FILE* fh = std::fopen(amDest8c.c_str(), "wb");
+                    if (fh) {
+                        std::fwrite(amData8c.data(), 1, amData8c.size(), fh);
+                        std::fclose(fh);
+                    } else {
+                        warnings.push_back("Cannot write patched .am for trigger timings.");
+                    }
+                }
+            }
         }
     }
 
