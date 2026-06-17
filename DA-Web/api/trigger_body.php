@@ -54,9 +54,9 @@ try {
 
     $triggers = [];
     foreach ($names as $trigName) {
-        // TRIG_NAME is the plain trigger name (engine returns e.name after fix).
-        // getTriggerProperty accepts plain name; engine's find_trigger resolves it.
-        $trigKey  = $trigName;
+        // Always use composite "table::name" key — plain-name lookup in find_trigger
+        // returns null when multiple tables share the same trigger name (e.g. "Insert AuditLog").
+        $trigKey  = $table . '::' . $trigName;
         // 1401=event_type (1=INSERT 2=UPDATE 3=DELETE), 1402=timing (1=BEFORE 2=INSTEAD_OF 4=AFTER)
         $evRaw     = $dict->getTriggerProperty($trigKey, 1401);
         $timRaw    = $dict->getTriggerProperty($trigKey, 1402);
