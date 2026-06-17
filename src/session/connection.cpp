@@ -5,6 +5,7 @@
 #include "drivers/dbt/dbt_memo.h"
 #include "drivers/fpt/fpt_memo.h"
 #include "drivers/ntx/ntx_driver.h"
+#include "platform/dll.h"
 #include "platform/path.h"
 
 #include <cstring>
@@ -584,6 +585,21 @@ Connection::~Connection() {
     }
 }
 
+// Returns the lowercase base-name of a path (no directory, no extension).
+static std::string dll_basename_lower(const std::string& p) {
+    namespace fs = std::filesystem;
+    std::string stem = fs::path(p).stem().string();
+    for (char& c : stem) c = static_cast<char>(std::tolower((unsigned char)c));
+    return stem;
+}
+
+// Returns true if the base-name suggests an ACE-compatible DLL that might
+// be either OpenADS or SAP Advantage (ace64 / ace32 / openace64 / openace32).
+static bool is_ace_dll_name(const std::string& stem) {
+    return stem == "ace64" || stem == "ace32"
+        || stem == "openace64" || stem == "openace32";
+}
+
 util::Result<void>
 Connection::register_procedure(const std::string& name,
                                const std::string& dll_path,
@@ -593,7 +609,33 @@ Connection::register_procedure(const std::string& name,
         platform::dll_close(it->second.dll);
         procedures_.erase(it);
     }
-    auto h = platform::dll_load(dll_path);
+
+    // For ACE-named DLLs, verify the candidate is OpenADS's own engine.
+    // If ace64.dll is SAP's, also try openace64.dll as a fallback so that
+    // stored procs referencing the legacy name can still work.
+    std::string effective_path = dll_path;
+    if (is_ace_dll_name(dll_basename_lower(dll_path))) {
+        std::string desc = platform::dll_probe_ace(dll_path);
+        if (desc.empty()) {
+            // Not OpenADS (SAP DLL or not found). Try openace64 fallback.
+            namespace fs = std::filesystem;
+            std::string fb = (fs::path(dll_path).parent_path()
+                              / "openace64.dll").string();
+            std::string fb_desc = platform::dll_probe_ace(fb);
+            if (!fb_desc.empty()) {
+                effective_path = fb;
+            } else {
+                return util::Error{5004, 0,
+                    "ACE DLL at the given path is either SAP Advantage "
+                    "(which OpenADS cannot load as a dependency) or was "
+                    "not found. Install openace64.dll alongside the server "
+                    "binary or point the procedure to the correct path.",
+                    dll_path};
+            }
+        }
+    }
+
+    auto h = platform::dll_load(effective_path);
     if (!h) return h.error();
     auto sym = platform::dll_symbol(h.value(), symbol);
     if (!sym) {

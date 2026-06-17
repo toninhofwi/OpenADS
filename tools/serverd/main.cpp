@@ -13,6 +13,7 @@
 // interactive use).
 
 #include "network/server.h"
+#include "platform/dll.h"
 #if defined(OPENADS_WITH_HTTP)
 #include "tools/serverd/http_server.h"
 #endif
@@ -102,6 +103,49 @@ bool parse_args(int argc, char** argv, Args& out) {
     return true;
 }
 
+// Probe the local ACE DLL landscape and print a one-line report.
+// Checks (in order): openace64.dll, ace64.dll, openace32.dll, ace32.dll
+// in the executable's directory and the current working directory.
+// Warns if a SAP ace64.dll is found (potential conflict / wrong binary).
+static void probe_ace_dlls(bool console) {
+    if (!console) return;
+    static const char* kCandidates[] = {
+        "openace64.dll", "ace64.dll",
+        "openace32.dll", "ace32.dll",
+        nullptr
+    };
+    bool any = false;
+    for (int i = 0; kCandidates[i]; ++i) {
+        std::string desc =
+            openads::platform::dll_probe_ace(kCandidates[i]);
+        if (!desc.empty()) {
+            std::printf("  [dll] %s — OpenADS ACE engine (%s)\n",
+                        kCandidates[i], desc.c_str());
+            any = true;
+        } else {
+            // DLL exists but is not OpenADS (SAP or missing AdsGetVersion).
+            // Distinguish "not found" from "found but SAP" by attempting a
+            // raw load.
+            auto h = openads::platform::dll_load(kCandidates[i]);
+            if (h) {
+                openads::platform::dll_close(h.value());
+                std::fprintf(stderr,
+                    "  [dll] WARNING: %s found but is NOT an OpenADS "
+                    "build (SAP Advantage DLL?). AEP procedures that "
+                    "reference this name will be rejected.\n",
+                    kCandidates[i]);
+                any = true;
+            }
+        }
+    }
+    if (!any) {
+        std::printf("  [dll] no ACE DLL found in working directory "
+                    "(ace64.dll / openace64.dll). AEP external "
+                    "procedures will require an explicit full path.\n");
+    }
+    std::fflush(stdout);
+}
+
 // Run the actual server. Returns when g_running flips to false
 // (signal handler on POSIX / SCM stop control on Windows).
 int run_server(const Args& args, bool console) {
@@ -135,7 +179,7 @@ int run_server(const Args& args, bool console) {
     if (console) {
         std::printf("openads_serverd listening on %s:%u (backlog=%d)\n",
                     args.host.c_str(), srv.port(), args.backlog);
-        std::fflush(stdout);
+        probe_ace_dlls(console);
     }
 
 #if defined(OPENADS_WITH_HTTP)

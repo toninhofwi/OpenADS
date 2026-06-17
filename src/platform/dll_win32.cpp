@@ -37,6 +37,27 @@ void dll_close(DllHandle h) noexcept {
     }
 }
 
+std::string dll_probe_ace(const std::string& path) noexcept {
+    HMODULE m = LoadLibraryA(path.c_str());
+    if (!m) return {};
+    using pfnGetVer = unsigned int(__stdcall*)(
+        unsigned int*, unsigned int*,
+        unsigned char*, unsigned char*, unsigned short*);
+    auto* fn = reinterpret_cast<pfnGetVer>(
+        GetProcAddress(m, "AdsGetVersion"));
+    std::string result;
+    if (fn) {
+        unsigned char desc[256] = {};
+        unsigned short len = static_cast<unsigned short>(sizeof(desc) - 1);
+        fn(nullptr, nullptr, nullptr, desc, &len);
+        result.assign(reinterpret_cast<char*>(desc),
+                      static_cast<std::size_t>(len));
+    }
+    FreeLibrary(m);
+    if (result.find("OpenADS") == std::string::npos) return {};
+    return result;
+}
+
 } // namespace openads::platform
 
 #endif // _WIN32
