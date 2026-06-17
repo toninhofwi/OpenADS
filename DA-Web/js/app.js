@@ -1453,13 +1453,13 @@
   document.getElementById('new-tab-btn').addEventListener('click', () => openSqlTab());
 
   // ── Table data loading ─────────────────────────────────────────────────────
-  // ── Table data: load rows with optional index ordering and seek ────────────
-  // opts: { orderby, orderdir, seekVal }
+  // ── Table data: load rows with optional index ordering, seek, and AOF filter ─
+  // opts: { orderby, orderdir, seekVal, aofExpr }
   async function loadTableData(tabId, dd, table, opts = {}) {
     const container = document.getElementById('data-' + tabId);
     if (!container) return;
 
-    const { orderby = '', orderdir = 'ASC', seekVal = '' } = opts;
+    const { orderby = '', orderdir = 'ASC', seekVal = '', aofExpr = '' } = opts;
 
     // Derive the leading field from the index expression (e.g. "leaseid" from "leaseid;enddate")
     const seekField = orderby ? orderby.split(/[;,]/)[0].trim() : '';
@@ -1471,6 +1471,7 @@
     let dataUrl = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`;
     if (orderby) dataUrl += `&orderby=${encodeURIComponent(orderby)}&orderdir=${encodeURIComponent(orderdir)}`;
     if (seekActive) dataUrl += `&seek=${encodeURIComponent(seekVal)}&seekfield=${encodeURIComponent(seekField)}`;
+    if (aofExpr)  dataUrl += `&aof=${encodeURIComponent(aofExpr)}`;
 
     let indexTags = [], fields = [], resp;
     try {
@@ -1595,19 +1596,37 @@
     const clearBtnStyle = 'background:none;border:none;cursor:pointer;color:#1e1e2e;font-size:14px;'
       + 'line-height:1;padding:0 0 0 2px;font-weight:bold;';
 
+    const aofPillStyle = 'display:flex;align-items:center;gap:3px;background:#a6e3a1;color:#1e1e2e;'
+      + 'padding:2px 6px 2px 9px;border-radius:10px;font-size:11px;font-weight:600;';
+    const aofActive = aofExpr.trim() !== '';
     container.innerHTML = `
-      <div id="seek-bar-${tabId}" style="flex:0 0 auto;display:flex;gap:6px;align-items:center;padding:4px 8px;background:#1e1e2e;border-bottom:1px solid #313244;">
-        <select id="idx-sel-${tabId}" style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 6px;border-radius:4px;font-size:12px;">
-          ${idxOpts}
-        </select>
-        <input id="seek-inp-${tabId}" type="text" placeholder="Seek to…" value="${escAttr(seekVal)}"
-          style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 8px;border-radius:4px;font-size:12px;width:180px;">
-        <button class="btn" id="seek-go-${tabId}" style="font-size:12px;padding:3px 10px;">Go</button>
-        <span id="seek-pill-${tabId}" style="${pillStyle}${seekActive ? '' : 'display:none;'}">
-          ⊙ ${escHtml(seekVal)}
-          <button id="seek-clear-${tabId}" style="${clearBtnStyle}" title="Clear seek">×</button>
-        </span>
-        <span id="seek-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+      <div style="flex:0 0 auto;display:flex;flex-direction:column;background:#1e1e2e;border-bottom:1px solid #313244;">
+        <div id="seek-bar-${tabId}" style="display:flex;gap:6px;align-items:center;padding:4px 8px;">
+          <select id="idx-sel-${tabId}" style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 6px;border-radius:4px;font-size:12px;">
+            ${idxOpts}
+          </select>
+          <input id="seek-inp-${tabId}" type="text" placeholder="Seek to…" value="${escAttr(seekVal)}"
+            style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 8px;border-radius:4px;font-size:12px;width:180px;">
+          <button class="btn" id="seek-go-${tabId}" style="font-size:12px;padding:3px 10px;">Go</button>
+          <span id="seek-pill-${tabId}" style="${pillStyle}${seekActive ? '' : 'display:none;'}">
+            ⊙ ${escHtml(seekVal)}
+            <button id="seek-clear-${tabId}" style="${clearBtnStyle}" title="Clear seek">×</button>
+          </span>
+          <span id="seek-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+        </div>
+        <div id="aof-bar-${tabId}" style="display:flex;gap:6px;align-items:center;padding:3px 8px;border-top:1px solid #313244;">
+          <span style="font-size:11px;color:#a6adc8;white-space:nowrap;">Filter:</span>
+          <input id="aof-inp-${tabId}" type="text" placeholder="e.g. AGE &gt;= 25 AND CITY = &#39;Miami&#39;"
+            value="${escAttr(aofExpr)}"
+            style="background:#181825;color:#cdd6f4;border:1px solid #45475a;padding:3px 8px;border-radius:4px;font-size:12px;flex:1;min-width:200px;">
+          <button class="btn" id="aof-apply-${tabId}" style="font-size:12px;padding:3px 10px;">Apply</button>
+          <button class="btn" id="aof-clear-${tabId}" style="font-size:12px;padding:3px 10px;" ${aofActive ? '' : 'disabled'}>Clear</button>
+          <span id="aof-pill-${tabId}" style="${aofPillStyle}${aofActive ? '' : 'display:none;'}">
+            ⊙ filter active
+            <button id="aof-pill-clear-${tabId}" style="${clearBtnStyle}" title="Clear filter">×</button>
+          </span>
+          <span id="aof-count-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+        </div>
       </div>
       <div id="tabulator-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
 
@@ -1692,7 +1711,7 @@
       if (paginator) paginator.prepend(bar);
       tblState[tabId] = {
         tbl, dd, table, rowIdx: -1, pendingRow: null,
-        orderby, orderdir, seekVal, seekField,
+        orderby, orderdir, seekVal, seekField, aofExpr,
         pkFields: [...pkFieldsUpper],
         dirtyRows: new Map(),
         confirmBtn:   bar.querySelector('[data-act="confirm"]'),
@@ -1767,18 +1786,47 @@
         if (msgEl) msgEl.textContent = 'Select an index to seek';
         return;
       }
-      loadTableData(tabId, dd, table, { orderby: selectedExpr, orderdir, seekVal: val });
+      const curAof = tblState[tabId]?.aofExpr || '';
+      loadTableData(tabId, dd, table, { orderby: selectedExpr, orderdir, seekVal: val, aofExpr: curAof });
     });
 
-    // Clear-seek button: reload without seek, preserve ordering
+    // Clear-seek button: reload without seek, preserve ordering and AOF
     document.getElementById('seek-clear-' + tabId)?.addEventListener('click', () => {
-      loadTableData(tabId, dd, table, { orderby, orderdir, seekVal: '' });
+      const curAof = tblState[tabId]?.aofExpr || '';
+      loadTableData(tabId, dd, table, { orderby, orderdir, seekVal: '', aofExpr: curAof });
     });
 
     // Enter in seek input triggers Go
     document.getElementById('seek-inp-' + tabId)?.addEventListener('keydown', e => {
       if (e.key === 'Enter') document.getElementById('seek-go-' + tabId)?.click();
     });
+
+    // ── AOF filter handlers ───────────────────────────────────────────────
+    const applyAof = () => {
+      const expr = (document.getElementById('aof-inp-' + tabId)?.value || '').trim();
+      loadTableData(tabId, dd, table, { orderby, orderdir, seekVal, aofExpr: expr });
+    };
+
+    document.getElementById('aof-apply-' + tabId)?.addEventListener('click', applyAof);
+
+    document.getElementById('aof-inp-' + tabId)?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') applyAof();
+    });
+
+    const clearAof = () => {
+      const inp = document.getElementById('aof-inp-' + tabId);
+      if (inp) inp.value = '';
+      loadTableData(tabId, dd, table, { orderby, orderdir, seekVal, aofExpr: '' });
+    };
+
+    document.getElementById('aof-clear-' + tabId)?.addEventListener('click', clearAof);
+    document.getElementById('aof-pill-clear-' + tabId)?.addEventListener('click', clearAof);
+
+    // Show row count when AOF is active
+    if (aofActive) {
+      const countEl = document.getElementById('aof-count-' + tabId);
+      if (countEl) countEl.textContent = `${resp.data.length} row(s)`;
+    }
   }
 
   // Navigate to a row by its 0-based index in the full dataset.
@@ -1839,13 +1887,15 @@
         break;
       }
       case 'refresh': {
-        const ob = inst.orderby  || '';
-        const od = inst.orderdir || 'ASC';
-        const sv = inst.seekVal  || '';
-        const sf = inst.seekField || '';
+        const ob  = inst.orderby  || '';
+        const od  = inst.orderdir || 'ASC';
+        const sv  = inst.seekVal  || '';
+        const sf  = inst.seekField || '';
+        const aof = inst.aofExpr  || '';
         let url = `api/table_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`;
         if (ob) url += `&orderby=${encodeURIComponent(ob)}&orderdir=${encodeURIComponent(od)}`;
         if (sv && sf) url += `&seek=${encodeURIComponent(sv)}&seekfield=${encodeURIComponent(sf)}`;
+        if (aof) url += `&aof=${encodeURIComponent(aof)}`;
         fetch(url).then(r => r.json())
           .then(resp => { if (!resp.error) { tbl.replaceData(resp.data); inst.rowIdx = -1; } })
           .catch(() => {});

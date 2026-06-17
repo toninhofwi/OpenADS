@@ -683,6 +683,10 @@ html, body {
 /* PK columns get a subtle indicator */
 .tabulator-cell.cell-pk { cursor: default; }
 .tabulator-col[data-field].col-pk .tabulator-col-content { opacity: 0.7; }
+/* AOF filter bar */
+#aof-bar { border-top: 1px solid #313244; }
+/* .btn[disabled] used by aof-clear when no filter is active */
+.btn[disabled] { opacity: 0.35; cursor: not-allowed; }
 
 /* ── SQL script list (Open SQL Script modal) ──────────────────────────────── */
 .script-row {
