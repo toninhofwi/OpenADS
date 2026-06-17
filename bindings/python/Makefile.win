@@ -1,0 +1,76 @@
+# Makefile.win — NMake build for openads.cp313-win_amd64.pyd
+# Usage: nmake /f Makefile.win [clean]
+
+PYTHON_DIR = C:\users\administrator\appdata\local\programs\python\python313
+ACE_INC    = F:\OpenADS\include\openads
+ACE_LIB    = F:\OpenADS\build\msvc-x64\src\Release\openace64.lib
+
+PYTHON_INC = $(PYTHON_DIR)\Include
+PYTHON_LIB = $(PYTHON_DIR)\libs\python313.lib
+
+OUTDIR = bin
+OBJDIR = obj
+
+TARGET = $(OUTDIR)\openads.cp313-win_amd64.pyd
+
+SRCS = \
+    src\openads_module.c    \
+    src\openads_connection.c \
+    src\openads_statement.c  \
+    src\openads_table.c      \
+    src\openads_misc.c       \
+    src\openads_prepared.c
+
+OBJS = \
+    $(OBJDIR)\openads_module.obj    \
+    $(OBJDIR)\openads_connection.obj \
+    $(OBJDIR)\openads_statement.obj  \
+    $(OBJDIR)\openads_table.obj      \
+    $(OBJDIR)\openads_misc.obj       \
+    $(OBJDIR)\openads_prepared.obj
+
+CC   = cl.exe
+LINK = link.exe
+
+CFLAGS = /nologo /W3 /O2 /MD \
+         /DWIN32 /Dx64 /DCOMPILE_DL_OPENADS \
+         /I"$(PYTHON_INC)" \
+         /I"$(ACE_INC)"
+
+LDFLAGS = /nologo /DLL /MANIFEST:NO \
+          /SUBSYSTEM:WINDOWS \
+          $(PYTHON_LIB) \
+          $(ACE_LIB)
+
+all: $(OUTDIR) $(OBJDIR) $(TARGET)
+
+$(OUTDIR):
+	if not exist $(OUTDIR) mkdir $(OUTDIR)
+
+$(OBJDIR):
+	if not exist $(OBJDIR) mkdir $(OBJDIR)
+
+$(TARGET): $(OBJS)
+	$(LINK) $(LDFLAGS) /OUT:$(TARGET) $(OBJS)
+
+$(OBJDIR)\openads_module.obj: src\openads_module.c src\openads.h
+	$(CC) $(CFLAGS) /Fo$(OBJDIR)\openads_module.obj /c src\openads_module.c
+
+$(OBJDIR)\openads_connection.obj: src\openads_connection.c src\openads.h
+	$(CC) $(CFLAGS) /Fo$(OBJDIR)\openads_connection.obj /c src\openads_connection.c
+
+$(OBJDIR)\openads_statement.obj: src\openads_statement.c src\openads.h
+	$(CC) $(CFLAGS) /Fo$(OBJDIR)\openads_statement.obj /c src\openads_statement.c
+
+$(OBJDIR)\openads_table.obj: src\openads_table.c src\openads.h
+	$(CC) $(CFLAGS) /Fo$(OBJDIR)\openads_table.obj /c src\openads_table.c
+
+$(OBJDIR)\openads_misc.obj: src\openads_misc.c src\openads.h
+	$(CC) $(CFLAGS) /Fo$(OBJDIR)\openads_misc.obj /c src\openads_misc.c
+
+$(OBJDIR)\openads_prepared.obj: src\openads_prepared.c src\openads.h
+	$(CC) $(CFLAGS) /Fo$(OBJDIR)\openads_prepared.obj /c src\openads_prepared.c
+
+clean:
+	if exist $(OBJDIR) rmdir /s /q $(OBJDIR)
+	if exist $(OUTDIR) rmdir /s /q $(OUTDIR)

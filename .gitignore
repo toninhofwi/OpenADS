@@ -25,6 +25,18 @@ Makefile
 # SQL engine temp tables (aggregate and system result scratch files)
 tests/fixtures/**/_agg_*.dbf
 tests/fixtures/**/_sys_*.dbf
+testdata/**/_agg_*.dbf
+testdata/**/_sys_*.adt
+testdata/**/_sys_*.adm
+testdata/**/_sys_*.adi
+
+# Transaction log and runtime artefacts
+openads.txlog
+*.txlog
+
+# Backup files
+*.bak
+*.bak2
 
 # Smoke-test build artefacts (third-party RDD harnesses)
 tests/smoke/harbour/smoke.exe
