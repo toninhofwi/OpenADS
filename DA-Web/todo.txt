@@ -25,9 +25,21 @@ I remind you that you can test what output should look like by connecting with S
 those after connecting with OpenADS to pmsys_imported.add.  Our objective is make OpenAds as fast and complete as SAP ADS. 
 
 Let's work on triggers.  Item #3 below is all about trigger execution.  Some of this information needs to be documented on readme.md for OpenAds.
-Make sure you update documentation accordingly so user is aware of how triggers work in OpenAds. 
+Make sure you update documentation accordingly so user is aware of how triggers work in OpenAds.
 
-3.  I think I need to explain how 3 special tables on triggers work.  Make sure OpenAds triggers works like SAP ADS: 
+3. [DONE 2026-06-17] Trigger execution — implemented in ace_exports.cpp:
+   - BEFORE/INSTEAD_OF/AFTER timing dispatch (tl_trigger_depth counter, limit 64)
+   - Priority-sorted firing order
+   - INSTEAD OF triggers suppress the actual DML; body must write manually
+   - __error table: INSERT INTO __error aborts trigger and returns error to client
+   - NO VALUES (options & 0x01) and NO MEMOS/BLOBS (options & 0x02) options enforced
+   - sp_DisableTriggers/sp_EnableTriggers: CURRENT USER, ALL, table, trigger scopes
+   - Connection::triggers_disabled_ flag for connection-level non-persistent disable
+   - Documentation added to README.md under "Triggers" section
+   Limitations: cursor/flow-control in bodies still skipped; SQL DML fires once
+   per batch not per row; __old for navigational UPDATE is not snapshotted.
+
+   Original spec:  I think I need to explain how 3 special tables on triggers work.  Make sure OpenAds triggers works like SAP ADS:
 Three special in-memory tables are used by triggers; __old, __new, and __error. These tables can be referenced using just 
 their base names (i.e., __new). For example, to read a value from the __new table the following SQL statement can be executed:
 SELECT empid FROM __new
