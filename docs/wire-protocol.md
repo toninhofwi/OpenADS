@@ -424,3 +424,419 @@ functions and `tools/mgprobe` speak to a remote `openads_serverd`.
   statically since v1.0.0-rc8).
 - **Wire codec**: `src/network/wire.{h,cpp}` (frame
   encode / decode + `Opcode` enum).
+
+---
+
+## 9. Data Dictionary API
+
+The Data Dictionary (DD) layer sits **above** the wire — there are
+no dedicated DD wire opcodes. DD calls in the public ABI
+(`AdsDDCreate*`, `AdsDDGet/Set*Property`, etc.) operate on the
+server-side `engine::DataDict` object owned by the session's
+`Connection`, which loaded it from the `.add` file at `Connect`
+time. Over a remote connection the call is dispatched through the
+`AdsConnect60` dual-mode layer into the server process, which
+then mutates the in-memory DD and persists atomically.
+
+### 9.1 Dictionary lifecycle
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreate` | `pucDictionary`, `bEncrypt`, `pucAdminPassword`, `phConnect*` | Create a new `.add` file and return an open connection handle. `bEncrypt` must be `ADS_FALSE` (encryption not yet implemented). |
+| `AdsDDOpen` | `pucDictionary`, `pucPassword`, `phConnect*` | Open an existing dictionary (alias for `AdsConnect60` with a `.add` path). |
+
+### 9.2 Table registration
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDAddTable` | `hConnect`, `pucAlias`, `pucTablePath`, `usFileType`, `usCharType`, `pucIndexPath`, `pucComment` | Register a table alias in the DD. `usFileType`: `ADS_ADT=3`, `ADS_CDX=4`, `ADS_NTX=2`. `pucIndexPath` may be `NULL`. |
+| `AdsDDRemoveTable` | `hConnect`, `pucAlias`, `usDeleteFiles` | Remove a table alias. `usDeleteFiles=ADS_TRUE` deletes the physical files. |
+
+### 9.3 Table properties (`AdsDDGetTableProperty` / `AdsDDSetTableProperty`)
+
+Both take `hConnect`, `pucTableName`, `usPropertyID`, `pvProperty`, `pusPropertyLen`.
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_TABLE_VALIDATION_EXPR` | 200 | string | Server-evaluated validation expression |
+| `ADS_DD_TABLE_VALIDATION_MSG`  | 201 | string | Message returned when validation fails |
+| `ADS_DD_TABLE_PRIMARY_KEY`     | 202 | string | Comma-separated PK field names |
+| `ADS_DD_TABLE_AUTO_CREATE`     | 203 | u16   | `ADS_TRUE` → create physical file if absent |
+| `ADS_DD_TABLE_TYPE`            | 204 | u16   | File type (`ADS_ADT`, `ADS_CDX`, `ADS_NTX`) |
+| `ADS_DD_TABLE_PATH`            | 205 | string | Resolved absolute path to the DBF |
+| `ADS_DD_TABLE_FIELD_COUNT`     | 206 | u16   | Number of fields (read-only) |
+| `ADS_DD_TABLE_OBJ_ID`          | 208 | u32   | Internal object ID (read-only) |
+| `ADS_DD_TABLE_RELATIVE_PATH`   | 211 | string | Path as stored in the `.add` (relative or absolute) |
+| `ADS_DD_TABLE_CHAR_TYPE`       | 212 | u16   | OEM / ANSI character encoding |
+| `ADS_DD_TABLE_DEFAULT_INDEX`   | 213 | string | Default index tag to set on open |
+| `ADS_DD_TABLE_PERMISSION_LEVEL`| 216 | u16   | Minimum privilege required to open (`ADS_DD_TABLE_PERMISSION_*`) |
+
+`ADS_DD_TABLE_PERMISSION_*` values:
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `ADS_DD_TABLE_PERMISSION_NONE`   | 0 | No restriction |
+| `ADS_DD_TABLE_PERMISSION_READ`   | 1 | Read only |
+| `ADS_DD_TABLE_PERMISSION_WRITE`  | 2 | Read + update |
+| `ADS_DD_TABLE_PERMISSION_DELETE` | 3 | Read + update + delete |
+| `ADS_DD_TABLE_PERMISSION_FULL`   | 4 | Full DML including INSERT |
+
+### 9.4 Field properties (`AdsDDGetFieldProperty` / `AdsDDSetFieldProperty`)
+
+Both take `hConnect`, `pucTableName`, `pucFieldName`, `usPropertyID`, `pvProperty`, `pusPropertyLen`.
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_FIELD_NAME`            | 301 | string | Field name |
+| `ADS_DD_FIELD_TYPE`            | 302 | string | Type character (`C`, `N`, `D`, `L`, `M`, `I`, `V`, `Q`, `Y`, `B`, `W`) |
+| `ADS_DD_FIELD_LENGTH`          | 303 | u16   | Column width in bytes |
+| `ADS_DD_FIELD_DECIMAL`         | 304 | u16   | Decimal digits (numeric fields) |
+| `ADS_DD_FIELD_REQUIRED`        | 305 | u16   | `ADS_TRUE` → NULL / blank rejected by engine |
+| `ADS_DD_FIELD_DEFAULT`         | 306 | string | Default value expression |
+| `ADS_DD_FIELD_VALIDATION_RULE` | 307 | string | Per-field validation expression |
+| `ADS_DD_FIELD_VALIDATION_MSG`  | 308 | string | Message on validation failure |
+| `ADS_DD_FIELD_COMMENT`         | 309 | string | Free-text comment |
+
+### 9.5 Index properties (`AdsDDGetIndexProperty` / `AdsDDSetIndexProperty`)
+
+Both take `hConnect`, `pucTableName`, `pucTagName`, `usPropertyID`, `pvProperty`, `pusPropertyLen`.
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_INDEX_FILE_NAME`  | 401 | string | Bound `.cdx` / `.ntx` file name |
+| `ADS_DD_INDEX_EXPR`       | 402 | string | Key expression |
+| `ADS_DD_INDEX_UNIQUE`     | 403 | u16   | `ADS_TRUE` → unique key |
+| `ADS_DD_INDEX_DESCENDING` | 404 | u16   | `ADS_TRUE` → descending sort |
+| `ADS_DD_INDEX_CONDITION`  | 405 | string | FOR condition expression |
+| `ADS_DD_INDEX_KEY_LENGTH` | 406 | u16   | Compiled key width in bytes |
+| `ADS_DD_INDEX_TYPE`       | 407 | u16   | `ADS_CDX` / `ADS_NTX` constant |
+| `ADS_DD_INDEX_FILE_TYPE`  | 408 | u16   | Same as `ADS_DD_INDEX_TYPE` |
+
+Index file management:
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDAddIndexFile`    | `hConnect`, `pucTableName`, `pucIndexFile`, `pucComment` | Bind an existing `.cdx` / `.ntx` to the table alias |
+| `AdsDDRemoveIndexFile` | `hConnect`, `pucTableName`, `pucIndexFile`, `usDeleteFile` | Unbind (and optionally delete) an index file |
+
+### 9.6 Database properties (`AdsDDGetDatabaseProperty` / `AdsDDSetDatabaseProperty`)
+
+Both take `hConnect`, `usPropertyID`, `pvProperty`, `pusPropertyLen`.
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_COMMENT`               | 1  | string | Free-text database description |
+| `ADS_DD_ADMIN_PASSWORD`        | 2  | string | Write-only; sets the `adssys` password |
+| `ADS_DD_DEFAULT_TABLE_PATH`    | 3  | string | Default directory for new table files |
+| `ADS_DD_TEMP_TABLE_PATH`       | 4  | string | Scratch directory for temp tables |
+| `ADS_DD_LOG_IN_REQUIRED`       | 5  | u16   | `ADS_TRUE` → reject anonymous connects |
+| `ADS_DD_VERIFY_ACCESS_RIGHTS`  | 6  | u16   | `ADS_TRUE` → enforce table-level permissions |
+| `ADS_DD_ENCRYPT_NEW_TABLE`     | 7  | u16   | Encrypt tables on creation |
+| `ADS_DD_ENCRYPT_TABLE_PASSWORD`| 8  | string | Encryption passphrase |
+| `ADS_DD_ENCRYPT_INDEXES`       | 9  | u16   | Encrypt index files |
+| `ADS_DD_ENCRYPTED`             | 11 | u16   | Read-only; `ADS_TRUE` if the `.add` itself is encrypted |
+| `ADS_DD_LOGINS_DISABLED`       | 14 | u16   | Temporarily bar new logins |
+| `ADS_DD_LOGINS_DISABLED_ERRSTR`| 15 | string | Message sent to rejected clients |
+| `ADS_DD_FTS_DELIMITERS`        | 17 | string | Full-text search word delimiters |
+| `ADS_DD_FTS_NOISE`             | 18 | string | FTS noise-word list |
+| `ADS_DD_MAX_FAILED_ATTEMPTS`   | 21 | u16   | Lock-out threshold (0 = no limit) |
+| `ADS_DD_USER_DEFINED_PROP`     | 22 | string | Arbitrary application-level property |
+| `ADS_DD_VERSION`               | 23 | u16   | Dictionary format version (read-only) |
+
+### 9.7 User and group management
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreateUser`          | `hConnect`, `pucGroup`, `pucUser`, `pucPassword`, `pucDescription` | Create user; add to `pucGroup` if non-NULL. Alias `adssys` is the built-in admin. |
+| `AdsDDDeleteUser`          | `hConnect`, `pucUser` | Remove user (and all group memberships) |
+| `AdsDDAddUserToGroup`      | `hConnect`, `pucGroup`, `pucUser` | Add an existing user to a group |
+| `AdsDDRemoveUserFromGroup` | `hConnect`, `pucGroup`, `pucUser` | Remove user from group |
+| `AdsDDGetUserProperty`     | `hConnect`, `pucUser`, `usPropertyID`, `pvProperty`, `pusPropertyLen` | Read a user property |
+| `AdsDDSetUserProperty`     | `hConnect`, `pucUser`, `usPropertyID`, `pvProperty`, `usPropertyLen` | Write a user property |
+
+User property IDs:
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_USER_PASSWORD`        | 1101 | string | Write-only new password |
+| `ADS_DD_USER_GROUP_MEMBERSHIP`| 1102 | string | Read-only; pipe-separated group names |
+| `ADS_DD_USER_BAD_LOGINS`      | 1103 | u16   | Failed login counter (writable for reset) |
+
+### 9.8 Table-level access rights
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDGetUserTableRights` | `hConnect`, `pucTableName`, `pucUser`, `pulRights*` | Read a `ADS_RIGHTS_*` bitmask |
+| `AdsDDSetUserTableRights` | `hConnect`, `pucTableName`, `pucUser`, `ulRights` | Write the bitmask |
+
+`pulRights` / `ulRights` is a bitfield of:
+
+| Bit | Hex | Meaning |
+|-----|-----|---------|
+| 0 | `0x00000001` | `ADS_RIGHTS_READ` |
+| 1 | `0x00000002` | `ADS_RIGHTS_WRITE` |
+| 2 | `0x00000004` | `ADS_RIGHTS_INSERT` |
+| 3 | `0x00000008` | `ADS_RIGHTS_DELETE` |
+| 4 | `0x00000010` | `ADS_RIGHTS_EXECUTE` |
+| 5 | `0x00000020` | `ADS_RIGHTS_CREATE` |
+| 6 | `0x00000040` | `ADS_RIGHTS_DROP` |
+
+### 9.9 Views
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreateView`     | `hConnect`, `pucName`, `pucComment`, `pucSQL` | Register a named SQL view |
+| `AdsDDDropView`       | `hConnect`, `pucName` | Delete a view |
+| `AdsDDGetViewProperty`| `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `pusPropertyLen` | Read view property |
+| `AdsDDSetViewProperty`| `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `usPropertyLen` | Write view property |
+
+View property IDs:
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_VIEW_STMT`    | 701 | string | SQL SELECT statement of the view |
+| `ADS_DD_VIEW_COMMENT` | 702 | string | Free-text comment |
+
+### 9.10 Stored procedures and functions
+
+**Stored procedures** (SQL bodies stored in the `.add`):
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreateProcedure` | `hConnect`, `pucName`, `pucContainer`, `pucProcName`, `ulInvokeOption`, `pucInParams`, `pucOutParams`, `pucComments` | Create a stored proc. Pass the SQL body in `pucComments`; `pucContainer` / `pucProcName` hold the DLL path and entry point for external-DLL procs. |
+| `AdsDDDropProcedure`   | `hConnect`, `pucName` | Delete a stored proc |
+| `AdsDDGetProcProperty` | `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `pusPropertyLen` | Read a proc property |
+| `AdsDDSetProcProperty` | `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `usPropertyLen` | Write a proc property |
+
+Aliases: `AdsDDAddProcedure` = `AdsDDCreateProcedure`, `AdsDDRemoveProcedure` = `AdsDDDropProcedure`, `AdsDDGetProcedureProperty` = `AdsDDGetProcProperty`, `AdsDDSetProcedureProperty` = `AdsDDSetProcProperty`.
+
+Procedure property IDs:
+
+| Constant | Value | Alias | Description |
+|----------|-------|-------|-------------|
+| `ADS_DD_PROC_INPUT`       | 601 | — | Pipe-separated input parameter types |
+| `ADS_DD_PROC_OUTPUT`      | 602 | — | Pipe-separated output parameter types |
+| `ADS_DD_PROC_CONTAINER`   | 603 | `ADS_DD_PROC_DLL_NAME` | DLL path (external) or empty (SQL body) |
+| `ADS_DD_PROC_PROC_NAME`   | 604 | `ADS_DD_PROC_DLL_FUNCTION_NAME` | Entry-point name (DLL) or SQL body text |
+| `ADS_DD_PROC_COMMENT`     | 605 | `ADS_DD_PROC_SCRIPT` | SQL body for OpenADS SQL procs |
+
+**User-defined functions** (UDFs):
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreateFunction`     | `hConnect`, `pucName`, `pucContainer`, `pucImplementation`, `pucRetType`, `pucInParams`, `pucComment` | Register a scalar UDF |
+| `AdsDDDropFunction`       | `hConnect`, `pucName` | Delete a UDF |
+| `AdsDDGetFunctionProperty`| `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `pusPropertyLen` | Read a UDF property |
+| `AdsDDSetFunctionProperty`| `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `usPropertyLen` | Write a UDF property |
+
+### 9.11 Triggers
+
+**Create / drop:**
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreateTrigger` | `hConnect`, `pucName`, `pucTable`, `ulType`, `ulOptions`, `pucContainer`, `pucProcedure`, `ulPriority` | Create a trigger. `pucName` is `"table::name"` form or bare name. SQL bodies go in `pucContainer`. |
+| `AdsDDDropTrigger`   | `hConnect`, `pucName` | Alias for `AdsDDRemoveTrigger` |
+| `AdsDDRemoveTrigger` | `hConnect`, `pucName` | Delete a trigger |
+
+**`ulType` — combined event/timing constant (`include/openads/ace.h`):**
+
+| Constant | Value | Fires |
+|----------|-------|-------|
+| `ADS_BEFORE_INSERT`   | `0x0001` | Before an INSERT |
+| `ADS_AFTER_INSERT`    | `0x0002` | After a successful INSERT |
+| `ADS_INSTEAD_OF_INSERT` | `0x0040` | Instead of an INSERT (suppresses the actual DML) |
+| `ADS_BEFORE_UPDATE`   | `0x0004` | Before an UPDATE |
+| `ADS_AFTER_UPDATE`    | `0x0008` | After a successful UPDATE |
+| `ADS_INSTEAD_OF_UPDATE` | `0x0080` | Instead of an UPDATE |
+| `ADS_BEFORE_DELETE`   | `0x0010` | Before a DELETE |
+| `ADS_AFTER_DELETE`    | `0x0020` | After a successful DELETE |
+| `ADS_INSTEAD_OF_DELETE` | `0x0100` | Instead of a DELETE |
+
+**`ulOptions` bitmask:**
+
+| Bit | Value | Effect |
+|-----|-------|--------|
+| 0 | `0x01` | `WANT_VALUES` — build `__new` / `__old` virtual tables (default ON when bit is set) |
+| 1 | `0x02` | `WANT_MEMOS` — include MEMO / BLOB fields in `__new` / `__old` |
+| 2 | `0x04` | `NO_TRANSACTION` — skip the implicit transaction wrapper |
+
+**Virtual tables available inside a trigger body:**
+
+- **`__new`** — one-row table with the same fields as the base table; holds the new (post-change) values. Available in INSERT and UPDATE triggers.
+- **`__old`** — one-row table; holds the pre-change values. Available in UPDATE and DELETE triggers.
+- **`__error`** — two-field table (`errno INTEGER`, `message MEMO`). INSERTing a row aborts the trigger and returns the error to the client.
+
+Only one INSTEAD OF trigger per event type (INSERT / UPDATE / DELETE) is allowed per table. If a BEFORE trigger exists for an event, no INSTEAD OF trigger may coexist for the same event. AFTER triggers do not fire when an INSTEAD OF trigger handles the same event. Nesting depth is capped at 64 levels.
+
+**`ulPriority`** — lower integer fires first when multiple triggers share the same event and timing.
+
+**Trigger properties (`AdsDDGetTriggerProperty` / `AdsDDSetTriggerProperty`):**
+
+Both take `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `pusPropertyLen / usPropertyLen`.
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_TRIGGER_TABLE`     | 501 | string | Table alias this trigger is bound to |
+| `ADS_DD_TRIGGER_EVENT`     | 502 | u32   | Combined event/timing constant (one of the `ADS_BEFORE_*` / `ADS_AFTER_*` / `ADS_INSTEAD_OF_*` values) |
+| `ADS_DD_TRIGGER_CONTAINER` | 503 | string | SQL body (OpenADS) or DLL path (external AEP) |
+| `ADS_DD_TRIGGER_PROC_NAME` | 504 | string | Entry-point name (external AEP) or empty (SQL body) |
+| `ADS_DD_TRIGGER_ENABLED`   | 505 | u16   | `ADS_TRUE` → trigger fires; `ADS_FALSE` → disabled |
+| `ADS_DD_TRIGGER_PRIORITY`  | 506 | u32   | Firing priority (lower = first) |
+| `ADS_DD_TRIGGER_COMMENT`   | 507 | string | Free-text comment |
+
+Synonym aliases: `ADS_DD_TRIG_TABLEID` = 501, `ADS_DD_TRIG_EVENT_TYPE` = 502, `ADS_DD_TRIG_CONTAINER` = 503, `ADS_DD_TRIG_FUNCTION_NAME` = 504, `ADS_DD_TRIG_PRIORITY` = 506, `ADS_DD_TRIG_TABLENAME` = 501.
+
+**Disable / enable at runtime (system stored procedures):**
+
+```sql
+-- Disable all triggers for the current connection (non-persistent)
+EXECUTE PROCEDURE sp_DisableTriggers('CURRENT USER', '', '');
+
+-- Disable all triggers for all users (persistent)
+EXECUTE PROCEDURE sp_DisableTriggers('ALL', '', '');
+
+-- Disable all triggers on a single table (persistent, all users)
+EXECUTE PROCEDURE sp_DisableTriggers('TABLE', 'orders', '');
+
+-- Disable one trigger by name (persistent, all users)
+EXECUTE PROCEDURE sp_DisableTriggers('TRIGGER', 'orders', 'orders::audit_insert');
+
+-- Re-enable (same scope arguments as Disable)
+EXECUTE PROCEDURE sp_EnableTriggers('ALL', '', '');
+```
+
+### 9.12 Referential Integrity
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreateRefIntegrity` | `hConnect`, `pucName`, `pucFailTable`, `pucParent`, `pucParentTag`, `pucChild`, `pucChildTag`, `usUpdateOption`, `usDeleteOption` | Define an RI rule between two DD-registered tables |
+| `AdsDDRemoveRefIntegrity` | `hConnect`, `pucName` | Delete an RI rule |
+| `AdsDDGetRefIntegrityProperty` | `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `pusPropertyLen` | Read an RI rule property |
+| `AdsDDSetRefIntegrityProperty` | `hConnect`, `pucName`, `usPropertyID`, `pvProperty`, `usPropertyLen` | Write an RI rule property |
+
+`usUpdateOption` / `usDeleteOption` constants:
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `ADS_DD_RI_CASCADE`    | 1 | Cascade changes to child table |
+| `ADS_DD_RI_RESTRICT`   | 2 | Reject parent change if child row exists |
+| `ADS_DD_RI_SETNULL`    | 3 | Set child FK to NULL on parent change |
+| `ADS_DD_RI_SETDEFAULT` | 4 | Set child FK to default on parent change |
+
+RI property IDs:
+
+| Constant | Value | Type | Description |
+|----------|-------|------|-------------|
+| `ADS_DD_RI_PARENT`     | 401 | string | Parent table alias |
+| `ADS_DD_RI_CHILD`      | 402 | string | Child table alias |
+| `ADS_DD_RI_PARENT_TAG` | 403 | string | Parent index tag used as FK source |
+| `ADS_DD_RI_CHILD_TAG`  | 404 | string | Child index tag used as FK |
+| `ADS_DD_RI_UPDATE_RULE`| 405 | u16   | One of `ADS_DD_RI_*` constants |
+| `ADS_DD_RI_DELETE_RULE`| 406 | u16   | One of `ADS_DD_RI_*` constants |
+| `ADS_DD_RI_FAIL_TABLE` | 407 | string | Table to log RI violations into |
+
+### 9.13 Links (cross-dictionary references)
+
+| Function | Parameters | Purpose |
+|----------|-----------|---------|
+| `AdsDDCreateLink` | `hConnect`, `pucAlias`, `pucPath`, `pucUser`, `pucPassword`, `usOptions` | Register a remote DD path (e.g. `tcp://other-host:16262/data`) under an alias. |
+| `AdsDDDropLink`   | `hConnect`, `pucAlias`, `usOptions` | Remove a link |
+| `AdsDDModifyLink` | `hConnect`, `pucAlias`, `pucPath`, `pucUser`, `pucPassword`, `usOptions` | Update link credentials / path |
+
+### 9.14 Object enumeration
+
+`AdsDDFindFirstObject` / `AdsDDFindNextObject` / `AdsDDFindClose` iterate over
+objects of a given type in the current DD:
+
+```c
+ADSHANDLE hFind;
+char name[256]; UNSIGNED16 len = sizeof(name);
+AdsDDFindFirstObject(hConnect, ADS_DD_TABLE_OBJECT, NULL, name, &len, &hFind);
+while (len > 0) {
+    printf("table: %.*s\n", len, name);
+    len = sizeof(name);
+    AdsDDFindNextObject(hConnect, hFind, name, &len);
+}
+AdsDDFindClose(hConnect, hFind);
+```
+
+`usFindObjectType` values: `ADS_DD_TABLE_OBJECT=1`, `ADS_DD_USER_OBJECT=2`,
+`ADS_DD_INDEX_FILE_OBJECT=3`, `ADS_DD_VIEW_OBJECT=4`, `ADS_DD_PROC_OBJECT=5`,
+`ADS_DD_RI_OBJECT=6`, `ADS_DD_TRIGGER_OBJECT=7`, `ADS_DD_LINK_OBJECT=8`.
+`pucParentName` filters by table name (e.g. for `ADS_DD_TRIGGER_OBJECT` to list
+only triggers on one table); pass `NULL` to enumerate all.
+
+### 9.15 Full example (C)
+
+```c
+#include <openads/ace.h>
+
+/* Create a dictionary with one table, one trigger, and one RI rule */
+int main(void) {
+    ADSHANDLE hConn;
+
+    /* 1. Create dictionary */
+    AdsDDCreate("C:/data/myapp.add", ADS_FALSE, "secret", &hConn);
+
+    /* 2. Register the orders table */
+    AdsDDAddTable(hConn, "orders", "orders.dbf",
+                  ADS_CDX, ADS_ANSI, NULL, "Order master");
+
+    /* 3. Set primary key property */
+    const char* pk = "order_id";
+    AdsDDSetTableProperty(hConn, "orders",
+                          ADS_DD_TABLE_PRIMARY_KEY,
+                          (void*)pk, (UNSIGNED16)strlen(pk));
+
+    /* 4. Add an AFTER INSERT trigger with an inline SQL body */
+    const char* body =
+        "INSERT INTO auditlog (action, ts) "
+        "SELECT 'INSERT', NOW() FROM system.iota;";
+    AdsDDCreateTrigger(hConn,
+        "orders::after_insert",   /* name */
+        "orders",                 /* table */
+        ADS_AFTER_INSERT,         /* ulType */
+        0x03u,                    /* WANT_VALUES | WANT_MEMOS */
+        (UNSIGNED8*)body,         /* pucContainer = SQL body */
+        NULL,                     /* pucProcedure = NULL for SQL */
+        10);                      /* priority */
+
+    /* 5. Add an RI rule: orders.customer_id → customers.id */
+    AdsDDCreateRefIntegrity(hConn,
+        "orders_customer",    /* rule name */
+        "rierrors",           /* fail table */
+        "customers",          /* parent */
+        "CUST_PK",            /* parent tag */
+        "orders",             /* child */
+        "CUST_FK",            /* child tag */
+        ADS_DD_RI_RESTRICT,   /* update */
+        ADS_DD_RI_RESTRICT);  /* delete */
+
+    AdsDisconnect(hConn);
+    return 0;
+}
+```
+
+### 9.16 PHP (via php_advantage / OpenADS PHP extension)
+
+```php
+// Connect to a remote OpenADS server with a DD
+$conn = ads_connect("tcp://localhost:16262/data/myapp.add",
+                    "adssys", "secret", ADS_REMOTE_SERVER);
+
+// Read the primary key of the orders table
+$len = 256; $pk = "";
+ads_dd_get_table_property($conn, "orders",
+    ADS_DD_TABLE_PRIMARY_KEY, $pk, $len);
+
+// Create an AFTER UPDATE trigger
+$body = "UPDATE auditlog SET updated = NOW() "
+      . "WHERE tbl = 'orders';";
+ads_dd_create_trigger($conn,
+    "orders::after_update", "orders",
+    ADS_AFTER_UPDATE, 0x01,   // WANT_VALUES
+    $body, null, 10);
+
+ads_disconnect($conn);
+```
