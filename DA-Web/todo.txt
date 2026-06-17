@@ -24,19 +24,8 @@ functions, fix it.  We have all sources and build tools.
 I remind you that you can test what output should look like by connecting with SAP ADS ot pmays.add comparing results with 
 those after connecting with OpenADS to pmsys_imported.add.  Our objective is make OpenAds as fast and complete as SAP ADS. 
 
-Below is what I want you to work on:
-1.  [DONE] SQL editor in DAWeb needs to color reserved words and comments in different colors.  Likewise, color function names differently.  Follow
-color scheme used by HeidiSQL. In ADS SQL comments are marked as in C.  /* this is a comment */  Comments are also anything following a double
-forward slash //
-Implemented: js/ads-sql-mode.js — ace/mode/ads_sql (keywords, functions, types, // and /* */ comments)
-             ace/theme/heidisql — light HeidiSQL-like colours (blue keywords, purple functions, green comments, crimson strings)
-
-2. [DONE] On DaWeb, when viewing triggers of a table, the tabulator on the right shows the triggers and the editor on the bottom shows
-the trigger body.  Among the trigger columns on the tabulator grid, you have the column "timing".  It is empty on all triggers.
-Table properties on Pmsys.add shows these columns on file:  file:///C:/Users/ADMINI~1/AppData/Local/Temp/2/exp30E1.htm   Column timing on
-the trigger grid should be populated and it is not.
-Fixed: patched pmsys_imported.am JSON blocks with correct timing from SAP system.triggers; import_dd tool now captures timing in future imports.
-
+Let's work on triggers.  Item #3 below is all about trigger execution.  Some of this information needs to be documented on readme.md for OpenAds.
+Make sure you update documentation accordingly so user is aware of how triggers work in OpenAds. 
 
 3.  I think I need to explain how 3 special tables on triggers work.  Make sure OpenAds triggers works like SAP ADS: 
 Three special in-memory tables are used by triggers; __old, __new, and __error. These tables can be referenced using just 
@@ -69,9 +58,66 @@ UPDATE __new SET date_inserted = (SELECT now() FROM system.iota);
 
 INSERT INTO mytable SELECT * FROM __new;
 
+We need to make sure trigger options are executed by OpenAds core correctly.
+When creating a trigger, the user can specify trigger options that modify trigger behavior. The following options are supported 
+NO VALUES  : This option can be used if your trigger code will not be making use of the __new or __old table. The __new and __old tables 
+will not be built by the server when a trigger fires, which can increase performance.
+
+NO MEMOS/BLOBS : This option can be used if your trigger code will not be making use of memo or blob fields in the __new and __old tables. 
+The __new and __old tables will be built by the server, but will not contain memo or blob data. This option can be used to increase performance 
+on tables that have large memo or blob fields.
+
+Note If a table has multiple triggers, and at least one of those triggers requires memo/BLOB data in the values tables, all triggers for the table 
+in question will get the memo/BLOB data in their values tables.
+
+PRIORITY :When creating a trigger, you can specify a firing priority. If more than one trigger exists for a given table, this priority will be used when determining the order in which the triggers will be fired. Consider a table that has two AFTER UPDATE triggers, one with a priority of 1, and another with a priority of 2. The trigger with a priority of 1 will fire first, followed by the trigger with a priority value of 2.
+
+NO TRANSACTION :In certain situations, you may find that data integrity is not as important as performance. For this reason, there is a trigger option to disable implicit transactions. This option can be used to increase the performance of simple triggers that do not need the additional integrity that implicit transactions provide. Note that currently the "no transactions" trigger option is implemented on a per-event basis, so if you specify this flag for a trigger, all triggers with that event type (INSERT, UPDATE, or DELETE) will respect the "no transactions" flag.
+
+Document that OpenAds currently does not have trigger deadlock detection.  It is the user's reponsibility not to create a deadelock situation.  
+For example: Depending on how your triggers are defined, it is possible to encounter a deadlock situation. Consider a database with two tables (tableA and tableB) and two triggers (trigA and trigB). TrigA fires on tableA, and updates records in tableB. TrigB fires on tableB, and updates records in tableA.
+Now if user1 updates tableA, and user2 updates tableB, it is possible for deadlock to occur, as the first user's trigger might need resources locked by user2, and user2's trigger might need resources locked by user1.
+OpenAds nor SAP Advantage currently have any deadlock detection and/or recovery capabilities. It is the developer's responsibility to avoid trigger deadlock.
+
+Make sure OpenAds core respectes when a trigger is disabled and that it can execute sp_disableTriggers and sp_EnableTriggers system stored procedures.
+Triggers can be disabled and enabled using the system procedures sp_DisableTriggers and sp_EnableTriggers. Changes to the disabled state of triggers take place immediately. Triggers can be disabled or enabled for the current user (connection), all database users, a single table, or a single trigger.
+
+Current User
+All triggers are disabled/enabled on the connection which made the request. This setting will not affect other connections made by the same database user. This setting is not persisted after the user disconnects.
+
+All Database Users
+All triggers for all users of the current database are disabled/enabled. This setting is persisted.
+
+Single Table
+All triggers associated with a single table are disabled/enabled. This setting affects all database users and is persisted.
+
+Single Trigger
+A single trigger of a single table is disabled/enabled. This setting affects all database users and is persisted.
+
+keep in mind that when using the Advantage Database Server (as opposed to the Advantage Local Server) all operations performed inside of a trigger are done so inside of an implicit transaction. If any trigger (or nested trigger) operation fails, all operations will be rolled back, and the database will be returned to the state it was in before the trigger(s) fired. If a transaction is already active before the first trigger is fired, a savepoint will be set, and on error, all operations will be rolled back to the savepoint.
+When using the Advantage Local Server, if a trigger fails for any reason, the database is left as is. This means any operations the trigger may have already performed will be persistent.
+Because triggers use transactions automatically, it is illegal to begin a transaction inside of a trigger. Committing or rolling back a transaction from inside a trigger will result in unexpected behavior, and should be avoided.
+In certain situations, you may find that data integrity is not as important as performance. For this reason, there is a trigger option to disable implicit transactions. This option can be used to increase the performance of simple triggers that do not need the additional integrity that implicit transactions provide. Note that currently the "no transactions" trigger option is implemented on a per-event basis, so if you specify this flag for a trigger, all triggers with that event type (insert, update, or delete) will respect the "no transactions" flag.
+
+Only one INSTEAD OF trigger is allowed for each event type (INSERT, UPDATE, or DELETE) per table.  If a table has a BEFORE trigger, it cannot have an INSTEAD OF trigger. The reverse is also true.
+If a table has an INSTEAD OF X trigger, AFTER X triggers defined for that table will not fire (where X is an event type).  The __error table can only have one row. Delete operations are not currently allowed on the __error table.
+VarChar fields are not supported in the __old and __new tables.   When using the Advantage Local Server, if a trigger fails for any reason, the database is left as is. This means any operations the trigger may have already performed will be persistent.
+Nested and recursive triggers are limited to 64 levels of server re-entrance before an error is returned.
+Nested triggers (performing an operation in one trigger, which causes another trigger to fire) and recursive triggers are supported.
+Nested and recursive triggers are limited to 64 levels of server re-entrance before an error is returned. This prevents a run-away trigger from hogging CPU time and an Advantage worker thread.
+INSTEAD OF and AFTER triggers do not support recursion when called on the base table that they are assigned to. These triggers are allowed to operate on the base table without firing themselves again. However, if these triggers modify some other table that has a trigger, that trigger will be fired.
+Data operations performed inside a trigger will not check user privileges. This allows you to hide tables or other database objects from the user(s), yet still provide controlled access to them through your triggers.
 
 
-
+You can use this text below also on documentation if you think it is appropriate.  Make sure to change any reference to SAP Advantage to OpenADs
+and "proprietary" might need to be replaced:
+A trigger is a piece of code (similar to a stored procedure) that is executed on the server. Triggers differ from stored procedures because triggers are not called by the client, but instead are executed automatically in response to an insert, update, or delete operation.
+Triggers are supported for both SQL and navigational update operations. Throughout this documentation the update operations will be specified using uppercase notation (for example, INSERT), but this does not imply an SQL-only limitation.
+When a trigger is "fired" it contains some state information, which can be used inside the body of the trigger. Two in-memory tables are available inside a trigger; a __new table and an __old table. The __new table contains new field values that were, or are about to be, inserted into the table. The __old table contains old field values for the record in question.
+Triggers can provide a very powerful means to maintain business rules inside of a database.
+Triggers can be defined for any supported table type, and are not limited to the proprietary ADT format.
+Both the Advantage Database Server and the Advantage Local Server support triggers. Implicit Transactions are the only trigger functionality that differ depending on server type.
+Trigger support is a server-side feature. Any Advantage client version 6.0 or greater capable of opening a dictionary-bound table can utilize triggers. This can be beneficial if you want to add trigger support to your application, but don’t want to upgrade your client applications. Only the database server needs to be upgraded (to Advantage version 7.0 or greater) in order to start using triggers.
 
 
 OPEN FEATURES

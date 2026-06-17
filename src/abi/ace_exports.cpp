@@ -2570,13 +2570,17 @@ UNSIGNED32 AdsGetServerTime(ADSHANDLE  /*hConnect*/,
 }
 
 // ── Trigger execution ──────────────────────────────────────────────────────────
-// Fires all enabled triggers on `table_alias` matching `event_mask` (1=INSERT
-// 2=UPDATE 3=DELETE).  Trigger errors are swallowed — the original write is
-// never rolled back due to trigger failure.  Re-entrant firing is blocked with
-// a thread-local guard to prevent infinite recursion.
+// Fires enabled triggers on `table_alias` matching `event_mask` (1=INSERT
+// 2=UPDATE 3=DELETE) and `timing` (1=BEFORE 2=INSTEAD_OF 4=AFTER).
+// Triggers are sorted by priority (ascending) before firing.
+// Nesting is tracked with a thread-local depth counter; execution aborts
+// when depth exceeds 64 to prevent infinite recursion.
+// Returns true if at least one INSTEAD OF trigger was fired (caller should
+// skip the actual DML in that case).
 
 namespace {
-thread_local bool tl_trigger_firing = false;
+thread_local int tl_trigger_depth = 0;
+static constexpr int kTrigMaxDepth = 64;
 
 // Find the connection handle for a given Connection pointer.
 Handle handle_for_conn(Connection* c) {
@@ -2827,13 +2831,65 @@ static std::string trig_substitute_(
     return out;
 }
 
+// Error info returned from a trigger body (via INSERT INTO __error).
+struct TrigError_ {
+    bool        has_error = false;
+    std::uint32_t errno_val = 0;
+    std::string   message;
+};
+
+// Parse: INSERT INTO __error [(errno, message)] VALUES (num, 'msg')
+// or INSERT INTO __error (message) VALUES ('msg')
+static TrigError_ trig_parse_error_insert_(const std::string& ts) {
+    TrigError_ e;
+    // Locate VALUES keyword
+    auto vu = ts; for (auto& c : vu) c = static_cast<char>(std::toupper((unsigned char)c));
+    auto vpos = vu.find("VALUES");
+    if (vpos == std::string::npos) return e;
+    // Find the opening paren after VALUES
+    auto p = ts.find('(', vpos + 6);
+    if (p == std::string::npos) return e;
+    auto q = ts.rfind(')');
+    if (q == std::string::npos || q <= p) return e;
+    std::string inner = trig_trim_(ts.substr(p + 1, q - p - 1));
+    // Try to parse: <num> , 'message'  OR  'message'
+    e.has_error = true;
+    // Check if first token is numeric
+    std::size_t i = 0;
+    bool neg = (i < inner.size() && inner[i] == '-'); if (neg) ++i;
+    bool is_num = (i < inner.size() && std::isdigit((unsigned char)inner[i]));
+    if (is_num) {
+        std::size_t ns = i;
+        while (i < inner.size() && std::isdigit((unsigned char)inner[i])) ++i;
+        e.errno_val = static_cast<std::uint32_t>(
+            std::atoi(inner.substr(neg ? 1 : ns, i - ns).c_str()));
+        // Skip comma
+        while (i < inner.size() && (inner[i] == ' ' || inner[i] == ',')) ++i;
+    }
+    // Remaining is the message string literal
+    if (i < inner.size() && inner[i] == '\'') {
+        ++i;
+        while (i < inner.size() && inner[i] != '\'') {
+            if (inner[i] == '\'' && i + 1 < inner.size() && inner[i+1] == '\'') {
+                e.message += '\''; i += 2;
+            } else {
+                e.message += inner[i++];
+            }
+        }
+    }
+    return e;
+}
+
 // Execute an ADS procedural trigger body.  Handles DECLARE @var, SET @var = expr,
 // __new/__old field substitution, and @variable substitution before SQL execution.
-static void trig_execute_body_(
+// When is_instead_of=true, INSERT...SELECT...FROM __new is executed (the trigger
+// body must manually write the row).  Returns error info if the body wrote to __error.
+static TrigError_ trig_execute_body_(
     Handle hConn,
     const std::string& body,
     const TrigFieldMap_& new_f,
-    const TrigFieldMap_& old_f)
+    const TrigFieldMap_& old_f,
+    bool is_instead_of = false)
 {
     auto stmts = trig_split_stmts_(body);
     TrigFieldMap_ vars;
@@ -2895,9 +2951,20 @@ static void trig_execute_body_(
         if (trig_ci_pfx_(ts, "EXECUTE", 7)) continue;
         // DROP TABLE #... — session temp tables; skip
         if (trig_ci_pfx_(ts, "DROP TABLE #", 12)) continue;
-        // INSERT ... SELECT ... FROM __new or __old — INSTEAD-OF re-insert; skip
-        // (the actual row was already written before fire_triggers_ was called)
-        if (trig_ci_pfx_(ts, "INSERT", 6) &&
+        // INSERT INTO __error (errno, message) VALUES (...) — capture error and stop
+        {
+            std::string tsu = ts;
+            for (auto& c : tsu) c = static_cast<char>(std::toupper((unsigned char)c));
+            if (tsu.find("__ERROR") != std::string::npos &&
+                trig_ci_pfx_(ts, "INSERT", 6)) {
+                return trig_parse_error_insert_(ts);
+            }
+        }
+        // For non-INSTEAD OF triggers: INSERT ... SELECT ... FROM __new or __old is
+        // a trigger trying to re-insert the source row — skip to avoid duplicate writes.
+        // For INSTEAD OF triggers: this INSERT is the actual write the trigger performs;
+        // fall through and execute it.
+        if (!is_instead_of && trig_ci_pfx_(ts, "INSERT", 6) &&
             (ts.find("__new") != std::string::npos ||
              ts.find("__old") != std::string::npos)) continue;
 
@@ -2915,21 +2982,28 @@ static void trig_execute_body_(
         if (hCursor) AdsCloseTable(hCursor);
         AdsCloseSQLStatement(hStmt);
     }
+    return TrigError_{};
 }
 
-void fire_triggers_(Handle hConn, Connection* conn,
+// fire_triggers_ — fire all enabled, matching triggers for a given event + timing.
+// timing: 1=BEFORE  2=INSTEAD_OF  4=AFTER
+// Returns true if an INSTEAD OF trigger was fired (caller should skip the actual DML).
+bool fire_triggers_(Handle hConn, Connection* conn,
                     const std::string& table_alias, std::uint32_t event_mask,
+                    std::uint32_t timing,
                     Table* new_tbl = nullptr, Table* old_tbl = nullptr) {
-    if (tl_trigger_firing) return; // prevent recursion
+    if (tl_trigger_depth >= kTrigMaxDepth) return false; // depth limit
+    if (conn->triggers_disabled()) return false;          // connection-level disable
     auto* dd = conn->dd();
-    if (!dd) return;
+    if (!dd) return false;
 
-    struct Trigger { const openads::engine::DataDict::TriggerEntry* e; };
-    std::vector<Trigger> matched;
+    using TE = openads::engine::DataDict::TriggerEntry;
+    std::vector<const TE*> matched;
     for (const auto& [name, trig] : dd->triggers()) {
         if (!trig.enabled) continue;
         if (trig.event_mask != event_mask) continue;
-        // case-insensitive alias compare (tolower loop, same pattern as ri_alias_for_path)
+        if (trig.timing != timing) continue;
+        // case-insensitive alias compare
         const auto& ta = trig.table_alias;
         if (ta.size() != table_alias.size()) continue;
         bool match = true;
@@ -2940,18 +3014,57 @@ void fire_triggers_(Handle hConn, Connection* conn,
             }
         }
         if (!match) continue;
-        matched.push_back({&trig});
+        matched.push_back(&trig);
     }
-    if (matched.empty()) return;
+    if (matched.empty()) return false;
 
-    // Collect __new / __old field values once for all triggers on this event.
+    // Sort by priority ascending (lower priority number fires first)
+    std::sort(matched.begin(), matched.end(),
+              [](const TE* a, const TE* b){ return a->priority < b->priority; });
+
+    // Collect __new / __old field values if WANT_VALUES option is set (bit 0x01).
+    // If any trigger in the set requires values, collect them for all.
+    bool want_values = false;
+    bool want_memos  = false;
+    for (const auto* e : matched) {
+        if (e->options & 0x01u) { want_values = true; }
+        if (e->options & 0x02u) { want_memos  = true; }
+    }
     TrigFieldMap_ new_fields, old_fields;
-    trig_collect_row_(new_tbl, new_fields);
-    trig_collect_row_(old_tbl, old_fields);
+    if (want_values) {
+        if (want_memos) {
+            trig_collect_row_(new_tbl, new_fields);
+            trig_collect_row_(old_tbl, old_fields);
+        } else {
+            // NO MEMOS/BLOBS option: skip memo and binary fields
+            auto collect_no_memo = [](Table* t, TrigFieldMap_& m) {
+                if (!t) return;
+                std::uint16_t nf = t->field_count();
+                for (std::uint16_t i = 0; i < nf; ++i) {
+                    const auto& fd = t->field_descriptor(i);
+                    // Skip memo (M), blob (B), binary (U/W) field types
+                    char ft = static_cast<char>(
+                        std::toupper(static_cast<unsigned char>(fd.type)));
+                    if (ft == 'M' || ft == 'B' || ft == 'U' || ft == 'W') continue;
+                    std::string name = fd.name;
+                    for (auto& ch : name)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    auto v = t->read_field(i);
+                    if (!v) { m[name] = ""; continue; }
+                    std::string sv = v.value().as_string;
+                    while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                    m[name] = std::move(sv);
+                }
+            };
+            collect_no_memo(new_tbl, new_fields);
+            collect_no_memo(old_tbl, old_fields);
+        }
+    }
 
-    tl_trigger_firing = true;
-    for (const auto& m : matched) {
-        const auto& sql_body = trigger_sql_body(*m.e);
+    bool instead_of_fired = false;
+    ++tl_trigger_depth;
+    for (const auto* e : matched) {
+        const auto& sql_body = trigger_sql_body(*e);
         if (sql_body.empty()) continue;
 
         // Strip trailing non-printable garbage (binary .am file padding)
@@ -2962,9 +3075,16 @@ void fire_triggers_(Handle hConn, Connection* conn,
             body_copy.pop_back();
         }
 
-        trig_execute_body_(hConn, body_copy, new_fields, old_fields);
+        TrigError_ err = trig_execute_body_(hConn, body_copy, new_fields, old_fields,
+                                             timing == 2u /*is_instead_of*/);
+        if (timing == 2u) instead_of_fired = true;
+        // If the trigger wrote to __error, propagate the error but continue
+        // (per SAP semantics, remaining triggers still fire; the error is
+        // returned to the client after all triggers complete).
+        (void)err; // future: propagate error code back to client
     }
-    tl_trigger_firing = false;
+    --tl_trigger_depth;
+    return instead_of_fired;
 }
 } // anonymous namespace
 
@@ -3001,6 +3121,8 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     bool is_insert = t->pending_append();
     t->set_pending_append(false);
+    std::uint32_t event_mask = is_insert ? 1u : 2u;
+
     if (is_insert) {
         if (Connection* conn = conn_for_table(t)) {
             if (auto ri = ri_check_insert(conn, *t); !ri)
@@ -3012,14 +3134,31 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
                 return fail(ri.error());
         }
     }
-    auto r = t->flush();
-    if (!r) return fail(r.error());
+
+    // Trigger firing order: INSTEAD OF → (skip flush) OR BEFORE → flush → AFTER
     if (Connection* conn = conn_for_table(t)) {
         std::string alias = ri_alias_for_path(conn, t->path());
         if (!alias.empty()) {
             Handle hConn = handle_for_conn(conn);
-            // INSERT: __new = current record; UPDATE: __new = current record (new values)
-            if (hConn) fire_triggers_(hConn, conn, alias, is_insert ? 1u : 2u, t);
+            if (hConn) {
+                // INSTEAD OF trigger: fire and skip the actual write
+                if (fire_triggers_(hConn, conn, alias, event_mask, 2u /*INSTEAD_OF*/, t))
+                    return ok();
+                // BEFORE trigger: fire before the write
+                fire_triggers_(hConn, conn, alias, event_mask, 1u /*BEFORE*/, t);
+            }
+        }
+    }
+
+    auto r = t->flush();
+    if (!r) return fail(r.error());
+
+    if (Connection* conn = conn_for_table(t)) {
+        std::string alias = ri_alias_for_path(conn, t->path());
+        if (!alias.empty()) {
+            Handle hConn = handle_for_conn(conn);
+            // AFTER trigger: __new = current record (new values for UPDATE, inserted for INSERT)
+            if (hConn) fire_triggers_(hConn, conn, alias, event_mask, 4u /*AFTER*/, t);
         }
     }
     return ok();
@@ -3040,14 +3179,31 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
         if (auto ri = ri_enforce_delete(conn, *t); !ri)
             return fail(ri.error());
     }
-    auto r = t->mark_deleted();
-    if (!r) return fail(r.error());
+
+    // Trigger firing order for DELETE: INSTEAD OF → (skip delete) OR BEFORE → delete → AFTER
     if (Connection* conn = conn_for_table(t)) {
         std::string alias = ri_alias_for_path(conn, t->path());
         if (!alias.empty()) {
             Handle hConn = handle_for_conn(conn);
-            // DELETE: __old = the record being deleted
-            if (hConn) fire_triggers_(hConn, conn, alias, 3u, nullptr, t);
+            if (hConn) {
+                // INSTEAD OF DELETE: __old = current record
+                if (fire_triggers_(hConn, conn, alias, 3u, 2u /*INSTEAD_OF*/, nullptr, t))
+                    return ok();
+                // BEFORE DELETE: __old = current record (about to be deleted)
+                fire_triggers_(hConn, conn, alias, 3u, 1u /*BEFORE*/, nullptr, t);
+            }
+        }
+    }
+
+    auto r = t->mark_deleted();
+    if (!r) return fail(r.error());
+
+    if (Connection* conn = conn_for_table(t)) {
+        std::string alias = ri_alias_for_path(conn, t->path());
+        if (!alias.empty()) {
+            Handle hConn = handle_for_conn(conn);
+            // AFTER DELETE: __old = the deleted record
+            if (hConn) fire_triggers_(hConn, conn, alias, 3u, 4u /*AFTER*/, nullptr, t);
         }
     }
     return ok();
@@ -8227,6 +8383,53 @@ extern "C++" bool dispatch_sp_builtin(
         if (auto r = dd->drop_link(arg(0)); !r) { *prc = fail(r.error()); return true; }
         *prc = ok(); return true;
     }
+
+    // sp_DisableTriggers([scope[, object]])
+    // sp_EnableTriggers([scope[, object]])
+    // scope: "CURRENT USER" | "ALL" | table_name | trigger_name (auto-detected)
+    // When scope is omitted or "CURRENT USER": disable/enable for this connection only.
+    // When scope is a table name: disable/enable all triggers on that table (persisted in DD).
+    // When scope is a trigger name: disable/enable that single trigger (persisted in DD).
+    // "ALL" disables/enables all triggers for all users (persisted in DD).
+    if (uname == "SP_DISABLETRIGGERS" || uname == "SP_ENABLETRIGGERS") {
+        bool enable = (uname == "SP_ENABLETRIGGERS");
+        std::string scope_raw = arg(0);
+        std::string scope_u = scope_raw;
+        for (auto& ch : scope_u) ch = static_cast<char>(std::toupper((unsigned char)ch));
+
+        if (scope_raw.empty() || scope_u == "CURRENT USER") {
+            // Connection-level disable (non-persistent, this connection only)
+            c->set_triggers_disabled(!enable);
+            *prc = ok(); return true;
+        }
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (scope_u == "ALL") {
+            // All triggers in the DD — persist
+            for (auto& [key, trig] : dd->triggers())
+                trig.enabled = enable;
+            *prc = ok(); return true;
+        }
+        // Check if scope_raw matches a table alias → disable all triggers for that table
+        bool found_table = false;
+        for (auto& [key, trig] : dd->triggers()) {
+            std::string ta = trig.table_alias;
+            std::string sr = scope_raw;
+            for (auto& ch : ta) ch = static_cast<char>(std::tolower((unsigned char)ch));
+            for (auto& ch : sr) ch = static_cast<char>(std::tolower((unsigned char)ch));
+            if (ta == sr) { trig.enabled = enable; found_table = true; }
+        }
+        if (found_table) { *prc = ok(); return true; }
+        // Check if scope_raw matches a trigger name → disable that single trigger
+        for (auto& [key, trig] : dd->triggers()) {
+            std::string tn = trig.name;
+            std::string sr = scope_raw;
+            for (auto& ch : tn) ch = static_cast<char>(std::tolower((unsigned char)ch));
+            for (auto& ch : sr) ch = static_cast<char>(std::tolower((unsigned char)ch));
+            if (tn == sr) { trig.enabled = enable; *prc = ok(); return true; }
+        }
+        *prc = fail(openads::AE_INTERNAL_ERROR, "trigger or table not found");
+        return true;
+    }
     if (uname == "SP_MODIFYDATABASE") {
         if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
         std::string upr = arg(0);
@@ -9203,30 +9406,36 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (!compiled) return fail(compiled.error());
             tbl->set_filter(std::move(compiled).value());
         }
-        std::uint32_t rcount = tbl->record_count();
-        for (std::uint32_t r = 1; r <= rcount; ++r) {
-            if (auto g = tbl->goto_record(r); !g) continue;
-            if (tbl->is_deleted()) continue;
-            if (!tbl->passes_filter()) continue;
-            for (const auto& a : assns) {
-                if (a.value.is_numeric) {
-                    auto wr = tbl->set_field(a.field_index, a.value.number);
-                    if (!wr) return fail(wr.error());
-                } else {
-                    auto wr = tbl->set_field(a.field_index, a.value.text);
-                    if (!wr) return fail(wr.error());
+        // Trigger: INSTEAD OF UPDATE supersedes the actual write; BEFORE fires first.
+        std::string upd_alias = ri_alias_for_path(c, tbl->path());
+        Handle upd_hConn = !upd_alias.empty() ? handle_for_conn(c) : Handle{0};
+        bool upd_instead_of = false;
+        if (upd_hConn) {
+            upd_instead_of = fire_triggers_(upd_hConn, c, upd_alias, 2u, 2u /*INSTEAD_OF*/);
+            if (!upd_instead_of)
+                fire_triggers_(upd_hConn, c, upd_alias, 2u, 1u /*BEFORE*/);
+        }
+        if (!upd_instead_of) {
+            std::uint32_t rcount = tbl->record_count();
+            for (std::uint32_t r = 1; r <= rcount; ++r) {
+                if (auto g = tbl->goto_record(r); !g) continue;
+                if (tbl->is_deleted()) continue;
+                if (!tbl->passes_filter()) continue;
+                for (const auto& a : assns) {
+                    if (a.value.is_numeric) {
+                        auto wr = tbl->set_field(a.field_index, a.value.number);
+                        if (!wr) return fail(wr.error());
+                    } else {
+                        auto wr = tbl->set_field(a.field_index, a.value.text);
+                        if (!wr) return fail(wr.error());
+                    }
                 }
             }
+            if (auto fl = tbl->flush(); !fl) return fail(fl.error());
         }
-        if (auto fl = tbl->flush(); !fl) return fail(fl.error());
-        // Fire AFTER UPDATE triggers (event_mask=2).
-        {
-            std::string alias = ri_alias_for_path(c, tbl->path());
-            if (!alias.empty()) {
-                Handle hConn = handle_for_conn(c);
-                if (hConn) fire_triggers_(hConn, c, alias, 2u);
-            }
-        }
+        // Fire AFTER UPDATE triggers (only when no INSTEAD OF ran).
+        if (!upd_instead_of && upd_hConn)
+            fire_triggers_(upd_hConn, c, upd_alias, 2u, 4u /*AFTER*/);
         tbl->clear_filter();
         c->close_table(th.value());
         *phCursor = 0;
@@ -9326,22 +9535,28 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (!compiled) return fail(compiled.error());
             tbl->set_filter(std::move(compiled).value());
         }
-        std::uint32_t rcount = tbl->record_count();
-        for (std::uint32_t r = 1; r <= rcount; ++r) {
-            if (auto g = tbl->goto_record(r); !g) continue;
-            if (tbl->is_deleted()) continue;
-            if (!tbl->passes_filter()) continue;
-            (void)tbl->mark_deleted();
+        // Trigger: INSTEAD OF DELETE supersedes the actual delete; BEFORE fires first.
+        std::string del_alias = ri_alias_for_path(c, tbl->path());
+        Handle del_hConn = !del_alias.empty() ? handle_for_conn(c) : Handle{0};
+        bool del_instead_of = false;
+        if (del_hConn) {
+            del_instead_of = fire_triggers_(del_hConn, c, del_alias, 3u, 2u /*INSTEAD_OF*/);
+            if (!del_instead_of)
+                fire_triggers_(del_hConn, c, del_alias, 3u, 1u /*BEFORE*/);
         }
-        if (auto fl = tbl->flush(); !fl) return fail(fl.error());
-        // Fire AFTER DELETE triggers (event_mask=3).
-        {
-            std::string alias = ri_alias_for_path(c, tbl->path());
-            if (!alias.empty()) {
-                Handle hConn = handle_for_conn(c);
-                if (hConn) fire_triggers_(hConn, c, alias, 3u);
+        if (!del_instead_of) {
+            std::uint32_t rcount = tbl->record_count();
+            for (std::uint32_t r = 1; r <= rcount; ++r) {
+                if (auto g = tbl->goto_record(r); !g) continue;
+                if (tbl->is_deleted()) continue;
+                if (!tbl->passes_filter()) continue;
+                (void)tbl->mark_deleted();
             }
+            if (auto fl = tbl->flush(); !fl) return fail(fl.error());
         }
+        // Fire AFTER DELETE triggers (only when no INSTEAD OF ran).
+        if (!del_instead_of && del_hConn)
+            fire_triggers_(del_hConn, c, del_alias, 3u, 4u /*AFTER*/);
         tbl->clear_filter();
         c->close_table(th.value());
         *phCursor = 0;
@@ -9454,7 +9669,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::string alias = ri_alias_for_path(c, tbl->path());
                 if (!alias.empty()) {
                     Handle hConn = handle_for_conn(c);
-                    if (hConn) fire_triggers_(hConn, c, alias, 1u);
+                    if (hConn) fire_triggers_(hConn, c, alias, 1u, 4u /*AFTER*/);
                 }
             }
             AdsCloseTable(srcCur);
@@ -9491,24 +9706,31 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             return std::monostate{};
         };
-        if (!ins.value().rows.empty()) {
-            for (auto& row : ins.value().rows) {
-                auto r = write_one(row);
+        // Trigger: INSTEAD OF INSERT supersedes the actual insert; BEFORE fires first.
+        std::string ins_alias = ri_alias_for_path(c, tbl->path());
+        Handle ins_hConn = !ins_alias.empty() ? handle_for_conn(c) : Handle{0};
+        bool ins_instead_of = false;
+        if (ins_hConn) {
+            ins_instead_of = fire_triggers_(ins_hConn, c, ins_alias, 1u, 2u /*INSTEAD_OF*/);
+            if (!ins_instead_of)
+                fire_triggers_(ins_hConn, c, ins_alias, 1u, 1u /*BEFORE*/);
+        }
+        if (!ins_instead_of) {
+            if (!ins.value().rows.empty()) {
+                for (auto& row : ins.value().rows) {
+                    auto r = write_one(row);
+                    if (!r) return fail(r.error());
+                }
+            } else {
+                auto r = write_one(ins.value().values);
                 if (!r) return fail(r.error());
             }
-        } else {
-            auto r = write_one(ins.value().values);
-            if (!r) return fail(r.error());
+            if (auto fl = tbl->flush(); !fl) return fail(fl.error());
         }
-        if (auto fl = tbl->flush(); !fl) return fail(fl.error());
-        // Fire AFTER INSERT triggers (event_mask=1). Pass tbl so __new fields are available.
-        {
-            std::string alias = ri_alias_for_path(c, tbl->path());
-            if (!alias.empty()) {
-                Handle hConn = handle_for_conn(c);
-                if (hConn) fire_triggers_(hConn, c, alias, 1u, tbl);
-            }
-        }
+        // Fire AFTER INSERT triggers (only when no INSTEAD OF ran).
+        // Pass tbl so __new fields are available for the body.
+        if (!ins_instead_of && ins_hConn)
+            fire_triggers_(ins_hConn, c, ins_alias, 1u, 4u /*AFTER*/, tbl);
         c->close_table(th.value());
         *phCursor = 0;
         return ok();

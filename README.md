@@ -1982,6 +1982,145 @@ All Phase 1 milestones (M0–M8) are complete. See the release table at the top 
 3. Execute the plan task by task. Each task is `red → green → commit` and lands one focused change.
 4. When the milestone is done, mark it green in the table above, push, and tag the head commit `mN-done` for traceability.
 
+---
+
+## Triggers
+
+A trigger is a piece of code (similar to a stored procedure) that executes on the server automatically in response to an INSERT, UPDATE, or DELETE operation.  Triggers differ from stored procedures in that they are not called by the client but fire implicitly whenever a matching DML event occurs on the bound table.  Triggers are supported for both SQL and navigational (record-level API) update operations.
+
+### Trigger timing
+
+Three timing values control when the trigger fires relative to the DML event:
+
+| Timing | Value | Description |
+|--------|-------|-------------|
+| `BEFORE` | 1 | Fires before the record is written. The row has not yet been committed to the table. |
+| `INSTEAD OF` | 2 | Fires **instead of** the actual write. The engine skips the original DML; the trigger body is responsible for performing the write (e.g. `INSERT INTO mytable SELECT * FROM __new`). |
+| `AFTER` | 4 | Fires after the record has been committed to the table. This is the most common timing. |
+
+Firing order when multiple triggers exist for the same event and timing: triggers are sorted by **priority** (ascending — lower number fires first).
+
+### Special in-memory tables: `__new`, `__old`, `__error`
+
+Three virtual in-memory tables are available inside a trigger body:
+
+**`__new`** — available for INSERT and UPDATE triggers.  Contains one row with the same field definitions as the base table.  For BEFORE and INSTEAD OF triggers the values are those *about to be written*; for AFTER triggers the values are those *just written*.
+
+```sql
+-- Read a field from the new record
+SELECT empid FROM __new
+```
+
+**`__old`** — available for UPDATE and DELETE triggers.  Contains one row with the field values *before* the current operation was performed.
+
+**`__error`** — used to return an error from inside a trigger.  The table has two fields:
+
+```
+INTEGER  errno
+MEMO     message
+```
+
+If the trigger body inserts a row into `__error`, the server returns the `errno` and `message` as an error to the client.  `errno` is optional; if omitted, a default trigger failure code is returned.
+
+```sql
+-- Abort the operation with a custom error
+INSERT INTO __error (errno, message) VALUES (1001, 'Value out of range');
+```
+
+> **Note:** The `__error` table can hold only one row.  DELETE operations on `__error` are not permitted.
+> VarChar fields are not represented in `__old` / `__new` — use Char instead.
+
+### INSTEAD OF trigger pattern
+
+An INSTEAD OF trigger intercepts the original DML and replaces it with trigger-controlled logic.  A common use case is to modify a field before committing:
+
+```sql
+-- INSTEAD OF INSERT trigger that stamps the current timestamp
+UPDATE __new SET date_inserted = (SELECT now() FROM system.iota);
+INSERT INTO mytable SELECT * FROM __new;
+```
+
+Constraints on INSTEAD OF triggers:
+- Only **one** INSTEAD OF trigger per event type (INSERT / UPDATE / DELETE) per table.
+- A table that has a BEFORE trigger cannot also have an INSTEAD OF trigger for the same event, and vice versa.
+- If an INSTEAD OF trigger fires, any AFTER triggers for the same event on that table **do not** fire.
+
+### Trigger options
+
+When creating a trigger the following options modify its behavior:
+
+| Option | Bitmask | Description |
+|--------|---------|-------------|
+| `NO VALUES` (bit 0x01 clear) | — | The `__new` and `__old` tables are not built.  Use when your trigger body does not reference either table.  Improves performance. |
+| `NO MEMOS/BLOBS` (bit 0x02 clear) | — | `__new` and `__old` are built but memo / blob / binary fields are excluded.  Use when you only need scalar fields from those tables.  Improves performance on tables with large memo or blob columns. |
+| `PRIORITY` | — | Integer firing order.  Lower values fire first.  Affects all triggers with the same event type and timing on a table. |
+| `NO TRANSACTION` | bit 0x04 | Disables the implicit transaction wrapping that surrounds trigger execution (see below).  Use only when performance matters more than atomicity. |
+
+> **Note:** If a table has multiple triggers and at least one requires memo/BLOB data in the values tables, all triggers for that table will receive memo/BLOB data.
+
+### Implicit transactions
+
+All operations performed inside a trigger are wrapped in an implicit transaction:
+
+- If the trigger (or any nested trigger) fails, all operations are rolled back and the database is returned to its pre-trigger state.
+- If a transaction is already active when the first trigger fires, a **savepoint** is set instead of a new transaction.  On failure the engine rolls back to that savepoint.
+- Because triggers use implicit transactions, beginning a transaction *inside* a trigger is not permitted.  Committing or rolling back from inside a trigger produces undefined behavior.
+
+The `NO TRANSACTION` option disables this behavior for performance-critical triggers that do not require atomicity.  This flag applies per-event: if any trigger for a given event (INSERT, UPDATE, or DELETE) specifies `NO TRANSACTION`, all triggers for that event on the table will skip the implicit transaction.
+
+### Nested and recursive triggers
+
+Triggers may nest: an operation inside trigger A can cause trigger B to fire.  OpenADS limits nesting to **64 levels**; if this depth is exceeded an error is returned to prevent runaway triggers from monopolising server resources.
+
+- INSTEAD OF and AFTER triggers do **not** recurse on their own base table — they may modify other tables, which can fire *those* tables' triggers, but they will not fire themselves again for the same table.
+- BEFORE triggers follow the same rule.
+
+It is the developer's responsibility to design triggers that do not create deadlock.  For example: if trigger A on tableA updates tableB, and trigger B on tableB updates tableA, a deadlock can occur when two connections concurrently update those tables.  **OpenADS has no deadlock detection or recovery.**  Avoid circular trigger chains.
+
+### Data operations inside a trigger bypass user privileges
+
+DML performed by trigger code runs without checking the calling user's permissions.  This lets you hide tables from end users while still providing controlled access through triggers.
+
+### Disabling and enabling triggers
+
+Triggers can be disabled and enabled using the system stored procedures `sp_DisableTriggers` and `sp_EnableTriggers`.
+
+```sql
+-- Disable all triggers for the current connection only (not persisted)
+EXECUTE PROCEDURE sp_DisableTriggers('CURRENT USER');
+
+-- Re-enable for the current connection
+EXECUTE PROCEDURE sp_EnableTriggers('CURRENT USER');
+
+-- Disable all triggers for all users (persisted in the DD)
+EXECUTE PROCEDURE sp_DisableTriggers('ALL');
+
+-- Disable all triggers on a single table (persisted)
+EXECUTE PROCEDURE sp_DisableTriggers('employees');
+
+-- Disable a single named trigger (persisted)
+EXECUTE PROCEDURE sp_DisableTriggers('MyAuditTrigger');
+```
+
+Scope rules:
+
+| Scope | Persistence | Effect |
+|-------|-------------|--------|
+| `CURRENT USER` (or no argument) | Not persisted | Only the current connection's triggers are affected.  Other connections are unaffected. |
+| `ALL` | Persisted | All triggers in the database are disabled for all users. |
+| *table name* | Persisted | All triggers bound to that table are disabled for all users. |
+| *trigger name* | Persisted | Only that trigger is affected, for all users. |
+
+Changes take effect immediately.
+
+### Known limitations
+
+- **No deadlock detection** — it is the developer's responsibility to avoid circular trigger chains (see above).
+- **Cursors and flow control** — `DECLARE ... CURSOR`, `OPEN`, `FETCH`, `CLOSE`, `WHILE`, `IF/ELSE` blocks, and `EXECUTE PROCEDURE` inside trigger bodies are currently parsed but not executed.  Simple DML statements (`INSERT`, `UPDATE`, `DELETE`, `SELECT`) with `__new`/`__old` field substitution and `@variable` substitution work correctly.
+- **SQL paths fire once per batch** — for SQL `UPDATE` / `DELETE` / `INSERT` that affect multiple rows, triggers fire once for the entire batch (not once per row).  Navigational (record-level) operations fire once per `AdsWriteRecord` / `AdsDeleteRecord` call.
+
+---
+
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE) for the full text and

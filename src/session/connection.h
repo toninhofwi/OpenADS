@@ -164,8 +164,15 @@ private:
         Collation::Binary;
     // Authenticated username (empty = anonymous / unauthenticated).
     std::string                                                username_;
+    // Per-connection trigger disable flag (sp_DisableTriggers / sp_EnableTriggers
+    // with CURRENT USER scope). Not persisted; reset when the connection closes.
+    bool                                                       triggers_disabled_ = false;
 
 public:
+    // Trigger disable / enable for this connection (current-user scope).
+    void set_triggers_disabled(bool v) noexcept { triggers_disabled_ = v; }
+    bool triggers_disabled()    const noexcept  { return triggers_disabled_; }
+
     ~Connection();
 };
 
