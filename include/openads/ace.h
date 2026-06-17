@@ -860,6 +860,10 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_AFTER_UPDATE                     0x0008
 #define ADS_BEFORE_DELETE                    0x0010
 #define ADS_AFTER_DELETE                     0x0020
+// INSTEAD OF variants (OpenADS extension — not in SAP ACE).
+#define ADS_INSTEAD_OF_INSERT                0x0040
+#define ADS_INSTEAD_OF_UPDATE                0x0080
+#define ADS_INSTEAD_OF_DELETE                0x0100
 
 // RI property codes (401-407).
 #define ADS_DD_RI_PARENT                     401

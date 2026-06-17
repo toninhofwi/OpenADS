@@ -166,7 +166,7 @@ OPEN MAINTENANCE
 10. Inspect Studio web console of OpenADS and see how AOFs work; adapt
     useful features into daWeb when browsing a table.
 
-14. OpenADS needs to build cross-platform. See git repo CI for current
+11. OpenADS needs to build cross-platform. See git repo CI for current
     failures on non-Windows platforms.
 
 

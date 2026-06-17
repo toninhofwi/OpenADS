@@ -131,6 +131,7 @@ add_executable(openads_unit_tests
     unit/abi_dd_perms_test.cpp
     unit/abi_dd_field_prop_test.cpp
     unit/abi_dd_trigger_test.cpp
+    unit/abi_dd_trigger_fire_test.cpp
     unit/abi_dd_proc_view_test.cpp
     unit/abi_sql_system_tables_test.cpp
     unit/abi_sql_dd_sql_test.cpp

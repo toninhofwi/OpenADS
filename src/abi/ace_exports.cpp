@@ -5452,7 +5452,24 @@ UNSIGNED32 AdsDDCreateTrigger(ADSHANDLE hConn, UNSIGNED8* pucName,
     openads::engine::DataDict::TriggerEntry e;
     e.name        = openads::abi::to_internal(pucName, 0);
     e.table_alias = openads::abi::to_internal(pucTable, 0);
-    e.event_mask  = ulType;
+    // Decode combined ADS trigger type constant into internal (event_mask, timing).
+    // ADS_BEFORE_INSERT=0x0001 ADS_AFTER_INSERT=0x0002 ADS_BEFORE_UPDATE=0x0004
+    // ADS_AFTER_UPDATE=0x0008 ADS_BEFORE_DELETE=0x0010 ADS_AFTER_DELETE=0x0020
+    // ADS_INSTEAD_OF_INSERT=0x0040 ADS_INSTEAD_OF_UPDATE=0x0080
+    // ADS_INSTEAD_OF_DELETE=0x0100
+    switch (ulType) {
+        case 0x0001: e.event_mask = 1; e.timing = 1; break; // BEFORE INSERT
+        case 0x0002: e.event_mask = 1; e.timing = 4; break; // AFTER INSERT
+        case 0x0040: e.event_mask = 1; e.timing = 2; break; // INSTEAD OF INSERT
+        case 0x0004: e.event_mask = 2; e.timing = 1; break; // BEFORE UPDATE
+        case 0x0008: e.event_mask = 2; e.timing = 4; break; // AFTER UPDATE
+        case 0x0080: e.event_mask = 2; e.timing = 2; break; // INSTEAD OF UPDATE
+        case 0x0010: e.event_mask = 3; e.timing = 1; break; // BEFORE DELETE
+        case 0x0020: e.event_mask = 3; e.timing = 4; break; // AFTER DELETE
+        case 0x0100: e.event_mask = 3; e.timing = 2; break; // INSTEAD OF DELETE
+        default:
+            return fail(openads::AE_INTERNAL_ERROR, "unknown trigger type");
+    }
     e.container   = pucContainer ? openads::abi::to_internal(pucContainer, 0) : "";
     e.procedure   = pucProcedure ? openads::abi::to_internal(pucProcedure, 0) : "";
     e.priority    = ulPriority;
@@ -5510,8 +5527,20 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         case 1408: /* ADS_DD_TRIG_TABLENAME (SAP ACE) */
             return put_str(e.table_alias);
         case ADS_DD_TRIGGER_EVENT:
-        case 1401: /* ADS_DD_TRIG_EVENT_TYPE (SAP ACE) */
-            return put_u32(e.event_mask);
+        case 1401: /* ADS_DD_TRIG_EVENT_TYPE (SAP ACE) — re-encode internal → combined ADS constant */
+        {
+            std::uint32_t combined = 0;
+            if      (e.event_mask==1 && e.timing==1) combined = 0x0001;
+            else if (e.event_mask==1 && e.timing==4) combined = 0x0002;
+            else if (e.event_mask==1 && e.timing==2) combined = 0x0040;
+            else if (e.event_mask==2 && e.timing==1) combined = 0x0004;
+            else if (e.event_mask==2 && e.timing==4) combined = 0x0008;
+            else if (e.event_mask==2 && e.timing==2) combined = 0x0080;
+            else if (e.event_mask==3 && e.timing==1) combined = 0x0010;
+            else if (e.event_mask==3 && e.timing==4) combined = 0x0020;
+            else if (e.event_mask==3 && e.timing==2) combined = 0x0100;
+            return put_u32(combined);
+        }
         case 1402: /* ADS_DD_TRIG_TIMING (SAP ACE extension) */
             return put_u32(e.timing);
         case ADS_DD_TRIGGER_CONTAINER:
@@ -5558,8 +5587,24 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         case 1408: /* ADS_DD_TRIG_TABLENAME (SAP ACE) */
             e.table_alias = val; break;
         case ADS_DD_TRIGGER_EVENT:
-        case 1401: /* ADS_DD_TRIG_EVENT_TYPE (SAP ACE) — event: 1=INSERT 2=UPDATE 3=DELETE */
-            parse_u32(e.event_mask); break;
+        case 1401: /* ADS_DD_TRIG_EVENT_TYPE (SAP ACE) — decode combined ADS constant */
+        {
+            std::uint32_t combined = 0;
+            parse_u32(combined);
+            switch (combined) {
+                case 0x0001: e.event_mask=1; e.timing=1; break;
+                case 0x0002: e.event_mask=1; e.timing=4; break;
+                case 0x0040: e.event_mask=1; e.timing=2; break;
+                case 0x0004: e.event_mask=2; e.timing=1; break;
+                case 0x0008: e.event_mask=2; e.timing=4; break;
+                case 0x0080: e.event_mask=2; e.timing=2; break;
+                case 0x0010: e.event_mask=3; e.timing=1; break;
+                case 0x0020: e.event_mask=3; e.timing=4; break;
+                case 0x0100: e.event_mask=3; e.timing=2; break;
+                default: break;
+            }
+            break;
+        }
         case 1402: /* timing: 1=BEFORE 2=INSTEAD_OF 4=AFTER */
             parse_u32(e.timing); break;
         case ADS_DD_TRIGGER_CONTAINER:
