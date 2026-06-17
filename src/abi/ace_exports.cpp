@@ -5527,8 +5527,8 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         case 1408: /* ADS_DD_TRIG_TABLENAME (SAP ACE) */
             return put_str(e.table_alias);
         case ADS_DD_TRIGGER_EVENT:
-        case 1401: /* ADS_DD_TRIG_EVENT_TYPE (SAP ACE) — re-encode internal → combined ADS constant */
         {
+            // ABI callers (AdsDDCreateTrigger/SetTriggerProperty) use combined ADS type constants.
             std::uint32_t combined = 0;
             if      (e.event_mask==1 && e.timing==1) combined = 0x0001;
             else if (e.event_mask==1 && e.timing==4) combined = 0x0002;
@@ -5541,6 +5541,8 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
             else if (e.event_mask==3 && e.timing==2) combined = 0x0100;
             return put_u32(combined);
         }
+        case 1401: /* ADS_DD_TRIG_EVENT_TYPE (SAP ACE) — 1=INSERT 2=UPDATE 3=DELETE */
+            return put_u32(static_cast<std::uint32_t>(e.event_mask));
         case 1402: /* ADS_DD_TRIG_TIMING (SAP ACE extension) */
             return put_u32(e.timing);
         case ADS_DD_TRIGGER_CONTAINER:

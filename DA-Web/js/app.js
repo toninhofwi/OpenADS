@@ -1051,29 +1051,50 @@
     });
   }
 
-  // ── Trigger tab: split grid (top) + ACE editor (bottom) ────────────────────
+  // ── Trigger tab: resizable grid (top) + ACE editor (bottom) ──────────────────
   function buildTriggerPanel(tabId, tab) {
     const dd = tab.dd || '';
     const ddOpts = Array.from(state.openConnections).map(n =>
       `<option value="${escAttr(n)}" ${n === dd ? 'selected' : ''}>${escHtml(n)}</option>`
     ).join('');
+    // ~36px header + 5×35px rows = 211px initial grid height
     return `
-      <div class="sql-panel" style="flex-direction:column;">
-        <div style="flex:0 0 auto;min-height:120px;max-height:45%;overflow:auto;border-bottom:2px solid #313244;" id="trig-grid-wrap-${tabId}">
-          <div style="padding:4px 6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#1e1e2e;border-bottom:1px solid #313244;">
-            <button class="btn btn-sm btn-primary" id="save-trig-${tabId}">&#128190; Save Changes</button>
-            <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" id="trig-opt-values-${tabId}" checked> Pass __new/__old values
-            </label>
-            <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" id="trig-opt-memos-${tabId}" checked> Include memos/blobs
-            </label>
-            <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" id="trig-opt-notxn-${tabId}"> No implicit transaction
-            </label>
-            <span id="trig-save-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:4px;"></span>
-          </div>
-          <div id="trig-grid-${tabId}" style="width:100%;"></div>
+      <div class="sql-panel" style="flex-direction:column;overflow:hidden;">
+        <div style="flex:0 0 auto;padding:4px 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#1e1e2e;border-bottom:1px solid #313244;">
+          <button class="btn btn-sm" id="add-trig-${tabId}" style="background:#40a02b;color:#fff;">&#43; Add</button>
+          <button class="btn btn-sm" id="del-trig-${tabId}" style="background:#d20f39;color:#fff;">&#128465; Delete</button>
+          <button class="btn btn-sm btn-primary" id="save-trig-${tabId}">&#128190; Save</button>
+          <span style="width:1px;height:18px;background:#45475a;display:inline-block;margin:0 2px;"></span>
+          <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="checkbox" id="trig-opt-values-${tabId}" checked> Pass __new/__old
+          </label>
+          <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="checkbox" id="trig-opt-memos-${tabId}" checked> Include memos
+          </label>
+          <label style="font-size:11px;color:#a6adc8;display:flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="checkbox" id="trig-opt-notxn-${tabId}"> No transaction
+          </label>
+          <span id="trig-save-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:4px;flex:1;"></span>
+        </div>
+        <div id="trig-add-form-${tabId}" style="display:none;flex:0 0 auto;padding:5px 8px;background:#181825;border-bottom:1px solid #313244;display:none;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:11px;color:#cdd6f4;font-weight:600;">New trigger:</span>
+          <input id="trig-new-name-${tabId}" placeholder="Name" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:2px 6px;border-radius:3px;font-size:12px;width:130px;">
+          <select id="trig-new-timing-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:2px 6px;border-radius:3px;font-size:12px;">
+            <option value="BEFORE">BEFORE</option><option value="AFTER">AFTER</option><option value="INSTEAD OF">INSTEAD OF</option>
+          </select>
+          <select id="trig-new-event-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:2px 6px;border-radius:3px;font-size:12px;">
+            <option value="INSERT">INSERT</option><option value="UPDATE">UPDATE</option><option value="DELETE">DELETE</option>
+          </select>
+          <input id="trig-new-prio-${tabId}" type="number" min="1" value="1" placeholder="Priority" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:2px 6px;border-radius:3px;font-size:12px;width:70px;">
+          <button class="btn btn-sm" id="trig-add-ok-${tabId}" style="background:#40a02b;color:#fff;">Create</button>
+          <button class="btn btn-sm" id="trig-add-cancel-${tabId}" style="background:#45475a;color:#cdd6f4;">Cancel</button>
+          <span id="trig-add-msg-${tabId}" style="font-size:11px;color:#f38ba8;"></span>
+        </div>
+        <div id="trig-grid-wrap-${tabId}" style="flex:0 0 211px;min-height:120px;overflow:hidden;">
+          <div id="trig-grid-${tabId}" style="height:100%;"></div>
+        </div>
+        <div id="trig-split-${tabId}" style="flex:0 0 7px;cursor:row-resize;background:#181825;border-top:1px solid #313244;border-bottom:1px solid #313244;display:flex;align-items:center;justify-content:center;">
+          <div style="width:36px;height:3px;background:#45475a;border-radius:2px;"></div>
         </div>
         <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
           <div class="sql-toolbar" style="flex:0 0 auto;">
@@ -1082,7 +1103,7 @@
               ${ddOpts}
             </select>
             <button class="btn btn-primary" id="sql-run-${tabId}" title="Execute (F5)">&#9654; Execute</button>
-            <span id="trig-label-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:8px;"></span>
+            <span id="trig-label-${tabId}" style="font-size:11px;color:#89b4fa;margin-left:8px;font-weight:600;"></span>
             <span id="sql-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:8px;"></span>
           </div>
           <div class="sql-editor-wrap" style="flex:1;min-height:0;">
@@ -1116,15 +1137,43 @@
         name: 'executeAll', bindKey: { win: 'F5', mac: 'F5' },
         exec: () => doExecuteSql(tabId, editor.getValue().trim()),
       });
+
+      // Splitter drag-resize between grid and editor
+      const splitter = document.getElementById('trig-split-' + tabId);
+      const gridWrap = document.getElementById('trig-grid-wrap-' + tabId);
+      if (splitter && gridWrap) {
+        let dragY = null, startH = null;
+        splitter.addEventListener('mousedown', e => {
+          e.preventDefault();
+          dragY  = e.clientY;
+          startH = gridWrap.offsetHeight;
+          const onMove = ev => {
+            if (dragY === null) return;
+            const newH = Math.max(90, Math.min(700, startH + ev.clientY - dragY));
+            gridWrap.style.flex = `0 0 ${newH}px`;
+          };
+          const onUp = () => {
+            dragY = null;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            // Force ACE editor to re-measure after resize
+            state.aceEditors[tabId]?.resize();
+          };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }
+
+      loadTriggerData(tabId, tab.dd, tab.table);
     }, 60);
   }
 
-  function loadTriggerData(tabId, dd, table) {
-    const gridEl = document.getElementById('trig-grid-' + tabId);
+  function loadTriggerData(tabId, dd, table, restoreName) {
+    const gridEl  = document.getElementById('trig-grid-' + tabId);
     const labelEl = document.getElementById('trig-label-' + tabId);
+    const msgEl   = document.getElementById('trig-save-msg-' + tabId);
     if (!gridEl) return;
 
-    // Use trigger_body.php which reads directly from .add/.am binary for correct event/timing/body
     apiFetch('api/trigger_body.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1135,81 +1184,216 @@
         return;
       }
       const triggers = resp.triggers || [];
+
+      // Add _origName so we always know what key to use for save/delete
+      triggers.forEach(t => { t._origName = t.name; });
+
       /* global Tabulator */
       const grid = new Tabulator('#trig-grid-' + tabId, {
         data: triggers,
         layout: 'fitDataFill',
         selectable: 1,
+        selectableRollingSelection: false,
         placeholder: '(no triggers defined for this table)',
+        rowFormatter: row => {
+          // Ensure selected row has a visible highlight
+          row.getElement().style.background = row.isSelected() ? '#313244' : '';
+        },
         columns: [
-          { title: 'Name',     field: 'name',     widthGrow: 2, headerSort: false },
-          { title: 'Timing',   field: 'timing',   width: 130,   headerSort: false,
+          { title: 'Name',     field: 'name',     widthGrow: 2,  minWidth: 120, headerSort: false,
+            editor: 'input' },
+          { title: 'Timing',   field: 'timing',   width: 120,    headerSort: false,
             editor: 'select', editorParams: { values: { BEFORE: 'BEFORE', 'INSTEAD OF': 'INSTEAD OF', AFTER: 'AFTER' } } },
-          { title: 'Event',    field: 'event',    widthGrow: 1, headerSort: false,
+          { title: 'Event',    field: 'event',    width: 90,     headerSort: false,
             editor: 'select', editorParams: { values: { INSERT: 'INSERT', UPDATE: 'UPDATE', DELETE: 'DELETE' } } },
-          { title: 'Enabled',  field: 'enabled',  width: 80,    headerSort: false,
+          { title: 'Enabled',  field: 'enabled',  width: 80,     headerSort: false,
             editor: 'select', editorParams: { values: { Yes: 'Yes', No: 'No' } } },
-          { title: 'Priority', field: 'priority', width: 75,    headerSort: false },
+          { title: 'Priority', field: 'priority', width: 75,     headerSort: false,
+            editor: 'number', editorParams: { min: 1, step: 1 } },
         ],
       });
 
-      // Save button: saves tabulator row values + editor body for selected trigger
-      const saveMsgEl  = document.getElementById('trig-save-msg-' + tabId);
-      const chkValues  = document.getElementById('trig-opt-values-' + tabId);
-      const chkMemos   = document.getElementById('trig-opt-memos-'  + tabId);
-      const chkNoTxn   = document.getElementById('trig-opt-notxn-'  + tabId);
-      document.getElementById('save-trig-' + tabId)?.addEventListener('click', async () => {
-        const editor = state.aceEditors[tabId];
-        const label  = document.getElementById('trig-label-' + tabId)?.textContent || '';
-        if (!label) { if (saveMsgEl) saveMsgEl.textContent = 'Select a trigger row first'; return; }
-        const row = grid.getData().find(r => r.name === label);
-        if (!row) { if (saveMsgEl) saveMsgEl.textContent = 'Trigger row not found'; return; }
-        if (saveMsgEl) saveMsgEl.textContent = 'Saving…';
-        try {
-          const body = editor ? editor.getValue() : '';
-          // Strip the "-- Trigger: ...\n-- timing event\n\n" header comment we prepend
-          const bodyLines = body.split('\n');
-          const sqlStart  = bodyLines.findIndex(l => !l.startsWith('-- '));
-          const sqlBody   = bodyLines.slice(sqlStart < 0 ? 0 : sqlStart).join('\n').trim();
-
-          // Compute options bitmask from checkboxes
-          const opts = ((chkValues?.checked ? 0x01 : 0) |
-                        (chkMemos?.checked  ? 0x02 : 0) |
-                        (chkNoTxn?.checked  ? 0x04 : 0));
-
-          const r = await apiFetch('api/save_trigger.php', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dd, table, name: row.name,
-              event: row.event, timing: row.timing, enabled: row.enabled, body: sqlBody,
-              options: opts }),
-          });
-          if (saveMsgEl) saveMsgEl.textContent = r.error ? `Error: ${r.error}` : `Saved ${row.name}`;
-        } catch (err) {
-          if (saveMsgEl) saveMsgEl.textContent = `Error: ${err.message}`;
+      // Validate uniqueness of (timing, event) when a cell is edited
+      grid.on('cellEdited', cell => {
+        const field = cell.getField();
+        if (field !== 'timing' && field !== 'event') return;
+        const row = cell.getRow();
+        const d   = row.getData();
+        const dups = grid.getData().filter(r =>
+          r._origName !== d._origName &&
+          r.timing === d.timing &&
+          r.event  === d.event
+        );
+        if (dups.length > 0) {
+          if (msgEl) msgEl.textContent = `⚠ A ${d.timing} ${d.event} trigger already exists`;
+          msgEl.style.color = '#f38ba8';
+          // Revert to previous value
+          cell.restoreOldValue();
+        } else {
+          if (msgEl) { msgEl.textContent = ''; msgEl.style.color = ''; }
         }
       });
+
+      const chkValues = document.getElementById('trig-opt-values-' + tabId);
+      const chkMemos  = document.getElementById('trig-opt-memos-'  + tabId);
+      const chkNoTxn  = document.getElementById('trig-opt-notxn-'  + tabId);
 
       const loadTrigBody = (d) => {
         const editor = state.aceEditors[tabId];
         if (!editor) return;
-        const body   = d.body || '';
         const header = `-- Trigger: ${d.name}\n-- ${d.timing} ${d.event}\n\n`;
-        editor.setValue(header + (body || '-- (body not available)'), -1);
+        editor.setValue(header + (d.body || '-- (body not available)'), -1);
         if (labelEl) labelEl.textContent = d.name;
-        // Update option checkboxes from trigger's options bitmask (default 0x03)
         const opts = (typeof d.options === 'number') ? d.options : 0x03;
         if (chkValues) chkValues.checked = !!(opts & 0x01);
         if (chkMemos)  chkMemos.checked  = !!(opts & 0x02);
         if (chkNoTxn)  chkNoTxn.checked  = !!(opts & 0x04);
       };
 
-      grid.on('rowClick', (e, row) => loadTrigBody(row.getData()));
+      grid.on('rowClick', (e, row) => {
+        row.select();
+        loadTrigBody(row.getData());
+      });
+      grid.on('rowSelected', row => {
+        // Keep rowFormatter highlight in sync
+        row.reformat();
+      });
+      grid.on('rowDeselected', row => row.reformat());
 
+      // ── Save ──────────────────────────────────────────────────────────────
+      const doSave = async () => {
+        const label = labelEl?.textContent || '';
+        if (!label) { if (msgEl) { msgEl.textContent = 'Select a trigger row first'; msgEl.style.color='#f38ba8'; } return; }
+        const allRows = grid.getData();
+        const row = allRows.find(r => r._origName === label || r.name === label);
+        if (!row) { if (msgEl) { msgEl.textContent = 'Trigger row not found'; msgEl.style.color='#f38ba8'; } return; }
+
+        // Uniqueness check before save
+        const conflict = allRows.find(r =>
+          r._origName !== row._origName &&
+          r.timing === row.timing && r.event === row.event
+        );
+        if (conflict) {
+          if (msgEl) { msgEl.textContent = `⚠ Duplicate ${row.timing} ${row.event} trigger`; msgEl.style.color='#f38ba8'; }
+          return;
+        }
+
+        if (msgEl) { msgEl.textContent = 'Saving…'; msgEl.style.color = ''; }
+        const editor = state.aceEditors[tabId];
+        const rawBody  = editor ? editor.getValue() : '';
+        const bodyLines = rawBody.split('\n');
+        const sqlStart  = bodyLines.findIndex(l => !l.startsWith('-- '));
+        const sqlBody   = bodyLines.slice(sqlStart < 0 ? 0 : sqlStart).join('\n').trim();
+        const opts = ((chkValues?.checked ? 0x01 : 0) |
+                      (chkMemos?.checked  ? 0x02 : 0) |
+                      (chkNoTxn?.checked  ? 0x04 : 0));
+        try {
+          const r = await apiFetch('api/save_trigger.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dd, table,
+              name:     row._origName,
+              event:    row.event,
+              timing:   row.timing,
+              enabled:  row.enabled,
+              priority: row.priority,
+              body:     sqlBody,
+              options:  opts,
+            }),
+          });
+          if (r.error) {
+            if (msgEl) { msgEl.textContent = `Error: ${r.error}`; msgEl.style.color = '#f38ba8'; }
+          } else {
+            if (msgEl) { msgEl.textContent = `Saved ${row._origName}`; msgEl.style.color = '#a6e3a1'; }
+            // If name changed, reload grid (delete+create would be needed — for now just flag)
+            if (row.name !== row._origName) loadTriggerData(tabId, dd, table, row.name);
+          }
+        } catch (err) {
+          if (msgEl) { msgEl.textContent = `Error: ${err.message}`; msgEl.style.color = '#f38ba8'; }
+        }
+      };
+      document.getElementById('save-trig-' + tabId)?.addEventListener('click', doSave);
+
+      // ── Add trigger form ──────────────────────────────────────────────────
+      const addForm   = document.getElementById('trig-add-form-' + tabId);
+      const addMsgEl  = document.getElementById('trig-add-msg-'  + tabId);
+      document.getElementById('add-trig-' + tabId)?.addEventListener('click', () => {
+        if (addForm) {
+          addForm.style.display = addForm.style.display === 'none' ? 'flex' : 'none';
+          if (addForm.style.display === 'flex') {
+            document.getElementById('trig-new-name-' + tabId)?.focus();
+          }
+        }
+      });
+      document.getElementById('trig-add-cancel-' + tabId)?.addEventListener('click', () => {
+        if (addForm) addForm.style.display = 'none';
+      });
+      document.getElementById('trig-add-ok-' + tabId)?.addEventListener('click', async () => {
+        const nameEl   = document.getElementById('trig-new-name-'   + tabId);
+        const timingEl = document.getElementById('trig-new-timing-' + tabId);
+        const eventEl  = document.getElementById('trig-new-event-'  + tabId);
+        const prioEl   = document.getElementById('trig-new-prio-'   + tabId);
+        const newName  = nameEl?.value.trim() || '';
+        const newTiming = timingEl?.value || 'BEFORE';
+        const newEvent  = eventEl?.value  || 'INSERT';
+        const newPrio   = Math.max(1, parseInt(prioEl?.value || '1', 10));
+        if (!newName) { if (addMsgEl) addMsgEl.textContent = 'Name is required'; return; }
+        // Client-side uniqueness check
+        const existing = grid.getData();
+        if (existing.find(r => r.name === newName)) {
+          if (addMsgEl) addMsgEl.textContent = `Trigger "${newName}" already exists`; return;
+        }
+        if (existing.find(r => r.timing === newTiming && r.event === newEvent)) {
+          if (addMsgEl) addMsgEl.textContent = `A ${newTiming} ${newEvent} trigger already exists`; return;
+        }
+        if (addMsgEl) addMsgEl.textContent = '';
+        try {
+          const r = await apiFetch('api/create_trigger.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dd, table, name: newName, timing: newTiming, event: newEvent, priority: newPrio }),
+          });
+          if (r.error) { if (addMsgEl) addMsgEl.textContent = r.error; return; }
+          if (addForm) addForm.style.display = 'none';
+          if (nameEl) nameEl.value = '';
+          loadTriggerData(tabId, dd, table, newName);
+        } catch (err) {
+          if (addMsgEl) addMsgEl.textContent = err.message;
+        }
+      });
+
+      // ── Delete trigger ────────────────────────────────────────────────────
+      document.getElementById('del-trig-' + tabId)?.addEventListener('click', async () => {
+        const label = labelEl?.textContent || '';
+        if (!label) { if (msgEl) { msgEl.textContent = 'Select a trigger row first'; msgEl.style.color='#f38ba8'; } return; }
+        const row = grid.getData().find(r => r._origName === label || r.name === label);
+        if (!row) return;
+        if (!confirm(`Delete trigger "${row._origName}"?`)) return;
+        try {
+          const r = await apiFetch('api/delete_trigger.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dd, table, name: row._origName }),
+          });
+          if (r.error) {
+            if (msgEl) { msgEl.textContent = `Error: ${r.error}`; msgEl.style.color='#f38ba8'; }
+          } else {
+            if (labelEl) labelEl.textContent = '';
+            const editor = state.aceEditors[tabId];
+            if (editor) editor.setValue('-- Select a trigger above to view its body.', -1);
+            loadTriggerData(tabId, dd, table);
+          }
+        } catch (err) {
+          if (msgEl) { msgEl.textContent = `Error: ${err.message}`; msgEl.style.color='#f38ba8'; }
+        }
+      });
+
+      // Select first row (or restoreName row after reload)
       if (triggers.length >= 1) {
         setTimeout(() => {
-          const firstRow = grid.getRows()[0];
-          if (firstRow) { firstRow.select(); loadTrigBody(firstRow.getData()); }
-        }, 200);
+          let target = null;
+          if (restoreName) target = grid.getRows().find(r => r.getData().name === restoreName);
+          if (!target) target = grid.getRows()[0];
+          if (target) { target.select(); loadTrigBody(target.getData()); }
+        }, 150);
       }
     }).catch(err => {
       if (gridEl) gridEl.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;

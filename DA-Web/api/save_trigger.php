@@ -24,11 +24,12 @@ $body   = json_decode(file_get_contents('php://input'), true) ?? [];
 $ddName  = trim($body['dd']      ?? '');
 $name    = trim($body['name']    ?? '');
 $table   = trim($body['table']   ?? '');   // parent table — used for disambiguation
-$event   = trim($body['event']   ?? '');   // "1" / "2" / "3"
-$timing  = trim($body['timing']  ?? '');   // "1" / "2" / "4"
-$enabled = trim($body['enabled'] ?? 'Yes');
-$sql     = $body['body']    ?? '';          // trigger body SQL
-$options = isset($body['options']) ? (int)$body['options'] : null; // bitmask or null = don't update
+$event    = trim($body['event']    ?? '');   // "1" / "2" / "3"
+$timing   = trim($body['timing']   ?? '');   // "1" / "2" / "4"
+$enabled  = trim($body['enabled']  ?? 'Yes');
+$priority = isset($body['priority']) ? (int)$body['priority'] : null;
+$sql      = $body['body']    ?? '';          // trigger body SQL
+$options  = isset($body['options']) ? (int)$body['options'] : null; // bitmask or null = don't update
 
 // Build composite key for disambiguation when same trigger name exists on multiple tables.
 $trigKey = ($table !== '') ? "$table::$name" : $name;
@@ -85,8 +86,14 @@ try {
     }
 
     // ADS_DD_TRIGGER_ENABLED (505) — pass "Yes"/"No" string
-    $dict->setTriggerProperty($name, 505, $enabled);
+    $dict->setTriggerProperty($trigKey, 505, $enabled);
     $saved++;
+
+    // ADS_DD_TRIGGER_PRIORITY (506)
+    if ($priority !== null) {
+        $dict->setTriggerProperty($trigKey, 506, (string)$priority);
+        $saved++;
+    }
 
     // ADS_DD_TRIGGER_CONTAINER (503) — SQL body
     if ($sql !== '') {

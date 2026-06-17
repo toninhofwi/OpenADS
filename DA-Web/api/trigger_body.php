@@ -54,28 +54,29 @@ try {
 
     $triggers = [];
     foreach ($names as $trigName) {
-        // TRIG_NAME from system.triggers is the composite "table::name" key;
-        // pass it directly to getTriggerProperty (no need to prepend table name again).
+        // TRIG_NAME is the plain trigger name (engine returns e.name after fix).
+        // getTriggerProperty accepts plain name; engine's find_trigger resolves it.
         $trigKey  = $trigName;
-        $dispName = strpos($trigName, '::') !== false
-            ? substr($trigName, strpos($trigName, '::') + 2)
-            : $trigName;
-        // event_mask, timing, and options come back as 4-byte LE integers
+        // 1401=event_type (1=INSERT 2=UPDATE 3=DELETE), 1402=timing (1=BEFORE 2=INSTEAD_OF 4=AFTER)
         $evRaw     = $dict->getTriggerProperty($trigKey, 1401);
         $timRaw    = $dict->getTriggerProperty($trigKey, 1402);
         $optsRaw   = $dict->getTriggerProperty($trigKey, 1407);
+        $prioRaw   = $dict->getTriggerProperty($trigKey, 1406);
+        $enblRaw   = $dict->getTriggerProperty($trigKey, 505);
         $body      = $dict->getTriggerProperty($trigKey, 1404);
 
         $eventMask = strlen($evRaw)   >= 4 ? unpack('V', substr($evRaw,   0, 4))[1] : 0;
         $timing    = strlen($timRaw)  >= 4 ? unpack('V', substr($timRaw,  0, 4))[1] : 0;
         $options   = strlen($optsRaw) >= 4 ? unpack('V', substr($optsRaw, 0, 4))[1] : 3;
+        $priority  = strlen($prioRaw) >= 4 ? unpack('V', substr($prioRaw, 0, 4))[1] : 1;
+        $enabled   = strlen($enblRaw) >= 4 ? (unpack('V', substr($enblRaw, 0, 4))[1] ? 'Yes' : 'No') : 'Yes';
 
         $triggers[] = [
-            'name'       => $dispName,
+            'name'       => $trigName,
             'timing'     => timing_str($timing),
             'event'      => event_str($eventMask),
-            'priority'   => 1,
-            'enabled'    => 'Yes',
+            'priority'   => (int)$priority,
+            'enabled'    => $enabled,
             'body'       => rtrim($body),
             'options'    => $options,
             '_rawEvent'  => $eventMask,
