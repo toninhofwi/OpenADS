@@ -148,13 +148,14 @@ struct SapFuncs {
 static std::string json_escape(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 4);
-    for (unsigned char c : s) {
+    for (char raw : s) {
+        auto c = static_cast<unsigned char>(raw);
         if      (c == '"')  out += "\\\"";
         else if (c == '\\') out += "\\\\";
         else if (c == '\n') out += "\\n";
         else if (c == '\r') out += "\\r";
         else if (c < 0x20)  { char buf[8]; std::snprintf(buf,8,"\\u%04X",c); out+=buf; }
-        else                out += c;
+        else                out += static_cast<char>(c);
     }
     return out;
 }
@@ -756,7 +757,6 @@ int main(int argc, char** argv) {
     //   [input_params] [NUL] [output_params] [NUL]
     //
     // proc_body.php then reads these after finding the first NUL in .am.
-    int written_proc_params = 0;
     if (!proc_params.empty()) {
         // Re-read .add (it was modified by DataDict above)
         std::vector<std::uint8_t> addData2;
@@ -893,7 +893,6 @@ int main(int argc, char** argv) {
                     }
                     std::memcpy(amData.data() + writeOff, tail.data(), tail.size());
                     am_modified = true;
-                    ++written_proc_params;
                 }
             }
 

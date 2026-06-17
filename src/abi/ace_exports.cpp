@@ -2596,7 +2596,7 @@ Handle handle_for_conn(Connection* c) {
 
 // Return the SQL body to execute for a trigger — prefer container unless it
 // looks like a short type code (e.g. "1"), in which case fall back to procedure.
-const std::string& trigger_sql_body(const openads::engine::DataDict::TriggerEntry& e) {
+static const std::string& trigger_sql_body(const openads::engine::DataDict::TriggerEntry& e) {
     if (e.container.size() > 4) return e.container;
     if (!e.procedure.empty())   return e.procedure;
     return e.container;
@@ -7749,10 +7749,11 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
                 if (fi[ci].adt_type == 11u) {  // INTEGER: 4-byte LE int32
                     std::int32_t iv = val.empty() ? 0
                         : static_cast<std::int32_t>(std::stol(val));
-                    dst[0] = static_cast<std::uint8_t>( iv        & 0xFFu);
-                    dst[1] = static_cast<std::uint8_t>((iv >>  8) & 0xFFu);
-                    dst[2] = static_cast<std::uint8_t>((iv >> 16) & 0xFFu);
-                    dst[3] = static_cast<std::uint8_t>((iv >> 24) & 0xFFu);
+                    auto uiv = static_cast<std::uint32_t>(iv);
+                    dst[0] = static_cast<std::uint8_t>( uiv        & 0xFFu);
+                    dst[1] = static_cast<std::uint8_t>((uiv >>  8) & 0xFFu);
+                    dst[2] = static_cast<std::uint8_t>((uiv >> 16) & 0xFFu);
+                    dst[3] = static_cast<std::uint8_t>((uiv >> 24) & 0xFFu);
                 } else if (fi[ci].adt_type == 1u) {  // LOGICAL: 1 byte — 'T'(0x54)/'F'(0x46)
                     dst[0] = (val == "1" || val == "T" || val == "t") ? 'T' : 'F';
                 } else {  // CICHAR: space-padded
@@ -7775,16 +7776,6 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
                       static_cast<std::streamsize>(file.size()));
         }
         return nb;
-    };
-
-    // Derive table type (DBF or ADT) from the stored path extension.
-    auto ttype_from_path = [](const std::string& path) -> std::string {
-        auto dot = path.rfind('.');
-        if (dot == std::string::npos) return "DBF";
-        std::string ext = path.substr(dot + 1);
-        for (auto& ch : ext) ch = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(ch)));
-        return (ext == "adt") ? "ADT" : "DBF";
     };
 
     if (sys_name == "tables") {
@@ -8170,11 +8161,7 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         std::vector<std::vector<std::string>> rows;
         for (const auto& kv : dd->triggers()) {
             const auto& e = kv.second;
-            // TRIG_NAME returns the composite "table::name" key so clients can
-            // pass it directly to AdsDDGetTriggerProperty (plain names are
-            // ambiguous when the same name appears in multiple tables).
-            std::string trig_key = e.table_alias + "::" + e.name;
-            rows.push_back({trig_key, e.table_alias,
+            rows.push_back({e.name, e.table_alias,
                             std::to_string(e.event_mask),
                             timing_str(e.timing),
                             event_str(e.event_mask),

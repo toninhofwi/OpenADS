@@ -148,11 +148,11 @@ TEST_CASE("system.tables lists DD tables with correct TABLE_TYPE for DBF and ADT
 
     CHECK(sql_count(hConn, "SELECT * FROM system.tables") == 2);
 
-    auto types = sql_col1(hConn, "SELECT * FROM system.tables", "TABLE_TYPE");
+    auto types = sql_col1(hConn, "SELECT * FROM system.tables", "Table_Type");
     bool has_dbf = false, has_adt = false;
     for (const auto& t : types) {
-        if (t == "DBF") has_dbf = true;
-        if (t == "ADT") has_adt = true;
+        if (t == "2") has_dbf = true;   // TABLE_TYPE 2 = CDX/DBF
+        if (t == "3") has_adt = true;   // TABLE_TYPE 3 = ADT
     }
     CHECK(has_dbf);
     CHECK(has_adt);

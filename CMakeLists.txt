@@ -134,6 +134,9 @@ if(MSVC)
     endif()
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion)
+    # _CRT_SECURE_NO_WARNINGS: needed when clang-cl targets MSVC CRT on Windows;
+    # harmless on Linux/macOS where this define has no effect.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     if(OPENADS_WARNINGS_AS_ERRORS)
         add_compile_options(-Werror)
     endif()

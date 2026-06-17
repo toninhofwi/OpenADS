@@ -129,7 +129,7 @@ std::string pack_double_key(double v) {
     std::memcpy(raw, &v, 8);               // raw = IEEE754 LE on x86
     std::reverse(raw, raw + 8);            // LE → BE
     if (raw[0] & 0x80u) {
-        for (auto& b : raw) b = ~b;        // negative: flip all bits
+        for (auto& b : raw) b = static_cast<std::uint8_t>(~b);  // negative: flip all bits
     } else {
         raw[0] ^= 0x80u;                   // non-negative: flip sign bit only
     }
@@ -920,8 +920,9 @@ util::Result<void> AdiIndex::promote_split_(
     std::uint8_t* src = parent.data() + ADI_TREE_ENTRY_START;
     // Copy entries [0..entry_idx], updating the chosen entry's key.
     for (int i = 0; i <= frame.entry_idx; ++i) {
-        std::uint8_t* dst = combo.data() + i * branch_entry_sz_;
-        std::memcpy(dst, src + i * branch_entry_sz_, branch_entry_sz_);
+        auto ui = static_cast<std::uint32_t>(i);
+        std::uint8_t* dst = combo.data() + ui * branch_entry_sz_;
+        std::memcpy(dst, src + ui * branch_entry_sz_, branch_entry_sz_);
         if (i == frame.entry_idx) {
             // Update this entry's key to left_max; page pointer stays.
             std::size_t klen = std::min((std::size_t)(char_key_ ? key_total_len_ : 8u),
@@ -933,10 +934,10 @@ util::Result<void> AdiIndex::promote_split_(
         }
     }
     // New entry for right child at entry_idx+1
-    write_branch_entry(combo.data() + (frame.entry_idx + 1) * branch_entry_sz_,
+    write_branch_entry(combo.data() + (static_cast<std::uint32_t>(frame.entry_idx) + 1u) * branch_entry_sz_,
                        right_max, right_pg);
     // Copy remaining entries [entry_idx+1..par_cnt-1] shifted right by one.
-    for (std::uint32_t i = frame.entry_idx + 1; i < par_cnt; ++i) {
+    for (std::uint32_t i = static_cast<std::uint32_t>(frame.entry_idx) + 1u; i < par_cnt; ++i) {
         std::memcpy(combo.data() + (i + 1) * branch_entry_sz_,
                     src + i * branch_entry_sz_, branch_entry_sz_);
     }
@@ -1063,10 +1064,10 @@ util::Result<void> AdiIndex::insert(std::uint32_t recno,
         std::uint8_t* base = pg.data() + ADI_DENSE_ENTRY_START;
         std::uint32_t move_n = leaf_cnt - static_cast<std::uint32_t>(pos);
         if (move_n > 0)
-            std::memmove(base + (pos + 1) * entry_size_,
-                         base + pos         * entry_size_,
+            std::memmove(base + (static_cast<std::uint32_t>(pos) + 1u) * entry_size_,
+                         base + static_cast<std::uint32_t>(pos) * entry_size_,
                          move_n * entry_size_);
-        build_dense_entry_(base + pos * entry_size_, recno, ikey);
+        build_dense_entry_(base + static_cast<std::uint32_t>(pos) * entry_size_, recno, ikey);
         set_u16_le(pg.data() + 2, leaf_cnt + 1);
 
         // Keep cursor consistent.
@@ -1084,9 +1085,9 @@ util::Result<void> AdiIndex::insert(std::uint32_t recno,
     std::memcpy(combo.data(),
                 base,
                 static_cast<std::uint32_t>(pos) * entry_size_);
-    build_dense_entry_(combo.data() + pos * entry_size_, recno, ikey);
-    std::memcpy(combo.data() + (pos + 1) * entry_size_,
-                base + pos * entry_size_,
+    build_dense_entry_(combo.data() + static_cast<std::uint32_t>(pos) * entry_size_, recno, ikey);
+    std::memcpy(combo.data() + (static_cast<std::uint32_t>(pos) + 1u) * entry_size_,
+                base + static_cast<std::uint32_t>(pos) * entry_size_,
                 (max_ents - static_cast<std::uint32_t>(pos)) * entry_size_);
 
     const std::uint32_t total   = max_ents + 1;
@@ -1248,8 +1249,8 @@ util::Result<void> AdiIndex::erase(std::uint32_t recno, const std::string& key) 
                 std::uint32_t move_n = static_cast<std::uint32_t>(cur_cnt_) - 1
                                        - static_cast<std::uint32_t>(i);
                 if (move_n > 0)
-                    std::memmove(base + i * entry_size_,
-                                 base + (i + 1) * entry_size_,
+                    std::memmove(base + static_cast<std::uint32_t>(i) * entry_size_,
+                                 base + (static_cast<std::uint32_t>(i) + 1u) * entry_size_,
                                  move_n * entry_size_);
                 --cur_cnt_;
                 set_u16_le(cur_page_.data() + 2, cur_cnt_);
