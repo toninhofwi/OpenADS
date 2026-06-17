@@ -31,6 +31,9 @@
   <script src="vendor/ace/theme-dracula.js"></script>
   <script src="vendor/ace/ext-language_tools.js"></script>
 
+  <!-- ADS SQL custom mode + HeidiSQL-like theme -->
+  <script src="js/ads-sql-mode.js?v=<?= filemtime(__DIR__ . '/js/ads-sql-mode.js') ?>"></script>
+
   <!-- Application styles -->
   <link rel="stylesheet" href="css/app.css?v=<?= filemtime(__DIR__ . '/css/app.css') ?>">
 </head>

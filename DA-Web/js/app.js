@@ -1092,26 +1092,15 @@
       </div>`;
   }
 
-  // Set ACE editor to SQL mode with ADS-SQL extensions (// line comments, etc.)
+  // Set ACE editor to ADS SQL mode (HeidiSQL-like colours, // and /* */ comments)
   function setAdsMode(editor) {
-    editor.session.setMode('ace/mode/sql');
-    try {
-      const tok = editor.session.bgTokenizer.tokenizer;
-      if (tok && tok.states && tok.states.start &&
-          !tok.states.start.some(r => r.regex === '//.*$')) {
-        tok.states.start.unshift({ token: 'comment', regex: '//.*$' });
-        editor.session.bgTokenizer.start(0);
-      }
-      const mode = editor.session.getMode();
-      if (mode && typeof mode.lineCommentStart === 'string')
-        mode.lineCommentStart = ['--', '//'];
-    } catch(_) {}
+    editor.setTheme('ace/theme/heidisql');
+    editor.session.setMode('ace/mode/ads_sql');
   }
 
   function bindTriggerPanel(tabId, tab) {
     setTimeout(() => {
       const editor = ace.edit('sql-ace-' + tabId);
-      editor.setTheme('ace/theme/dracula');
       setAdsMode(editor);
       editor.setOptions({
         showPrintMargin: false, useWorker: false, fontSize: '13px',
@@ -2166,7 +2155,6 @@
       // ── Ace editor init ──────────────────────────────────────────────────────
       ace.require('ace/ext/language_tools');
       const editor = ace.edit('sql-ace-' + tabId);
-      editor.setTheme('ace/theme/dracula');
       setAdsMode(editor);
       editor.setOptions({
         enableBasicAutocompletion: true,
@@ -2294,7 +2282,6 @@
       // ── Ace editor ─────────────────────────────────────────────────────────
       ace.require('ace/ext/language_tools');
       const editor = ace.edit('sql-ace-' + tabId);
-      editor.setTheme('ace/theme/dracula');
       setAdsMode(editor);
       editor.setOptions({
         enableBasicAutocompletion: true,
