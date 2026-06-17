@@ -94,6 +94,14 @@ public:
     std::string read_identifier() {
         skip_ws();
         std::string out;
+        // SAP ADS bracket-quoted identifier: [reserved_word] or [name with spaces]
+        if (pos_ < s_.size() && s_[pos_] == '[') {
+            ++pos_;  // consume '['
+            while (pos_ < s_.size() && s_[pos_] != ']')
+                out.push_back(s_[pos_++]);
+            if (pos_ < s_.size()) ++pos_;  // consume ']'
+            return out;
+        }
         while (pos_ < s_.size()) {
             char c = s_[pos_];
             if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {

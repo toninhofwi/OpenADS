@@ -52,6 +52,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -2597,8 +2598,328 @@ const std::string& trigger_sql_body(const openads::engine::DataDict::TriggerEntr
     return e.container;
 }
 
+// ── Procedural trigger body executor ────────────────────────────────────────
+// Implements a minimal interpreter for SAP ADS trigger body SQL:
+//   DECLARE @var TYPE       — declares a local variable (ignored, just tracked)
+//   SET @var = expr         — assigns a value; expr may be __new.field, __old.field,
+//                             a string literal, a numeric literal, or a SQL expression
+//   __new.fieldname         — value of the new record's field (INSERT/UPDATE)
+//   __old.fieldname         — value of the old record's field (UPDATE/DELETE)
+// All other statements are executed via AdsExecuteSQLDirect after substitution.
+
+// Type alias to avoid MSVC C2562 when returning std::map<> from a function
+// inside an extern "C" / anonymous-namespace block.
+using TrigFieldMap_ = std::map<std::string, std::string>;
+
+// SQL-quote a raw string value (escape embedded quotes, wrap in single quotes).
+static std::string trig_sql_quote_(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    out += '\'';
+    for (char c : s) {
+        if (c == '\'') out += "''";
+        else out += c;
+    }
+    out += '\'';
+    return out;
+}
+
+// Trim leading and trailing whitespace from a string.
+static std::string trig_trim_(const std::string& s) {
+    std::size_t b = 0, e = s.size();
+    while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r' || s[b] == '\n')) ++b;
+    while (e > b && (s[e-1] == ' ' || s[e-1] == '\t' || s[e-1] == '\r' || s[e-1] == '\n')) --e;
+    return s.substr(b, e - b);
+}
+
+// Case-insensitive prefix check.
+static bool trig_ci_pfx_(const std::string& s, const char* prefix, std::size_t plen) {
+    if (s.size() < plen) return false;
+    for (std::size_t i = 0; i < plen; ++i) {
+        if (std::tolower(static_cast<unsigned char>(s[i])) !=
+            std::tolower(static_cast<unsigned char>(prefix[i]))) return false;
+    }
+    return true;
+}
+
+// Split trigger body into statements at ';' boundaries, respecting string literals.
+static std::vector<std::string> trig_split_stmts_(const std::string& body) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool in_sq = false;
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        char c = body[i];
+        if (in_sq) {
+            cur += c;
+            if (c == '\'' && i + 1 < body.size() && body[i+1] == '\'') {
+                cur += body[++i];  // escaped ''
+            } else if (c == '\'') {
+                in_sq = false;
+            }
+        } else if (c == '\'') {
+            in_sq = true;
+            cur += c;
+        } else if (c == ';') {
+            auto ts = trig_trim_(cur);
+            if (!ts.empty()) out.push_back(std::move(ts));
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    auto ts = trig_trim_(cur);
+    if (!ts.empty()) out.push_back(std::move(ts));
+    return out;
+}
+
+// Collect all field values from a Table into a lowercase-keyed string map.
+// Char fields are space-trimmed; numeric/date fields use as_string representation.
+static void trig_collect_row_(Table* t, TrigFieldMap_& m) {
+    if (!t) return;
+    std::uint16_t nf = t->field_count();
+    for (std::uint16_t i = 0; i < nf; ++i) {
+        const auto& fd = t->field_descriptor(i);
+        std::string name = fd.name;
+        for (auto& ch : name)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        auto v = t->read_field(i);
+        if (!v) { m[name] = ""; continue; }
+        std::string sv = v.value().as_string;
+        while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+        m[name] = std::move(sv);
+    }
+}
+
+// Evaluate a SET expression RHS, returning a SQL-ready value string.
+// __new/old field refs → SQL-quoted string.  SQL functions/literals → as-is.
+static std::string trig_eval_rhs_(
+    const std::string& rhs,
+    const TrigFieldMap_& new_f,
+    const TrigFieldMap_& old_f,
+    const TrigFieldMap_& vars)
+{
+    auto lc = [](char x) { return static_cast<char>(std::tolower(static_cast<unsigned char>(x))); };
+    std::string t = trig_trim_(rhs);
+    // __new.field or __old.field
+    if (t.size() > 6) {
+        bool is_new = (lc(t[0])=='_' && lc(t[1])=='_' && lc(t[2])=='n' &&
+                       lc(t[3])=='e' && lc(t[4])=='w' && t[5]=='.');
+        bool is_old = (lc(t[0])=='_' && lc(t[1])=='_' && lc(t[2])=='o' &&
+                       lc(t[3])=='l' && lc(t[4])=='d' && t[5]=='.');
+        if (is_new || is_old) {
+            std::string fname = trig_trim_(t.substr(6));
+            for (auto& c : fname) c = lc(c);
+            const auto& fmap = is_new ? new_f : old_f;
+            auto it = fmap.find(fname);
+            return (it != fmap.end()) ? trig_sql_quote_(it->second) : "NULL";
+        }
+    }
+    // @var reference
+    if (!t.empty() && t[0] == '@') {
+        std::string vname = t.substr(1);
+        for (auto& c : vname) c = lc(c);
+        auto it = vars.find(vname);
+        return (it != vars.end()) ? it->second : "NULL";
+    }
+    // Subquery: ( SELECT field FROM __new ) or ( SELECT field FROM __old ) or __input
+    // Pattern: ( SELECT <field> FROM __new|__old|__input )
+    if (!t.empty() && t.front() == '(') {
+        std::string inner = trig_trim_(t.substr(1, t.size() - 2));
+        if (trig_ci_pfx_(inner, "SELECT", 6)) {
+            std::size_t p = 6;
+            while (p < inner.size() && inner[p] == ' ') ++p;
+            // Extract field name (up to whitespace or FROM)
+            std::size_t fs = p;
+            while (p < inner.size() &&
+                   (std::isalnum(static_cast<unsigned char>(inner[p])) ||
+                    inner[p] == '_' || inner[p] == '[' || inner[p] == ']')) ++p;
+            std::string field = inner.substr(fs, p - fs);
+            // Strip brackets
+            if (!field.empty() && field.front() == '[') field = field.substr(1);
+            if (!field.empty() && field.back() == ']') field.pop_back();
+            for (auto& c : field) c = lc(c);
+            while (p < inner.size() && inner[p] == ' ') ++p;
+            if (p + 4 <= inner.size() &&
+                lc(inner[p])=='f' && lc(inner[p+1])=='r' &&
+                lc(inner[p+2])=='o' && lc(inner[p+3])=='m') {
+                p += 4;
+                while (p < inner.size() && inner[p] == ' ') ++p;
+                std::size_t ts = p;
+                while (p < inner.size() && !std::isspace(static_cast<unsigned char>(inner[p]))) ++p;
+                std::string src = inner.substr(ts, p - ts);
+                for (auto& c : src) c = lc(c);
+                const TrigFieldMap_* fmap = nullptr;
+                if (src == "__new")   fmap = &new_f;
+                else if (src == "__old")   fmap = &old_f;
+                else if (src == "__input") fmap = &new_f;  // __input: params passed as new_f
+                if (fmap) {
+                    auto it = fmap->find(field);
+                    return (it != fmap->end()) ? trig_sql_quote_(it->second) : "NULL";
+                }
+            }
+        }
+    }
+    // String literal (already SQL-quoted) or SQL expression/function: pass through
+    return t;
+}
+
+// Substitute __new.field, __old.field, and @var references in a SQL statement.
+// String literals inside the statement are passed through unchanged.
+static std::string trig_substitute_(
+    const std::string& stmt,
+    const TrigFieldMap_& new_f,
+    const TrigFieldMap_& old_f,
+    const TrigFieldMap_& vars)
+{
+    auto lc = [](char x) { return static_cast<char>(std::tolower(static_cast<unsigned char>(x))); };
+    std::string out;
+    out.reserve(stmt.size() * 2);
+    std::size_t i = 0;
+    bool in_str = false;
+    while (i < stmt.size()) {
+        char c = stmt[i];
+        if (in_str) {
+            out += c; ++i;
+            if (c == '\'' && i < stmt.size() && stmt[i] == '\'') {
+                out += stmt[i++];  // escaped ''
+            } else if (c == '\'') {
+                in_str = false;
+            }
+            continue;
+        }
+        if (c == '\'') { in_str = true; out += c; ++i; continue; }
+        // __new.field or __old.field
+        if (c == '_' && i + 6 <= stmt.size()) {
+            bool is_new = (lc(stmt[i+0])=='_' && lc(stmt[i+1])=='_' && lc(stmt[i+2])=='n' &&
+                           lc(stmt[i+3])=='e' && lc(stmt[i+4])=='w' && stmt[i+5]=='.');
+            bool is_old = (!is_new && lc(stmt[i+0])=='_' && lc(stmt[i+1])=='_' &&
+                           lc(stmt[i+2])=='o' && lc(stmt[i+3])=='l' &&
+                           lc(stmt[i+4])=='d' && stmt[i+5]=='.');
+            if (is_new || is_old) {
+                i += 6;
+                std::size_t fs = i;
+                while (i < stmt.size() &&
+                       (std::isalnum(static_cast<unsigned char>(stmt[i])) || stmt[i]=='_'))
+                    ++i;
+                std::string fname = stmt.substr(fs, i - fs);
+                for (auto& ch : fname) ch = lc(ch);
+                const auto& fmap = is_new ? new_f : old_f;
+                auto it = fmap.find(fname);
+                out += (it != fmap.end()) ? trig_sql_quote_(it->second) : "NULL";
+                continue;
+            }
+        }
+        // @var reference
+        if (c == '@') {
+            std::size_t vs = i + 1, ve = vs;
+            while (ve < stmt.size() &&
+                   (std::isalnum(static_cast<unsigned char>(stmt[ve])) || stmt[ve]=='_'))
+                ++ve;
+            if (ve > vs) {
+                std::string vname = stmt.substr(vs, ve - vs);
+                for (auto& ch : vname) ch = lc(ch);
+                auto it = vars.find(vname);
+                if (it != vars.end()) { out += it->second; i = ve; continue; }
+            }
+        }
+        out += c; ++i;
+    }
+    return out;
+}
+
+// Execute an ADS procedural trigger body.  Handles DECLARE @var, SET @var = expr,
+// __new/__old field substitution, and @variable substitution before SQL execution.
+static void trig_execute_body_(
+    Handle hConn,
+    const std::string& body,
+    const TrigFieldMap_& new_f,
+    const TrigFieldMap_& old_f)
+{
+    auto stmts = trig_split_stmts_(body);
+    TrigFieldMap_ vars;
+    auto lc = [](char x) { return static_cast<char>(std::tolower(static_cast<unsigned char>(x))); };
+
+    for (const auto& raw : stmts) {
+        std::string ts = trig_trim_(raw);
+        if (ts.empty()) continue;
+
+        // DECLARE @var [TYPE] — register variable; DECLARE name CURSOR — skip
+        if (trig_ci_pfx_(ts, "DECLARE", 7)) {
+            std::size_t p = 7;
+            while (p < ts.size() && ts[p] == ' ') ++p;
+            if (p < ts.size() && ts[p] == '@') {
+                std::size_t ns = p + 1, ne = ns;
+                while (ne < ts.size() &&
+                       (std::isalnum(static_cast<unsigned char>(ts[ne])) || ts[ne]=='_')) ++ne;
+                std::string vname = ts.substr(ns, ne - ns);
+                for (auto& c : vname) c = lc(c);
+                vars.emplace(vname, "NULL");
+            }
+            // Cursor declarations (DECLARE name CURSOR AS SELECT ...) are skipped entirely
+            continue;
+        }
+
+        // SET @var = expr
+        if (trig_ci_pfx_(ts, "SET", 3) && ts.size() > 3 &&
+            (ts[3] == ' ' || ts[3] == '\t')) {
+            std::size_t p = 3;
+            while (p < ts.size() && ts[p] == ' ') ++p;
+            if (p < ts.size() && ts[p] == '@') {
+                std::size_t ns = p + 1, ne = ns;
+                while (ne < ts.size() &&
+                       (std::isalnum(static_cast<unsigned char>(ts[ne])) || ts[ne]=='_')) ++ne;
+                std::string vname = ts.substr(ns, ne - ns);
+                for (auto& c : vname) c = lc(c);
+                std::size_t eq = ne;
+                while (eq < ts.size() && ts[eq] == ' ') ++eq;
+                if (eq < ts.size() && ts[eq] == '=') {
+                    ++eq;
+                    while (eq < ts.size() && ts[eq] == ' ') ++eq;
+                    vars[vname] = trig_eval_rhs_(ts.substr(eq), new_f, old_f, vars);
+                }
+            }
+            continue;
+        }
+
+        // OPEN cursor AS SELECT ... — cursor loops not supported; skip
+        if (trig_ci_pfx_(ts, "OPEN", 4)) continue;
+        // FETCH / CLOSE cursor — skip
+        if (trig_ci_pfx_(ts, "FETCH", 5)) continue;
+        if (trig_ci_pfx_(ts, "CLOSE", 5)) continue;
+        // WHILE ... DO ... END (cursor loop) — skip entire block
+        if (trig_ci_pfx_(ts, "WHILE", 5)) continue;
+        // IF ... THEN / ELSE / END — skip conditional blocks
+        if (trig_ci_pfx_(ts, "IF ", 3) || trig_ci_pfx_(ts, "ELSEIF", 6) ||
+            trig_ci_pfx_(ts, "ELSE", 4) || trig_ci_pfx_(ts, "END", 3)) continue;
+        // EXECUTE IMMEDIATE / EXECUTE PROCEDURE — not supported; skip
+        if (trig_ci_pfx_(ts, "EXECUTE", 7)) continue;
+        // DROP TABLE #... — session temp tables; skip
+        if (trig_ci_pfx_(ts, "DROP TABLE #", 12)) continue;
+        // INSERT ... SELECT ... FROM __new or __old — INSTEAD-OF re-insert; skip
+        // (the actual row was already written before fire_triggers_ was called)
+        if (trig_ci_pfx_(ts, "INSERT", 6) &&
+            (ts.find("__new") != std::string::npos ||
+             ts.find("__old") != std::string::npos)) continue;
+
+        // Plain SQL: substitute references and execute
+        std::string sql = trig_trim_(trig_substitute_(ts, new_f, old_f, vars));
+        if (sql.empty()) continue;
+
+        ADSHANDLE hStmt = 0;
+        if (AdsCreateSQLStatement(hConn, &hStmt) != openads::AE_SUCCESS) continue;
+        ADSHANDLE hCursor = 0;
+        AdsExecuteSQLDirect(
+            hStmt,
+            reinterpret_cast<UNSIGNED8*>(const_cast<char*>(sql.c_str())),
+            &hCursor);
+        if (hCursor) AdsCloseTable(hCursor);
+        AdsCloseSQLStatement(hStmt);
+    }
+}
+
 void fire_triggers_(Handle hConn, Connection* conn,
-                    const std::string& table_alias, std::uint32_t event_mask) {
+                    const std::string& table_alias, std::uint32_t event_mask,
+                    Table* new_tbl = nullptr, Table* old_tbl = nullptr) {
     if (tl_trigger_firing) return; // prevent recursion
     auto* dd = conn->dd();
     if (!dd) return;
@@ -2623,32 +2944,25 @@ void fire_triggers_(Handle hConn, Connection* conn,
     }
     if (matched.empty()) return;
 
+    // Collect __new / __old field values once for all triggers on this event.
+    TrigFieldMap_ new_fields, old_fields;
+    trig_collect_row_(new_tbl, new_fields);
+    trig_collect_row_(old_tbl, old_fields);
+
     tl_trigger_firing = true;
     for (const auto& m : matched) {
         const auto& sql_body = trigger_sql_body(*m.e);
         if (sql_body.empty()) continue;
 
-        ADSHANDLE hStmt = 0;
-        if (AdsCreateSQLStatement(hConn, &hStmt) != openads::AE_SUCCESS) continue;
-
-        // Execute each statement in the body; a statement is delimited by ';' +
-        // newline/end.  For simple single-statement trigger bodies this loop runs
-        // once.  Complex stored-procedure SQL (DECLARE, IF, etc.) will fail
-        // individually — errors are swallowed.
-        ADSHANDLE hCursor = 0;
+        // Strip trailing non-printable garbage (binary .am file padding)
         std::string body_copy = sql_body;
-        // Remove trailing garbage (non-printable bytes from .am file)
         while (!body_copy.empty()) {
             unsigned char last = static_cast<unsigned char>(body_copy.back());
             if (last >= 0x20u || last == '\t' || last == '\n' || last == '\r') break;
             body_copy.pop_back();
         }
-        AdsExecuteSQLDirect(
-            hStmt,
-            reinterpret_cast<UNSIGNED8*>(const_cast<char*>(body_copy.c_str())),
-            &hCursor);
-        if (hCursor) AdsCloseTable(hCursor);
-        AdsCloseSQLStatement(hStmt);
+
+        trig_execute_body_(hConn, body_copy, new_fields, old_fields);
     }
     tl_trigger_firing = false;
 }
@@ -2704,7 +3018,8 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
         std::string alias = ri_alias_for_path(conn, t->path());
         if (!alias.empty()) {
             Handle hConn = handle_for_conn(conn);
-            if (hConn) fire_triggers_(hConn, conn, alias, is_insert ? 1u : 2u);
+            // INSERT: __new = current record; UPDATE: __new = current record (new values)
+            if (hConn) fire_triggers_(hConn, conn, alias, is_insert ? 1u : 2u, t);
         }
     }
     return ok();
@@ -2731,7 +3046,8 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
         std::string alias = ri_alias_for_path(conn, t->path());
         if (!alias.empty()) {
             Handle hConn = handle_for_conn(conn);
-            if (hConn) fire_triggers_(hConn, conn, alias, 3u);
+            // DELETE: __old = the record being deleted
+            if (hConn) fire_triggers_(hConn, conn, alias, 3u, nullptr, t);
         }
     }
     return ok();
@@ -9185,12 +9501,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (!r) return fail(r.error());
         }
         if (auto fl = tbl->flush(); !fl) return fail(fl.error());
-        // Fire AFTER INSERT triggers (event_mask=1).
+        // Fire AFTER INSERT triggers (event_mask=1). Pass tbl so __new fields are available.
         {
             std::string alias = ri_alias_for_path(c, tbl->path());
             if (!alias.empty()) {
                 Handle hConn = handle_for_conn(c);
-                if (hConn) fire_triggers_(hConn, c, alias, 1u);
+                if (hConn) fire_triggers_(hConn, c, alias, 1u, tbl);
             }
         }
         c->close_table(th.value());

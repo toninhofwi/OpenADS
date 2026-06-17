@@ -120,21 +120,25 @@ std::uint32_t dense_entry_recno(const std::uint8_t* pg, int idx,
 
 // ── Key encoding ─────────────────────────────────────────────────────────────
 
-// Pack a double into an 8-byte sign-flipped big-endian ADI key.
-// The resulting 8 bytes sort correctly via memcmp for ascending doubles.
+// Pack a double into an 8-byte IEEE 754 total-order big-endian ADI key.
+// Positive values: flip sign bit only (0x80).
+// Negative values: flip all bits so they sort before positives and among
+// themselves in the correct order (most-negative first).
 std::string pack_double_key(double v) {
     std::uint8_t raw[8];
     std::memcpy(raw, &v, 8);               // raw = IEEE754 LE on x86
-    // Convert LE → BE
-    std::reverse(raw, raw + 8);
-    // Flip sign bit so negative values sort before positive
-    raw[0] ^= 0x80u;
+    std::reverse(raw, raw + 8);            // LE → BE
+    if (raw[0] & 0x80u) {
+        for (auto& b : raw) b = ~b;        // negative: flip all bits
+    } else {
+        raw[0] ^= 0x80u;                   // non-negative: flip sign bit only
+    }
     return std::string(reinterpret_cast<char*>(raw), 8);
 }
 
 // Encode an ADT field value to ADI key bytes, given ADT type and field data.
 // For character types (CICHAR, CHAR): returns the raw field bytes (length bytes).
-// For numeric types: returns an 8-byte sign-flipped BE float64.
+// For numeric types: returns an 8-byte IEEE 754 total-order BE key.
 std::string encode_adt_key(std::uint16_t adt_type, const std::uint8_t* data,
                            std::uint16_t length) {
     // Character types: key is the raw field data (space-padded in ADT already)
@@ -168,11 +172,9 @@ std::string encode_adt_key(std::uint16_t adt_type, const std::uint8_t* data,
         case ADT_TYPE_DOUBLE:
         case ADT_TYPE_MONEY:
         case ADT_TYPE_MODTIME: {
-            std::uint8_t raw[8];
-            std::memcpy(raw, data, 8);
-            std::reverse(raw, raw + 8);
-            raw[0] ^= 0x80u;
-            return std::string(reinterpret_cast<char*>(raw), 8);
+            double v;
+            std::memcpy(&v, data, 8);
+            return pack_double_key(v);
         }
         case ADT_TYPE_TIMESTAMP: {
             std::uint64_t v = static_cast<std::uint64_t>(u32_le(data)) |

@@ -2321,17 +2321,27 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
                 tbl_id = br.obj_id; break;
             }
         }
+        // Mark all stale same-name records inactive before creating/updating.
+        // (Handles duplicate accumulation from prior runs with wrong parent_id.)
+        bool updated = false;
         for (auto& r : binary_recs_) {
-            if (r.active && r.obj_type == "Trigger" && r.obj_name == e.name &&
-                (tbl_id == 0 || r.parent_id == tbl_id)) {
-                r.property = prop; r.prop_null = false;
-                return save();
+            if (r.active && r.obj_type == "Trigger" && r.obj_name == e.name) {
+                if (!updated && (tbl_id == 0 || r.parent_id == tbl_id)) {
+                    // Best match: update in place and fix parent.
+                    r.property  = prop; r.prop_null = false;
+                    r.parent_id = (tbl_id != 0) ? tbl_id : r.parent_id;
+                    updated = true;
+                } else {
+                    r.active = false;  // deactivate duplicate
+                }
             }
         }
+        if (updated) return save();
         BinaryRecord r;
         r.active    = true;
         r.obj_id    = binary_alloc_id_();
-        r.parent_id = binary_obj_id_of_("Database", "Database");
+        // Use the table's obj_id as parent so drop_trigger can find this record.
+        r.parent_id = (tbl_id != 0) ? tbl_id : binary_obj_id_of_("Database", "Database");
         if (r.parent_id == 0) r.parent_id = 1;
         r.obj_type  = "Trigger";
         r.obj_name  = e.name;
@@ -2366,11 +2376,11 @@ util::Result<void> DataDict::drop_trigger(const std::string& name) {
                 }
             }
         }
+        // Deactivate ALL trigger records matching this name (any parent_id).
+        // This cleans up duplicates that may have accumulated from prior runs.
         for (auto& r : binary_recs_) {
-            if (r.active && r.obj_type == "Trigger" && r.obj_name == plain_name &&
-                (tbl_id == 0 || r.parent_id == tbl_id)) {
-                r.active = false; break;
-            }
+            if (r.active && r.obj_type == "Trigger" && r.obj_name == plain_name)
+                r.active = false;
         }
     }
     return save();
