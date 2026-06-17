@@ -251,24 +251,25 @@ void ads_get_field_zval(ADSHANDLE hCursor, const char *fieldName, zval *retval)
             break;
         }
 
-        case ADS_ROWVERSION:
-        case ADS_MODTIME: {
-            /* 8-byte binary counter: read raw bytes via AdsGetString, return hex. */
-            unsigned char rawBuf[16] = {0};
-            UNSIGNED32 ulBufSize = (UNSIGNED32)sizeof(rawBuf);
+        case ADS_ROWVERSION: {
+            /* Engine returns decimal string (uint64 counter). Read via AdsGetString. */
+            char rvBuf[24] = {0};
+            UNSIGNED32 ulBufSize = (UNSIGNED32)sizeof(rvBuf);
             ulRet = AdsGetString(hCursor, (UNSIGNED8 *)fieldName,
-                                 rawBuf, &ulBufSize, 0);
-            if (ulRet == AE_SUCCESS && ulBufSize > 0) {
-                static const char hc[] = "0123456789abcdef";
-                char hexBuf[19] = "0x";
-                UNSIGNED32 j;
-                UNSIGNED32 n = ulBufSize < 8 ? ulBufSize : 8;
-                for (j = 0; j < n; j++) {
-                    hexBuf[2 + j * 2]     = hc[(rawBuf[j] >> 4) & 0xF];
-                    hexBuf[2 + j * 2 + 1] = hc[ rawBuf[j]       & 0xF];
-                }
-                hexBuf[2 + n * 2] = '\0';
-                ZVAL_STRINGL(retval, hexBuf, 2 + (size_t)n * 2);
+                                 (UNSIGNED8 *)rvBuf, &ulBufSize, ADS_TRIM);
+            if (ulRet == AE_SUCCESS) {
+                ZVAL_STRINGL(retval, rvBuf, (size_t)ulBufSize);
+            }
+            break;
+        }
+        case ADS_MODTIME: {
+            /* Engine returns "YYYYMMDDHHMMSS". Read via AdsGetString. */
+            char mtBuf[16] = {0};
+            UNSIGNED32 ulBufSize = (UNSIGNED32)sizeof(mtBuf);
+            ulRet = AdsGetString(hCursor, (UNSIGNED8 *)fieldName,
+                                 (UNSIGNED8 *)mtBuf, &ulBufSize, 0);
+            if (ulRet == AE_SUCCESS) {
+                ZVAL_STRINGL(retval, mtBuf, (size_t)ulBufSize);
             }
             break;
         }
