@@ -1,149 +1,77 @@
 OPEN BUGS
 ---------
 To work on these problems and build tests you need to know that php.ini is loading both ACE libs.  OpenADs is 
-working on port 8080 and SAP ADS is responding on port 80.
+working on port 8080 as fastcgi and SAP ADS is responding on port 80 also as fastcgi.
 
 If you wish to work with Python, you should be able to use f:\python_ads for SAP ACE.  SAP libs are in F:\Ads11.
-To use python with OpenAds we will need to create a python extension from OpenAds.  You can build this based on SAP Python extension 
-on f:\python_ads. 
+To use python with OpenAds you can use OpenAds Python ext found in: f:\OpenAds\bindings\python.
 
-Use the local server for SAP as well as OpenADS for your tests. 
+We have written a tool to replace SAP Data Architect named DaWeb.  It is found in f:\OpenAds\DA-Web.
 
-Using f:\Openads\testdata\pmsys\pmsys.add with SAP ADS versus f:\Openads\testdata\pmsys\pmsys_imported.add you can test 
-both libs.  adssys user password on both dd is pmsys.
+Use the REMOTE server for SAP as well as OpenADS for your tests. SAP ADS is running as a service and responding on port 6262.
+To load OpenAds as a service read readme.md where you can find detailed instructions on how.  I suggest you make it respond on por 16262.
 
-pmsys_imported was imported using newly created tool to import groups and permissions from any SAP DD.  In essense we 
+Use DD found in f:\Openads\testdata\pmsys\pmsys.add with SAP ADS and use f:\Openads\testdata\pmsys\pmsys_imported.add with OpenAds. 
+Adssys user password on both dd is pmsys.
+
+pmsys_imported was imported using newly created tool in f:\Openads\Tools\Import_dd.  In essense we 
 endup with a new DD that is compatible with our OpenAds not with SAP.  Import only needs to happen once.  If you have doubts
 how to use this tool and what it does look at readme.md on f:\Openads\tools\import_dd
 
-I remind you that you can test what out should look like by connecting with SAP ADS comparing results with those after connecting with 
-OpenADS. 
+If you find that the Python extensin is faulty, fix it.  If you find import tool is faulty, fix it.  If there are problems with OpenADS core
+functions, fix it.  We have all sources and build tools. 
 
-**Under a table name on the tree on the left, DAWeb needs to generate an SQL script to create the table and indexes.  Currently it is not 
-doing anything.  It used to work but now it has stoped working.  See the source code for SAP Data Architect here: C:\Program Files (x86)\Advantage 10.10\ARC\Source>
-Notice there is an option to generate SQL script.  Try it and see what SAP DA returns.  Make sure DAWeb returns the same script.  The DD 
-to work with with SAP ADS is in f:\OpenAds\testdata\pmsys\pmsys.add.    The DD to work with OpenAds and DAWeb is in 
-f:\Openads\testdata\pmsys\pmsys_imported.add.   The SQL script needs to load on the SQL dialog we already have setup.
+I remind you that you can test what output should look like by connecting with SAP ADS ot pmays.add comparing results with 
+those after connecting with OpenADS to pmsys_imported.add.  Our objective is make OpenAds as fast and complete as SAP ADS. 
 
-Notice OpenAds has a server that can load as a service.  Load the service and make your tests 
-with OpenAds Server using the remote server instead of the local server.   I remind you that SAP ADS service is already responding on port 6262.
-You will need to use an used port for OpenAds.  I suggest 16262.  To learn how to load and run the remote server read readme.md on our git repository 
-or locally.
+Below is what I want you to work on:
+1.  [DONE] SQL editor in DAWeb needs to color reserved words and comments in different colors.  Likewise, color function names differently.  Follow
+color scheme used by HeidiSQL. In ADS SQL comments are marked as in C.  /* this is a comment */  Comments are also anything following a double
+forward slash //
+Implemented: js/ads-sql-mode.js — ace/mode/ads_sql (keywords, functions, types, // and /* */ comments)
+             ace/theme/heidisql — light HeidiSQL-like colours (blue keywords, purple functions, green comments, crimson strings)
 
-If you find problems connecting tot he remote server or loading it, report the problems and fix them.  I remind you that we have full source code for 
-OpenAds. 
-
-**Configure the SQL editor to recognize and color  anything after a double forward slash ( // )as comments.
-
-**Check functions body.  It doesn't show right.  For example NewSeqKey is missing a lot of code.  Compare pmsys.add functions with SAP ADS with 
-pmsys_imported.add with OpenAds.  Find the problem and fix it.  I remind you that we do not need to save everything in the new imported dd 
-teh same way as SAP ADS.  We are free to establish our own format as long as it faster and that we can decipher easily.  We are allowed to read 
-DD with SAP ADS and write to new imported DD with OpenAds.  There is no reason to fail and we don't have to reverse engineer much.
-
-** When opening a user's properties, it takes a considerable amount of time to open and show the groups this user belongs to and the permissions 
-table.  Why does it take this long?  Does it have to be that way.  Can we make it faster?
+2. [DONE] On DaWeb, when viewing triggers of a table, the tabulator on the right shows the triggers and the editor on the bottom shows
+the trigger body.  Among the trigger columns on the tabulator grid, you have the column "timing".  It is empty on all triggers.
+Table properties on Pmsys.add shows these columns on file:  file:///C:/Users/ADMINI~1/AppData/Local/Temp/2/exp30E1.htm   Column timing on
+the trigger grid should be populated and it is not.
+Fixed: patched pmsys_imported.am JSON blocks with correct timing from SAP system.triggers; import_dd tool now captures timing in future imports.
 
 
-[DONE] OpenAds did not show complete trigger body.
-Fixed: Three root causes fixed in engine (data_dict.cpp) and import tool:
-1. SAP binary format: body read from buf[TPS+18] directly (bypassing plen=4 limit).
-2. triggers_ map collision: changed key to composite "table::name" to avoid same-named
-   triggers on different tables overwriting each other.
-3. join_nul 273-byte overflow: long bodies (>258 chars) now stored in .am with empty
-   inline body; append_am reads them back. Trailing-trim deferred to after .am append.
-Also: system.triggers CONTAINER column widened to 4096; trigger_body.php and
-save_trigger.php pass composite table::name keys to getTriggerProperty/setTriggerProperty.
-Test: tests/tools/get_sap_triggers.php comparison shows 5/5 triggers pass (6th skipped
-due to SAP PHP extension buffer overflow on the 2107-char Create Recurrance body). 
+3.  I think I need to explain how 3 special tables on triggers work.  Make sure OpenAds triggers works like SAP ADS: 
+Three special in-memory tables are used by triggers; __old, __new, and __error. These tables can be referenced using just 
+their base names (i.e., __new). For example, to read a value from the __new table the following SQL statement can be executed:
+SELECT empid FROM __new
+The __new table is used when firing an INSERT or UPDATE trigger. It contains one row with the same field definitions as the 
+base table on which the update was performed. The field values are the values that are about to be (in case of a BEFORE, or INSTEAD OF, 
+or CONFLICT trigger) or were already (in case of an AFTER trigger) written to the table.  The __old table is used when firing an 
+UPDATE or DELETE trigger. It contains one row with the same field definitions as the base table on which the update was performed. 
+The field values are the values that used to be in the table (immediately before the current update was performed).  The __error table is 
+used to return an error code and/or error string from inside of a trigger. The __error table has the following table definition:
 
-Most items below have been solved.  you can mark them as [done].
+INTEGER
+ errno
+ 
+MEMO
+ message
+ 
 
+If trigger code writes a row to this table, the Advantage server will read the error number and message from the __error table and return 
+them to the client as a native exception or error code (depending on which client you are using). The errno field is optional, and 
+if left empty, a default trigger failure error code will be returned to the client.
 
-**Triggers can receive __old and __new cursors with corresponding state of the record before and after an update.  In case of insert only __new cursor
-option.  This is an option on SAP ADS.  We need to provide a way on daWeb when defining or modifying a trigger to check or or off these options.
-The options are:  include curosrs __new and __old, include memo and blob fields, use implicit transactions to maintain data integrity. 
-See how SAP Ads does it or reads it from.  These options are present on Data Architect and you can see the source for DA in C:\Program Files (x86)\Advantage 10.10\ARC\Source>
-Make sure reading and writing trigger properties are written on the OpenAds Engine not the client.  The client only needs to querry these 
-values from the server engine. 
+The user can make changes to the data values in the __new and __old tables but these changes will not be reflected in the record 
+update or insert operation. To make changes to the values provided by the client, use an INSTEAD OF trigger, change any data values 
+in the __new table you wish to modify, then post the __new record manually. The example below is an INSTEAD OF INSERT trigger that modifies 
+the date_inserted field and puts the current date and time into that field:
 
-**When executing an insert or update on a table that has a trigger for update or insert, we need to confirm the trigger is executing.
-For example: table properties has an Insert, update, delete triggers that should insert a record on auditlog with detailed information 
-of what changed or what was inserted.   Notice some triggers call a stored procedure and these triggers may or may not receive __new and __old 
-cursors.  ADS makes these cursors available to any stored procedure called from inside a trigger that has them.
+UPDATE __new SET date_inserted = (SELECT now() FROM system.iota);
 
-Write tests doing inserts, updates, and deletes on all tables with triggers and confirm triggers fire without errors and execute expected results.
-Trigger and stored procedure code has been confirmed to be working with ADS SAP.
-
-**[new bug] When opening tables on the left side tree in DAWeb, I get an error: Adsconnection:Query 5063 column name not found table_name.  Something 
-broke or daWeb or php_OpenAds extension needs updating.
-
-
-You should be able to connect to SAP DD using remote as well as local servers.   OpenAds is only working as a Local server.  
-OpenADs remote server is still not running. 
-
-
-[DONE] Start with building python language extenson for OpenAds and place it in f:\OpenAds\bindings
-Built: openads.cp313-win_amd64.pyd at f:\OpenADS\bindings\python\bin\
-After that move to solving these bugs:
-
-[DONE] *When opening a stored procedure from DaWeb it shows this message below:
--- sp_ChargeLateFees
--- Source is not available as SQL (built-in system procedure or body stored in server binary).
-Fixed: proc_body.php detects OpenADS-imported format (NUL-terminated body after params)
-and reads .am continuation.  pmsys_imported.am copied from pmsys.am for full body.
-
-[DONE] Issue above marked as done but procedure parameters are missing.  Procedure Sql body shows with non-human-readable characters at the end.
-These chars are probably parameters encoding.  Using your connection to f:\OpenAds\Testdata\pmsys\pmsys.add check parameters for each
-stored procedure and compare to parameters shown using OpenAds on newly imported dd f:\OpenAds\Testdata\pmsys\pmsys_imported.add.
-With stored procedures parameters can be of type input or output.  For example sp_GetPhysicalPath stored procedure has one single parameter
-and that parameter is an output parameter: databasepath of type memo.
-Fixed: import_dd now queries system.storedprocedures for Proc_Input/Proc_Output and patches them into .am after SQL body NUL.
-proc_body.php reads body up to first NUL, then input_params and output_params from subsequent NUL-delimited segments.
-app.js parseParamStr/serializeParams handle paramType (Input/Output); save_proc.php writes body\0in\0out\0 into .am.
-
-[DONE] *When trying to view a function body from DAWeb I get this message:
--- BoY
--- Source is not available as SQL (built-in system procedure or body stored in server binary).
-Fixed: pmsys_imported.add patched to store BoY body in readable lstr format (plen=0).
-Function property API (AdsDDGetFunctionProperty etc.) added end-to-end: engine → ABI → PHP ext → DA-Web.
-proc_body.php and save_proc.php now use AdsDictionary API (no binary file parsing).
-
-[DONE] Trigger event_mask and timing show as garbage or empty in system.triggers.
-Cause: binary loader read event_mask as LE uint32 from bytes 0-3, but OpenADS-created triggers store
-NUL-delimited text (table_alias\0event_mask\0...) in the property area.  Also timing was never
-included in the NUL-delimited save format.
-Fixed: loader now detects NUL-delimited format (byte[0]>=0x20) and parses correctly.  Save format
-updated to include timing as a third field.  Client-side binary parsing removed from trigger_body.php,
-table_meta.php, and gen_sql.php — all now use AdsDictionary API (getTriggerProperty 1401/1402/1404).
-
-[DONE] *When browsing the contents of a table from DAWeb Money fields show as $0.00 when there is actual data.
-For example you can look at table leases where rent and late fee fields shows as $0.00
-Fixed: AdtMoney (type 18) was wrongly decoded as IEEE754 double; now decoded as LE int64/10000
-(same encoding as VFP Currency).  Engine rebuilt, C:\php\openace64.dll updated.
-
-Check the problems below as most of them are already solved. Those that are not solved yet, work on them as well.
-
-You have permission to read and write to/from f:\OpenAds.  You have permissions to run cmake and build using any c++ compiler.
+INSERT INTO mytable SELECT * FROM __new;
 
 
 
-1. [DONE] RI Objects — foreign key tag and primary key tag dropdowns always empty.
-   On RI Transactions2Leases: parent PK tag and child FK tag both show blank.
-   Fixed: ri_meta.php now falls back to probing {table}.adi/.cdx in the DD directory
-   when system.indexes has no registered entry for the table.
-   Files: api/ri_meta.php
 
-2. [DONE] User group memberships showing wrong data.
-   User RCB belongs to Administrators, Supervisors, General, Internet yet
-   DA-Web showed Agents, Owners, Tenants.
-   Fixed: user_groups.php now returns correct memberships.
-   Files: api/user_groups.php
-
-3. [DONE] Built-in DD groups not visible.
-   SAP DDs always include DB:Public, DB:Backup, DB:Admin, DB:Debug.
-   Fixed: all four DB:* groups appear in the tree and group list.
-   RCB membership in DB:Admin and DB:Public correctly detected via SAP-DLL-assisted cipher.
-   Files: api/tree.php, api/user_groups.php, group_meta.php
 
 
 OPEN FEATURES
@@ -166,28 +94,19 @@ OPEN MAINTENANCE
 
 6. openads_serverd smart DLL detection.
    Server should detect whether ace64.dll or openace64.dll is present and
-   load whichever is available.
+   load whichever is available as long as ACE64 is not the SAP version.
 
 7. Cross-platform build verification.
    Confirm full source tree builds on Linux and macOS.  Run unit tests on
    each platform and document results.
 
-8. Explain bindings/php vs bindings/php_ext difference.
-   Add docs explaining when to use the pure-PHP FFI binding vs the
-   compiled Zend extension.
 
-9. Build-your-own-Harbour-app section in OpenADS readme.md needs updating.
-   Check section still reflects openace64.dll naming correctly.
+8. wire-protocol.md — add ALL DD functions and usage.
 
-10. wire-protocol.md — add DD functions and usage.
+9. More tests for DD: permissions enforcement, triggers firing, RI rules.
 
-11. More tests for DD: permissions enforcement, triggers firing, RI rules.
-
-12. Inspect Studio web console of OpenADS and see how AOFs work; adapt
+10. Inspect Studio web console of OpenADS and see how AOFs work; adapt
     useful features into daWeb when browsing a table.
-
-13. openads_serverd needs to be smarter and know if Ace64 is present or
-    OpenAce64 and load the right one.
 
 14. OpenADS needs to build cross-platform. See git repo CI for current
     failures on non-Windows platforms.
@@ -195,26 +114,6 @@ OPEN MAINTENANCE
 
 COMPLETED
 ---------
-
-[DONE] ACE Editor auto-downloads via setup.bat / setup.ps1 alongside jQuery,
-       jsTree, Tabulator, Split.js.  README.md updated.
-
-[DONE] Inline table cell editing — non-PK fields are editable in the data
-       grid; Save button commits via row_ops.php.  PK columns are read-only.
-
-[DONE] Export buttons on SQL results — CSV, HTML, JSON, XML, Excel in the
-       Tabulator pagination bar.
-
-[DONE] User Direct Permissions panel — User tab now shows two sections:
-       Group Memberships (top) and Direct Permissions (bottom).
-       api/user_meta.php + api/save_user_meta.php added.
-
-[DONE] Group permissions fix — permission values '1' (normal) and '2'
-       (WITH GRANT) both recognized as "granted"; Alter/Drop read-only
-       columns added to group permissions grid.
-
-[DONE] openace64.dll rename — DA-Web and README updated to reflect new
-       DLL name.
 
 
 DD PERMISSIONS IMPLEMENTATION STATUS (2026-06-03)
