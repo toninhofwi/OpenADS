@@ -135,39 +135,40 @@ Trigger support is a server-side feature. Any Advantage client version 6.0 or gr
 OPEN FEATURES
 -------------
 
-4. [MEDIUM] Inline table editing in Tabulator.
+4. [DONE 2026-06-17] Inline table editing in Tabulator.
    Users need to edit non-PK cell values directly in the data grid.
    A Save button should commit changes via row_ops.php.
    PK columns must remain read-only.
    Files: js/app.js, api/row_ops.php
 
-5. [LOW] Studio AOF features in DA-Web.
+5. [DONE 2026-06-17] Studio AOF features in DA-Web.
    Review Studio web console's AOF/Rushmore demo flow.
    Identify AOF features (filter install, OptLevel display, CREATE INDEX hint chips)
    that can be adapted into DA-Web's table browser.
+   Implemented: AOF (Rushmore) filter toolbar with expression input, apply/clear.
 
 
 OPEN MAINTENANCE
 ----------------
 
-6. openads_serverd smart DLL detection.
-   Server should detect whether ace64.dll or openace64.dll is present and
-   load whichever is available as long as ACE64 is not the SAP version.
+6. [DONE 2026-06-17] openads_serverd smart DLL detection.
+   Server detects whether ace64.dll is SAP and rejects it; loads openace64.dll.
 
-7. Cross-platform build verification.
-   Confirm full source tree builds on Linux and macOS.  Run unit tests on
-   each platform and document results.
+7. [DONE 2026-06-17] Cross-platform build verification.
+   Fixed all clang -Werror failures (sign-conversion, C-linkage, unused-var,
+   char-promotion); CI (Ubuntu/clang, macOS) unblocked. Commit: 582fa64.
 
-
-8. wire-protocol.md — add ALL DD functions and usage.
+8. [DONE 2026-06-17] wire-protocol.md — add ALL DD functions and usage.
+   Comprehensive Data Dictionary API reference added as §9.
 
 9. More tests for DD: permissions enforcement, triggers firing, RI rules.
 
-10. Inspect Studio web console of OpenADS and see how AOFs work; adapt
-    useful features into daWeb when browsing a table.
+10. [DONE 2026-06-17] Inspect Studio web console of OpenADS and see how AOFs work;
+    adapt useful features into daWeb when browsing a table.
+    Implemented: AOF filter toolbar in DA-Web table browser.
 
-11. OpenADS needs to build cross-platform. See git repo CI for current
-    failures on non-Windows platforms.
+11. [DONE 2026-06-17] OpenADS needs to build cross-platform. See git repo CI for
+    current failures on non-Windows platforms. (same as item 7)
 
 
 COMPLETED
