@@ -3,80 +3,91 @@
  *
  * Build a set of related DBF/CDX tables for OpenADS smoke tests:
  *
- *   F:\OpenADS\testdata\invoices\
+ *   <exe-dir>\..\..\..\testdata\invoices\
  *     customer.dbf / .cdx   - 100 customers
  *     items.dbf    / .cdx   - 20 catalogue items
  *     invoices.dbf / .cdx   - 1000 invoices linked to customers
  *     invoicedetail.dbf/.cdx- 3+ detail lines per invoice
  *
- * The directory is created if it does not exist.  Tables are always
- * rebuilt from scratch so the fixture is in a known state.
+ * Data directory is always relative to the executable so the fixture
+ * works on any drive without editing source.
  *
  * Usage:
  *   openads_cdx_invoice_fixture.exe          -- unattended / CI
- *   openads_cdx_invoice_fixture.exe BROWSE   -- interactive: browse each table
+ *   openads_cdx_invoice_fixture.exe BROWSE   -- browse each table interactively
  */
 
 #include "ads.ch"
+#include "inkey.ch"
 
 #require "rddads"
 REQUEST ADS
 REQUEST ADSCDX
 
-#define DATA_DIR           "F:\OpenADS\testdata\invoices"
+#define DATA_RELPATH       "..\..\..\testdata\invoices"
 #define CUSTOMER_COUNT     100
 #define INVOICE_COUNT      1000
 #define ITEM_COUNT         20
 #define MIN_DETAIL_PER_INV 3
+#define BOX_WIDTH          64
 
 //----------------------------------------------------------------------------
 
 PROCEDURE Main()
-   LOCAL cDataDir := DATA_DIR
+   LOCAL cDataDir := hb_PathNormalize( hb_DirBase() + DATA_RELPATH )
    LOCAL lBrowse  := ( PCount() > 0 )
+   LOCAL nTotal
 
    ErrorBlock( { |oErr| MyHandler( oErr ) } )
 
    SET FILETYPE TO CDX
    RDDSETDEFAULT( "ADSCDX" )
 
-   ? "OpenADS DBF/CDX invoice fixture generator"
-   ? "Data directory:", cDataDir
-   ? "Browse mode   :", IIF( lBrowse, "ON (interactive)", "OFF (unattended)" )
-   ?
+   PrintBanner()
+   ? "  Data dir : " + cDataDir
+   ? "  Mode     : " + IIF( lBrowse, "interactive  (browse after each table)", "unattended" )
+   ? "  " + Sep()
 
    IF ! hb_DirExists( cDataDir )
       hb_DirCreate( cDataDir )
       IF ! hb_DirExists( cDataDir )
-         ? "ERROR: Could not create data directory:", cDataDir
+         ? "  ERROR: Could not create data directory: " + cDataDir
          RETURN
       ENDIF
    ENDIF
 
+   ?
    IF ! BuildTables( cDataDir, lBrowse )
       RETURN
    ENDIF
 
+   nTotal := CUSTOMER_COUNT + ITEM_COUNT + INVOICE_COUNT + ;
+             INVOICE_COUNT * MIN_DETAIL_PER_INV
    ?
-   ? "Fixture creation complete."
-   ? "  Customers:", CUSTOMER_COUNT
-   ? "  Items    :", ITEM_COUNT
-   ? "  Invoices :", INVOICE_COUNT
-   ? "  Details  :", INVOICE_COUNT * MIN_DETAIL_PER_INV
+   ? "  " + Sep( Chr(205) )
+   ? "  Fixture complete.  4 tables  " + LTrim( Str( nTotal ) ) + " records."
+   ? "  " + Sep( Chr(205) )
    RETURN
 
 //----------------------------------------------------------------------------
 
 STATIC FUNCTION BuildTables( cDataDir, lBrowse )
-   LOCAL aCustomers := GenerateCustomerRows()
-   LOCAL aItems     := GenerateItems()
-   LOCAL aInvoices  := GenerateInvoices( aCustomers )
-   LOCAL aDetails   := GenerateInvoiceDetails( aInvoices, aItems )
+   LOCAL cLegacy  := cDataDir + "\.cdx"
+   LOCAL aCustomers, aItems, aInvoices, aDetails
 
-   IF ! CreateCustomerTable( cDataDir, aCustomers, lBrowse ) ; RETURN .F. ; ENDIF
-   IF ! CreateItemTable( cDataDir, aItems, lBrowse )         ; RETURN .F. ; ENDIF
-   IF ! CreateInvoiceTable( cDataDir, aInvoices, lBrowse )   ; RETURN .F. ; ENDIF
-   IF ! CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse ) ; RETURN .F. ; ENDIF
+   /* Remove the legacy shared .cdx that old engine builds left behind
+      before per-table naming was fixed. */
+   IF File( cLegacy ) ; FErase( cLegacy ) ; ENDIF
+
+   aCustomers := GenerateCustomerRows()
+   aItems     := GenerateItems()
+   aInvoices  := GenerateInvoices( aCustomers )
+   aDetails   := GenerateInvoiceDetails( aInvoices, aItems )
+
+   IF ! CreateCustomerTable(     cDataDir, aCustomers, lBrowse ) ; RETURN .F. ; ENDIF
+   IF ! CreateItemTable(         cDataDir, aItems,     lBrowse ) ; RETURN .F. ; ENDIF
+   IF ! CreateInvoiceTable(      cDataDir, aInvoices,  lBrowse ) ; RETURN .F. ; ENDIF
+   IF ! CreateInvoiceDetailTable(cDataDir, aDetails,   lBrowse ) ; RETURN .F. ; ENDIF
 
    RETURN .T.
 
@@ -86,6 +97,7 @@ STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers, lBrowse )
    LOCAL cFile := cDataDir + "\customer.dbf"
    LOCAL i
 
+   ?? "  " + Chr(16) + " customer.dbf "
    DeleteExistingFixtureFiles( cFile )
 
    DbCreate( cFile, ;
@@ -97,7 +109,7 @@ STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers, lBrowse )
 
    USE ( cFile ) ALIAS CUSTOMER SHARED NEW
    IF Select( "CUSTOMER" ) == 0
-      ? "ERROR: Failed to open", cFile
+      ? "  ERROR: Failed to open " + cFile
       RETURN .F.
    ENDIF
 
@@ -115,10 +127,11 @@ STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers, lBrowse )
 
    CUSTOMER->( DbCommit() )
    CUSTOMER->( DbGoTop() )
+   ? Str( Len(aCustomers), 5 ) + " records   [CUSTNO, CUSTNAME]"
 
    IF lBrowse
       SELECT CUSTOMER
-      BROWSE()
+      BrowseTable( "customer.dbf", Len(aCustomers) )
    ENDIF
 
    USE
@@ -130,6 +143,7 @@ STATIC FUNCTION CreateItemTable( cDataDir, aItems, lBrowse )
    LOCAL cFile := cDataDir + "\items.dbf"
    LOCAL j
 
+   ?? "  " + Chr(16) + " items.dbf    "
    DeleteExistingFixtureFiles( cFile )
 
    DbCreate( cFile, ;
@@ -139,7 +153,7 @@ STATIC FUNCTION CreateItemTable( cDataDir, aItems, lBrowse )
 
    USE ( cFile ) ALIAS ITEMS SHARED NEW
    IF Select( "ITEMS" ) == 0
-      ? "ERROR: Failed to open", cFile
+      ? "  ERROR: Failed to open " + cFile
       RETURN .F.
    ENDIF
 
@@ -154,10 +168,11 @@ STATIC FUNCTION CreateItemTable( cDataDir, aItems, lBrowse )
 
    ITEMS->( DbCommit() )
    ITEMS->( DbGoTop() )
+   ? Str( Len(aItems), 5 ) + " records   [ITEMNO]"
 
    IF lBrowse
       SELECT ITEMS
-      BROWSE()
+      BrowseTable( "items.dbf", Len(aItems) )
    ENDIF
 
    USE
@@ -169,6 +184,7 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
    LOCAL cFile := cDataDir + "\invoices.dbf"
    LOCAL k
 
+   ?? "  " + Chr(16) + " invoices.dbf "
    DeleteExistingFixtureFiles( cFile )
 
    DbCreate( cFile, ;
@@ -180,7 +196,7 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
 
    USE ( cFile ) ALIAS INVOICES SHARED NEW
    IF Select( "INVOICES" ) == 0
-      ? "ERROR: Failed to open", cFile
+      ? "  ERROR: Failed to open " + cFile
       RETURN .F.
    ENDIF
 
@@ -198,10 +214,11 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
 
    INVOICES->( DbCommit() )
    INVOICES->( DbGoTop() )
+   ? Str( Len(aInvoices), 5 ) + " records   [INVNO, CUSTIDX]"
 
    IF lBrowse
       SELECT INVOICES
-      BROWSE()
+      BrowseTable( "invoices.dbf", Len(aInvoices) )
    ENDIF
 
    USE
@@ -213,6 +230,7 @@ STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse )
    LOCAL cFile := cDataDir + "\invoicedetail.dbf"
    LOCAL n
 
+   ?? "  " + Chr(16) + " invoicedetail.dbf "
    DeleteExistingFixtureFiles( cFile )
 
    DbCreate( cFile, ;
@@ -225,7 +243,7 @@ STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse )
 
    USE ( cFile ) ALIAS DETAIL SHARED NEW
    IF Select( "DETAIL" ) == 0
-      ? "ERROR: Failed to open", cFile
+      ? "  ERROR: Failed to open " + cFile
       RETURN .F.
    ENDIF
 
@@ -244,14 +262,96 @@ STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse )
 
    DETAIL->( DbCommit() )
    DETAIL->( DbGoTop() )
+   ? Str( Len(aDetails), 5 ) + " records   [INVNO, ITEMIDX]"
 
    IF lBrowse
       SELECT DETAIL
-      BROWSE()
+      BrowseTable( "invoicedetail.dbf", Len(aDetails) )
    ENDIF
 
    USE
    RETURN .T.
+
+//----------------------------------------------------------------------------
+
+STATIC PROCEDURE BrowseTable( cTable, nRecs )
+   LOCAL oBrw, oCol, nKey, lExit, i, nW
+
+   CLS
+
+   /* Header bar */
+   @ 0, 0 SAY PadR( "  " + cTable + "  " + LTrim( Str(nRecs) ) + " records", MaxCol() + 1 ) COLOR "GR+/B"
+
+   /* Footer bar */
+   @ MaxRow(), 0 SAY PadR( "  " + Chr(24) + Chr(25) + " navigate   " + ;
+      "PgUp/PgDn scroll   Ctrl+PgDn/PgUp first/last   Esc close", ;
+      MaxCol() + 1 ) COLOR "N+/W"
+
+   /* TBrowse covering the area between header and footer */
+   oBrw := TBrowseDB( 1, 0, MaxRow() - 1, MaxCol() )
+   oBrw:colorSpec := "W/N,GR+/B,W/N,GR+/B"
+   oBrw:headSep   := Chr(205)   /* ═ below column headings */
+   oBrw:colSep    := Chr(179)   /* │ between columns */
+
+   FOR i := 1 TO FCount()
+      nW   := Min( FieldLen(i), 22 )
+      oCol := TBColumn():New( FieldName(i), FieldBlock( FieldName(i) ) )
+      oCol:Width := nW
+      oBrw:AddColumn( oCol )
+   NEXT
+
+   lExit := .F.
+   DO WHILE ! lExit
+      DO WHILE ! oBrw:Stabilize() ; ENDDO
+
+      /* Update record position in header */
+      @ 0, MaxCol() - 17 SAY " Rec " + ;
+         PadL( LTrim( Str( RecNo() ) ), 6 ) + "/" + ;
+         PadL( LTrim( Str( LastRec() ) ), 6 ) + " " COLOR "GR+/B"
+
+      nKey := InKey( 0 )
+      DO CASE
+         CASE nKey == K_ESC      ;  lExit := .T.
+         CASE nKey == K_DOWN     ;  oBrw:Down()
+         CASE nKey == K_UP       ;  oBrw:Up()
+         CASE nKey == K_PGDN     ;  oBrw:PageDown()
+         CASE nKey == K_PGUP     ;  oBrw:PageUp()
+         CASE nKey == K_CTRL_PGDN;  oBrw:GoBottom()
+         CASE nKey == K_CTRL_PGUP;  oBrw:GoTop()
+         CASE nKey == K_LEFT     ;  oBrw:Left()
+         CASE nKey == K_RIGHT    ;  oBrw:Right()
+         CASE nKey == K_HOME     ;  oBrw:Home()
+         CASE nKey == K_END      ;  oBrw:End()
+      ENDCASE
+   ENDDO
+
+   CLS
+   RETURN
+
+//----------------------------------------------------------------------------
+
+STATIC PROCEDURE PrintBanner()
+   LOCAL cTitle := "OpenADS DBF/CDX Invoice Fixture Generator"
+   LOCAL nW     := BOX_WIDTH
+   LOCAL cH     := Chr(205)   /* ═ */
+   LOCAL cV     := Chr(186)   /* ║ */
+   LOCAL cTL    := Chr(201)   /* ╔ */
+   LOCAL cTR    := Chr(187)   /* ╗ */
+   LOCAL cBL    := Chr(200)   /* ╚ */
+   LOCAL cBR    := Chr(188)   /* ╝ */
+
+   ?
+   ? cTL + Replicate( cH, nW - 2 ) + cTR
+   ? cV  + PadC( cTitle, nW - 2 )  + cV
+   ? cBL + Replicate( cH, nW - 2 ) + cBR
+   ?
+   RETURN
+
+//----------------------------------------------------------------------------
+
+STATIC FUNCTION Sep( cChar )
+   hb_Default( @cChar, Chr(196) )   /* ─ */
+   RETURN Replicate( cChar, BOX_WIDTH )
 
 //----------------------------------------------------------------------------
 
