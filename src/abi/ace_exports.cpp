@@ -4180,12 +4180,23 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         : std::string{};
 
     namespace fs = std::filesystem;
-    fs::path p(bag);
-    if (!p.is_absolute()) {
-        fs::path tdir = fs::path(t->path()).parent_path();
-        p = tdir / p;
+    fs::path p;
+    if (bag.empty()) {
+        // No bag name supplied → structural CDX: same stem as the table,
+        // same directory.  Mirrors the auto-open logic in AdsOpenTable90
+        // (tp.replace_extension(".cdx")).  Using tdir/"" on Windows
+        // std::filesystem appends a trailing separator, making
+        // replace_extension produce ".cdx" with no stem — one shared file
+        // for the whole directory instead of one per table.
+        p = fs::path(t->path()).replace_extension(".cdx");
+    } else {
+        p = fs::path(bag);
+        if (!p.is_absolute()) {
+            fs::path tdir = fs::path(t->path()).parent_path();
+            p = tdir / p;
+        }
+        if (!p.has_extension()) p.replace_extension(".cdx");
     }
-    if (!p.has_extension()) p.replace_extension(".cdx");
     bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
 
     // ACE AdsCreateIndex* option bits (include/openads/ace.h):

@@ -185,6 +185,11 @@ UNSIGNED32 ENTRYPOINT AdsGetLong   (ADSHANDLE hTable, UNSIGNED8* pucField,
 // SAP ACE W-variants keep field names as ASCII (UNSIGNED8*); only
 // the data buffer (pucValueW / pucBufW) is wide-char UTF-16LE.
 // Harbour's ads1.c passes ADSFIELD(n) (UNSIGNED8*) — matching SAP.
+// Cast a 1-based field index to the UNSIGNED8* accepted by ADS API
+// functions that take either a name string or a numeric field index.
+#ifndef ADSFIELD
+#  define ADSFIELD( n )  ( ( UNSIGNED8 * ) ( uintptr_t ) ( n ) )
+#endif
 UNSIGNED32 AdsSetStringW    (ADSHANDLE  hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pucValueW, UNSIGNED32 ulLen);
 UNSIGNED32 AdsGetStringW    (ADSHANDLE  hTable, UNSIGNED8* pucField,
