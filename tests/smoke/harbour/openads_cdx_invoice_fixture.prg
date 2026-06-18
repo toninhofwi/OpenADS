@@ -23,7 +23,6 @@
 #require "rddads"
 REQUEST ADS
 REQUEST ADSCDX
-
 #define DATA_RELPATH       "..\..\..\testdata\invoices"
 #define CUSTOMER_COUNT     100
 #define INVOICE_COUNT      1000
@@ -38,7 +37,7 @@ PROCEDURE Main()
    LOCAL lBrowse  := ( PCount() > 0 )
    LOCAL nTotal
 
-   SetMode( 25, 80 )
+   SetMode( 25, 120 )
    ErrorBlock( { |oErr| MyHandler( oErr ) } )
 
    SET FILETYPE TO CDX
@@ -201,8 +200,9 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
       RETURN .F.
    ENDIF
 
-   INDEX ON INVOICES->INVNO  TAG INVNO
-   INDEX ON INVOICES->CUSTNO TAG CUSTIDX
+   INDEX ON INVOICES->INVNO   TAG INVNO
+   INDEX ON INVOICES->CUSTNO  TAG CUSTNO
+   INDEX ON INVOICES->INVDATE TAG INVDATE
 
    FOR k := 1 TO Len( aInvoices )
       INVOICES->( DbAppend() )
@@ -214,12 +214,14 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
    NEXT
 
    INVOICES->( DbCommit() )
+   INVOICES->( OrdSetFocus( "INVNO" ) )
    INVOICES->( DbGoTop() )
-   ? Str( Len(aInvoices), 5 ) + " records   [INVNO, CUSTIDX]"
+   ? Str( Len(aInvoices), 5 ) + " records   [INVNO, CUSTNO, INVDATE]"
 
    IF lBrowse
       SELECT INVOICES
-      BrowseTable( "invoices.dbf", Len(aInvoices) )
+      BrowseTable( "invoices.dbf", Len(aInvoices), ;
+         { { "INVNO", 1 }, { "CUSTNO", 2 }, { "INVDATE", 3 } } )
    ENDIF
 
    USE
@@ -275,24 +277,27 @@ STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse )
 
 //----------------------------------------------------------------------------
 
-STATIC PROCEDURE BrowseTable( cTable, nRecs )
+STATIC PROCEDURE BrowseTable( cTable, nRecs, aTags )
    LOCAL oBrw, oCol, nKey, lExit, i, nW
+   LOCAL nOrdIdx  := 1
+   LOCAL cOrdName, cFooter
+
+   hb_Default( @aTags, {} )
 
    CLS
 
-   /* Header bar */
    @ 0, 0 SAY PadR( "  " + cTable + "  " + LTrim( Str(nRecs) ) + " records", MaxCol() + 1 ) COLOR "GR+/B"
 
-   /* Footer bar */
-   @ MaxRow(), 0 SAY PadR( "  " + Chr(24) + Chr(25) + " navigate   " + ;
-      "PgUp/PgDn scroll   Ctrl+PgDn/PgUp first/last   Esc close", ;
-      MaxCol() + 1 ) COLOR "N+/W"
+   cFooter := "  " + Chr(24) + Chr(25) + " navigate   PgUp/PgDn   Ctrl+PgDn/PgUp first/last   Esc close"
+   IF Len( aTags ) > 0
+      cFooter += "   Space: cycle index"
+   ENDIF
+   @ MaxRow(), 0 SAY PadR( cFooter, MaxCol() + 1 ) COLOR "N+/W"
 
-   /* TBrowse covering the area between header and footer */
    oBrw := TBrowseDB( 1, 0, MaxRow() - 1, MaxCol() )
    oBrw:colorSpec := "W/N,GR+/B,W/N,GR+/B"
-   oBrw:headSep   := Chr(205)   /* ═ below column headings */
-   oBrw:colSep    := Chr(179)   /* │ between columns */
+   oBrw:headSep   := Chr(205)
+   oBrw:colSep    := Chr(179)
 
    FOR i := 1 TO FCount()
       nW   := Min( FieldLen(i), 22 )
@@ -305,24 +310,31 @@ STATIC PROCEDURE BrowseTable( cTable, nRecs )
    DO WHILE ! lExit
       DO WHILE ! oBrw:Stabilize() ; ENDDO
 
-      /* Update record position in header */
+      cOrdName := OrdName()
+      IF Empty( cOrdName ) ; cOrdName := "natural" ; ENDIF
+      @ 0, 45 SAY PadR( "[" + cOrdName + "]", 15 ) COLOR "GR+/B"
       @ 0, MaxCol() - 17 SAY " Rec " + ;
          PadL( LTrim( Str( RecNo() ) ), 6 ) + "/" + ;
          PadL( LTrim( Str( LastRec() ) ), 6 ) + " " COLOR "GR+/B"
 
       nKey := InKey( 0 )
       DO CASE
-         CASE nKey == K_ESC      ;  lExit := .T.
-         CASE nKey == K_DOWN     ;  oBrw:Down()
-         CASE nKey == K_UP       ;  oBrw:Up()
-         CASE nKey == K_PGDN     ;  oBrw:PageDown()
-         CASE nKey == K_PGUP     ;  oBrw:PageUp()
-         CASE nKey == K_CTRL_PGDN;  oBrw:GoBottom()
-         CASE nKey == K_CTRL_PGUP;  oBrw:GoTop()
-         CASE nKey == K_LEFT     ;  oBrw:Left()
-         CASE nKey == K_RIGHT    ;  oBrw:Right()
-         CASE nKey == K_HOME     ;  oBrw:Home()
-         CASE nKey == K_END      ;  oBrw:End()
+         CASE nKey == K_ESC       ;  lExit := .T.
+         CASE nKey == K_DOWN      ;  oBrw:Down()
+         CASE nKey == K_UP        ;  oBrw:Up()
+         CASE nKey == K_PGDN      ;  oBrw:PageDown()
+         CASE nKey == K_PGUP      ;  oBrw:PageUp()
+         CASE nKey == K_CTRL_PGDN ;  oBrw:GoBottom()
+         CASE nKey == K_CTRL_PGUP ;  oBrw:GoTop()
+         CASE nKey == K_LEFT      ;  oBrw:Left()
+         CASE nKey == K_RIGHT     ;  oBrw:Right()
+         CASE nKey == K_HOME      ;  oBrw:Home()
+         CASE nKey == K_END       ;  oBrw:End()
+         CASE nKey == K_SPACE .AND. Len( aTags ) > 0
+            nOrdIdx := IIF( nOrdIdx >= Len( aTags ), 1, nOrdIdx + 1 )
+            OrdSetFocus( aTags[nOrdIdx][1] )
+            oBrw:RefreshAll()
+            oBrw:GoTop()
       ENDCASE
    ENDDO
 

@@ -12,7 +12,7 @@ correct per-table compound index files and that indexed navigation works.
 |------|---------|----------|
 | `customer.dbf` | 100 | CUSTNO, CUSTNAME |
 | `items.dbf` | 20 | ITEMNO |
-| `invoices.dbf` | 1 000 | INVNO, CUSTIDX |
+| `invoices.dbf` | 1 000 | INVNO, CUSTNO, INVDATE |
 | `invoicedetail.dbf` | 3 000 | INVNO, ITEMIDX |
 
 Each table gets its own structural CDX (`customer.cdx`, etc.).
@@ -66,8 +66,18 @@ openads_cdx_invoice_fixture.exe BROWSE
 ```
 
 Any command-line argument enables browse mode. After each table is
-populated the program pauses with a full-screen record browser.
-Press **Escape** to close the browser and continue to the next table.
+populated the program pauses with a full-screen record browser
+(25 rows × 120 columns). The header bar shows the active index tag and
+the current record position (`Rec X/Y`).
+
+| Key | Action |
+|-----|--------|
+| ↑ ↓ | move one row |
+| PgUp / PgDn | scroll one page |
+| Ctrl+PgDn / Ctrl+PgUp | go to last / first record |
+| ← → / Home / End | pan columns |
+| **Space** | cycle controlling index (invoices only: INVNO → CUSTNO → INVDATE → …) |
+| Esc | close browser, continue to next table |
 
 ### Source files
 
@@ -82,9 +92,15 @@ Press **Escape** to close the browser and continue to the next table.
 - `RDDSETDEFAULT("ADSCDX")` is set once at startup; no `VIA` clause
   needed on individual `USE` statements.
 - `SET FILETYPE TO CDX` selects compound (multi-tag) index files.
+- `SetMode(25, 120)` resizes the console before any output so the
+  browse fits within the window on any system.
 - Tables are opened `SHARED NEW` so the fixture can run while the
   OpenADS server is active.
 - The fixture links against `openace64.lib`, not the legacy `ace64.lib`.
+- The invoices table carries three CDX tags (`INVNO`, `CUSTNO`,
+  `INVDATE`). `OrdSetFocus` is called before the browse to start in
+  invoice-number order; **Space** cycles through all three tags at
+  runtime using `OrdSetFocus` + `oBrw:RefreshAll()` + `oBrw:GoTop()`.
 
 ---
 
