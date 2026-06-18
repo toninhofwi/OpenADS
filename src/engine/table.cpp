@@ -1039,6 +1039,38 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
         return false;
     }
     bool exact = r.value().hit == drivers::SeekHit::Exact;
+    // SET DELETED ON: a seek must not report a deleted row as found.
+    // goto_top/goto_bottom/skip already honor show_deleted() but seek_key
+    // did not (the B+tree match landed on a deleted row and was returned
+    // as found). Skip forward over deleted records at the landing, then
+    // re-derive `exact` from the row we actually land on (Clipper/DBFCDX:
+    // if the only matching rows are deleted, Found() is .F. and the cursor
+    // sits on the next live record or Eof).
+    if (!openads::abi::show_deleted()) {
+        std::string del_key = key;
+        if (del_key.size() < idx->key_length())
+            del_key.append(idx->key_length() - del_key.size(), ' ');
+        if (del_key.size() > idx->key_length())
+            del_key.resize(idx->key_length());
+        while (r.value().positioned) {
+            if (auto ld = load_record_(r.value().recno); !ld) return ld.error();
+            if (!is_deleted()) break;
+            r = idx->next();
+            if (!r) return r.error();
+        }
+        if (!r.value().positioned) {
+            state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                    : State::Eof;
+            recno_ = 0;
+            last_seek_found_ = false;
+            return false;
+        }
+        std::string ck = idx->current_key();
+        if (ck.size() < del_key.size())
+            ck.append(del_key.size() - ck.size(), ' ');
+        if (ck.size() > del_key.size()) ck.resize(del_key.size());
+        exact = (std::memcmp(ck.data(), del_key.data(), del_key.size()) == 0);
+    }
     // DESCEND order treats the FIRST match in walk direction as
     // the LAST entry in the equal-key group when sorted ASC. Walk
     // duplicates regardless of `last` flag.
