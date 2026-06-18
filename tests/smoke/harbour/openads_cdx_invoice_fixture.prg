@@ -38,6 +38,7 @@ PROCEDURE Main()
    LOCAL lBrowse  := ( PCount() > 0 )
    LOCAL nTotal
 
+   SetMode( 25, 80 )
    ErrorBlock( { |oErr| MyHandler( oErr ) } )
 
    SET FILETYPE TO CDX
