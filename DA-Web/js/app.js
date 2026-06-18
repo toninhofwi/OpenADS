@@ -1195,10 +1195,6 @@
         selectable: 1,
         selectableRollingSelection: false,
         placeholder: '(no triggers defined for this table)',
-        rowFormatter: row => {
-          // Ensure selected row has a visible highlight
-          row.getElement().style.background = row.isSelected() ? '#313244' : '';
-        },
         columns: [
           { title: 'Name',     field: 'name',     widthGrow: 2,  minWidth: 120, headerSort: false,
             editor: 'input' },
@@ -1251,14 +1247,11 @@
       };
 
       grid.on('rowClick', (e, row) => {
+        grid.getRows().forEach(r => r.getElement().style.background = '');
+        row.getElement().style.background = '#313244';
         row.select();
         loadTrigBody(row.getData());
       });
-      grid.on('rowSelected', row => {
-        // Keep rowFormatter highlight in sync
-        row.reformat();
-      });
-      grid.on('rowDeselected', row => row.reformat());
 
       // ── Save ──────────────────────────────────────────────────────────────
       const doSave = async () => {
@@ -1392,7 +1385,12 @@
           let target = null;
           if (restoreName) target = grid.getRows().find(r => r.getData().name === restoreName);
           if (!target) target = grid.getRows()[0];
-          if (target) { target.select(); loadTrigBody(target.getData()); }
+          if (target) {
+            grid.getRows().forEach(r => r.getElement().style.background = '');
+            target.getElement().style.background = '#313244';
+            target.select();
+            loadTrigBody(target.getData());
+          }
         }, 150);
       }
     }).catch(err => {
@@ -1432,15 +1430,16 @@
     }
     if (kind === 'indexes') {
       return [
-        { title: 'Tag',        field: 'Tag',        widthGrow: 1.5, headerSort: false },
+        { title: 'Tag',        field: 'Tag',        widthGrow: 1.5, headerSort: false, editor: 'input' },
         { title: 'Expression', field: 'Expression', widthGrow: 3,   headerSort: false, editor: 'input' },
         { title: 'Descending', field: 'Descending', width: 100, headerSort: false,
-          editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
+          editor: 'select', editorParams: { values: ['No', 'Yes'] } },
         { title: 'Unique',     field: 'Unique',     width: 80,  headerSort: false,
-          editor: 'select', editorParams: { values: { '': '', No: 'No', Yes: 'Yes' } } },
-        { title: 'Primary',    field: 'Primary',    width: 80,  headerSort: false },
+          editor: 'select', editorParams: { values: ['No', 'Yes'] } },
+        { title: 'Primary',    field: 'Primary',    width: 80,  headerSort: false,
+          editor: 'select', editorParams: { values: ['No', 'Yes'] } },
         { title: 'Binary',     field: 'Binary',     width: 80,  headerSort: false,
-          editor: 'select', editorParams: { values: { No: 'No', Yes: 'Yes' } } },
+          editor: 'select', editorParams: { values: ['No', 'Yes'] } },
         { title: 'Key Type',   field: 'KeyType',    width: 90,  headerSort: false },
       ];
     }
@@ -1466,15 +1465,48 @@
         }
 
         const showSave = kind === 'fields' || kind === 'indexes';
+        const addIdxBtn = kind === 'indexes'
+          ? `<button class="btn btn-sm" id="add-idx-btn-${tabId}" style="background:#a6e3a1;color:#1e1e2e;">+ Add Index</button>`
+          : '';
+        const delIdxBtn = kind === 'indexes'
+          ? `<button class="btn btn-sm" id="del-idx-btn-${tabId}" disabled style="background:#f38ba8;color:#1e1e2e;opacity:0.5;cursor:not-allowed;">&#128465; Delete</button>`
+          : '';
+        const saveBtnExtra = kind === 'indexes'
+          ? ' disabled style="opacity:0.5;cursor:not-allowed;"'
+          : '';
         const toolbarHtml = showSave
           ? `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
-               <button class="btn btn-sm btn-primary" id="save-meta-${tabId}">&#128190; Save Changes</button>
+               <button class="btn btn-sm btn-primary" id="save-meta-${tabId}"${saveBtnExtra}>&#128190; Save Changes</button>
+               ${addIdxBtn}
+               ${delIdxBtn}
                <span id="save-meta-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
              </div>`
           : '';
+        const addIdxForm = kind === 'indexes'
+          ? `<div id="add-idx-form-${tabId}" style="display:none;padding:4px 6px;gap:6px;align-items:center;flex-wrap:wrap;background:#181825;border-bottom:1px solid #313244;">
+               <input id="new-idx-tag-${tabId}"  placeholder="Tag name"   style="width:120px;padding:2px 6px;background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;" />
+               <input id="new-idx-expr-${tabId}" placeholder="Expression" style="width:240px;padding:2px 6px;background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;" />
+               <select id="new-idx-desc-${tabId}" style="padding:2px 4px;background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;" title="Sort order">
+                 <option value="No">Ascending</option><option value="Yes">Descending</option>
+               </select>
+               <select id="new-idx-uniq-${tabId}" style="padding:2px 4px;background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;" title="Unique">
+                 <option value="No">Not Unique</option><option value="Yes">Unique</option>
+               </select>
+               <select id="new-idx-bin-${tabId}" style="padding:2px 4px;background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;" title="Case sensitivity">
+                 <option value="No">Case Insensitive</option><option value="Yes">Binary</option>
+               </select>
+               <button class="btn btn-sm btn-primary" id="new-idx-ok-${tabId}">Add</button>
+               <button class="btn btn-sm" id="new-idx-cancel-${tabId}" style="background:#313244;color:#cdd6f4;">Cancel</button>
+               <span id="new-idx-msg-${tabId}" style="font-size:11px;"></span>
+             </div>`
+          : '';
 
-        container.innerHTML = toolbarHtml +
+        container.innerHTML = toolbarHtml + addIdxForm +
           `<div id="meta-tbl-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>`;
+
+        if (kind === 'indexes') {
+          resp.data = resp.data.map(r => ({ ...r, _origTag: r.Tag }));
+        }
 
         /* global Tabulator */
         const grid = new Tabulator('#meta-tbl-' + tabId, {
@@ -1511,30 +1543,152 @@
         }
 
         if (kind === 'indexes') {
-          const saveBtn = document.getElementById('save-meta-' + tabId);
-          const msgEl   = document.getElementById('save-meta-msg-' + tabId);
+          const saveBtn     = document.getElementById('save-meta-' + tabId);
+          const msgEl       = document.getElementById('save-meta-msg-' + tabId);
+          const addIdxBtnEl = document.getElementById('add-idx-btn-'   + tabId);
+          const addIdxFormEl= document.getElementById('add-idx-form-'  + tabId);
+          const dirtyTags   = new Set();   // _origTag values of edited rows
+
+          const delIdxBtnEl = document.getElementById('del-idx-btn-' + tabId);
+          let selectedTag = null;
+          let selectedRow = null;
+
+          const applyHighlight = () => {
+            grid.getRows().forEach(r => r.getElement().style.background = '');
+            if (selectedRow) selectedRow.getElement().style.background = '#313244';
+          };
+          const enableSave = () => {
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.style.opacity = ''; saveBtn.style.cursor = ''; }
+          };
+          const disableSave = () => {
+            dirtyTags.clear();
+            if (saveBtn) { saveBtn.disabled = true; saveBtn.style.opacity = '0.5'; saveBtn.style.cursor = 'not-allowed'; }
+          };
+          const enableDel = (tag, row) => {
+            selectedTag = tag;
+            selectedRow = row;
+            if (delIdxBtnEl) { delIdxBtnEl.disabled = false; delIdxBtnEl.style.opacity = ''; delIdxBtnEl.style.cursor = ''; }
+          };
+          const disableDel = () => {
+            selectedTag = null;
+            selectedRow = null;
+            if (delIdxBtnEl) { delIdxBtnEl.disabled = true; delIdxBtnEl.style.opacity = '0.5'; delIdxBtnEl.style.cursor = 'not-allowed'; }
+          };
+
+          // Row click — highlight and arm delete button
+          grid.on('rowClick', (e, row) => {
+            enableDel(row.getData()._origTag || row.getData().Tag, row);
+            applyHighlight();
+          });
+
+          // Mark row dirty; re-apply highlight since Tabulator re-renders edited rows
+          grid.on('cellEdited', cell => {
+            dirtyTags.add(cell.getRow().getData()._origTag);
+            enableSave();
+            applyHighlight();
+          });
+
+          // Delete selected index
+          delIdxBtnEl?.addEventListener('click', async () => {
+            if (!selectedTag) return;
+            if (!confirm(`Delete index "${selectedTag}"?`)) return;
+            if (msgEl) { msgEl.textContent = 'Deleting…'; msgEl.style.color = '#a6adc8'; }
+            try {
+              const r = await apiFetch('api/delete_index.php', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dd, table, tag: selectedTag }),
+              });
+              if (r.error) {
+                if (msgEl) { msgEl.textContent = r.error; msgEl.style.color = '#f38ba8'; }
+              } else {
+                disableDel();
+                if (msgEl) msgEl.textContent = '';
+                loadMetaData(tabId, dd, table, kind);
+              }
+            } catch (err) {
+              if (msgEl) { msgEl.textContent = err.message; msgEl.style.color = '#f38ba8'; }
+            }
+          });
+
+          // Toggle Add Index form
+          addIdxBtnEl?.addEventListener('click', () => {
+            if (!addIdxFormEl) return;
+            const shown = addIdxFormEl.style.display !== 'none';
+            addIdxFormEl.style.display = shown ? 'none' : 'flex';
+            if (!shown) document.getElementById('new-idx-tag-' + tabId)?.focus();
+          });
+          document.getElementById('new-idx-cancel-' + tabId)?.addEventListener('click', () => {
+            if (addIdxFormEl) addIdxFormEl.style.display = 'none';
+          });
+
+          // Add Index submit
+          document.getElementById('new-idx-ok-' + tabId)?.addEventListener('click', async () => {
+            const tagEl  = document.getElementById('new-idx-tag-'  + tabId);
+            const exprEl = document.getElementById('new-idx-expr-' + tabId);
+            const descEl = document.getElementById('new-idx-desc-' + tabId);
+            const uniqEl = document.getElementById('new-idx-uniq-' + tabId);
+            const binEl  = document.getElementById('new-idx-bin-'  + tabId);
+            const newMsg = document.getElementById('new-idx-msg-'  + tabId);
+            const tagV   = tagEl?.value.trim();
+            const exprV  = exprEl?.value.trim();
+            if (!tagV || !exprV) {
+              if (newMsg) { newMsg.textContent = 'Tag and Expression are required'; newMsg.style.color = '#f38ba8'; }
+              return;
+            }
+            if (newMsg) { newMsg.textContent = 'Creating…'; newMsg.style.color = '#a6adc8'; }
+            try {
+              const r = await apiFetch('api/save_index.php', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  dd, table, origTag: '', tag: tagV, expression: exprV,
+                  descending: descEl?.value || 'No',
+                  unique: uniqEl?.value || 'No',
+                  binary: binEl?.value || 'No',
+                }),
+              });
+              if (r.error) {
+                if (newMsg) { newMsg.textContent = r.error; newMsg.style.color = '#f38ba8'; }
+              } else {
+                if (addIdxFormEl) addIdxFormEl.style.display = 'none';
+                if (tagEl)  tagEl.value  = '';
+                if (exprEl) exprEl.value = '';
+                if (newMsg) newMsg.textContent = '';
+                loadMetaData(tabId, dd, table, kind);
+              }
+            } catch (err) {
+              if (newMsg) { newMsg.textContent = err.message; newMsg.style.color = '#f38ba8'; }
+            }
+          });
+
+          // Save only dirty rows (drop+recreate with origTag for rename support)
           saveBtn?.addEventListener('click', async () => {
-            // Save each modified index row by re-creating the index
-            const rows = grid.getData();
-            const sel  = grid.getSelectedRows();
-            const targets = sel.length > 0 ? sel.map(r => r.getData()) : rows;
-            if (targets.length === 0) { if (msgEl) msgEl.textContent = 'No row selected'; return; }
-            if (msgEl) msgEl.textContent = 'Re-indexing…';
+            const targets = grid.getData().filter(r => dirtyTags.has(r._origTag));
+            if (targets.length === 0) return;
+            if (msgEl) { msgEl.textContent = 'Saving…'; msgEl.style.color = '#a6adc8'; }
             let ok = 0, errs = [];
             for (const row of targets) {
               try {
                 const r = await apiFetch('api/save_index.php', {
                   method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ dd, table,
+                  body: JSON.stringify({
+                    dd, table,
+                    origTag: row._origTag || row.Tag,
                     tag: row.Tag, expression: row.Expression,
-                    descending: row.Descending, unique: row.Unique, binary: row.Binary }),
+                    descending: row.Descending, unique: row.Unique,
+                    primary: row.Primary, binary: row.Binary,
+                  }),
                 });
                 if (r.error) errs.push(`${row.Tag}: ${r.error}`); else ok++;
               } catch (err) { errs.push(`${row.Tag}: ${err.message}`); }
             }
-            if (msgEl) msgEl.textContent = errs.length
-              ? `${ok} saved, errors: ${errs.join('; ')}`
-              : `${ok} index(es) saved`;
+            if (msgEl) {
+              msgEl.style.color = errs.length ? '#f38ba8' : '#a6e3a1';
+              msgEl.textContent = errs.length
+                ? `${ok} saved, errors: ${errs.join('; ')}`
+                : `${ok} index(es) saved`;
+            }
+            if (ok > 0) loadMetaData(tabId, dd, table, kind);
+            else disableSave();
           });
         }
       })

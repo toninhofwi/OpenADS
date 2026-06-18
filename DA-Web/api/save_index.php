@@ -20,10 +20,12 @@ $body       = json_decode(file_get_contents('php://input'), true) ?? [];
 $ddName     = trim($body['dd']         ?? '');
 $table      = trim($body['table']      ?? '');
 $tag        = trim($body['tag']        ?? '');
+$origTag    = trim($body['origTag']    ?? '') ?: $tag;  // original name for DROP (rename support)
 $expression = trim($body['expression'] ?? '');
 $descending = strcasecmp(trim($body['descending'] ?? 'No'), 'Yes') === 0;
 $unique     = strcasecmp(trim($body['unique']     ?? 'No'), 'Yes') === 0;
 $binary     = strcasecmp(trim($body['binary']     ?? 'No'), 'Yes') === 0;
+$primary    = strcasecmp(trim($body['primary']    ?? 'No'), 'Yes') === 0;
 
 if (!isset($_SESSION['connections'][$ddName])) {
     http_response_code(401);
@@ -53,15 +55,23 @@ try {
     if ($descending) $flags |= 0x0010;  // ADS_DESCENDING
     if ($binary)     $flags |= 0x0004;  // ADS_BINARY_KEY
 
-    // Drop existing tag (SQL DROP INDEX; ignore error if tag doesn't exist)
-    try {
-        $conn->execute("DROP INDEX $tag ON $table");
-    } catch (Throwable $e) {}
+    // Drop existing tag using origTag (handles renames; ignore error if not found)
+    if ($origTag !== '') {
+        try {
+            $conn->execute("DROP INDEX $origTag ON $table");
+        } catch (Throwable $e) {}
+    }
 
     // Recreate index
     $esc = fn($s) => str_replace("'", "''", $s);
     $sql = "EXECUTE PROCEDURE sp_CreateIndex90('{$esc($table)}', '{$esc($indexFile)}', '{$esc($tag)}', '{$esc($expression)}', '', $flags, 512, '')";
     $conn->execute($sql);
+
+    // Update primary key property if requested (ADS_DD_TABLE_PRIMARY_KEY = 202)
+    if ($primary) {
+        $dict = AdsDictionary::fromConnection($conn);
+        $dict->setTableProperty($table, 202, $tag);
+    }
 
     $conn->close();
     echo json_encode(['saved' => true]);
