@@ -45,7 +45,7 @@ impl HttpClient {
             client: reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
-                .unwrap_or_default(),
+                .expect("failed to build reqwest client"),
         }
     }
 
@@ -53,7 +53,10 @@ impl HttpClient {
         let mut snap = HttpSnapshot::default();
         match self.client.get(format!("{}/api/health", self.base)).send() {
             Ok(r) if r.status().is_success() => {
-                snap.health = r.json().ok();
+                match r.json::<Health>() {
+                    Ok(h) => snap.health = Some(h),
+                    Err(e) => snap.error = Some(format!("health JSON decode: {e}")),
+                }
             }
             Ok(r) => snap.error = Some(format!("health HTTP {}", r.status())),
             Err(e) => snap.error = Some(format!("health: {e}")),
