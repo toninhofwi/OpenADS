@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openmonitor</title>
+<style>
+:root {
+  --bg: #0c0f14;
+  --surface: #141a22;
+  --surface2: #1b232d;
+  --border: #263040;
+  --text: #d8e0ea;
+  --muted: #7d8da3;
+  --accent: #6b9bd1;
+  --accent-dim: #3d5f82;
+  --ok: #5dad8f;
+  --warn: #c9a227;
+  --err: #c76b6b;
+  --radius: 10px;
+  --shadow: 0 8px 28px rgba(0,0,0,.28);
+}
+[data-theme="light"] {
+  --bg: #eef1f5;
+  --surface: #ffffff;
+  --surface2: #f6f8fb;
+  --border: #d5dde8;
+  --text: #1a2332;
+  --muted: #5c6b7f;
+  --accent: #3d6ea8;
+  --accent-dim: #8eb3db;
+  --ok: #2d8a66;
+  --warn: #9a7b18;
+  --err: #b54a4a;
+  --shadow: 0 8px 24px rgba(26,35,50,.08);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 40px; }
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; margin-bottom: 22px; flex-wrap: wrap;
+}
+.brand { display: flex; flex-direction: column; gap: 4px; }
+.brand h1 {
+  margin: 0; font-size: 1.15rem; font-weight: 600; letter-spacing: .02em;
+}
+.brand p { margin: 0; color: var(--muted); font-size: .82rem; }
+.tools { display: flex; gap: 8px; align-items: center; }
+button, .btn {
+  appearance: none; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text);
+  border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer;
+}
+button:hover { border-color: var(--accent-dim); }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; font-size: .78rem;
+  border: 1px solid var(--border); background: var(--surface2);
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); box-shadow: 0 0 8px rgba(93,173,143,.45); }
+.dot.err { background: var(--err); }
+.grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 14px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+.card h3 {
+  margin: 0 0 8px; font-size: .72rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+}
+.metric { font-size: 1.55rem; font-weight: 600; letter-spacing: -.02em; }
+.metric sub { font-size: .72rem; color: var(--muted); font-weight: 500; vertical-align: baseline; }
+.chart-card { grid-column: span 1; min-height: 118px; }
+.chart-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 6px;
+}
+.chart-head strong { font-size: .95rem; font-weight: 600; }
+.chart-head span { color: var(--muted); font-size: .78rem; }
+canvas.spark {
+  width: 100%; height: 52px; display: block;
+  border-radius: 6px; background: linear-gradient(180deg, var(--surface2), transparent);
+}
+.panels {
+  display: grid; gap: 14px; grid-template-columns: 1fr 1.1fr;
+}
+@media (max-width: 860px) { .panels { grid-template-columns: 1fr; } }
+.panel-title {
+  margin: 0 0 12px; font-size: .78rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+}
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: .86rem; }
+.kv dt { color: var(--muted); margin: 0; }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+table {
+  width: 100%; border-collapse: collapse; font-size: .84rem;
+}
+th, td { padding: 8px 6px; text-align: left; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+tr:last-child td { border-bottom: none; }
+.empty { color: var(--muted); font-size: .86rem; padding: 8px 0; }
+.kill {
+  padding: 4px 8px; font-size: .75rem; border-radius: 6px;
+  border-color: rgba(199,107,107,.35); color: var(--err);
+}
+footer {
+  margin-top: 18px; color: var(--muted); font-size: .76rem;
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+.err-banner {
+  margin-bottom: 14px; padding: 10px 14px; border-radius: 8px;
+  border: 1px solid rgba(199,107,107,.35); color: var(--err);
+  background: rgba(199,107,107,.08); font-size: .84rem;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>openmonitor</h1>
+      <p id="subtitle">openads server</p>
+    </div>
+    <div class="tools">
+      <span class="pill"><span class="dot" id="statusDot"></span><span id="statusText">—</span></span>
+      <button type="button" id="themeBtn" title="Tema">◐</button>
+      <button type="button" id="refreshBtn">Atualizar</button>
+    </div>
+  </header>
+  <div id="banner" class="err-banner" style="display:none"></div>
+  <div class="grid" id="metrics"></div>
+  <div class="grid" id="charts"></div>
+  <div class="panels">
+    <section class="card">
+      <h2 class="panel-title">Atividade wire</h2>
+      <dl class="kv" id="wireKv"></dl>
+      <h2 class="panel-title" style="margin-top:16px">Usuários wire</h2>
+      <div id="wireUsers" class="empty">—</div>
+    </section>
+    <section class="card">
+      <h2 class="panel-title">Sessões HTTP</h2>
+      <div id="sessionsWrap"></div>
+      <h2 class="panel-title" style="margin-top:16px">Studio</h2>
+      <dl class="kv" id="httpKv"></dl>
+    </section>
+  </div>
+  <footer>
+    <span id="footLeft">openmonitor</span>
+    <span id="footRight">—</span>
+  </footer>
+</div>
+<script>
+const THEME_KEY = "openmonitor.theme";
+const colors = ["#6b9bd1","#5dad8f","#c9a227","#9b7ed8","#7d8da3"];
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem(THEME_KEY, t);
+}
+setTheme(localStorage.getItem(THEME_KEY) || "dark");
+document.getElementById("themeBtn").onclick = () =>
+  setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+
+function drawSpark(canvas, values, max, color) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * devicePixelRatio;
+  canvas.height = h * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.clearRect(0, 0, w, h);
+  if (!values.length) return;
+  const m = Math.max(max, 1);
+  const step = w / Math.max(values.length - 1, 1);
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const x = i * step;
+    const y = h - 4 - (v / m) * (h - 8);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, color + "55");
+  g.addColorStop(1, color + "00");
+  ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.stroke();
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function kvRow(dt, dd) {
+  const d = document.createElement("div");
+  d.style.display = "contents";
+  d.innerHTML = `<dt>${dt}</dt><dd>${dd}</dd>`;
+  return d;
+}
+
+async function killSession(id) {
+  if (!confirm(`Encerrar sessão #${id}?`)) return;
+  const r = await fetch(`/api/sessions/${id}/kill`, { method: "POST" });
+  if (!r.ok) alert("Falha ao encerrar sessão");
+  else load();
+}
+
+async function load() {
+  const r = await fetch("/api/snapshot");
+  const d = await r.json();
+  const w = d.wire, h = d.http;
+
+  document.getElementById("subtitle").textContent =
+    `wire ${d.wire_host}:${d.wire_port}` + (d.http_url ? ` · ${d.http_url}` : "");
+  const dot = document.getElementById("statusDot");
+  const st = document.getElementById("statusText");
+  dot.className = "dot " + (w.online ? "ok" : "err");
+  st.textContent = w.online ? (w.uptime || "online") : "offline";
+
+  const banner = document.getElementById("banner");
+  const errs = [w.error, h.error].filter(Boolean);
+  if (errs.length) {
+    banner.style.display = "block";
+    banner.textContent = errs.join(" · ");
+  } else banner.style.display = "none";
+
+  const metrics = document.getElementById("metrics");
+  metrics.replaceChildren();
+  const items = [
+    ["Conexões", `${w.connections}<sub> / ${w.max_connections}</sub>`],
+    ["Usuários", `${w.users}<sub> / ${w.max_users}</sub>`],
+    ["Tabelas", String(w.tables)],
+    ["Operações", String(w.operations)],
+    ["RSS", w.rss],
+    ["Pacotes", `${w.packets_in} / ${w.packets_out}`],
+  ];
+  items.forEach(([t, v]) => {
+    const c = el("div", "card");
+    c.innerHTML = `<h3>${t}</h3><div class="metric">${v}</div>`;
+    metrics.appendChild(c);
+  });
+
+  const charts = document.getElementById("charts");
+  charts.replaceChildren();
+  (d.series || []).forEach((s, i) => {
+    const c = el("div", "card chart-card");
+    const head = el("div", "chart-head");
+    head.append(el("strong", null, s.label), el("span", null, String(s.current)));
+    const cv = document.createElement("canvas");
+    cv.className = "spark";
+    c.append(head, cv);
+    charts.appendChild(c);
+    drawSpark(cv, s.values, s.max, colors[i % colors.length]);
+  });
+
+  const wireKv = document.getElementById("wireKv");
+  wireKv.replaceChildren();
+  [
+    ["Uptime", w.uptime || "—"],
+    ["Listener", w.listener_port ? String(w.listener_port) : "—"],
+    ["Bytes in", w.bytes_in],
+    ["Bytes out", w.bytes_out],
+  ].forEach(([a,b]) => wireKv.appendChild(kvRow(a,b)));
+
+  const wu = document.getElementById("wireUsers");
+  if (!w.wire_users.length) {
+    wu.className = "empty"; wu.textContent = "Nenhum usuário wire";
+  } else {
+    wu.className = "";
+    wu.replaceChildren();
+    w.wire_users.forEach(u => {
+      wu.appendChild(el("div", null, `#${u.conn_no} ${u.name} @ ${u.address}`));
+    });
+  }
+
+  const sw = document.getElementById("sessionsWrap");
+  if (!h.configured) {
+    sw.replaceChildren(el("div", "empty", "Passe --http para listar sessões"));
+  } else if (!h.sessions.length) {
+    sw.replaceChildren(el("div", "empty", "Nenhuma sessão HTTP"));
+  } else {
+    const tbl = document.createElement("table");
+    tbl.innerHTML = "<thead><tr><th>ID</th><th>Peer</th><th>User</th><th>Tbl</th><th>Idle</th><th></th></tr></thead>";
+    const tb = document.createElement("tbody");
+    h.sessions.forEach(s => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${s.id}</td><td>${s.peer_ip}:${s.peer_port}</td><td>${s.user}</td><td>${s.open_tables}</td><td>${s.idle_secs}s</td>`;
+      const td = document.createElement("td");
+      const b = el("button", "kill", "kill");
+      b.onclick = () => killSession(s.id);
+      td.appendChild(b); tr.appendChild(td); tb.appendChild(tr);
+    });
+    tbl.appendChild(tb); sw.replaceChildren(tbl);
+  }
+
+  const httpKv = document.getElementById("httpKv");
+  httpKv.replaceChildren();
+  if (!h.configured) {
+    httpKv.appendChild(kvRow("HTTP", "não configurado"));
+  } else {
+    [
+      ["Status", h.status || "—"],
+      ["Modo", h.mode || "—"],
+      ["Versão", h.version || "—"],
+      ["Tabelas disco", h.disk_tables != null ? String(h.disk_tables) : "—"],
+      ["Data dir", h.data_dir || "—"],
+    ].forEach(([a,b]) => httpKv.appendChild(kvRow(a,b)));
+  }
+
+  document.getElementById("footRight").textContent = `atualizado ${d.updated_at}`;
+}
+
+document.getElementById("refreshBtn").onclick = load;
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>
