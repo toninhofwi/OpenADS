@@ -648,8 +648,16 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                         std::string chunk = am_buf.substr(am_off, readable);
                         auto n0 = chunk.find('\0');
                         if (n0 != std::string::npos) {
-                            // Body continuation up to first NUL.
+                            // Body continuation up to first NUL — strip binary padding.
                             std::string cont = chunk.substr(0, n0);
+                            std::size_t lt = cont.size();
+                            while (lt > 0) {
+                                unsigned char uc = static_cast<unsigned char>(cont[lt - 1]);
+                                if ((uc >= 0x20u && uc <= 0x7Eu) ||
+                                    uc == '\t' || uc == '\n' || uc == '\r') break;
+                                --lt;
+                            }
+                            cont.resize(lt);
                             auto lc = cont.find_last_not_of(" \t\r\n");
                             if (lc != std::string::npos) cont.resize(lc + 1);
                             else cont.clear();
@@ -706,7 +714,16 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                         e.procedure = std::move(body);
                     }
                 }
-                append_am(e.procedure, rec.more_property);
+                // SAP .am body is a NUL-terminated C string; strip from first NUL.
+                {
+                    const auto body_end = e.procedure.size();
+                    append_am(e.procedure, rec.more_property);
+                    auto nul = e.procedure.find('\0', body_end);
+                    if (nul != std::string::npos) e.procedure.resize(nul);
+                    auto lc = e.procedure.find_last_not_of(" \t\r\n");
+                    if (lc != std::string::npos) e.procedure.resize(lc + 1);
+                    else e.procedure.clear();
+                }
             }
             procs_[e.name] = std::move(e);
 
