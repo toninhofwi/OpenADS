@@ -11,6 +11,10 @@
  *
  * The directory is created if it does not exist.  Tables are always
  * rebuilt from scratch so the fixture is in a known state.
+ *
+ * Usage:
+ *   openads_cdx_invoice_fixture.exe          -- unattended / CI
+ *   openads_cdx_invoice_fixture.exe BROWSE   -- interactive: browse each table
  */
 
 #include "ads.ch"
@@ -25,8 +29,11 @@ REQUEST ADSCDX
 #define ITEM_COUNT         20
 #define MIN_DETAIL_PER_INV 3
 
+//----------------------------------------------------------------------------
+
 PROCEDURE Main()
    LOCAL cDataDir := DATA_DIR
+   LOCAL lBrowse  := ( PCount() > 0 )
 
    ErrorBlock( { |oErr| MyHandler( oErr ) } )
 
@@ -35,6 +42,7 @@ PROCEDURE Main()
 
    ? "OpenADS DBF/CDX invoice fixture generator"
    ? "Data directory:", cDataDir
+   ? "Browse mode   :", IIF( lBrowse, "ON (interactive)", "OFF (unattended)" )
    ?
 
    IF ! hb_DirExists( cDataDir )
@@ -45,7 +53,7 @@ PROCEDURE Main()
       ENDIF
    ENDIF
 
-   IF ! BuildTables( cDataDir )
+   IF ! BuildTables( cDataDir, lBrowse )
       RETURN
    ENDIF
 
@@ -57,20 +65,24 @@ PROCEDURE Main()
    ? "  Details  :", INVOICE_COUNT * MIN_DETAIL_PER_INV
    RETURN
 
-STATIC FUNCTION BuildTables( cDataDir )
+//----------------------------------------------------------------------------
+
+STATIC FUNCTION BuildTables( cDataDir, lBrowse )
    LOCAL aCustomers := GenerateCustomerRows()
    LOCAL aItems     := GenerateItems()
    LOCAL aInvoices  := GenerateInvoices( aCustomers )
    LOCAL aDetails   := GenerateInvoiceDetails( aInvoices, aItems )
 
-   IF ! CreateCustomerTable( cDataDir, aCustomers ) ; RETURN .F. ; ENDIF
-   IF ! CreateItemTable( cDataDir, aItems )         ; RETURN .F. ; ENDIF
-   IF ! CreateInvoiceTable( cDataDir, aInvoices )   ; RETURN .F. ; ENDIF
-   IF ! CreateInvoiceDetailTable( cDataDir, aDetails ) ; RETURN .F. ; ENDIF
+   IF ! CreateCustomerTable( cDataDir, aCustomers, lBrowse ) ; RETURN .F. ; ENDIF
+   IF ! CreateItemTable( cDataDir, aItems, lBrowse )         ; RETURN .F. ; ENDIF
+   IF ! CreateInvoiceTable( cDataDir, aInvoices, lBrowse )   ; RETURN .F. ; ENDIF
+   IF ! CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse ) ; RETURN .F. ; ENDIF
 
    RETURN .T.
 
-STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers )
+//----------------------------------------------------------------------------
+
+STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers, lBrowse )
    LOCAL cFile := cDataDir + "\customer.dbf"
    LOCAL i
 
@@ -102,10 +114,19 @@ STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers )
    NEXT
 
    CUSTOMER->( DbCommit() )
+   CUSTOMER->( DbGoTop() )
+
+   IF lBrowse
+      SELECT CUSTOMER
+      BROWSE()
+   ENDIF
+
    USE
    RETURN .T.
 
-STATIC FUNCTION CreateItemTable( cDataDir, aItems )
+//----------------------------------------------------------------------------
+
+STATIC FUNCTION CreateItemTable( cDataDir, aItems, lBrowse )
    LOCAL cFile := cDataDir + "\items.dbf"
    LOCAL j
 
@@ -132,10 +153,19 @@ STATIC FUNCTION CreateItemTable( cDataDir, aItems )
    NEXT
 
    ITEMS->( DbCommit() )
+   ITEMS->( DbGoTop() )
+
+   IF lBrowse
+      SELECT ITEMS
+      BROWSE()
+   ENDIF
+
    USE
    RETURN .T.
 
-STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices )
+//----------------------------------------------------------------------------
+
+STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
    LOCAL cFile := cDataDir + "\invoices.dbf"
    LOCAL k
 
@@ -167,10 +197,19 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices )
    NEXT
 
    INVOICES->( DbCommit() )
+   INVOICES->( DbGoTop() )
+
+   IF lBrowse
+      SELECT INVOICES
+      BROWSE()
+   ENDIF
+
    USE
    RETURN .T.
 
-STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails )
+//----------------------------------------------------------------------------
+
+STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse )
    LOCAL cFile := cDataDir + "\invoicedetail.dbf"
    LOCAL n
 
@@ -204,8 +243,17 @@ STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails )
    NEXT
 
    DETAIL->( DbCommit() )
+   DETAIL->( DbGoTop() )
+
+   IF lBrowse
+      SELECT DETAIL
+      BROWSE()
+   ENDIF
+
    USE
    RETURN .T.
+
+//----------------------------------------------------------------------------
 
 STATIC PROCEDURE DeleteExistingFixtureFiles( cDbf )
    LOCAL cCdx := hb_FNameExtSet( cDbf, ".cdx" )
@@ -215,6 +263,8 @@ STATIC PROCEDURE DeleteExistingFixtureFiles( cDbf )
    IF File( cCdx ) ; FErase( cCdx ) ; ENDIF
    IF File( cFpt ) ; FErase( cFpt ) ; ENDIF
    RETURN
+
+//----------------------------------------------------------------------------
 
 STATIC FUNCTION GenerateCustomerRows()
    LOCAL aResult  := {}
@@ -247,6 +297,8 @@ STATIC FUNCTION GenerateCustomerRows()
 
    RETURN aResult
 
+//----------------------------------------------------------------------------
+
 STATIC FUNCTION GenerateItems()
    LOCAL aResult := {}
    LOCAL aWords  := { "Widget",    "Gadget",  "Service", "Kit",    "Module", ;
@@ -265,6 +317,8 @@ STATIC FUNCTION GenerateItems()
 
    RETURN aResult
 
+//----------------------------------------------------------------------------
+
 STATIC FUNCTION GenerateInvoices( aCustomers )
    LOCAL aResult  := {}
    LOCAL aStatus  := { "O", "P", "C" }
@@ -281,6 +335,8 @@ STATIC FUNCTION GenerateInvoices( aCustomers )
    NEXT
 
    RETURN aResult
+
+//----------------------------------------------------------------------------
 
 /* Builds detail rows; accumulates per-invoice totals into aInvoices[][4]. */
 STATIC FUNCTION GenerateInvoiceDetails( aInvoices, aItems )
@@ -304,6 +360,8 @@ STATIC FUNCTION GenerateInvoiceDetails( aInvoices, aItems )
    NEXT
 
    RETURN aResult
+
+//----------------------------------------------------------------------------
 
 STATIC PROCEDURE MyHandler( oErr )
    ? "ERROR:", oErr:Description
