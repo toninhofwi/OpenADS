@@ -1195,6 +1195,7 @@ OpenADS/
 │   ├── import_dd/              # openads_import_dd — SAP .add → OpenADS import
 │   │   └── main.cpp
 │   ├── bench/                  # openads_bench — synthetic SQL benchmark
+│   ├── openmonitor/            # openmonitor — TUI + web dashboard for openads_serverd
 │   ├── harbour_patch/          # rddads compatibility patches + ADS baseline fixture
 │   ├── scripts/
 │   │   ├── systemd/            # openads-serverd.service (Linux)
