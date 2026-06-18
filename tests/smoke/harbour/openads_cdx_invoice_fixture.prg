@@ -113,8 +113,8 @@ STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers, lBrowse )
       RETURN .F.
    ENDIF
 
-   INDEX ON CUSTOMER->CUSTNO TAG CUSTNO
-   INDEX ON CUSTOMER->NAME   TAG CUSTNAME
+   INDEX ON CUSTOMER->CUSTNO TAG CUSTNO TO "customer"
+   INDEX ON CUSTOMER->NAME   TAG CUSTNAME TO "customer"
 
    FOR i := 1 TO Len( aCustomers )
       CUSTOMER->( DbAppend() )
@@ -134,7 +134,7 @@ STATIC FUNCTION CreateCustomerTable( cDataDir, aCustomers, lBrowse )
       BrowseTable( "customer.dbf", Len(aCustomers) )
    ENDIF
 
-   USE
+   customer->( DbCloseArea() )
    RETURN .T.
 
 //----------------------------------------------------------------------------
@@ -157,7 +157,7 @@ STATIC FUNCTION CreateItemTable( cDataDir, aItems, lBrowse )
       RETURN .F.
    ENDIF
 
-   INDEX ON ITEMS->ITEMNO TAG ITEMNO
+   INDEX ON ITEMS->ITEMNO TAG ITEMNO TO "items"
 
    FOR j := 1 TO Len( aItems )
       ITEMS->( DbAppend() )
@@ -175,7 +175,7 @@ STATIC FUNCTION CreateItemTable( cDataDir, aItems, lBrowse )
       BrowseTable( "items.dbf", Len(aItems) )
    ENDIF
 
-   USE
+   items->( DbCloseArea() )
    RETURN .T.
 
 //----------------------------------------------------------------------------
@@ -200,9 +200,9 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
       RETURN .F.
    ENDIF
 
-   INDEX ON INVOICES->INVNO   TAG INVNO
-   INDEX ON INVOICES->CUSTNO  TAG CUSTNO
-   INDEX ON INVOICES->INVDATE TAG INVDATE
+   INDEX ON INVOICES->INVNO   TAG INVNO TO "invoices"
+   INDEX ON INVOICES->CUSTNO  TAG CUSTNO TO "invoices"
+   INDEX ON INVOICES->INVDATE TAG INVDATE TO "invoices"
 
    FOR k := 1 TO Len( aInvoices )
       INVOICES->( DbAppend() )
@@ -224,7 +224,7 @@ STATIC FUNCTION CreateInvoiceTable( cDataDir, aInvoices, lBrowse )
          { { "INVNO", 1 }, { "CUSTNO", 2 }, { "INVDATE", 3 } } )
    ENDIF
 
-   USE
+   invoices->( DbCloseArea() )
    RETURN .T.
 
 //----------------------------------------------------------------------------
@@ -250,8 +250,8 @@ STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse )
       RETURN .F.
    ENDIF
 
-   INDEX ON DETAIL->INVNO  TAG INVNO
-   INDEX ON DETAIL->ITEMNO TAG ITEMIDX
+   INDEX ON DETAIL->INVNO  TAG INVNO TO "invoicedetail"
+   INDEX ON DETAIL->ITEMNO TAG ITEMIDX TO "invoicedetail"
 
    FOR n := 1 TO Len( aDetails )
       DETAIL->( DbAppend() )
@@ -272,7 +272,7 @@ STATIC FUNCTION CreateInvoiceDetailTable( cDataDir, aDetails, lBrowse )
       BrowseTable( "invoicedetail.dbf", Len(aDetails) )
    ENDIF
 
-   USE
+   detail->( DbCloseArea() )
    RETURN .T.
 
 //----------------------------------------------------------------------------
