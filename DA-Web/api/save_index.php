@@ -68,7 +68,7 @@ try {
     // Drop existing tag using origTag (handles renames; ignore error if not found)
     if ($origTag !== '') {
         try {
-            $conn->execute('DROP INDEX ' . $origTag . ' ON ' . $table);
+            $conn->execute('DROP INDEX "' . $origTag . '" ON "' . $table . '"');
         } catch (Throwable $e) {}
     }
 

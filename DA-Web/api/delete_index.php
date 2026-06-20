@@ -26,7 +26,7 @@ if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 
 try {
     $conn = AdsConnection::connect($opts);
-    $conn->execute('DROP INDEX ' . $tag . ' ON ' . $table);
+    $conn->execute('DROP INDEX "' . $tag . '" ON "' . $table . '"');
     $conn->close();
     echo json_encode(['deleted' => $tag]);
 } catch (Throwable $e) {

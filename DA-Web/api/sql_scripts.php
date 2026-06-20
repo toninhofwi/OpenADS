@@ -35,7 +35,9 @@ if ($action === 'save') {
     if ($name === '') {
         api_error(400, 'name required');
     }
-    api_validate_identifier($name, 'script name');
+    if (str_contains($name, "\0")) {
+        api_error(400, 'invalid script name');
+    }
     $scripts = loadScripts($file);
     $scripts[$name] = $sql;
     saveScripts($file, $scripts);
@@ -47,7 +49,9 @@ if ($action === 'delete') {
     if ($name === '') {
         api_error(400, 'name required');
     }
-    api_validate_identifier($name, 'script name');
+    if (str_contains($name, "\0")) {
+        api_error(400, 'invalid script name');
+    }
     $scripts = loadScripts($file);
     unset($scripts[$name]);
     saveScripts($file, $scripts);

@@ -51,6 +51,7 @@ function api_require_session(): void
  */
 function api_require_connection(string $ddName): array
 {
+    api_require_session();
     if ($ddName === '') {
         api_error(400, 'dd is required');
     }
@@ -65,7 +66,7 @@ function api_require_connection(string $ddName): array
  */
 function api_validate_identifier(string $name, string $label = 'identifier'): void
 {
-    if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
+    if (!preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $name)) {
         api_error(400, "invalid $label");
     }
 }
@@ -88,7 +89,7 @@ function api_reject_unsafe_path(string $path, string $label = 'path'): void
  */
 function api_sql_quote(string $s): string
 {
-    return str_replace("'", "''", $s);
+    return str_replace(["'", "\0"], ["''", ""], $s);
 }
 
 /**
@@ -125,7 +126,8 @@ function api_resolve_path_under_root(string $candidate, string $root): ?string
 
     $norm = strtolower(str_replace('\\', '/', $real));
     $rootNorm = strtolower(str_replace('\\', '/', $rootReal));
-    if ($norm !== $rootNorm && !str_starts_with($norm, $rootNorm . '/')) {
+    $rootNormDir = rtrim($rootNorm, '/') . '/';
+    if ($norm !== $rootNorm && !str_starts_with($norm, $rootNormDir)) {
         return null;
     }
 
