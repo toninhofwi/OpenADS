@@ -96,6 +96,8 @@ util::Result<void> read_all_rows(
                 if (ind == SQL_NO_TOTAL ||
                     ind >= static_cast<SQLLEN>(sizeof(buf))) {
                     chunk = sizeof(buf) - 1;  // truncated; NUL eats one byte
+                } else if (ind < 0) {
+                    chunk = 0;                // stray driver indicator; ignore
                 } else {
                     chunk = static_cast<std::size_t>(ind);
                 }
@@ -235,10 +237,19 @@ discover_pk(SQLHDBC dbc, const std::string& name) {
             auto rr = read_all_rows(st, rows, nulls);
             SQLFreeHandle(SQL_HANDLE_STMT, st);
             if (!rr) return rr.error();
+            // Pin to the first schema seen (col 2 = TABLE_SCHEM): with a
+            // null schema arg, drivers that support schemas can return PK
+            // columns for same-named tables across schemas; mixing them
+            // would corrupt the key.
+            std::string chosen_schema;
+            bool        has_schema = false;
             std::vector<std::pair<int, std::string>> keyed;
             for (auto& row : rows) {
-                std::string col = row.size() >= 4 ? row[3] : std::string();
+                std::string schem = row.size() >= 2 ? row[1] : std::string();
+                std::string col   = row.size() >= 4 ? row[3] : std::string();
                 int seq = row.size() >= 5 ? std::atoi(row[4].c_str()) : 0;
+                if (!has_schema) { chosen_schema = schem; has_schema = true; }
+                if (schem != chosen_schema) continue;
                 if (!col.empty()) keyed.emplace_back(seq, col);
             }
             if (!keyed.empty()) return order_keyed(std::move(keyed));
@@ -265,14 +276,19 @@ discover_pk(SQLHDBC dbc, const std::string& name) {
             SQLFreeHandle(SQL_HANDLE_STMT, st);
             if (!rr) return rr.error();
             std::string chosen;
+            std::string chosen_schema;
+            bool        has_schema = false;
             std::vector<std::pair<int, std::string>> keyed;
             for (auto& row : rows) {
+                const std::string schem      = row.size() >= 2 ? row[1] : "";
                 const std::string non_unique = row.size() >= 4 ? row[3] : "";
                 const std::string idx_name   = row.size() >= 6 ? row[5] : "";
                 const std::string ord_s      = row.size() >= 8 ? row[7] : "";
                 const std::string col_name   = row.size() >= 9 ? row[8] : "";
                 if (col_name.empty()) continue;     // table-statistic row
                 if (non_unique != "0") continue;    // only unique indexes
+                if (!has_schema) { chosen_schema = schem; has_schema = true; }
+                if (schem != chosen_schema) continue;
                 if (chosen.empty()) chosen = idx_name;
                 if (idx_name != chosen) continue;
                 keyed.emplace_back(std::atoi(ord_s.c_str()), col_name);
@@ -315,6 +331,8 @@ util::Result<void> describe_columns(SQLHDBC dbc, OdbcTable* tbl) {
     // SQLColumns columns (1-based): 4 COLUMN_NAME, 5 DATA_TYPE,
     // 7 COLUMN_SIZE, 9 DECIMAL_DIGITS, 11 NULLABLE. Rows arrive in
     // ORDINAL_POSITION order per the ODBC spec.
+    std::string chosen_schema;
+    bool        has_schema = false;
     std::vector<OdbcTable::FieldDesc> out;
     out.reserve(rows.size());
     for (auto& row : rows) {
@@ -322,6 +340,12 @@ util::Result<void> describe_columns(SQLHDBC dbc, OdbcTable* tbl) {
             std::size_t i = one_based - 1;
             return i < row.size() ? row[i] : std::string();
         };
+        // Pin to the first schema seen (col 2 = TABLE_SCHEM) so a null
+        // schema arg cannot mix columns of same-named tables in different
+        // schemas into one field list.
+        const std::string schem = cell(2);
+        if (!has_schema) { chosen_schema = schem; has_schema = true; }
+        if (schem != chosen_schema) continue;
         const std::string cname = cell(4);
         const int dtype = std::atoi(cell(5).c_str());
         const int csize = std::atoi(cell(7).c_str());
@@ -412,8 +436,12 @@ util::Result<OdbcConnection> OdbcConnection::open(const OdbcUri& uri) {
                                       &conn.impl_->env))) {
         return util::Error{5001, 0, "odbc: SQLAllocHandle(ENV) failed", ""};
     }
-    SQLSetEnvAttr(conn.impl_->env, SQL_ATTR_ODBC_VERSION,
-                  reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), 0);
+    if (!SQL_SUCCEEDED(SQLSetEnvAttr(conn.impl_->env, SQL_ATTR_ODBC_VERSION,
+                                     reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3),
+                                     0))) {
+        return odbc_error("odbc: SQLSetEnvAttr(ODBC_VERSION)",
+                          odbc_diag(SQL_HANDLE_ENV, conn.impl_->env));
+    }
     if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_DBC, conn.impl_->env,
                                       &conn.impl_->dbc))) {
         return odbc_error("odbc: SQLAllocHandle(DBC)",
