@@ -9,7 +9,9 @@ if not defined OPENADS_LIBPQ_INCLUDE (
     )
 )
 if not defined OPENADS_LIBPQ_LIBRARY (
-    if exist "%OPENADS_TOOLCHAIN_ROOT%\libpq\x86\libpq.lib" (
+    if exist "%OPENADS_TOOLCHAIN_ROOT%\pgsql\lib\libpq.lib" (
+        set "OPENADS_LIBPQ_LIBRARY=%OPENADS_TOOLCHAIN_ROOT%\pgsql\lib\libpq.lib"
+    ) else if exist "%OPENADS_TOOLCHAIN_ROOT%\libpq\x86\libpq.lib" (
         set "OPENADS_LIBPQ_LIBRARY=%OPENADS_TOOLCHAIN_ROOT%\libpq\x86\libpq.lib"
     )
 )

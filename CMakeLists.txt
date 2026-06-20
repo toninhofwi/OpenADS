@@ -193,6 +193,9 @@ if(MSVC)
     if(OPENADS_WARNINGS_AS_ERRORS)
         add_compile_options(/WX)
     endif()
+elseif(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # MinGW/winlibs: static link toolchain runtime; libpq.dll still loads at runtime.
+    add_link_options(-static)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion)
     # _CRT_SECURE_NO_WARNINGS: needed when clang-cl targets MSVC CRT on Windows;
