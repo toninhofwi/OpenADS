@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -249,14 +250,16 @@ util::Result<void> Connection::rollback_tx() {
     if (!tx_.active()) {
         return util::Error{5000, 0, "no active transaction", ""};
     }
+    std::optional<util::Error> rollback_err;
     tx_.for_each_before_image(
         [&](const engine::Tx::RecordKey& k,
             const std::vector<std::uint8_t>& bytes) {
+            if (rollback_err) return;
             auto it = tables_.find(static_cast<Handle>(k.table));
             if (it == tables_.end()) return;
-            auto* drv = it->second->driver();
-            if (drv) {
-                (void)drv->write_record_raw(k.recno, bytes.data(), bytes.size());
+            if (auto r = it->second->apply_tx_rollback(k.recno, bytes.data(),
+                                                       bytes.size()); !r) {
+                rollback_err = r.error();
             }
         });
     // Undo appends: physically pop the trailing rows (de-indexing them)
@@ -275,6 +278,9 @@ util::Result<void> Connection::rollback_tx() {
     if (auto r = tx_log_.append_abort(tx_.id()); !r) return r.error();
     for (auto& [h, holder] : tables_) {
         (void)h;
+        std::uint32_t rec = holder->recno();
+        if (rec > 0 && rec <= holder->record_count())
+            (void)holder->goto_record(rec);
         holder->detach_tx();
         (void)holder->flush();
     }
@@ -344,6 +350,12 @@ Connection::rollback_to_savepoint(const std::string& name) {
                                     op.before.data(), op.before.size());
     }
     tx_.truncate_ops_to(idx);
+    for (auto& [h, holder] : tables_) {
+        (void)h;
+        std::uint32_t rec = holder->recno();
+        if (rec > 0 && rec <= holder->record_count())
+            (void)holder->goto_record(rec);
+    }
     return {};
 }
 
