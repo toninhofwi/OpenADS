@@ -320,6 +320,9 @@ std::size_t sqlite_field_index(openads::sql_backend::SqliteTable* st,
             return std::numeric_limits<std::size_t>::max();
         }
     }
+    if (pucField == nullptr) {
+        return std::numeric_limits<std::size_t>::max();
+    }
     std::string want = openads::abi::to_internal(pucField, 0);
     for (auto& c : want) {
         c = static_cast<char>(
@@ -2342,6 +2345,9 @@ std::size_t remote_field_index(openads::network::RemoteTable* rt,
             }
             return std::numeric_limits<std::size_t>::max();
         }
+    }
+    if (pucField == nullptr) {
+        return std::numeric_limits<std::size_t>::max();
     }
     std::string want = openads::abi::to_internal(pucField, 0);
     for (auto& c : want) {
@@ -9266,38 +9272,19 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #if defined(OPENADS_WITH_SQLITE)
     if (it->second->sqlite != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
-        // A result-producing statement (SELECT/WITH/VALUES/PRAGMA/EXPLAIN) gets
-        // a navigable cursor; everything else (INSERT/UPDATE/DELETE/DDL) just
-        // executes and returns no cursor.
-        std::size_t w = 0;
-        while (w < sqlstr.size() &&
-               std::isspace(static_cast<unsigned char>(sqlstr[w]))) ++w;
-        auto kw_is = [&](const char* kw) {
-            std::size_t n = std::strlen(kw);
-            if (sqlstr.size() - w < n) return false;
-            for (std::size_t k = 0; k < n; ++k)
-                if (std::toupper(static_cast<unsigned char>(sqlstr[w + k])) !=
-                    kw[k]) return false;
-            return true;
-        };
-        const bool produces_rows = kw_is("SELECT") || kw_is("WITH") ||
-            kw_is("VALUES") || kw_is("PRAGMA") || kw_is("EXPLAIN");
-        if (produces_rows) {
-            auto q = it->second->sqlite->query_sql(sqlstr);
-            if (!q) return fail(q.error());
-            auto& s = state();
-            std::lock_guard<std::recursive_mutex> lk(s.mu);
-            auto holder = std::move(q).value();
-            openads::sql_backend::SqliteTable* raw = holder.get();
-            Handle h = s.registry.register_object(
-                HandleKind::SqliteTable, raw);
-            sqlite_tables_map().emplace(h, std::move(holder));
-            *phCursor = h;
-            return ok();
-        }
-        if (auto r = it->second->sqlite->exec_sql(sqlstr); !r)
-            return fail(r.error());
-        *phCursor = 0;
+        // Let SQLite classify the statement (it knows the column count): run_sql
+        // returns a navigable cursor for a result-producing statement, or a null
+        // pointer for an executed INSERT/UPDATE/DELETE/DDL — no SQL parsing here.
+        auto r = it->second->sqlite->run_sql(sqlstr);
+        if (!r) return fail(r.error());
+        auto cursor = std::move(r).value();
+        if (!cursor) { *phCursor = 0; return ok(); }
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        openads::sql_backend::SqliteTable* raw = cursor.get();
+        Handle h = s.registry.register_object(HandleKind::SqliteTable, raw);
+        sqlite_tables_map().emplace(h, std::move(cursor));
+        *phCursor = h;
         return ok();
     }
 #endif

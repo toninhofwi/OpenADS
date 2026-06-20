@@ -55,12 +55,12 @@ public:
                                   std::string& buf,
                                   bool& is_null) const;
 
-    // AdsExecuteSQLDirect passthrough: run a non-result statement
-    // (INSERT/UPDATE/DELETE/DDL) — no cursor.
-    util::Result<void> exec_sql(const std::string& sql);
-    // Run a result-producing statement (SELECT/WITH/VALUES/...) and return a
-    // materialized, navigable result cursor.
-    util::Result<std::unique_ptr<SqliteTable>> query_sql(const std::string& sql);
+    // AdsExecuteSQLDirect passthrough: prepare and run any statement. Returns a
+    // materialized, navigable result cursor when the statement produces rows
+    // (column count > 0), or a null pointer for a non-result statement
+    // (INSERT/UPDATE/DELETE/DDL), which is executed to completion. SQLite itself
+    // classifies the statement, so no SQL keyword parsing is needed.
+    util::Result<std::unique_ptr<SqliteTable>> run_sql(const std::string& sql);
 
     const std::string& db_path() const noexcept { return db_path_; }
 

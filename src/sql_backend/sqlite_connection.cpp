@@ -536,39 +536,33 @@ util::Result<bool> SqliteConnection::seek_index(SqliteTable* tbl,
 #endif
 }
 
-util::Result<void> SqliteConnection::exec_sql(const std::string& sql) {
-#if defined(OPENADS_WITH_SQLITE)
-    if (!valid()) return util::Error{5001, 0, "sqlite connection not open", ""};
-    char* err = nullptr;
-    if (sqlite3_exec(impl_->db, sql.c_str(), nullptr, nullptr, &err)
-            != SQLITE_OK) {
-        std::string msg = err ? err : "exec failed";
-        if (err) sqlite3_free(err);
-        return util::Error{5001, 0, msg, ""};
-    }
-    return util::Result<void>{};
-#else
-    (void)sql;
-    return util::Error{5004, 0, "sqlite backend disabled", ""};
-#endif
-}
-
 util::Result<std::unique_ptr<SqliteTable>>
-SqliteConnection::query_sql(const std::string& sql) {
+SqliteConnection::run_sql(const std::string& sql) {
 #if defined(OPENADS_WITH_SQLITE)
     if (!valid()) return util::Error{5001, 0, "sqlite connection not open", ""};
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(impl_->db, sql.c_str(),
                            static_cast<int>(sql.size()),
                            &stmt, nullptr) != SQLITE_OK) {
-        return sqlite_error(impl_->db, "prepare query");
+        return sqlite_error(impl_->db, "prepare sql");
     }
+
+    const int cols = sqlite3_column_count(stmt);
+    if (cols == 0) {
+        // Non-result statement (INSERT/UPDATE/DELETE/DDL): run to completion
+        // and report no cursor — SQLite already told us there are no columns.
+        int rc;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) { /* no rows */ }
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) return sqlite_error(impl_->db, "exec sql");
+        return std::unique_ptr<SqliteTable>{};
+    }
+
+    // Result-producing statement: materialize into a navigable cursor.
     auto tbl = std::make_unique<SqliteTable>();
     tbl->conn      = this;
     tbl->name      = "(result)";
     tbl->is_result = true;
-
-    const int cols = sqlite3_column_count(stmt);
     tbl->fields.reserve(static_cast<std::size_t>(cols));
     for (int c = 0; c < cols; ++c) {
         const char* cn = sqlite3_column_name(stmt, c);
