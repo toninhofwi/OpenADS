@@ -1,5 +1,15 @@
 @echo off
 REM Run PostgreSQL ABI e2e tests from build\pg (or pass BUILD_DIR).
+REM
+REM GCC/Ninja builds link against winlibs runtime DLLs. Before running the
+REM exe by hand, prepend winlibs to PATH (libgcc_s_seh-1, libstdc++-6,
+REM libwinpthread-1 live there):
+REM   set PATH=%OPENADS_TOOLCHAIN_ROOT%\winlibs-x86_64\bin;%PATH%
+REM This script does that automatically when DEVAI_ROOT/OPENADS_TOOLCHAIN_ROOT
+REM is set. Also needs pgsql\bin for libpq.dll.
+REM
+REM Cleaner long-term: build with MSVC cl (see build_msvc_x64_postgres.bat) so
+REM no GCC runtime is required at test time.
 setlocal
 set "ROOT=%~dp0..\.."
 set "BUILD=%ROOT%\build\pg"
