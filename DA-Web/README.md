@@ -232,6 +232,27 @@ Click any view under **Views** to open its SQL definition in the editor.
 
 ---
 
+## Security notes
+
+DA-Web is an **administration console**, not a public API. Hardening applied
+in the PHP layer:
+
+- **Session required** for config mutation (`dictionaries.php` POST,
+  `sql_scripts.php` POST, `create_dd.php`).
+- **Connection required** for engine operations (same as before).
+- **Identifier validation** on table/index/RI names — rejects SQL injection
+  and path-segment payloads before they reach `AdsConnection`.
+- **Wire server** (`openads_serverd`) rejects inbound frames larger than
+  16 MiB to avoid memory exhaustion.
+
+Smoke: `php tests/tools/daweb_api_validate_test.php` and
+`openads_unit_tests.exe --test-case=*oversized*`.
+
+When exposing DA-Web beyond `127.0.0.1`, terminate HTTPS and authenticate
+at the reverse proxy.
+
+---
+
 ## API Reference
 
 | Endpoint | Method | Purpose |

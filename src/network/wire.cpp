@@ -33,6 +33,9 @@ util::Result<Frame> decode_frame(const std::uint8_t* buf,
         (static_cast<std::uint32_t>(buf[1]) << 16) |
         (static_cast<std::uint32_t>(buf[2]) <<  8) |
          static_cast<std::uint32_t>(buf[3]);
+    if (n > kMaxFramePayload) {
+        return util::Error{5000, 0, "frame payload too large", ""};
+    }
     if (size < 5 + static_cast<std::size_t>(n)) {
         return util::Error{5000, 0, "frame buffer truncated", ""};
     }

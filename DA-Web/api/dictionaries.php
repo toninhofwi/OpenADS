@@ -6,6 +6,8 @@
  * POST action=remove → remove a DD by name
  */
 header('Content-Type: application/json');
+session_start();
+require_once __DIR__ . '/common.php';
 
 $configFile = __DIR__ . '/../config/dictionaries.json';
 
@@ -27,6 +29,7 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST') {
+    api_require_session();
     $body = json_decode(file_get_contents('php://input'), true) ?? [];
     $action = $body['action'] ?? '';
 
@@ -37,10 +40,9 @@ if ($method === 'POST') {
         $connType  = trim($body['connType']  ?? 'local');
         $entryType = trim($body['entryType'] ?? 'dd');
         if ($name === '' || $path === '') {
-            http_response_code(400);
-            echo json_encode(['error' => 'name and path are required']);
-            exit;
+            api_error(400, 'name and path are required');
         }
+        api_validate_identifier($name, 'dictionary name');
         if (!in_array($connType,  ['local', 'remote'], true)) $connType  = 'local';
         if (!in_array($entryType, ['dd', 'free'],       true)) $entryType = 'dd';
         $dicts = loadDicts($configFile);
@@ -64,10 +66,9 @@ if ($method === 'POST') {
         $username  = trim($body['username']  ?? '');
         $connType  = trim($body['connType']  ?? 'local');
         if ($name === '' || $path === '') {
-            http_response_code(400);
-            echo json_encode(['error' => 'name and path are required']);
-            exit;
+            api_error(400, 'name and path are required');
         }
+        api_validate_identifier($name, 'dictionary name');
         if (!in_array($connType, ['local', 'remote'], true)) $connType = 'local';
         $dicts = loadDicts($configFile);
         $found = false;
@@ -93,6 +94,9 @@ if ($method === 'POST') {
 
     if ($action === 'remove') {
         $name = trim($body['name'] ?? '');
+        if ($name !== '') {
+            api_validate_identifier($name, 'dictionary name');
+        }
         if ($name === '') {
             http_response_code(400);
             echo json_encode(['error' => 'name is required']);
