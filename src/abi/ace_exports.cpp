@@ -7957,13 +7957,12 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
 
         auto top_key = [](const std::string& grantee,
                           const std::string& obj_name,
-                          int type_code) -> std::string {
-            return grantee + '\x1f' + obj_name + '\x1f' +
-                   std::to_string(type_code);
+                          const std::string& type_code) -> std::string {
+            return grantee + '\x1f' + obj_name + '\x1f' + type_code;
         };
 
         auto emit_top_row = [&](const std::string& obj_name,
-                                int type_code,
+                                const std::string& type_code,
                                 const std::string& obj_type,
                                 const std::string& grantee,
                                 bool is_grp,
@@ -7994,7 +7993,7 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
 
             rows.push_back({
                 obj_name,
-                std::to_string(type_code),
+                type_code,
                 "",
                 grantee,
                 show_dml  ? dml_col(m, is_grp, 0)  : "",
@@ -8013,9 +8012,11 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         std::unordered_set<std::string> seen_top;
 
         for (const auto& pe : dd->permissions()) {
-            seen_top.insert(top_key(pe.grantee, pe.object_name,
-                                    pe.object_type_code));
-            emit_top_row(pe.object_name, pe.object_type_code, pe.object_type,
+            const std::string type_code = std::to_string(pe.object_type_code);
+            if (!seen_top.insert(top_key(pe.grantee, pe.object_name,
+                                         type_code)).second)
+                continue;
+            emit_top_row(pe.object_name, type_code, pe.object_type,
                          pe.grantee, pe.grantee_is_group, pe.bitmask);
 
             // Field-level rows: OBJ_TYPE=4, PARENT=table.  Skip fields that
@@ -8062,28 +8063,28 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         struct SecObj {
             std::string name;
             std::string type;
-            int         code;
+            std::string code;
         };
         std::vector<SecObj> objects;
         objects.reserve(dd->tables().size() + dd->views().size() +
                         dd->procs().size() + dd->functions().size() +
                         dd->links().size() + 8);
         for (const auto& [alias, _] : dd->tables())
-            objects.push_back({alias, "Table", 1});
+            objects.push_back({alias, "Table", "1"});
         for (const auto& [name, _] : dd->views())
-            objects.push_back({name, "View", 6});
+            objects.push_back({name, "View", "6"});
         for (const auto& [name, _] : dd->procs())
-            objects.push_back({name, "StoredProc", 10});
+            objects.push_back({name, "StoredProc", "10"});
         for (const auto& [name, _] : dd->functions())
-            objects.push_back({name, "Function", 18});
+            objects.push_back({name, "Function", "18"});
         for (const auto& [alias, _] : dd->links())
-            objects.push_back({alias, "Link", 12});
+            objects.push_back({alias, "Link", "12"});
         for (const auto& u : dd->users())
-            objects.push_back({u, "User", 8});
+            objects.push_back({u, "User", "8"});
         for (const auto& g : dd->groups())
-            objects.push_back({g, "Group", 9});
+            objects.push_back({g, "Group", "9"});
         if (!dd->users().empty() || !dd->groups().empty())
-            objects.push_back({"Database", "Database", 11});
+            objects.push_back({"Database", "Database", "11"});
 
         struct Grantee { std::string name; bool is_group; };
         std::vector<Grantee> grantees;
@@ -8096,8 +8097,7 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         for (const auto& gr : grantees) {
             for (const auto& obj : objects) {
                 const auto key = top_key(gr.name, obj.name, obj.code);
-                if (seen_top.count(key)) continue;
-                seen_top.insert(key);
+                if (!seen_top.insert(key).second) continue;
                 emit_top_row(obj.name, obj.code, obj.type, gr.name, gr.is_group,
                              0u);
             }
