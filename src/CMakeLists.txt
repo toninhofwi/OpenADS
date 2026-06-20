@@ -129,6 +129,9 @@ endif()
 
 if(OPENADS_WITH_SQLITE)
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_SQLITE=1)
+    if(OPENADS_WITH_SQLCIPHER)
+        target_compile_definitions(openads_core PUBLIC OPENADS_WITH_SQLCIPHER=1)
+    endif()
     target_link_libraries(openads_core PRIVATE openads_sqlite3)
 endif()
 

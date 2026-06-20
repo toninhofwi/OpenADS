@@ -77,6 +77,14 @@ option(OPENADS_WITH_POSTGRESQL "Enable PostgreSQL-backed table driver (libpq)" O
 option(OPENADS_WITH_MARIADB "Enable MariaDB-backed table driver (libmariadb)" OFF)
 # Optional generic ODBC table driver (system ODBC driver manager). OFF by default.
 option(OPENADS_WITH_ODBC "Enable ODBC-backed table driver (system ODBC driver manager)" OFF)
+# Opt-in: build the SQLite backend from the SQLite3 Multiple Ciphers
+# amalgamation (SQLCipher-compatible encryption at rest, self-contained — no
+# external OpenSSL) instead of plain SQLite. Vendored under
+# third_party/sqlcipher/ (not committed — see .gitignore).
+option(OPENADS_WITH_SQLCIPHER "Build the SQL backend with SQLCipher-compatible encryption (SQLite3 Multiple Ciphers)" OFF)
+if(OPENADS_WITH_SQLCIPHER)
+    set(OPENADS_WITH_SQLITE ON CACHE BOOL "" FORCE)
+endif()
 
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each
@@ -137,21 +145,34 @@ if(OPENADS_WITH_HTTP)
 endif()
 
 if(OPENADS_WITH_SQLITE)
-    # Use a locally vendored amalgamation under third_party/sqlite/ when
-    # present (offline / air-gapped builds); otherwise fetch it. The
-    # amalgamation is not committed — see .gitignore.
-    set(_openads_sqlite_src "${CMAKE_SOURCE_DIR}/third_party/sqlite/sqlite3.c")
-    set(_openads_sqlite_inc "${CMAKE_SOURCE_DIR}/third_party/sqlite")
-    if(NOT EXISTS "${_openads_sqlite_src}")
-        include(FetchContent)
-        FetchContent_Declare(
-            sqlite_amalgamation
-            URL https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        )
-        FetchContent_MakeAvailable(sqlite_amalgamation)
-        set(_openads_sqlite_src "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c")
-        set(_openads_sqlite_inc "${sqlite_amalgamation_SOURCE_DIR}")
+    if(OPENADS_WITH_SQLCIPHER)
+        # SQLite3 Multiple Ciphers amalgamation — SQLCipher-compatible AES at
+        # rest, self-contained. Vendored under third_party/sqlcipher/.
+        set(_openads_sqlite_src "${CMAKE_SOURCE_DIR}/third_party/sqlcipher/sqlite3mc_amalgamation.c")
+        set(_openads_sqlite_inc "${CMAKE_SOURCE_DIR}/third_party/sqlcipher")
+        if(NOT EXISTS "${_openads_sqlite_src}")
+            message(FATAL_ERROR
+                "OPENADS_WITH_SQLCIPHER=ON needs the SQLite3 Multiple Ciphers "
+                "amalgamation at third_party/sqlcipher/sqlite3mc_amalgamation.c")
+        endif()
+        message(STATUS "OpenADS: SQL backend with SQLCipher-compatible encryption (SQLite3 Multiple Ciphers)")
+    else()
+        # Use a locally vendored amalgamation under third_party/sqlite/ when
+        # present (offline / air-gapped builds); otherwise fetch it. The
+        # amalgamation is not committed — see .gitignore.
+        set(_openads_sqlite_src "${CMAKE_SOURCE_DIR}/third_party/sqlite/sqlite3.c")
+        set(_openads_sqlite_inc "${CMAKE_SOURCE_DIR}/third_party/sqlite")
+        if(NOT EXISTS "${_openads_sqlite_src}")
+            include(FetchContent)
+            FetchContent_Declare(
+                sqlite_amalgamation
+                URL https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
+                DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            )
+            FetchContent_MakeAvailable(sqlite_amalgamation)
+            set(_openads_sqlite_src "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c")
+            set(_openads_sqlite_inc "${sqlite_amalgamation_SOURCE_DIR}")
+        endif()
     endif()
     add_library(openads_sqlite3 STATIC "${_openads_sqlite_src}")
     target_include_directories(openads_sqlite3 PUBLIC "${_openads_sqlite_inc}")

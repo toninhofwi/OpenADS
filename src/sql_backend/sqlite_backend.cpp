@@ -120,16 +120,13 @@ namespace {
 util::Result<void> apply_cipher_key(sqlite3* db, const std::string& key) {
     if (key.empty()) return util::Result<void>{};
 #if defined(OPENADS_WITH_SQLCIPHER)
+    // Select the SQLCipher-compatible cipher scheme BEFORE keying; `legacy=4`
+    // pins the SQLCipher v4 page format (kdf_iter 256000, HMAC-SHA512, 4096B
+    // pages). `PRAGMA key` then derives the key and unlocks the database.
     const std::string esc = escape_pragma_key(key);
+    if (auto r = exec_pragma(db, "PRAGMA cipher='sqlcipher'"); !r) return r;
+    if (auto r = exec_pragma(db, "PRAGMA legacy=4"); !r) return r;
     if (auto r = exec_pragma(db, "PRAGMA key='" + esc + "'"); !r) return r;
-    if (auto r = exec_pragma(db, "PRAGMA cipher_page_size=4096"); !r) return r;
-    if (auto r = exec_pragma(db, "PRAGMA kdf_iter=256000"); !r) return r;
-    if (auto r = exec_pragma(db, "PRAGMA cipher_hmac_algorithm=HMAC_SHA512"); !r)
-        return r;
-    if (auto r = exec_pragma(db,
-                             "PRAGMA cipher_kdf_algorithm=PBKDF2_HMAC_SHA512");
-        !r)
-        return r;
     return util::Result<void>{};
 #else
     (void)db;
