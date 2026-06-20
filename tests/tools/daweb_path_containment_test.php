@@ -32,7 +32,8 @@ if ($outside !== null) {
 }
 pass('dot-dot index path rejected');
 
-$absOutside = api_resolve_path_under_root('C:\\Windows\\win.ini', $root);
+$absOutsidePath = DIRECTORY_SEPARATOR === '/' ? '/etc/passwd' : 'C:\\Windows\\win.ini';
+$absOutside = api_resolve_path_under_root($absOutsidePath, $root);
 if ($absOutside !== null) {
     fail('absolute path outside root should be rejected');
 }

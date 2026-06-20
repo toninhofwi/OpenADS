@@ -75,7 +75,8 @@ function api_resolve_path_under_root(string $candidate, string $root): ?string
 
     $norm = strtolower(str_replace('\\', '/', $real));
     $rootNorm = strtolower(str_replace('\\', '/', $rootReal));
-    if ($norm !== $rootNorm && !str_starts_with($norm, $rootNorm . '/')) {
+    $rootNormDir = rtrim($rootNorm, '/') . '/';
+    if ($norm !== $rootNorm && !str_starts_with($norm, $rootNormDir)) {
         return null;
     }
 
