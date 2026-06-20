@@ -68,6 +68,10 @@ option(OPENADS_WITH_TLS "Enable TLS transport (vendors mbedtls 3.6 LTS via Fetch
 # and nlohmann/json (MIT) at configure time via FetchContent.
 option(OPENADS_WITH_HTTP "Enable embedded HTTP web console (Studio) in openads_serverd / ace64.dll" ON)
 
+# OpenADS Plus — optional SQLite-backed table driver (static amalgamation).
+# On by default; set OFF for dev builds that skip the FetchContent download.
+option(OPENADS_WITH_SQLITE "Enable the SQLite-backed table driver (vendors the SQLite amalgamation via FetchContent)" ON)
+
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each
 # OpenADS target adds the strict flags target-locally below via
@@ -124,6 +128,36 @@ if(OPENADS_WITH_HTTP)
     set(JSON_BuildTests OFF CACHE INTERNAL "")
     FetchContent_MakeAvailable(cpp_httplib nlohmann_json)
     message(STATUS "OpenADS: HTTP web console enabled (cpp-httplib + nlohmann/json)")
+endif()
+
+if(OPENADS_WITH_SQLITE)
+    # Use a locally vendored amalgamation under third_party/sqlite/ when
+    # present (offline / air-gapped builds); otherwise fetch it. The
+    # amalgamation is not committed — see .gitignore.
+    set(_openads_sqlite_src "${CMAKE_SOURCE_DIR}/third_party/sqlite/sqlite3.c")
+    set(_openads_sqlite_inc "${CMAKE_SOURCE_DIR}/third_party/sqlite")
+    if(NOT EXISTS "${_openads_sqlite_src}")
+        include(FetchContent)
+        FetchContent_Declare(
+            sqlite_amalgamation
+            URL https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        )
+        FetchContent_MakeAvailable(sqlite_amalgamation)
+        set(_openads_sqlite_src "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c")
+        set(_openads_sqlite_inc "${sqlite_amalgamation_SOURCE_DIR}")
+    endif()
+    add_library(openads_sqlite3 STATIC "${_openads_sqlite_src}")
+    target_include_directories(openads_sqlite3 PUBLIC "${_openads_sqlite_inc}")
+    target_compile_definitions(openads_sqlite3 PRIVATE
+        SQLITE_THREADSAFE=1
+        SQLITE_DEFAULT_MEMSTATUS=0)
+    if(MSVC)
+        target_compile_options(openads_sqlite3 PRIVATE /wd4267 /wd4244)
+    else()
+        target_compile_options(openads_sqlite3 PRIVATE -Wno-conversion)
+    endif()
+    message(STATUS "OpenADS: SQLite-backed table driver enabled")
 endif()
 
 if(MSVC)
