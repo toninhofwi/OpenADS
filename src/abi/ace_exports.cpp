@@ -302,6 +302,11 @@ openads::sql_backend::SqliteIndex* get_sqlite_index(ADSHANDLE h) {
 std::size_t sqlite_field_index(openads::sql_backend::SqliteTable* st,
                                UNSIGNED8* pucField) {
     if (!st->fields_cached) {
+        // st->conn is nulled by AdsDisconnect on still-open tables to
+        // avoid use-after-free; guard before dereferencing it.
+        if (st->conn == nullptr) {
+            return std::numeric_limits<std::size_t>::max();
+        }
         auto r = st->conn->describe_table(st);
         if (!r) return std::numeric_limits<std::size_t>::max();
     }

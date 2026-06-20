@@ -5,15 +5,21 @@
 #include "openads/ace.h"
 
 #include <cctype>
+#include <cstdio>
 
 namespace openads::sql_backend {
 
 bool is_safe_identifier(const std::string& name) {
     if (name.empty()) return false;
+    // Locale-independent ASCII check: std::isalnum depends on the active
+    // C locale, which could admit unexpected bytes into an identifier we
+    // splice into SQL. Keep it strict regardless of locale.
     for (char c : name) {
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
-            return false;
-        }
+        const bool ok = (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') ||
+                        c == '_';
+        if (!ok) return false;
     }
     return true;
 }
@@ -61,8 +67,14 @@ std::string format_sqlite_value(sqlite3_stmt* stmt, int col, bool& is_null) {
     switch (sqlite3_column_type(stmt, col)) {
         case SQLITE_INTEGER:
             return std::to_string(sqlite3_column_int64(stmt, col));
-        case SQLITE_FLOAT:
-            return std::to_string(sqlite3_column_double(stmt, col));
+        case SQLITE_FLOAT: {
+            // %.17g round-trips an IEEE-754 double without precision loss;
+            // std::to_string clamps to 6 fractional digits.
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.17g",
+                          sqlite3_column_double(stmt, col));
+            return buf;
+        }
         case SQLITE_BLOB: {
             const void* blob = sqlite3_column_blob(stmt, col);
             int         n    = sqlite3_column_bytes(stmt, col);

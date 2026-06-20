@@ -2,6 +2,7 @@
 
 #include "sql_backend/sqlite_backend.h"
 
+#include <algorithm>
 #include <cctype>
 
 #if defined(OPENADS_WITH_SQLITE)
@@ -55,13 +56,15 @@ util::Result<void> position_at_rowid(sqlite3* db, SqliteTable* tbl,
     if (tbl == nullptr || db == nullptr) {
         return util::Error{5001, 0, "invalid sqlite table state", ""};
     }
-    for (std::size_t i = 0; i < tbl->rowids.size(); ++i) {
-        if (tbl->rowids[i] == rowid) {
-            tbl->pos           = i;
-            tbl->positioned    = true;
-            tbl->current_rowid = rowid;
-            return load_current_row(db, tbl);
-        }
+    // rowids is built ascending in open_table, so binary-search it
+    // (O(log N)) rather than scan linearly.
+    auto it = std::lower_bound(tbl->rowids.begin(), tbl->rowids.end(), rowid);
+    if (it != tbl->rowids.end() && *it == rowid) {
+        tbl->pos           = static_cast<std::size_t>(
+            std::distance(tbl->rowids.begin(), it));
+        tbl->positioned    = true;
+        tbl->current_rowid = rowid;
+        return load_current_row(db, tbl);
     }
     tbl->positioned = false;
     tbl->row_valid  = false;
@@ -302,10 +305,19 @@ util::Result<void> SqliteConnection::skip(SqliteTable* tbl, std::int32_t step) {
 
     std::int64_t next = 0;
     if (!tbl->positioned) {
-        if (step > 0) {
-            next = 0;
+        // Not on a row: pos == 0 is BOF, pos == size is EOF.
+        if (tbl->pos == 0) {
+            if (step > 0) {
+                next = step - 1;            // skip forward from BOF
+            } else {
+                return util::Error{5026, 0, "bof", ""};
+            }
         } else {
-            return util::Error{5026, 0, "no current record", ""};
+            if (step < 0) {
+                next = static_cast<std::int64_t>(tbl->pos) + step;  // back from EOF
+            } else {
+                return util::Result<void>{};  // stay at EOF
+            }
         }
     } else {
         next = static_cast<std::int64_t>(tbl->pos) + step;
