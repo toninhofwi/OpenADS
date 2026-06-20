@@ -17,7 +17,13 @@ namespace {
 #if defined(OPENADS_WITH_POSTGRESQL)
 
 std::string quote_ident(const std::string& name) {
-    return '"' + name + '"';
+    std::string out = "\"";
+    for (char c : name) {
+        if (c == '"') out += "\"\"";  // double any embedded quote
+        else          out += c;
+    }
+    out += '"';
+    return out;
 }
 
 std::string pk_select_list(const PostgresTable& tbl) {
@@ -25,6 +31,17 @@ std::string pk_select_list(const PostgresTable& tbl) {
     for (std::size_t i = 0; i < tbl.pk_columns.size(); ++i) {
         if (i > 0) out += ", ";
         out += quote_ident(tbl.pk_columns[i]);
+    }
+    return out;
+}
+
+// primary-key columns with an explicit direction ("pk1" ASC, "pk2" ASC) — a
+// deterministic tie-breaker so a seek never returns an arbitrary row on dup keys.
+std::string pk_order_by(const PostgresTable& tbl, const char* dir) {
+    std::string out;
+    for (std::size_t i = 0; i < tbl.pk_columns.size(); ++i) {
+        if (i > 0) out += ", ";
+        out += quote_ident(tbl.pk_columns[i]) + ' ' + dir;
     }
     return out;
 }
@@ -156,8 +173,15 @@ util::Result<void> load_current_row(PGconn* conn, PostgresTable* tbl) {
         if (!d) return d.error();
     }
 
+    // Explicit column list in tbl->fields order (NOT "SELECT *"): keeps
+    // current_row[i] aligned with fields[i] regardless of physical column order.
+    std::string collist;
+    for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+        if (i > 0) collist += ", ";
+        collist += quote_ident(tbl->fields[i].name);
+    }
     const std::string sql =
-        "SELECT * FROM " + quote_ident(tbl->name) + " WHERE " +
+        "SELECT " + collist + " FROM " + quote_ident(tbl->name) + " WHERE " +
         pk_where_clause(*tbl);
     const PostgresTable::PkRow& pk = tbl->pk_snapshot[tbl->pos];
     std::vector<const char*> params;
@@ -538,18 +562,22 @@ util::Result<bool> PostgresConnection::seek_index(
     const std::string qcol = quote_ident(column);
     const std::string from = " FROM " + quote_ident(tbl->name) + " WHERE ";
 
+    const std::string pk_asc  = pk_order_by(*tbl, "ASC");
+    const std::string pk_desc = pk_order_by(*tbl, "DESC");
+
     std::string sql;
     if (last_key) {
         sql = soft
             ? "SELECT " + sel + from + qcol + " <= $1 ORDER BY " + qcol +
-              " DESC LIMIT 1"
-            : "SELECT " + sel + from + qcol + " = $1 ORDER BY " + qcol +
-              " DESC LIMIT 1";
+              " DESC, " + pk_desc + " LIMIT 1"
+            : "SELECT " + sel + from + qcol + " = $1 ORDER BY " + pk_desc +
+              " LIMIT 1";
     } else {
         sql = soft
             ? "SELECT " + sel + from + qcol + " >= $1 ORDER BY " + qcol +
-              " ASC LIMIT 1"
-            : "SELECT " + sel + from + qcol + " = $1 LIMIT 1";
+              " ASC, " + pk_asc + " LIMIT 1"
+            : "SELECT " + sel + from + qcol + " = $1 ORDER BY " + pk_asc +
+              " LIMIT 1";
     }
 
     const char* params[1] = {key.c_str()};

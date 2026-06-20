@@ -100,11 +100,18 @@ std::size_t field_index_ci(const PostgresTable& tbl, const std::string& name) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     }
     for (std::size_t i = 0; i < tbl.fields.size(); ++i) {
-        std::string have = tbl.fields[i].name;
-        for (auto& c : have) {
-            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        const std::string& have = tbl.fields[i].name;
+        if (have.size() != want.size()) continue;
+        bool eq = true;
+        for (std::size_t k = 0; k < have.size(); ++k) {
+            if (static_cast<char>(
+                    std::toupper(static_cast<unsigned char>(have[k]))) !=
+                want[k]) {
+                eq = false;
+                break;
+            }
         }
-        if (have == want) return i;
+        if (eq) return i;
     }
     return static_cast<std::size_t>(-1);
 }
