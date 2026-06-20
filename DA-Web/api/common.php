@@ -48,6 +48,7 @@ function api_require_session(): void
  */
 function api_require_connection(string $ddName): array
 {
+    api_require_session();
     if ($ddName === '') {
         api_error(400, 'dd is required');
     }
@@ -62,7 +63,7 @@ function api_require_connection(string $ddName): array
  */
 function api_validate_identifier(string $name, string $label = 'identifier'): void
 {
-    if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
+    if (!preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $name)) {
         api_error(400, "invalid $label");
     }
 }
@@ -72,5 +73,5 @@ function api_validate_identifier(string $name, string $label = 'identifier'): vo
  */
 function api_sql_quote(string $s): string
 {
-    return str_replace("'", "''", $s);
+    return str_replace(["'", "\0"], ["''", ""], $s);
 }
