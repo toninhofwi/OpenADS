@@ -10,24 +10,19 @@
  */
 header('Content-Type: application/json');
 session_start();
+require_once __DIR__ . '/common.php';
 require_once __DIR__ . '/openads_stubs.php';
 
 $req    = json_decode(file_get_contents('php://input'), true) ?? [];
 $ddName = trim($req['dd']    ?? '');
 $table  = trim($req['table'] ?? '');
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($table === '') {
+    api_error(400, 'table is required');
 }
-if ($ddName === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $table)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid parameters']);
-    exit;
-}
+api_validate_identifier($table, 'table name');
 
-$c = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
@@ -44,8 +39,8 @@ try {
     $dict = AdsDictionary::fromConnection($conn);
 
     // Get trigger list filtered by table from system.triggers
-    $stmt = $conn->query("SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '" .
-                          addslashes($table) . "'");
+    $stmt = $conn->query("SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '"
+                          . api_sql_quote($table) . "'");
     $names = [];
     while ($row = $stmt->fetchAssoc()) {
         $names[] = $row['TRIG_NAME'];
@@ -87,9 +82,7 @@ try {
     $conn->close();
     usort($triggers, fn($a, $b) => strcmp($a['name'], $b['name']));
 } catch (Throwable $e) {
-    http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
-    exit;
+    api_exception(500, $e);
 }
 
 echo json_encode(

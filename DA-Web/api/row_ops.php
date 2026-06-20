@@ -14,18 +14,9 @@ $action = trim($body['action'] ?? '');
 $ddName = trim($body['dd']     ?? '');
 $table  = trim($body['table']  ?? '');
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
-}
-if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $table)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid table name']);
-    exit;
-}
+api_validate_identifier($table, 'table name');
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
@@ -94,6 +85,9 @@ try {
         $orig     = $body['orig']     ?? [];
         $newVals  = $body['row']      ?? [];
         $pkFields = array_map('strtoupper', $body['pkFields'] ?? []);
+        foreach ($pkFields as $pk) {
+            api_validate_identifier($pk, 'primary key field');
+        }
 
         if (empty($pkFields)) {
             $tbl->close(); $conn->close();
@@ -102,7 +96,7 @@ try {
             exit;
         }
 
-        $esc = fn($v) => str_replace("'", "''", (string)$v);
+        $esc = fn($v) => api_sql_quote((string)$v);
 
         // SET — all fields that changed, excluding PK columns
         $setParts = [];

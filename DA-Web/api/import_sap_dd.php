@@ -25,6 +25,9 @@
  */
 header('Content-Type: application/json');
 session_start();
+require_once __DIR__ . '/common.php';
+
+api_require_session();
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 $body     = json_decode(file_get_contents('php://input'), true) ?? [];
@@ -36,10 +39,31 @@ $password = $body['password']      ?? '';
 $sapLib   = trim($body['sapLib']   ?? '');
 
 if ($name === '' || $source === '' || $dest === '' || $user === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'name, source, dest, and user are required']);
-    exit;
+    api_error(400, 'name, source, dest, and user are required');
 }
+api_validate_identifier($name, 'dictionary name');
+api_reject_unsafe_path($source, 'source path');
+api_reject_unsafe_path($dest, 'dest path');
+if ($sapLib !== '') {
+    api_reject_unsafe_path($sapLib, 'sapLib path');
+}
+
+$sourceReal = realpath($source);
+if ($sourceReal === false || !is_file($sourceReal)) {
+    api_error(400, 'source path does not exist or is not a file');
+}
+$destDir = dirname($dest);
+if ($destDir !== '' && $destDir !== '.' && !is_dir($destDir)) {
+    api_error(400, 'dest parent directory does not exist');
+}
+if ($sapLib !== '') {
+    $sapReal = realpath($sapLib);
+    if ($sapReal === false || !is_file($sapReal)) {
+        api_error(400, 'sapLib path does not exist or is not a file');
+    }
+    $sapLib = $sapReal;
+}
+$source = $sourceReal;
 
 // ── Find the import binary ────────────────────────────────────────────────────
 $projectRoot = realpath(__DIR__ . '/../../');
@@ -69,13 +93,9 @@ foreach ($candidates as $c) {
 }
 
 if ($importBin === null) {
-    http_response_code(500);
-    echo json_encode([
-        'error' => 'openads_import_dd binary not found. '
-                 . 'Set the OPENADS_IMPORT_DD_BIN environment variable to its full path, '
-                 . 'or copy it to ' . $projectRoot . '/bin/.',
-    ]);
-    exit;
+    api_error(500, 'openads_import_dd binary not found. '
+        . 'Set the OPENADS_IMPORT_DD_BIN environment variable to its full path, '
+        . 'or copy it to ' . $projectRoot . '/bin/.');
 }
 
 // ── Build argument list (no shell — proc_open with array is injection-safe) ───
@@ -100,9 +120,7 @@ $descriptors = [
 
 $proc = proc_open($cmd, $descriptors, $pipes);
 if (!is_resource($proc)) {
-    http_response_code(500);
-    echo json_encode(['error' => 'Failed to launch openads_import_dd process']);
-    exit;
+    api_error(500, 'Failed to launch openads_import_dd process');
 }
 
 fclose($pipes[0]);
@@ -114,19 +132,14 @@ $exitCode = proc_close($proc);
 // ── Parse tool output ─────────────────────────────────────────────────────────
 $toolResult = json_decode($stdout, true);
 if (!is_array($toolResult)) {
-    http_response_code(500);
-    echo json_encode([
-        'error'     => 'openads_import_dd produced no parseable JSON output',
+    api_error(500, 'openads_import_dd produced no parseable JSON output', 0, [
         'exit_code' => $exitCode,
         'raw'       => substr($stdout, 0, 500),
     ]);
-    exit;
 }
 
 if (!($toolResult['ok'] ?? false)) {
-    http_response_code(500);
-    echo json_encode($toolResult);
-    exit;
+    api_error(500, $toolResult['error'] ?? 'import failed', 0, $toolResult);
 }
 
 // ── Register the imported DD in dictionaries.json ─────────────────────────────

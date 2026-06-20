@@ -15,18 +15,12 @@ require_once __DIR__ . '/openads_stubs.php';
 $ddName = trim($_GET['dd']    ?? '');
 $table  = trim($_GET['table'] ?? '');
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($table === '') {
+    api_error(400, 'table is required');
 }
-if (!preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $table)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid table name']);
-    exit;
-}
+api_validate_identifier($table, 'table name');
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
@@ -34,8 +28,8 @@ if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 // ── ADS trigger helper (returns trigger list via API) ────────────────────────
 function readTriggers(AdsConnection $conn, AdsDictionary $dict2, string $table): array {
     $stmt = $conn->query(
-        "SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '" .
-        addslashes($table) . "'"
+        "SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '"
+        . api_sql_quote($table) . "'"
     );
     $names = [];
     while ($row = $stmt->fetchAssoc()) $names[] = $row['TRIG_NAME'];

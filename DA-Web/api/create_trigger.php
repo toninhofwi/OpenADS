@@ -24,21 +24,11 @@ $timing   = strtoupper(trim($body['timing']   ?? 'BEFORE'));
 $event    = strtoupper(trim($body['event']    ?? 'INSERT'));
 $priority = max(1, (int)($body['priority'] ?? 1));
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($table === '' || $name === '') {
+    api_error(400, 'table and name are required');
 }
-if ($ddName === '' || $table === '' || $name === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd, table, and name are required']);
-    exit;
-}
-if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid trigger name']);
-    exit;
-}
+api_validate_identifier($table, 'table name');
+api_validate_identifier($name, 'trigger name');
 
 // Map (timing, event) → combined ADS type constant
 $typeMap = [
@@ -54,7 +44,7 @@ if (!isset($typeMap[$typeKey])) {
 }
 $type = $typeMap[$typeKey];
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];

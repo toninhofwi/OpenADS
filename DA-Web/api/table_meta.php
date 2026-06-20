@@ -12,19 +12,12 @@ $ddName = trim($_GET['dd']    ?? '');
 $table  = trim($_GET['table'] ?? '');
 $kind   = trim($_GET['kind']  ?? '');
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($table === '' || !in_array($kind, ['fields', 'indexes', 'triggers'], true)) {
+    api_error(400, 'invalid parameters');
 }
-if (!preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $table) ||
-    !in_array($kind, ['fields', 'indexes', 'triggers'], true)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid parameters']);
-    exit;
-}
+api_validate_identifier($table, 'table name');
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
@@ -334,8 +327,8 @@ try {
     else {
         $dict2 = AdsDictionary::fromConnection($conn);
         $stmt2 = $conn->query(
-            "SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '" .
-            addslashes($table) . "'"
+            "SELECT TRIG_NAME FROM system.triggers WHERE TABLE_NAME = '"
+            . api_sql_quote($table) . "'"
         );
         $trigNames = [];
         while ($trow = $stmt2->fetchAssoc()) $trigNames[] = $trow['TRIG_NAME'];
