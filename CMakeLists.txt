@@ -68,6 +68,12 @@ option(OPENADS_WITH_TLS "Enable TLS transport (vendors mbedtls 3.6 LTS via Fetch
 # and nlohmann/json (MIT) at configure time via FetchContent.
 option(OPENADS_WITH_HTTP "Enable embedded HTTP web console (Studio) in openads_serverd / ace64.dll" ON)
 
+# Optional ODBC table driver. Talks to any data source through the
+# system ODBC driver manager (odbc32 on Windows, unixODBC on Linux);
+# the headers and import library ship with the platform SDK, so no
+# external dependency is downloaded. OFF by default.
+option(OPENADS_WITH_ODBC "Enable ODBC-backed table driver (system ODBC driver manager)" OFF)
+
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each
 # OpenADS target adds the strict flags target-locally below via

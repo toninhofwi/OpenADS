@@ -58,6 +58,15 @@ add_library(openads_core STATIC
     network/mg_wire.cpp
 )
 
+if(OPENADS_WITH_ODBC)
+    target_sources(openads_core PRIVATE
+        sql_backend/sql_common.cpp
+        sql_backend/odbc_uri.cpp
+        sql_backend/odbc_backend.cpp
+        sql_backend/odbc_connection.cpp
+    )
+endif()
+
 if(WIN32)
     target_sources(openads_core PRIVATE
         platform/file_win32.cpp
@@ -96,6 +105,15 @@ if(OPENADS_WITH_TLS)
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_TLS=1)
     target_link_libraries(openads_core PRIVATE
         MbedTLS::mbedtls MbedTLS::mbedx509 MbedTLS::mbedcrypto)
+endif()
+
+if(OPENADS_WITH_ODBC)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_ODBC=1)
+    if(WIN32)
+        target_link_libraries(openads_core PUBLIC odbc32)
+    else()
+        target_link_libraries(openads_core PUBLIC odbc)
+    endif()
 endif()
 
 # ----------------------------------------------------------------------
