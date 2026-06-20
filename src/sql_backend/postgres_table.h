@@ -32,7 +32,11 @@ struct PostgresTable {
     std::uint32_t cached_rec_count   = 0;
     bool          rec_count_cached     = false;
 
-    std::vector<std::string> ctids;
+    std::vector<std::string> pk_columns;
+    struct PkRow {
+        std::vector<std::string> values;
+    };
+    std::vector<PkRow>       pk_snapshot;
     std::size_t              pos              = 0;
     bool                     positioned       = false;
     bool                     last_seek_found  = false;

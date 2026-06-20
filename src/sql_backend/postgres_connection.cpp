@@ -4,6 +4,7 @@
 #include "sql_backend/sql_common.h"
 
 #include <algorithm>
+#include <vector>
 
 #if defined(OPENADS_WITH_POSTGRESQL)
 #include <libpq-fe.h>
@@ -15,7 +16,64 @@ namespace {
 
 #if defined(OPENADS_WITH_POSTGRESQL)
 
+std::string quote_ident(const std::string& name) {
+    return '"' + name + '"';
+}
+
+std::string pk_select_list(const PostgresTable& tbl) {
+    std::string out;
+    for (std::size_t i = 0; i < tbl.pk_columns.size(); ++i) {
+        if (i > 0) out += ", ";
+        out += quote_ident(tbl.pk_columns[i]);
+    }
+    return out;
+}
+
+// "col1" = $1 AND "col2" = $2 ...  (placeholders bound positionally)
+std::string pk_where_clause(const PostgresTable& tbl) {
+    std::string sql;
+    for (std::size_t i = 0; i < tbl.pk_columns.size(); ++i) {
+        if (i > 0) sql += " AND ";
+        sql += quote_ident(tbl.pk_columns[i]) + " = $" +
+               std::to_string(i + 1);
+    }
+    return sql;
+}
+
 util::Result<void> load_current_row(PGconn* conn, PostgresTable* tbl);
+
+util::Result<std::vector<std::string>>
+discover_pk_columns(PGconn* conn, const std::string& table_name) {
+    const char* params[1] = {table_name.c_str()};
+    PGresult* res = PQexecParams(
+        conn,
+        "SELECT kcu.column_name "
+        "FROM information_schema.table_constraints tc "
+        "JOIN information_schema.key_column_usage kcu "
+        "  ON kcu.constraint_schema = tc.constraint_schema "
+        " AND kcu.constraint_name = tc.constraint_name "
+        "WHERE tc.constraint_type = 'PRIMARY KEY' "
+        "  AND tc.table_schema = ANY (current_schemas(true)) "
+        "  AND tc.table_name = $1 "
+        "ORDER BY kcu.ordinal_position",
+        1, nullptr, params, nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        const char* msg = PQerrorMessage(conn);
+        PQclear(res);
+        return postgres_error("pk discovery", msg);
+    }
+    const int rows = PQntuples(res);
+    std::vector<std::string> cols;
+    cols.reserve(static_cast<std::size_t>(rows));
+    for (int r = 0; r < rows; ++r) {
+        cols.emplace_back(PQgetvalue(res, r, 0));
+    }
+    PQclear(res);
+    if (cols.empty()) {
+        return util::Error{5001, 0, "table has no primary key", table_name};
+    }
+    return cols;
+}
 
 util::Result<std::vector<PostgresTable::FieldDesc>>
 describe_table_impl(PGconn* conn, PostgresTable* tbl) {
@@ -61,19 +119,23 @@ describe_table_impl(PGconn* conn, PostgresTable* tbl) {
     return out;
 }
 
-util::Result<void> position_at_ctid(PGconn* conn, PostgresTable* tbl,
-                                    const std::string& ctid) {
+util::Result<void> position_at_pk(PGconn* conn, PostgresTable* tbl,
+                                  const PostgresTable::PkRow& pk) {
     if (tbl == nullptr || conn == nullptr) {
         return util::Error{5001, 0, "invalid postgres table state", ""};
     }
-    auto it = std::find(tbl->ctids.begin(), tbl->ctids.end(), ctid);
-    if (it == tbl->ctids.end()) {
+    auto it = std::find_if(
+        tbl->pk_snapshot.begin(), tbl->pk_snapshot.end(),
+        [&](const PostgresTable::PkRow& row) {
+            return row.values == pk.values;
+        });
+    if (it == tbl->pk_snapshot.end()) {
         tbl->positioned = false;
         tbl->row_valid  = false;
         return util::Result<void>{};
     }
     tbl->pos           = static_cast<std::size_t>(
-        std::distance(tbl->ctids.begin(), it));
+        std::distance(tbl->pk_snapshot.begin(), it));
     tbl->positioned    = true;
     tbl->current_recno = static_cast<std::uint32_t>(tbl->pos + 1);
     return load_current_row(conn, tbl);
@@ -95,11 +157,16 @@ util::Result<void> load_current_row(PGconn* conn, PostgresTable* tbl) {
     }
 
     const std::string sql =
-        "SELECT * FROM \"" + tbl->name + "\" WHERE ctid = $1::tid";
-    const std::string& ctid = tbl->ctids[tbl->pos];
-    const char* params[1]   = {ctid.c_str()};
-    PGresult* res = PQexecParams(conn, sql.c_str(), 1, nullptr, params,
-                                 nullptr, nullptr, 0);
+        "SELECT * FROM " + quote_ident(tbl->name) + " WHERE " +
+        pk_where_clause(*tbl);
+    const PostgresTable::PkRow& pk = tbl->pk_snapshot[tbl->pos];
+    std::vector<const char*> params;
+    params.reserve(pk.values.size());
+    for (const std::string& v : pk.values) params.push_back(v.c_str());
+
+    PGresult* res = PQexecParams(
+        conn, sql.c_str(), static_cast<int>(params.size()), nullptr,
+        params.data(), nullptr, nullptr, 0);
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         const char* msg = PQerrorMessage(conn);
         PQclear(res);
@@ -213,22 +280,36 @@ PostgresConnection::open_table(const std::string& table_name) {
     tbl->conn = this;
     tbl->name = table_name;
 
+    auto pk = discover_pk_columns(impl_->conn, table_name);
+    if (!pk) return pk.error();
+    tbl->pk_columns = std::move(pk).value();
+
+    const std::string sel = pk_select_list(*tbl);
     const std::string sql =
-        "SELECT ctid::text FROM \"" + table_name + "\" ORDER BY ctid";
+        "SELECT " + sel + " FROM " + quote_ident(table_name) +
+        " ORDER BY " + sel;
     PGresult* res = PQexec(impl_->conn, sql.c_str());
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         const char* msg = PQerrorMessage(impl_->conn);
         PQclear(res);
-        return postgres_error("ctid list", msg);
+        return postgres_error("pk snapshot", msg);
     }
-    const int rows = PQntuples(res);
-    tbl->ctids.reserve(static_cast<std::size_t>(rows));
+    const int rows    = PQntuples(res);
+    const int pk_cols = PQnfields(res);
+    tbl->pk_snapshot.reserve(static_cast<std::size_t>(rows));
     for (int r = 0; r < rows; ++r) {
-        tbl->ctids.emplace_back(PQgetvalue(res, r, 0));
+        PostgresTable::PkRow pk_row;
+        pk_row.values.resize(static_cast<std::size_t>(pk_cols));
+        for (int c = 0; c < pk_cols; ++c) {
+            pk_row.values[static_cast<std::size_t>(c)] =
+                PQgetisnull(res, r, c) ? std::string{}
+                                       : PQgetvalue(res, r, c);
+        }
+        tbl->pk_snapshot.push_back(std::move(pk_row));
     }
     PQclear(res);
 
-    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->ctids.size());
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
     tbl->rec_count_cached = true;
     tbl->positioned       = false;
     tbl->row_valid        = false;
@@ -254,7 +335,7 @@ util::Result<void> PostgresConnection::goto_top(PostgresTable* tbl) {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid postgres goto_top", ""};
     }
-    if (tbl->ctids.empty()) {
+    if (tbl->pk_snapshot.empty()) {
         tbl->positioned    = false;
         tbl->row_valid     = false;
         tbl->current_recno = 0;
@@ -276,14 +357,14 @@ util::Result<void> PostgresConnection::goto_bottom(PostgresTable* tbl) {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid postgres goto_bottom", ""};
     }
-    if (tbl->ctids.empty()) {
+    if (tbl->pk_snapshot.empty()) {
         tbl->positioned    = false;
         tbl->row_valid     = false;
         tbl->current_recno = 0;
         tbl->pos           = 0;
         return util::Result<void>{};
     }
-    tbl->pos           = tbl->ctids.size() - 1;
+    tbl->pos           = tbl->pk_snapshot.size() - 1;
     tbl->positioned    = true;
     tbl->current_recno = static_cast<std::uint32_t>(tbl->pos + 1);
     return load_current_row(impl_->conn, tbl);
@@ -300,7 +381,7 @@ util::Result<void> PostgresConnection::skip(PostgresTable* tbl,
         return util::Error{5001, 0, "invalid postgres skip", ""};
     }
     if (step == 0) return util::Result<void>{};
-    if (tbl->ctids.empty()) {
+    if (tbl->pk_snapshot.empty()) {
         tbl->positioned = false;
         tbl->row_valid  = false;
         tbl->pos        = 0;
@@ -329,10 +410,10 @@ util::Result<void> PostgresConnection::skip(PostgresTable* tbl,
         tbl->pos        = 0;
         return util::Error{5026, 0, "bof", ""};
     }
-    if (static_cast<std::size_t>(next) >= tbl->ctids.size()) {
+    if (static_cast<std::size_t>(next) >= tbl->pk_snapshot.size()) {
         tbl->positioned = false;
         tbl->row_valid  = false;
-        tbl->pos        = tbl->ctids.size();
+        tbl->pos        = tbl->pk_snapshot.size();
         return util::Result<void>{};
     }
 
@@ -352,8 +433,8 @@ util::Result<bool> PostgresConnection::at_eof(PostgresTable* tbl) const {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid postgres at_eof", ""};
     }
-    if (tbl->ctids.empty()) return true;
-    if (!tbl->positioned && tbl->pos >= tbl->ctids.size()) return true;
+    if (tbl->pk_snapshot.empty()) return true;
+    if (!tbl->positioned && tbl->pos >= tbl->pk_snapshot.size()) return true;
     return false;
 #else
     (void)tbl;
@@ -366,7 +447,7 @@ util::Result<bool> PostgresConnection::at_bof(PostgresTable* tbl) const {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid postgres at_bof", ""};
     }
-    if (tbl->ctids.empty()) return true;
+    if (tbl->pk_snapshot.empty()) return true;
     return !tbl->positioned && tbl->pos == 0;
 #else
     (void)tbl;
@@ -380,7 +461,7 @@ util::Result<std::uint32_t> PostgresConnection::record_count(PostgresTable* tbl)
         return util::Error{5001, 0, "invalid postgres record_count", ""};
     }
     if (tbl->rec_count_cached) return tbl->cached_rec_count;
-    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->ctids.size());
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
     tbl->rec_count_cached = true;
     return tbl->cached_rec_count;
 #else
@@ -453,19 +534,22 @@ util::Result<bool> PostgresConnection::seek_index(
         return util::Error{5063, 0, "seek column not found", column};
     }
 
+    const std::string sel  = pk_select_list(*tbl);
+    const std::string qcol = quote_ident(column);
+    const std::string from = " FROM " + quote_ident(tbl->name) + " WHERE ";
+
     std::string sql;
     if (last_key) {
         sql = soft
-            ? "SELECT ctid::text FROM \"" + tbl->name + "\" WHERE \"" +
-              column + "\" <= $1 ORDER BY \"" + column + "\" DESC LIMIT 1"
-            : "SELECT ctid::text FROM \"" + tbl->name + "\" WHERE \"" +
-              column + "\" = $1 ORDER BY \"" + column + "\" DESC LIMIT 1";
+            ? "SELECT " + sel + from + qcol + " <= $1 ORDER BY " + qcol +
+              " DESC LIMIT 1"
+            : "SELECT " + sel + from + qcol + " = $1 ORDER BY " + qcol +
+              " DESC LIMIT 1";
     } else {
         sql = soft
-            ? "SELECT ctid::text FROM \"" + tbl->name + "\" WHERE \"" +
-              column + "\" >= $1 ORDER BY \"" + column + "\" ASC LIMIT 1"
-            : "SELECT ctid::text FROM \"" + tbl->name + "\" WHERE \"" +
-              column + "\" = $1 LIMIT 1";
+            ? "SELECT " + sel + from + qcol + " >= $1 ORDER BY " + qcol +
+              " ASC LIMIT 1"
+            : "SELECT " + sel + from + qcol + " = $1 LIMIT 1";
     }
 
     const char* params[1] = {key.c_str()};
@@ -479,9 +563,16 @@ util::Result<bool> PostgresConnection::seek_index(
 
     bool found = false;
     if (PQntuples(res) == 1) {
-        const std::string ctid = PQgetvalue(res, 0, 0);
+        const int pk_cols = PQnfields(res);
+        PostgresTable::PkRow pk;
+        pk.values.resize(static_cast<std::size_t>(pk_cols));
+        for (int c = 0; c < pk_cols; ++c) {
+            pk.values[static_cast<std::size_t>(c)] =
+                PQgetisnull(res, 0, c) ? std::string{}
+                                       : PQgetvalue(res, 0, c);
+        }
         PQclear(res);
-        if (auto p = position_at_ctid(impl_->conn, tbl, ctid); !p) {
+        if (auto p = position_at_pk(impl_->conn, tbl, pk); !p) {
             return p.error();
         }
         found = tbl->positioned && tbl->row_valid;
