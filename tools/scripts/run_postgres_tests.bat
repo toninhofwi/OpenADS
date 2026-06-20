@@ -5,8 +5,8 @@ REM GCC/Ninja builds link against winlibs runtime DLLs. Before running the
 REM exe by hand, prepend winlibs to PATH (libgcc_s_seh-1, libstdc++-6,
 REM libwinpthread-1 live there):
 REM   set PATH=%OPENADS_TOOLCHAIN_ROOT%\winlibs-x86_64\bin;%PATH%
-REM This script does that automatically when DEVAI_ROOT/OPENADS_TOOLCHAIN_ROOT
-REM is set. Also needs pgsql\bin for libpq.dll.
+REM This script does that automatically when OPENADS_TOOLCHAIN_ROOT is set.
+REM Also needs pgsql\bin for libpq.dll.
 REM
 REM Cleaner long-term: build with MSVC cl (see build_msvc_x64_postgres.bat) so
 REM no GCC runtime is required at test time.
@@ -21,12 +21,8 @@ if not exist "%BUILD%\tests\openads_unit_tests.exe" (
 )
 
 if not defined OPENADS_TOOLCHAIN_ROOT (
-    if defined DEVAI_ROOT (
-        set "OPENADS_TOOLCHAIN_ROOT=%DEVAI_ROOT%\_UtlAI"
-    )
-)
-if not defined OPENADS_TOOLCHAIN_ROOT (
-    echo ERROR: set OPENADS_TOOLCHAIN_ROOT or DEVAI_ROOT for libpq / winlibs PATH.
+    echo ERROR: set OPENADS_TOOLCHAIN_ROOT to the directory that holds pgsql
+    echo        and winlibs (for libpq / winlibs PATH).
     exit /b 1
 )
 
