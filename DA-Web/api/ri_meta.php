@@ -12,6 +12,7 @@
 header('Content-Type: application/json');
 session_start();
 require_once __DIR__ . '/common.php';
+require_once __DIR__ . '/openads_stubs.php';
 
 $ddName = trim($_GET['dd']     ?? '');
 $action = trim($_GET['action'] ?? '');
@@ -217,11 +218,33 @@ function resolveIndexPath(string $idxFile, string $addDir): string {
     return $addDir . DIRECTORY_SEPARATOR . $idxFile;
 }
 
-// Fetch index tags for $tableName by querying system.indexes and parsing files.
-// Falls back to probing the DD directory for {table}.adi / {table}.cdx when
-// system.indexes has no registered entry for the table (e.g. unregistered indexes).
+// Primary path: ask the engine (auto-opens sibling .adi/.cdx like AdsOpenTable).
+function fetchIndexTagsFromEngine(AdsConnection $conn, string $tableName): array {
+    if ($tableName === '') return [];
+    try {
+        $tbl  = AdsTable::open($conn, $tableName, 0);
+        $raw  = $tbl->getIndexTags();
+        $tbl->close();
+        $tags = [];
+        foreach ($raw as $entry) {
+            $tag = trim((string)($entry['tag'] ?? ''));
+            if ($tag !== '') $tags[] = $tag;
+        }
+        $tags = array_values(array_unique($tags));
+        sort($tags);
+        return $tags;
+    } catch (Throwable) {
+        return [];
+    }
+}
+
+// Fallback: parse CDX/ADI from system.indexes paths or DD directory probes.
 function fetchIndexTags(AdsConnection $conn, string $addDir, string $tableName): array {
     if ($tableName === '') return [];
+
+    $engine = fetchIndexTagsFromEngine($conn, $tableName);
+    if (!empty($engine)) return $engine;
+
     try {
         $tags = [];
         $found = false;
