@@ -197,7 +197,9 @@ util::Result<SqliteConnection> SqliteConnection::open(const SqliteUri& uri) {
 void SqliteConnection::disconnect() noexcept {
 #if defined(OPENADS_WITH_SQLITE)
     if (impl_ && impl_->db) {
-        sqlite3_close(impl_->db);
+        // close_v2 tolerates outstanding prepared statements (zombie close)
+        // instead of failing with SQLITE_BUSY and leaking the handle.
+        sqlite3_close_v2(impl_->db);
         impl_->db = nullptr;
     }
 #endif
@@ -504,7 +506,7 @@ util::Result<bool> SqliteConnection::seek_index(SqliteTable* tbl,
         return sqlite_error(impl_->db, "prepare seek");
     }
     sqlite3_bind_text(stmt, 1, key.c_str(),
-                      static_cast<int>(key.size()), SQLITE_TRANSIENT);
+                      static_cast<int>(key.size()), SQLITE_STATIC);
 
     bool found = false;
     const int rc = sqlite3_step(stmt);

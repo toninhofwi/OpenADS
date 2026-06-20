@@ -104,16 +104,6 @@ namespace {
     return util::Result<void>{};
 }
 
-[[maybe_unused]] std::string escape_pragma_key(const std::string& key) {
-    std::string out;
-    out.reserve(key.size());
-    for (char c : key) {
-        if (c == '\'') out.append("''");
-        else out.push_back(c);
-    }
-    return out;
-}
-
 } // namespace
 #endif  // OPENADS_WITH_SQLCIPHER
 
@@ -123,10 +113,13 @@ util::Result<void> apply_cipher_key(sqlite3* db, const std::string& key) {
     // Select the SQLCipher-compatible cipher scheme BEFORE keying; `legacy=4`
     // pins the SQLCipher v4 page format (kdf_iter 256000, HMAC-SHA512, 4096B
     // pages). `PRAGMA key` then derives the key and unlocks the database.
-    const std::string esc = escape_pragma_key(key);
     if (auto r = exec_pragma(db, "PRAGMA cipher='sqlcipher'"); !r) return r;
     if (auto r = exec_pragma(db, "PRAGMA legacy=4"); !r) return r;
-    if (auto r = exec_pragma(db, "PRAGMA key='" + esc + "'"); !r) return r;
+    // Bind the key through the C API rather than a PRAGMA string: no escaping,
+    // and the passphrase never appears in SQL text or logs.
+    if (sqlite3_key(db, key.data(), static_cast<int>(key.size())) != SQLITE_OK) {
+        return sqlite_error(db, "sqlite3_key");
+    }
     return util::Result<void>{};
 #else
     (void)db;
