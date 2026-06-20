@@ -81,6 +81,19 @@ util::Result<void> load_current_row(sqlite3* db, SqliteTable* tbl) {
         tbl->current_nulls.clear();
         return util::Result<void>{};
     }
+    if (tbl->is_result) {
+        // Materialized result cursor: serve the row from memory, no query.
+        if (tbl->pos < tbl->result_rows.size()) {
+            tbl->current_row   = tbl->result_rows[tbl->pos];
+            tbl->current_nulls = tbl->result_nulls[tbl->pos];
+            tbl->row_valid     = true;
+        } else {
+            tbl->current_row.clear();
+            tbl->current_nulls.clear();
+            tbl->row_valid = false;
+        }
+        return util::Result<void>{};
+    }
     if (!tbl->fields_cached) {
         auto d = describe_table_impl(db, tbl);
         if (!d) return d.error();
@@ -154,12 +167,12 @@ util::Result<SqliteConnection> SqliteConnection::open(const SqliteUri& uri) {
     conn.impl_    = std::make_unique<Impl>();
 
     sqlite3* raw = nullptr;
-    // Phase-1 driver is read-only: open an existing database, never
-    // create. A mistyped path must fail loudly, not silently spawn an
-    // empty database file.
+    // SQL passthrough (AdsExecuteSQLDirect) adds DDL/DML, so the backend opens
+    // read-write and creates the file on first use — a Harbour application can
+    // CREATE its own database via SQL.
     const int rc = sqlite3_open_v2(
         uri.path.c_str(), &raw,
-        SQLITE_OPEN_READONLY, nullptr);
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
     if (rc != SQLITE_OK) {
         util::Error e = sqlite_error(raw, "sqlite3_open");
         if (raw) sqlite3_close(raw);
@@ -519,6 +532,79 @@ util::Result<bool> SqliteConnection::seek_index(SqliteTable* tbl,
     (void)key;
     (void)soft;
     (void)last_key;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::exec_sql(const std::string& sql) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid()) return util::Error{5001, 0, "sqlite connection not open", ""};
+    char* err = nullptr;
+    if (sqlite3_exec(impl_->db, sql.c_str(), nullptr, nullptr, &err)
+            != SQLITE_OK) {
+        std::string msg = err ? err : "exec failed";
+        if (err) sqlite3_free(err);
+        return util::Error{5001, 0, msg, ""};
+    }
+    return util::Result<void>{};
+#else
+    (void)sql;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<std::unique_ptr<SqliteTable>>
+SqliteConnection::query_sql(const std::string& sql) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid()) return util::Error{5001, 0, "sqlite connection not open", ""};
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(impl_->db, sql.c_str(),
+                           static_cast<int>(sql.size()),
+                           &stmt, nullptr) != SQLITE_OK) {
+        return sqlite_error(impl_->db, "prepare query");
+    }
+    auto tbl = std::make_unique<SqliteTable>();
+    tbl->conn      = this;
+    tbl->name      = "(result)";
+    tbl->is_result = true;
+
+    const int cols = sqlite3_column_count(stmt);
+    tbl->fields.reserve(static_cast<std::size_t>(cols));
+    for (int c = 0; c < cols; ++c) {
+        const char* cn = sqlite3_column_name(stmt, c);
+        const char* dt = sqlite3_column_decltype(stmt, c);
+        tbl->fields.push_back(map_sqlite_column(cn ? cn : "", dt, false));
+    }
+    tbl->fields_cached = true;
+
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        std::vector<std::string> row(static_cast<std::size_t>(cols));
+        std::vector<bool>        nul(static_cast<std::size_t>(cols));
+        for (int c = 0; c < cols; ++c) {
+            bool is_null = false;
+            row[static_cast<std::size_t>(c)] =
+                format_sqlite_value(stmt, c, is_null);
+            nul[static_cast<std::size_t>(c)] = is_null;
+        }
+        tbl->result_rows.push_back(std::move(row));
+        tbl->result_nulls.push_back(std::move(nul));
+    }
+    if (rc != SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        return sqlite_error(impl_->db, "step query");
+    }
+    sqlite3_finalize(stmt);
+
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->result_rows.size());
+    tbl->rec_count_cached = true;
+    // Synthetic rowid slots so record_count + nav bounds reuse the shared path.
+    tbl->rowids.resize(tbl->result_rows.size());
+    tbl->positioned = false;
+    tbl->pos        = 0;
+    return tbl;
+#else
+    (void)sql;
     return util::Error{5004, 0, "sqlite backend disabled", ""};
 #endif
 }

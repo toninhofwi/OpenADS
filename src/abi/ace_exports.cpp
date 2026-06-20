@@ -7896,6 +7896,7 @@ namespace {
 struct SqlStatement {
     Connection*                            conn   = nullptr;
     openads::network::RemoteConnection*    remote = nullptr;
+    openads::sql_backend::SqliteConnection* sqlite = nullptr;
     std::string                            sql;
     // RCB 2026-05-22 17:03 — The original struct stored only the raw SQL string.
     // AdsSet* functions never had a place to write named parameter values because
@@ -7977,6 +7978,17 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
         *phStatement = h;
         return ok();
     }
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* sc = s.registry.lookup<openads::sql_backend::SqliteConnection>(
+            hConnect, HandleKind::SqliteConnection)) {
+        auto stmt = std::make_unique<SqlStatement>();
+        stmt->sqlite = sc;
+        ADSHANDLE h = next_stmt_handle();
+        stmt_map()[h] = std::move(stmt);
+        *phStatement = h;
+        return ok();
+    }
+#endif
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto stmt = std::make_unique<SqlStatement>();
@@ -9251,6 +9263,44 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         *phCursor = h;
         return ok();
     }
+#if defined(OPENADS_WITH_SQLITE)
+    if (it->second->sqlite != nullptr) {
+        auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        // A result-producing statement (SELECT/WITH/VALUES/PRAGMA/EXPLAIN) gets
+        // a navigable cursor; everything else (INSERT/UPDATE/DELETE/DDL) just
+        // executes and returns no cursor.
+        std::size_t w = 0;
+        while (w < sqlstr.size() &&
+               std::isspace(static_cast<unsigned char>(sqlstr[w]))) ++w;
+        auto kw_is = [&](const char* kw) {
+            std::size_t n = std::strlen(kw);
+            if (sqlstr.size() - w < n) return false;
+            for (std::size_t k = 0; k < n; ++k)
+                if (std::toupper(static_cast<unsigned char>(sqlstr[w + k])) !=
+                    kw[k]) return false;
+            return true;
+        };
+        const bool produces_rows = kw_is("SELECT") || kw_is("WITH") ||
+            kw_is("VALUES") || kw_is("PRAGMA") || kw_is("EXPLAIN");
+        if (produces_rows) {
+            auto q = it->second->sqlite->query_sql(sqlstr);
+            if (!q) return fail(q.error());
+            auto& s = state();
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
+            auto holder = std::move(q).value();
+            openads::sql_backend::SqliteTable* raw = holder.get();
+            Handle h = s.registry.register_object(
+                HandleKind::SqliteTable, raw);
+            sqlite_tables_map().emplace(h, std::move(holder));
+            *phCursor = h;
+            return ok();
+        }
+        if (auto r = it->second->sqlite->exec_sql(sqlstr); !r)
+            return fail(r.error());
+        *phCursor = 0;
+        return ok();
+    }
+#endif
     Connection* c = it->second->conn;
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);

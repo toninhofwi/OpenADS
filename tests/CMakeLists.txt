@@ -59,6 +59,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_smoke_test.cpp
     unit/abi_plus_sqlite_read_test.cpp
     unit/abi_plus_sqlite_seek_test.cpp
+    unit/abi_plus_sqlite_passthrough_test.cpp
     unit/lsn_map_test.cpp
     unit/index_expr_test.cpp
     unit/abi_m92_real_test.cpp
