@@ -16,13 +16,29 @@
 
 namespace {
 
+constexpr const char* kDefaultPgUri =
+    "postgresql://postgres@127.0.0.1:5433/postgres";
+
+const char* test_pg_uri() {
+    const char* uri_env = std::getenv("OPENADS_TEST_PG_URI");
+    if (uri_env != nullptr && uri_env[0] != '\0') {
+        return uri_env;
+    }
+    return kDefaultPgUri;
+}
+
 void seed_fixture(PGconn* conn) {
     auto exec = [&](const char* sql) {
         PGresult* res = PQexec(conn, sql);
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
             const char* msg = PQerrorMessage(conn);
             PQclear(res);
-            FAIL(std::string("seed failed: ") + (msg ? msg : ""));
+            std::string detail = "seed failed";
+            if (msg != nullptr && msg[0] != '\0') {
+                detail += ": ";
+                detail += msg;
+            }
+            FAIL(detail);
         }
         PQclear(res);
     };
@@ -45,20 +61,14 @@ std::string field_str(ADSHANDLE hTable, const char* name) {
 } // namespace
 
 TEST_CASE("ABI: postgresql read-only AdsOpenTable navigation") {
-    const char* uri_env = std::getenv("OPENADS_TEST_PG_URI");
-    if (uri_env == nullptr || uri_env[0] == '\0') {
-        SKIP("Set OPENADS_TEST_PG_URI (postgresql://...) for E2E test.");
-    }
+    const char* uri_cstr = test_pg_uri();
 
-    PGconn* seed = PQconnectdb(uri_env);
-    if (PQstatus(seed) != CONNECTION_OK) {
-        PQfinish(seed);
-        SKIP("Cannot connect with OPENADS_TEST_PG_URI.");
-    }
+    PGconn* seed = PQconnectdb(uri_cstr);
+    REQUIRE(PQstatus(seed) == CONNECTION_OK);
     seed_fixture(seed);
     PQfinish(seed);
 
-    const std::string uri = uri_env;
+    const std::string uri = uri_cstr;
     std::vector<UNSIGNED8> srv(uri.size() + 1);
     std::memcpy(srv.data(), uri.c_str(), uri.size() + 1);
 

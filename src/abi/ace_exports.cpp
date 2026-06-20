@@ -900,6 +900,20 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
             return ok();
         }
     }
+#else
+    {
+        static constexpr const char* kPgPrefixes[] = {
+            "postgresql://", "postgres://", "pgsql://",
+        };
+        for (const char* prefix : kPgPrefixes) {
+            const auto plen = std::char_traits<char>::length(prefix);
+            if (path.size() >= plen && path.compare(0, plen, prefix) == 0) {
+                return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                            "postgresql URI requires "
+                            "OPENADS_WITH_POSTGRESQL=ON");
+            }
+        }
+    }
 #endif
     auto opened = Connection::open(path);
     if (!opened) return fail(opened.error());

@@ -4,7 +4,7 @@
 
 namespace openads::sql_backend {
 
-// Full libpq connection URI after `postgresql://` / `postgres://` prefix.
+// Full libpq connection URI after `postgresql://`, `postgres://`, or `pgsql://`.
 struct PostgresUri {
     std::string conninfo;
 };
