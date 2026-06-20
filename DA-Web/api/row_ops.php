@@ -109,7 +109,13 @@ try {
         foreach ($newVals as $field => $value) {
             if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $field)) continue;
             if (in_array(strtoupper($field), $pkFields, true)) continue;
-            $setParts[] = $value === null ? "$field = NULL" : "$field = '{$esc($value)}'";
+            if ($value === null) {
+                $setParts[] = "$field = NULL";
+            } elseif (is_bool($value)) {
+                $setParts[] = $field . ($value ? ' = TRUE' : ' = FALSE');
+            } else {
+                $setParts[] = "$field = '{$esc($value)}'";
+            }
         }
 
         if (empty($setParts)) {
