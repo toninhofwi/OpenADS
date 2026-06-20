@@ -33,6 +33,10 @@ Outros presets: `ninja-clang` (Linux), `default` (macOS). Ver
 5. PR **documentada**: Summary, Changes, Motivation, Testing.
 6. PR de código com **unit test ou smoke test** (`ctest`); docs-only
    isenta teste, mas descreve o que foi verificado.
+7. **Fixtures genéricos no Git** — testes versionados usam DBF/DD
+   sintéticos ou `temp_directory_path()`; nunca binários legados reais
+   (`pmsys.add`, paths `F:\…`). Validar no legado **local** é ok;
+   não commitar scripts/capturas dessa validação.
 
 ## Política de protocolo (obrigatória)
 
@@ -75,7 +79,8 @@ OpenADS oferece:
 2. `ctest` verde (ou PR marcado `wip:`).
 3. Descrição do PR com Summary / Changes / Motivation / Testing.
 4. Teste unitário ou smoke para mudança de código.
-5. Sem dados reais de cliente em fixtures.
+5. Testes no Git só com fixtures genéricos (sem legado binário novo).
+6. Sem dados reais de cliente em fixtures.
 
 ## Links
 

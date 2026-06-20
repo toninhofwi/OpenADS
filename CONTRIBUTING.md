@@ -105,6 +105,26 @@ At minimum:
 Docs-only PRs are exempt, but must still describe what was verified
 (spelling, links, build of doc site if applicable).
 
+### Test fixtures: generic in git, legacy local only
+
+**Committed tests (`tests/unit/`, `ctest`, CI) must use generic,
+self-contained fixtures** — built in the test itself or under
+`tests/fixtures/` as minimal synthetic files (text `.add` v1, tiny
+`.dbf`, temp directories). No hardcoded client paths, no dependency
+on proprietary binary `.add`/`.adt` blobs from production or
+third-party dumps.
+
+| OK in git / PR | Not in git / PR |
+|----------------|-----------------|
+| `fs::temp_directory_path()` + synthetic DBF/DD | `pmsys.add`, `landlords.adt`, `F:\…` paths |
+| `write_dd()` with `# OpenADS Data Dictionary v1` | Real legacy binary dictionaries |
+| Skip-if-absent optional probes (existing upstream) | **New** tests that require legacy files |
+
+**Validating against legacy binaries locally is fine** — run ad-hoc
+scripts on your machine to compare behaviour. Do **not** commit those
+scripts, paths, captures, or fixtures as part of a PR. Keep local-only
+probes outside the repo or in `.gitignore` on your fork.
+
 ---
 
 ## Protocol policy (required reading)
@@ -183,8 +203,10 @@ Avoid vendor trademarks and phrases like "reverse engineering" or
 3. `ctest` passes (or PR title uses `wip:` with explanation).
 4. PR description has Summary / Changes / Motivation / Testing.
 5. Code change includes unit or smoke test (unless docs-only).
-6. No real customer/patient data in fixtures.
-7. Commit messages and PR text use neutral terminology.
+6. Tests use generic/synthetic fixtures only — no new legacy binary
+   dependencies in `tests/unit/` or CI.
+7. No real customer/patient data in fixtures.
+8. Commit messages and PR text use neutral terminology.
 
 ---
 
