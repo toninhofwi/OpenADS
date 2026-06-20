@@ -28,7 +28,11 @@ Outros presets: `ninja-clang` (Linux), `default` (macOS). Ver
 1. Fork no GitHub.
 2. Branch a partir de `upstream/main`.
 3. Uma fatia lógica por PR (`docs:`, `fix:`, `test:`, `feat:`).
-4. PR contra `FiveTechSoft/OpenADS:main`.
+4. PR contra `FiveTechSoft/OpenADS:main` — **só o dono mergeia**;
+   contribuidor abre PR e aguarda review.
+5. PR **documentada**: Summary, Changes, Motivation, Testing.
+6. PR de código com **unit test ou smoke test** (`ctest`); docs-only
+   isenta teste, mas descreve o que foi verificado.
 
 ## Política de protocolo (obrigatória)
 
@@ -69,7 +73,9 @@ OpenADS oferece:
 
 1. Diff sem dumps, scripts de criptoanálise ou POC de wire legado.
 2. `ctest` verde (ou PR marcado `wip:`).
-3. Sem dados reais de cliente em fixtures.
+3. Descrição do PR com Summary / Changes / Motivation / Testing.
+4. Teste unitário ou smoke para mudança de código.
+5. Sem dados reais de cliente em fixtures.
 
 ## Links
 

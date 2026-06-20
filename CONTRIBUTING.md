@@ -76,6 +76,35 @@ Details: [`bindings/php_ext/README.md`](bindings/php_ext/README.md).
 7. Use honest commit prefixes: `docs:`, `fix:`, `test:`, `feat:`,
    or `wip:` when not yet validated.
 
+**Maintainers merge; contributors do not.** Never push directly to
+`main` on the upstream repo. Every change lands through an open PR
+that the project owner reviews and merges.
+
+### Every PR must be documented
+
+The PR description should include:
+
+| Section | Content |
+|---------|---------|
+| **Summary** | One paragraph: what changes and why |
+| **Changes** | Bullet list of files / behaviour touched |
+| **Motivation** | User-visible problem or parity gap |
+| **Testing** | Exact test files and cases run (see below) |
+
+For behaviour changes, update the relevant doc under `docs/` or
+`DA-Web/README.md` when the feature is user-facing.
+
+### Every code PR must include tests
+
+At minimum:
+
+- **Unit test** in `tests/unit/` (doctest, picked up by `ctest`), or
+- **Smoke test** in `tests/unit/*_smoke_test.cpp` or
+  `tests/smoke/` for end-to-end ABI / RDD paths.
+
+Docs-only PRs are exempt, but must still describe what was verified
+(spelling, links, build of doc site if applicable).
+
 ---
 
 ## Protocol policy (required reading)
@@ -152,8 +181,10 @@ Avoid vendor trademarks and phrases like "reverse engineering" or
 2. New files are tests, docs, or engine fixes aligned with the
    protocol policy above.
 3. `ctest` passes (or PR title uses `wip:` with explanation).
-4. No real customer/patient data in fixtures.
-5. Commit messages and PR text use neutral terminology.
+4. PR description has Summary / Changes / Motivation / Testing.
+5. Code change includes unit or smoke test (unless docs-only).
+6. No real customer/patient data in fixtures.
+7. Commit messages and PR text use neutral terminology.
 
 ---
 
