@@ -84,7 +84,7 @@ OpenADS oferece:
 
 ## Links
 
-- [Primeiros passos](primeiros-passos/)
-- [Arquitetura](arquitetura/)
+- [Primeiros passos](/OpenADS/pt/primeiros-passos/)
+- [Arquitetura](/OpenADS/pt/arquitetura/)
 - [Protocolo wire (EN)](/OpenADS/en/wire-protocol/)
 - [TODO.md](https://github.com/FiveTechSoft/OpenADS/blob/main/TODO.md)
