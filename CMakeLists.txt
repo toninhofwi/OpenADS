@@ -75,6 +75,8 @@ option(OPENADS_WITH_SQLITE "Enable the SQLite-backed table driver (vendors the S
 option(OPENADS_WITH_POSTGRESQL "Enable PostgreSQL-backed table driver (libpq)" OFF)
 # Optional MariaDB/MySQL table driver (libmariadb). OFF by default.
 option(OPENADS_WITH_MARIADB "Enable MariaDB-backed table driver (libmariadb)" OFF)
+# Optional generic ODBC table driver (system ODBC driver manager). OFF by default.
+option(OPENADS_WITH_ODBC "Enable ODBC-backed table driver (system ODBC driver manager)" OFF)
 
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each

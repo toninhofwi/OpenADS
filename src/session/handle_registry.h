@@ -32,7 +32,11 @@ enum class HandleKind {
     // OpenADS Plus — MariaDB/MySQL backend (mariadb:// …).
     MariaConnection = 15,
     MariaTable      = 16,
-    MariaIndex      = 17
+    MariaIndex      = 17,
+    // OpenADS Plus — generic ODBC backend (odbc:// …).
+    OdbcConnection = 18,
+    OdbcTable      = 19,
+    OdbcIndex      = 20
 };
 
 using Handle = std::uint64_t;

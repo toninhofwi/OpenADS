@@ -79,6 +79,14 @@ if(OPENADS_WITH_MARIADB)
     )
 endif()
 
+if(OPENADS_WITH_ODBC)
+    target_sources(openads_core PRIVATE
+        sql_backend/odbc_uri.cpp
+        sql_backend/odbc_backend.cpp
+        sql_backend/odbc_connection.cpp
+    )
+endif()
+
 if(WIN32)
     target_sources(openads_core PRIVATE
         platform/file_win32.cpp
@@ -132,6 +140,15 @@ endif()
 if(OPENADS_WITH_MARIADB)
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_MARIADB=1)
     target_link_libraries(openads_core PUBLIC openads_libmariadb)
+endif()
+
+if(OPENADS_WITH_ODBC)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_ODBC=1)
+    if(WIN32)
+        target_link_libraries(openads_core PUBLIC odbc32)
+    else()
+        target_link_libraries(openads_core PUBLIC odbc)
+    endif()
 endif()
 
 # ----------------------------------------------------------------------
