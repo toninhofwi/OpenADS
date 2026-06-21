@@ -14815,7 +14815,7 @@ UNSIGNED32 AdsFindConnection(UNSIGNED8* /*pucServer*/, ADSHANDLE* phConnect) {
 UNSIGNED32 AdsGetAllIndexes(ADSHANDLE hTable, ADSHANDLE* ahIndex,
                             UNSIGNED16* pusArrayLen) {
     if (!pusArrayLen) return fail(openads::AE_INTERNAL_ERROR, "null out");
-    if (auto* rt = get_remote_table(hTable)) { *pusArrayLen = 0; return ok(); }
+    if (get_remote_table(hTable)) { *pusArrayLen = 0; return ok(); }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::vector<ADSHANDLE> found;
