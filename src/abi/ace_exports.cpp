@@ -3634,6 +3634,20 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
                            std::string(nbuf)))
             return ok();
     }
+    // Remote table: mirror AdsSetString -- ship the value to the server as a
+    // string (locale-independent %.17g) over the wire set_field. Without this
+    // a numeric set against a tcp:// table fell through to the local-only
+    // get_table() path and failed silently, dropping the write.
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        char nbuf[64];
+        std::snprintf(nbuf, sizeof(nbuf), "%.17g", dValue);
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname, std::string(nbuf));
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
