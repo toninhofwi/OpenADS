@@ -29,16 +29,22 @@
 #if defined(OPENADS_WITH_SQLITE)
 #include "sql_backend/sqlite_connection.h"
 #include "sql_backend/sqlite_index.h"
+#include "sql_backend/uri.h"
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
 #include "sql_backend/postgres_connection.h"
 #include "sql_backend/postgres_index.h"
 #include "sql_backend/postgres_uri.h"
+#endif
+#if defined(OPENADS_WITH_MARIADB)
 #include "sql_backend/maria_connection.h"
 #include "sql_backend/maria_index.h"
 #include "sql_backend/maria_uri.h"
+#endif
+#if defined(OPENADS_WITH_ODBC)
 #include "sql_backend/odbc_connection.h"
 #include "sql_backend/odbc_index.h"
 #include "sql_backend/odbc_uri.h"
-#include "sql_backend/uri.h"
 #endif
 #include "drivers/dbf_common.h"
 #include "drivers/index_trait.h"
