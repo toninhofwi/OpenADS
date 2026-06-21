@@ -20,10 +20,10 @@ The spec (`docs/superpowers/specs/2026-06-21-backend-ops-registry-design.md`) pl
   `HandleKind::Table`/`RemoteTable`) MUST remain the unchanged fall-through. They
   do NOT register ops.
 - No change to the public ACE ABI (exported function signatures unchanged).
-- Build/test env: run from a shell with MSVC x64 on PATH
-  (`_UtlAI\msvc\setup_x64.bat`); configure with `OPENADS_WITH_SQLITE=ON`.
+- Build/test env: run from a shell with MSVC x64 on PATH (a Visual Studio
+  x64 Developer Command Prompt); configure with `OPENADS_WITH_SQLITE=ON`.
 - Branch: `refactor/backend-ops-registry` (base `973d6f3`). Supervised merge to
-  the integration line per regra 7.
+  the integration line.
 - Each commit ends with the `Co-Authored-By: Claude Opus 4.8 (1M context)` trailer.
 
 ---
