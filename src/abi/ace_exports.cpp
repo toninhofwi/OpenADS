@@ -1915,7 +1915,7 @@ UNSIGNED32 AdsCloseAllTables(void) {
 
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     {
-    if (get_remote_table(hTable)) {
+    if (auto* rt = get_remote_table(hTable)) {
             // conn is nulled out by AdsDisconnect before the RemoteConnection
             // is freed; skip the wire close op if the connection is already gone.
             if (rt->conn != nullptr)
@@ -3540,9 +3540,8 @@ UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                          UNSIGNED16 /*usOption*/) {
     if (pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    if (auto* rt = get_remote_table(hTable)) {
-        // M12.28 — remote table: delegate to AdsGetField which serves
-        // from the row cache or falls back to a GetField RPC.
+    if (auto* _rt = get_remote_table(hTable); _rt != nullptr) {
+        (void)_rt;
         UNSIGNED8 tmp[4096] = {0};
         UNSIGNED32 cap = sizeof(tmp);
         auto rc = AdsGetField(hTable, pucField, tmp, &cap, 0);
@@ -14816,7 +14815,7 @@ UNSIGNED32 AdsFindConnection(UNSIGNED8* /*pucServer*/, ADSHANDLE* phConnect) {
 UNSIGNED32 AdsGetAllIndexes(ADSHANDLE hTable, ADSHANDLE* ahIndex,
                             UNSIGNED16* pusArrayLen) {
     if (!pusArrayLen) return fail(openads::AE_INTERNAL_ERROR, "null out");
-    if (get_remote_table(hTable)) { *pusArrayLen = 0; return ok(); }
+    if (auto* rt = get_remote_table(hTable)) { *pusArrayLen = 0; return ok(); }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::vector<ADSHANDLE> found;
