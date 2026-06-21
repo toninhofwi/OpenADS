@@ -3608,6 +3608,19 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
                            reinterpret_cast<const char*>(pucField),
                            bValue ? "1" : "0"))
             return ok();
+    // Remote table: mirror AdsSetString/AdsSetDouble -- send the DBF logical
+    // literal ('T'/'F') through the wire set_field. Without this a logical set
+    // against a tcp:// table fell through to the local-only get_table() and
+    // failed silently, dropping the write.
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname,
+                                     std::string(bValue ? "T" : "F"));
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
