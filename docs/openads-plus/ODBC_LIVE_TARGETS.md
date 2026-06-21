@@ -15,13 +15,22 @@ pointing `OPENADS_TEST_ODBC_CONNSTR` at it. Two reproducible harnesses ship:
 
 ## Verified
 
-- **Microsoft Access** — 4 cases / 59 assertions (CI fixture).
-- **SQL Server 2022** — 4 cases / 59 assertions, via the *ODBC Driver 18 for
+- **Microsoft Access** — 5 cases / 83 assertions (CI fixture).
+- **SQL Server 2022** — 5 cases / 83 assertions, via the *ODBC Driver 18 for
   SQL Server*. The unmodified backend (same binary that passes against
   Access) navigates a `dbo.clientes` table by primary key with no
   dialect-specific changes: `SQLPrimaryKeys` is honoured, the identifier
   quote character is discovered via `SQLGetInfo`, and numeric literals are
   emitted type-aware.
+
+Both read navigation (`GO TOP` / `SKIP` / `SEEK`) and navigational write
+(`AdsAppendRecord` → `AdsSetString`/`AdsSetDouble` → `AdsWriteRecord`,
+plus `AdsDeleteRecord`) are exercised against the same fixture on both
+drivers. Write stages field values and flushes one `INSERT` (append) or
+`UPDATE` (positioned edit) per record; `AdsDeleteRecord` issues a `DELETE`
+by primary key. v1 expects the caller to supply the primary key on append
+(no IDENTITY round-trip yet) and emits SQL literals (parameter binding is a
+later hardening slice).
 
 When `OPENADS_TEST_ODBC_CONNSTR` is unset, the live cases skip (the backend
 is still exercised by the URI-parsing unit tests), so the suite stays green

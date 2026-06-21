@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace openads::sql_backend {
@@ -51,6 +52,13 @@ struct OdbcTable {
     std::size_t pos             = 0;
     bool        positioned      = false;
     bool        last_seek_found = false;
+
+    // --- write staging (navigational append / update via SQL) ---
+    // Field values set since the last AppendRecord (appending) or since
+    // navigating onto a row (edit), keyed by the driver-reported column
+    // name. flush_table emits one INSERT (appending) or UPDATE (edit).
+    std::vector<std::pair<std::string, std::string>> staged;
+    bool appending = false;
 };
 
 } // namespace openads::sql_backend

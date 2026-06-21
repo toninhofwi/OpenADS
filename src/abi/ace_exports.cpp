@@ -3409,6 +3409,11 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+    if (auto* st = get_odbc_table(hTable)) {
+        auto r = st->conn->append_blank(st);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->append_record();
@@ -3427,6 +3432,11 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->flush_table(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    if (auto* st = get_odbc_table(hTable)) {
+        auto r = st->conn->flush_table(st);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -3482,6 +3492,11 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
         rt->row_valid        = false;               // M12.17
         rt->rec_count_cached = false;               // M12.19 (Pack drops the row)
         auto r = rt->conn->delete_record(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    if (auto* st = get_odbc_table(hTable)) {
+        auto r = st->conn->delete_record(st);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -3594,6 +3609,17 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (auto* st = get_odbc_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0) {
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        }
+        auto r = st->conn->set_field(st, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
@@ -3616,6 +3642,13 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
                            reinterpret_cast<const char*>(pucField),
                            bValue ? "1" : "0"))
             return ok();
+    if (auto* st = get_odbc_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        auto r = st->conn->set_field(
+            st, reinterpret_cast<const char*>(pucField), bValue ? "1" : "0");
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
@@ -3641,6 +3674,15 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
                            reinterpret_cast<const char*>(pucField),
                            std::string(nbuf)))
             return ok();
+    }
+    if (auto* st = get_odbc_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        char nbuf2[64];
+        std::snprintf(nbuf2, sizeof(nbuf2), "%.17g", dValue);
+        auto r = st->conn->set_field(
+            st, reinterpret_cast<const char*>(pucField), std::string(nbuf2));
+        if (!r) return fail(r.error());
+        return ok();
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");

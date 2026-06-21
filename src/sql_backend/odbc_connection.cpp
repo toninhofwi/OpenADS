@@ -22,6 +22,7 @@ namespace openads::sql_backend {}
 #include <sqlext.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 
 namespace openads::sql_backend {
@@ -63,6 +64,10 @@ util::Result<void> read_all_rows(
     if (!SQL_SUCCEEDED(SQLNumResultCols(st, &cols))) {
         return odbc_error("odbc num cols", odbc_diag(SQL_HANDLE_STMT, st));
     }
+    // INSERT / UPDATE / DELETE produce no result set; there is nothing to
+    // fetch and SQLFetch on a cursorless statement would error. Return the
+    // empty row set so the write path can reuse run_query for DML.
+    if (cols == 0) return util::Result<void>{};
     while (true) {
         SQLRETURN r = SQLFetch(st);
         if (r == SQL_NO_DATA) break;
@@ -729,6 +734,168 @@ util::Result<bool> OdbcConnection::seek_index(
     }
     tbl->last_seek_found = found;
     return found;
+}
+
+namespace {
+
+bool ci_equal(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Build the PK tuple of the row just written, so flush_table can reposition
+// the cursor on it after reloading the snapshot. For an append the PK comes
+// from the staged values; for an edit it is the current PK with any staged
+// PK-column override applied.
+OdbcTable::PkRow target_pk(const OdbcTable& tbl, bool appending) {
+    OdbcTable::PkRow pk;
+    pk.values.reserve(tbl.pk_columns.size());
+    for (std::size_t c = 0; c < tbl.pk_columns.size(); ++c) {
+        std::string v = (!appending && tbl.pos < tbl.pk_snapshot.size())
+                            ? tbl.pk_snapshot[tbl.pos].values[c]
+                            : std::string();
+        for (const auto& kv : tbl.staged) {
+            if (ci_equal(kv.first, tbl.pk_columns[c])) { v = kv.second; break; }
+        }
+        pk.values.push_back(v);
+    }
+    return pk;
+}
+
+} // namespace
+
+util::Result<void> OdbcConnection::append_blank(OdbcTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc append", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_columns(impl_->dbc, tbl); !d) return d.error();
+    }
+    tbl->staged.clear();
+    tbl->appending = true;
+    return util::Result<void>{};
+}
+
+util::Result<void> OdbcConnection::set_field(OdbcTable* tbl,
+                                             const std::string& name,
+                                             const std::string& value) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc set_field", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_columns(impl_->dbc, tbl); !d) return d.error();
+    }
+    const std::size_t idx = field_index_ci(*tbl, name);
+    if (idx == static_cast<std::size_t>(-1)) {
+        return util::Error{5063, 0, "column not found", name};
+    }
+    const std::string& sqlname = tbl->fields[idx].name;  // driver casing
+    for (auto& kv : tbl->staged) {
+        if (ci_equal(kv.first, sqlname)) { kv.second = value; return {}; }
+    }
+    tbl->staged.emplace_back(sqlname, value);
+    return util::Result<void>{};
+}
+
+util::Result<void> OdbcConnection::flush_table(OdbcTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc flush", ""};
+    }
+    const std::string& q = impl_->quote;
+
+    if (tbl->appending) {
+        if (tbl->staged.empty()) {
+            return util::Error{5001, 0, "append with no fields set",
+                               tbl->name};
+        }
+        std::string cols, vals;
+        for (std::size_t i = 0; i < tbl->staged.size(); ++i) {
+            if (i) { cols += ", "; vals += ", "; }
+            cols += quote_ident(q, tbl->staged[i].first);
+            vals += format_literal(*tbl, tbl->staged[i].first,
+                                   tbl->staged[i].second);
+        }
+        const std::string sql =
+            "INSERT INTO " + quote_ident(q, tbl->sql_table) +
+            " (" + cols + ") VALUES (" + vals + ")";
+        std::vector<std::vector<std::string>> rows;
+        std::vector<std::vector<bool>>        nulls;
+        if (auto r = run_query(impl_->dbc, sql, rows, nulls); !r) {
+            return r.error();
+        }
+    } else {
+        if (tbl->staged.empty()) return util::Result<void>{};  // no-op edit
+        if (!tbl->positioned || tbl->pos >= tbl->pk_snapshot.size()) {
+            return util::Error{5026, 0, "no current record to update", ""};
+        }
+        std::string sets;
+        for (std::size_t i = 0; i < tbl->staged.size(); ++i) {
+            if (i) sets += ", ";
+            sets += quote_ident(q, tbl->staged[i].first) + " = " +
+                    format_literal(*tbl, tbl->staged[i].first,
+                                   tbl->staged[i].second);
+        }
+        const std::string sql =
+            "UPDATE " + quote_ident(q, tbl->sql_table) + " SET " + sets +
+            " WHERE " + pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos]);
+        std::vector<std::vector<std::string>> rows;
+        std::vector<std::vector<bool>>        nulls;
+        if (auto r = run_query(impl_->dbc, sql, rows, nulls); !r) {
+            return r.error();
+        }
+    }
+
+    const OdbcTable::PkRow want = target_pk(*tbl, tbl->appending);
+    tbl->staged.clear();
+    tbl->appending = false;
+
+    if (auto s = load_pk_snapshot(impl_->dbc, q, tbl); !s) return s.error();
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
+    tbl->rec_count_cached = true;
+
+    std::size_t pos = static_cast<std::size_t>(-1);
+    for (std::size_t i = 0; i < tbl->pk_snapshot.size(); ++i) {
+        if (tbl->pk_snapshot[i] == want) { pos = i; break; }
+    }
+    if (pos != static_cast<std::size_t>(-1)) {
+        return load_current_row(impl_->dbc, q, tbl, pos);
+    }
+    tbl->positioned = false;
+    tbl->row_valid  = false;
+    return util::Result<void>{};
+}
+
+util::Result<void> OdbcConnection::delete_record(OdbcTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc delete", ""};
+    }
+    tbl->staged.clear();
+    tbl->appending = false;
+    if (!tbl->positioned || tbl->pos >= tbl->pk_snapshot.size()) {
+        return util::Error{5026, 0, "no current record to delete", ""};
+    }
+    const std::string& q = impl_->quote;
+    const std::string sql =
+        "DELETE FROM " + quote_ident(q, tbl->sql_table) + " WHERE " +
+        pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos]);
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::vector<bool>>        nulls;
+    if (auto r = run_query(impl_->dbc, sql, rows, nulls); !r) {
+        return r.error();
+    }
+
+    if (auto s = load_pk_snapshot(impl_->dbc, q, tbl); !s) return s.error();
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
+    tbl->rec_count_cached = true;
+    tbl->positioned = false;
+    tbl->row_valid  = false;
+    return util::Result<void>{};
 }
 
 } // namespace openads::sql_backend

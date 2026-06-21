@@ -12,11 +12,13 @@
 
 namespace openads::sql_backend {
 
-// Read-only v1 ODBC backend. Talks to any data source with an ODBC
-// driver (SQL Server, Oracle, Firebird, PostgreSQL, MariaDB, DB2,
-// Access, …) through the Win32 / unixODBC API. Write support
-// (append / update / delete) is a later slice; until then a write on an
-// ODBC-backed table is rejected at the ABI border as an unknown handle.
+// ODBC backend. Talks to any data source with an ODBC driver (SQL Server,
+// Oracle, Firebird, PostgreSQL, MariaDB, DB2, Access, …) through the
+// Win32 / unixODBC API. Read navigates a primary-key snapshot; write
+// (append / update / delete) stages field values and flushes one
+// INSERT / UPDATE / DELETE per record. v1 expects the caller to supply the
+// primary key on append (no IDENTITY round-trip yet) and formats values as
+// SQL literals (parameter binding is a later hardening slice).
 class OdbcConnection {
 public:
     OdbcConnection();
@@ -58,6 +60,18 @@ public:
                                   const std::string& key,
                                   bool soft,
                                   bool last_key);
+
+    // --- navigational write (v1) ---
+    // append_blank starts a fresh staged row; set_field stages a value by
+    // column name (append OR positioned edit); flush_table emits the
+    // INSERT (appending) or UPDATE (positioned) and repositions on the
+    // written row; delete_record removes the current row.
+    util::Result<void> append_blank(OdbcTable* tbl);
+    util::Result<void> set_field(OdbcTable* tbl,
+                                 const std::string& name,
+                                 const std::string& value);
+    util::Result<void> flush_table(OdbcTable* tbl);
+    util::Result<void> delete_record(OdbcTable* tbl);
 
 private:
     struct Impl;
