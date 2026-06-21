@@ -6038,10 +6038,11 @@ UNSIGNED32 AdsDDGetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     auto put_u32 = [&](std::uint32_t v) -> UNSIGNED32 {
         if (pBuf != nullptr && cap >= 4) {
             auto* b = static_cast<std::uint8_t*>(pBuf);
-            b[0]=v&0xFF; b[1]=(v>>8)&0xFF; b[2]=(v>>16)&0xFF; b[3]=(v>>24)&0xFF;
+            b[0]=static_cast<uint8_t>(v&0xFF); b[1]=static_cast<uint8_t>((v>>8)&0xFF); b[2]=static_cast<uint8_t>((v>>16)&0xFF); b[3]=static_cast<uint8_t>((v>>24)&0xFF);
         }
         *pusLen = 4; return ok();
     };
+
     switch (usProp) {
         case ADS_DD_RI_PARENT:      return put_str(e.parent);
         case ADS_DD_RI_CHILD:       return put_str(e.child);
@@ -7936,7 +7937,6 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         // sap_bit: actual bit position in the ADS_PERMISSION mask.
         auto dml_col = [&perm_val](
                             uint32_t mask, bool is_grp, int sap_bit) -> std::string {
-            const uint32_t SAP_SENTINEL = 0x80000000u;
             if (mask & SAP_SENTINEL) {
                 // SAP sentinel: cannot decode actual level from encrypted blobs.
                 // For groups: approximate as full DML (SELECT+UPDATE+INSERT+DELETE).
@@ -7948,7 +7948,6 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
 
         // Execute column (ADS_PERMISSION_EXECUTE = bit 2 = 0x004).
         auto exe_col = [&perm_val](uint32_t mask, bool is_grp) -> std::string {
-            const uint32_t SAP_SENTINEL = 0x80000000u;
             if (mask & SAP_SENTINEL) return perm_val(is_grp, is_grp);
             return perm_val((mask >> 2) & 1u, is_grp);
         };
