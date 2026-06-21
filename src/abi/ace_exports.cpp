@@ -2416,18 +2416,8 @@ UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
         *pbAtEnd = r.value() ? 1 : 0;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->at_eof(st);
-        if (!r) return fail(r.error());
-        *pbAtEnd = r.value() ? 1 : 0;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->at_eof) return ops->at_eof(hTable, pbAtEnd);
     Table* t = get_table(hTable);
     if (!t || pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbAtEnd = t->eof() ? 1 : 0;
@@ -2442,17 +2432,8 @@ UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
         *pbAtBegin = r.value() ? 1 : 0;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->at_bof(st);
-        if (!r) return fail(r.error());
-        *pbAtBegin = r.value() ? 1 : 0;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->at_bof) return ops->at_bof(hTable, pbAtBegin);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbAtBegin = t->bof() ? 1 : 0;
@@ -2471,19 +2452,8 @@ UNSIGNED32 AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
         *pusFields = static_cast<UNSIGNED16>(rt->fields.size());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        if (!st->fields_cached) {
-            auto r = st->conn->describe_table(st);
-            if (!r) return fail(r.error());
-        }
-        *pusFields = static_cast<UNSIGNED16>(st->fields.size());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->num_fields) return ops->num_fields(hTable, pusFields);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* p = projection_for(hTable); p != nullptr) {
@@ -2510,23 +2480,8 @@ UNSIGNED32 AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
             rt->fields[usFieldNum - 1].name);
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        if (!st->fields_cached) {
-            auto r = st->conn->describe_table(st);
-            if (!r) return fail(r.error());
-        }
-        if (usFieldNum == 0 || usFieldNum > st->fields.size()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        openads::abi::copy_to_caller(pucBuf, pusLen,
-            st->fields[usFieldNum - 1].name);
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_name) return ops->field_name(hTable, usFieldNum, pucBuf, pusLen);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto* p = projection_for(hTable);
@@ -2607,16 +2562,8 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
         *pusType = rt->fields[i].type;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        auto i = sqlite_field_index(st, pucField);
-        if (i == std::numeric_limits<std::size_t>::max()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        *pusType = st->fields[i].type;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_type) return ops->field_type(hTable, pucField, pusType);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -2638,16 +2585,8 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
         *pulLen = rt->fields[i].length;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        auto i = sqlite_field_index(st, pucField);
-        if (i == std::numeric_limits<std::size_t>::max()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        *pulLen = st->fields[i].length;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_length) return ops->field_length(hTable, pucField, pulLen);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -2690,16 +2629,8 @@ UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
         *pusDec = rt->fields[i].decimals;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        auto i = sqlite_field_index(st, pucField);
-        if (i == std::numeric_limits<std::size_t>::max()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        *pusDec = st->fields[i].decimals;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_decimals) return ops->field_decimals(hTable, pucField, pusDec);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -2980,27 +2911,8 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         openads::abi::copy_to_caller(pucBuf, pulLen, val);
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto fname = openads::abi::to_internal(pucField, 0);
-        bool is_null = false;
-        std::string val;
-        auto r = st->conn->read_field(st, fname, val, is_null);
-        if (!r) return fail(r.error());
-        if (is_null) val.clear();
-        auto fi = sqlite_field_index(st, pucField);
-        if (fi != std::numeric_limits<std::size_t>::max() &&
-            st->fields[fi].type == ADS_STRING) {
-            val = pad_char_field(std::move(val), st->fields[fi].length);
-        }
-        openads::abi::copy_to_caller(pucBuf, pulLen, val);
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->get_field) return ops->get_field(hTable, pucField, pucBuf, pulLen, 0);
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
