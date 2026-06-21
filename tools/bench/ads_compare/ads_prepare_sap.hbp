@@ -1,0 +1,22 @@
+# ads_prepare_sap.hbp - SAP data generator for engine bench
+-w3
+-iwlib_local
+ads_prepare_bench.prg
+-lrddads
+-L"${ACE64_LIB_PATH}"
+-lace64
+-lws2_32
+-ladvapi32
+-luser32
+-lkernel32
+-lole32
+-loleaut32
+-luuid
+-ldflag=/NODEFAULTLIB:msvcrt
+-ldflag=/NODEFAULTLIB:libucrt
+-ldflag=/NODEFAULTLIB:libvcruntime.lib
+-ldflag=/FORCE:MULTIPLE
+-L"${MSVC_UCRT_X64}"
+-lucrt
+-lvcruntime
+-llegacy_stdio_definitions
