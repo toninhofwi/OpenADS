@@ -2307,16 +2307,6 @@ UNSIGNED32 AdsCloseAllTables(void) {
 
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     {
-#if defined(OPENADS_WITH_SQLITE)
-        if (auto* st = get_sqlite_table(hTable)) {
-            (void)st;
-            auto& s2 = state();
-            std::lock_guard<std::recursive_mutex> lk2(s2.mu);
-            sqlite_tables_map().erase(hTable);
-            s2.registry.release(hTable);
-            return ok();
-        }
-#endif
         if (auto* rt = get_remote_table(hTable)) {
             // conn is nulled out by AdsDisconnect before the RemoteConnection
             // is freed; skip the wire close op if the connection is already gone.
@@ -2328,6 +2318,8 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
             remote_sql_cursors_map().erase(hTable);
             return ok();
         }
+        if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+            if (ops->close_table) return ops->close_table(hTable);
     }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -2359,16 +2351,8 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->goto_top(st);
-        if (!r) return fail(r.error());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->goto_top) return ops->goto_top(hTable);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_top();
@@ -2383,16 +2367,8 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->goto_bottom(st);
-        if (!r) return fail(r.error());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->goto_bottom) return ops->goto_bottom(hTable);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_bottom();
@@ -2422,16 +2398,8 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
         if (!r) return fail(r.error());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->skip(st, lRows);
-        if (!r) return fail(r.error());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->skip) return ops->skip(hTable, lRows);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->skip(lRows);
