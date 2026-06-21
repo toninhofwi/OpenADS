@@ -4,7 +4,12 @@
   These let applications built with MSVC, MinGW/GCC, or Borland/C++Builder
   link against ace64.dll / ace32.dll by name. They are committed because the
   release CI runners do not have the Borland toolchain; regenerate them here
-  whenever src/openads_ace.def changes, then commit the result.
+  whenever src/openads_ace.def or src/openads_ace_x86.def changes, then
+  commit the result.
+
+  x86 import libs use openads_ace_x86.def (__stdcall-decorated @N names)
+  so Harbour's contrib/rddads links cleanly. x64 uses the undecorated
+  openads_ace.def.  (Bug report: JONSSON RUSSI, RusSoft Ltda.)
 
   Prereqs (paths below — adjust if your install differs):
     MSVC      lib.exe   (any VS 2022 install)
@@ -37,9 +42,10 @@ New-Item -ItemType Directory $work | Out-Null
 Copy-Item $dll64 "$work\ace64.dll"; Copy-Item $dll32 "$work\ace32.dll"
 
 # .def with an explicit LIBRARY name so the import libs reference ace64/ace32.dll
-$def = Get-Content (Join-Path $root "src\openads_ace.def")
-($def -replace '^\s*LIBRARY\s*$','LIBRARY ace64') | Set-Content "$work\ace64.def" -Encoding ascii
-($def -replace '^\s*LIBRARY\s*$','LIBRARY ace32') | Set-Content "$work\ace32.def" -Encoding ascii
+$def    = Get-Content (Join-Path $root "src\openads_ace.def")
+$defX86 = Get-Content (Join-Path $root "src\openads_ace_x86.def")
+($def    -replace '^\s*LIBRARY\s*$','LIBRARY ace64') | Set-Content "$work\ace64.def" -Encoding ascii
+($defX86 -replace '^\s*LIBRARY\s*$','LIBRARY ace32') | Set-Content "$work\ace32.def" -Encoding ascii
 
 Push-Location $work
 try {

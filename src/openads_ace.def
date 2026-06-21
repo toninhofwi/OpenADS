@@ -1,8 +1,13 @@
 ; OpenADS ACE-compatible DLL exports.
+; Reported by JONSSON RUSSI (RusSoft Ltda).
+;
 ; All entry points use the Microsoft __cdecl convention (the SAP ACE
 ; default on Windows). Names are exported undecorated on x64 and x86;
 ; __cdecl on x86 prepends a leading underscore at link time, but the
 ; .def NAME form forces the public export to match the source name.
+;
+; NOTE: For x86 Harbour (rddads) compatibility, use openads_ace_x86.def
+; which exports __stdcall-decorated (@N) names instead.
 LIBRARY
 EXPORTS
     AdsConnect60
@@ -272,9 +277,15 @@ EXPORTS
     ; libs reference these symbols; modern UCRT no longer ships them.
     ; ace64.dll re-exports them under their legacy names so a Harbour
     ; app links cleanly without rebuilding Harbour.
+    ;
+    ; NOTE: _wfsopen is intentionally NOT exported here. Modern UCRT
+    ; provides _wfsopen via api-ms-win-crt-stdio-l1-1-0.dll. Exporting
+    ; it from the DLL caused STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139)
+    ; at load time: the PE loader resolved the DLL's own internal UCRT
+    ; import of _wfsopen to its own export, creating a circular symbol
+    ; that couldn't be located. See GitHub issue #N.
     _dclass   = openads_dclass
     _dsign    = openads_dsign
-    _wfsopen  = openads_wfsopen
     _getch    = openads_getch
     _kbhit    = openads_kbhit
     _eof      = openads_eof

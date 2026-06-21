@@ -162,7 +162,10 @@ add_library(openads_ace SHARED
 )
 
 if(WIN32)
-    # Default .def is name-based exports. Apps linked against an
+    # Default .def is name-based exports (undecorated, __cdecl). For x86
+    # Harbour (rddads) compatibility, openads_ace_x86.def exports
+    # __stdcall-decorated (@N) names instead. See dist/import-libs/gen.ps1.
+    # Apps linked against an
     # ace32.lib / ace64.lib whose imports are by-ordinal need a
     # custom .def whose @N values match the SAP-shipped DLL the
     # user is replacing — generate it once per-machine with
