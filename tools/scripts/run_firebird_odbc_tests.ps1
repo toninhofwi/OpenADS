@@ -43,10 +43,15 @@ if (-not (Test-Path $fbDb)) {
     exit 1
 }
 
-$drivers = Get-OdbcDriver -Platform "64-bit" -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match 'Firebird' }
-if (-not $drivers) {
-    Write-Error "Firebird ODBC driver not installed — run install_firebird_odbc.bat"
+$driverName = "Firebird ODBC Driver (DEVAI)"
+$drivers = Get-OdbcDriver -Platform "64-bit" -ErrorAction SilentlyContinue
+if ($drivers.Name -contains $driverName) {
+    # portable SSD registration (HKLM -> odbc\bin\FirebirdODBC.dll)
+} elseif ($drivers.Name -contains "Firebird ODBC Driver") {
+    Write-Warning "Using system Firebird ODBC Driver (C:\Windows\System32). Run install_firebird_odbc.bat for portable."
+    $driverName = "Firebird ODBC Driver"
+} else {
+    Write-Error "Firebird ODBC driver not registered — run install_firebird_odbc.bat (UAC 1x per machine)"
     exit 1
 }
 
@@ -59,7 +64,7 @@ if (-not (Test-Path $gds)) {
 $env:FIREBIRD = $fbHome
 $env:PATH     = "$fbHome;$env:PATH"
 
-$connstr = "Driver={Firebird ODBC Driver};Database=$fbDb;Uid=SYSDBA;Pwd=$fbPass;Charset=UTF8;"
+$connstr = "Driver={$driverName};Database=$fbDb;Uid=SYSDBA;Pwd=$fbPass;Charset=UTF8;"
 $env:OPENADS_TEST_ODBC_CONNSTR = $connstr
 
 Write-Host "[openads] Firebird ODBC fixture: $fbDb"
