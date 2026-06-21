@@ -344,7 +344,11 @@ util::Result<void> describe_columns(SQLHDBC dbc, OdbcTable* tbl) {
         // schema arg cannot mix columns of same-named tables in different
         // schemas into one field list.
         const std::string schem = cell(2);
-        if (!has_schema) { chosen_schema = schem; has_schema = true; }
+        if (!has_schema) {
+            chosen_schema     = schem;
+            tbl->sql_table    = cell(3);
+            has_schema        = true;
+        }
         if (schem != chosen_schema) continue;
         const std::string cname = cell(4);
         const int dtype = std::atoi(cell(5).c_str());
@@ -362,7 +366,7 @@ util::Result<void> load_pk_snapshot(SQLHDBC dbc, const std::string& q,
                                     OdbcTable* tbl) {
     const std::string list = pk_select_list(q, *tbl);
     const std::string sql =
-        "SELECT " + list + " FROM " + quote_ident(q, tbl->name) +
+        "SELECT " + list + " FROM " + quote_ident(q, tbl->sql_table) +
         " ORDER BY " + list;
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
@@ -386,7 +390,7 @@ util::Result<void> load_current_row(SQLHDBC dbc, const std::string& q,
         return util::Result<void>{};
     }
     const std::string sql =
-        "SELECT * FROM " + quote_ident(q, tbl->name) + " WHERE " +
+        "SELECT * FROM " + quote_ident(q, tbl->sql_table) + " WHERE " +
         pk_where_clause(q, *tbl, tbl->pk_snapshot[idx]);
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
@@ -499,7 +503,8 @@ OdbcConnection::open_table(const std::string& table_name) {
     }
     auto tbl  = std::make_unique<OdbcTable>();
     tbl->conn = this;
-    tbl->name = table_name;
+    tbl->name      = table_name;
+    tbl->sql_table = table_name;
 
     auto pk = discover_pk(impl_->dbc, table_name);
     if (!pk) return pk.error();
@@ -663,17 +668,19 @@ util::Result<bool> OdbcConnection::seek_index(
     if (!tbl->fields_cached) {
         if (auto d = describe_columns(impl_->dbc, tbl); !d) return d.error();
     }
-    if (field_index_ci(*tbl, column) == static_cast<std::size_t>(-1)) {
+    const std::size_t col_idx = field_index_ci(*tbl, column);
+    if (col_idx == static_cast<std::size_t>(-1)) {
         return util::Error{5063, 0, "seek column not found", column};
     }
+    const std::string& sql_col = tbl->fields[col_idx].name;
 
     const std::string& q      = impl_->quote;
     const std::string  pkcols = pk_select_list(q, *tbl);
     const std::string  esc    = (kind == IndexExprKind::UpperColumn)
                                     ? escape_literal(key)
-                                    : format_literal(*tbl, column, key);
-    const std::string  qexpr  = index_column_sql(q, column, kind);
-    const std::string  from   = " FROM " + quote_ident(q, tbl->name);
+                                    : format_literal(*tbl, sql_col, key);
+    const std::string  qexpr  = index_column_sql(q, sql_col, kind);
+    const std::string  from   = " FROM " + quote_ident(q, tbl->sql_table);
 
     std::string sql;
     if (last_key) {

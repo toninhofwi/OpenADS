@@ -17,7 +17,8 @@ class OdbcConnection;
 // (no LIMIT / OFFSET / TOP, no scrollable-cursor dependency).
 struct OdbcTable {
     OdbcConnection* conn = nullptr;
-    std::string     name;
+    std::string     name;       // ABI / AdsOpenTable name (caller casing)
+    std::string     sql_table;  // driver-reported TABLE_NAME for SQL
 
     struct FieldDesc {
         std::string   name;
