@@ -5528,7 +5528,7 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     auto put_u32 = [&](std::uint32_t v) -> UNSIGNED32 {
         if (pBuf != nullptr && cap >= 4) {
             auto* b = static_cast<std::uint8_t*>(pBuf);
-            b[0]=v&0xFF; b[1]=(v>>8)&0xFF; b[2]=(v>>16)&0xFF; b[3]=(v>>24)&0xFF;
+            b[0]=static_cast<std::uint8_t>(v&0xFF); b[1]=static_cast<std::uint8_t>((v>>8)&0xFF); b[2]=static_cast<std::uint8_t>((v>>16)&0xFF); b[3]=static_cast<std::uint8_t>((v>>24)&0xFF);
         }
         *pusLen = 4; return ok();
     };

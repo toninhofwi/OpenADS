@@ -259,7 +259,7 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             unsigned hh  = ms / 3600000u;
             unsigned mmv = (ms % 3600000u) / 60000u;
             unsigned ss  = (ms % 60000u)   / 1000u;
-            char tmp[20];
+            char tmp[48];
             std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d%02u%02u%02u",
                           y, mo, d, hh, mmv, ss);
             v.as_string = tmp;
@@ -402,7 +402,7 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             if (jdn == 0) { v.is_null = true; break; }
             int y, mo, d;
             jdn_to_ymd(jdn, y, mo, d);
-            char tmp[12];
+            char tmp[48];
             std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d", y, mo, d);
             v.as_string = tmp;
             break;
@@ -424,7 +424,7 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             unsigned hh  = ms / 3600000u;
             unsigned mmv = (ms % 3600000u) / 60000u;
             unsigned ss  = (ms % 60000u)   / 1000u;
-            char tmp[20];
+            char tmp[48];
             std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d%02u%02u%02u",
                           y, mo, d, hh, mmv, ss);
             v.as_string = tmp;
@@ -459,7 +459,7 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             unsigned hh  = ms / 3600000u;
             unsigned mmv = (ms % 3600000u) / 60000u;
             unsigned ss  = (ms % 60000u)   / 1000u;
-            char tmp[20];
+            char tmp[48];
             std::snprintf(tmp, sizeof(tmp), "%04d%02d%02d%02u%02u%02u",
                           y, mo, d, hh, mmv, ss);
             v.as_string = tmp;
