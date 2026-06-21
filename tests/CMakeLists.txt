@@ -150,7 +150,9 @@ add_executable(openads_unit_tests
 if(OPENADS_WITH_POSTGRESQL)
     target_sources(openads_unit_tests PRIVATE
         unit/abi_plus_postgres_read_test.cpp
+    unit/abi_plus_mariadb_read_test.cpp
         unit/abi_plus_postgres_seek_test.cpp
+    unit/abi_plus_mariadb_seek_test.cpp
     )
 endif()
 

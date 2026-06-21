@@ -28,7 +28,11 @@ enum class HandleKind {
     // OpenADS Plus — PostgreSQL backend (postgresql:// …).
     PostgresConnection = 12,
     PostgresTable      = 13,
-    PostgresIndex      = 14
+    PostgresIndex      = 14,
+    // OpenADS Plus — MariaDB/MySQL backend (mariadb:// …).
+    MariaConnection = 15,
+    MariaTable      = 16,
+    MariaIndex      = 17
 };
 
 using Handle = std::uint64_t;

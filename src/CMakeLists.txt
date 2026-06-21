@@ -71,6 +71,14 @@ if(OPENADS_WITH_POSTGRESQL)
     )
 endif()
 
+if(OPENADS_WITH_MARIADB)
+    target_sources(openads_core PRIVATE
+        sql_backend/maria_uri.cpp
+        sql_backend/maria_backend.cpp
+        sql_backend/maria_connection.cpp
+    )
+endif()
+
 if(WIN32)
     target_sources(openads_core PRIVATE
         platform/file_win32.cpp
@@ -119,6 +127,11 @@ endif()
 if(OPENADS_WITH_POSTGRESQL)
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_POSTGRESQL=1)
     target_link_libraries(openads_core PUBLIC openads_libpq)
+endif()
+
+if(OPENADS_WITH_MARIADB)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_MARIADB=1)
+    target_link_libraries(openads_core PUBLIC openads_libmariadb)
 endif()
 
 # ----------------------------------------------------------------------
