@@ -51,6 +51,12 @@ public:
         }
     }
 
+    HandleKind kind_of(Handle h) const {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = slots_.find(h);
+        return it == slots_.end() ? HandleKind::None : it->second.kind;
+    }
+
 private:
     struct Slot { HandleKind kind = HandleKind::None; void* ptr = nullptr; };
 

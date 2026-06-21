@@ -33,6 +33,7 @@ add_executable(openads_unit_tests
     unit/engine_table_write_test.cpp
     unit/engine_cursor_test.cpp
     unit/session_handle_registry_test.cpp
+    unit/handle_registry_kind_of_test.cpp
     unit/session_connection_test.cpp
     unit/abi_smoke_test.cpp
     unit/abi_write_smoke_test.cpp
