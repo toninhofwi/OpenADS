@@ -24,6 +24,7 @@ add_library(openads_core STATIC
     abi/ace_stubs.cpp
     abi/last_error.cpp
     abi/charset.cpp
+    abi/backend_registry.cpp
     session/handle_registry.cpp
     session/connection.cpp
     engine/table.cpp
