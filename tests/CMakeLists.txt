@@ -8,7 +8,11 @@ if(NOT MSVC)
     # __COUNTER__ is a widely-supported GCC/Clang extension used by doctest.
     # Clang 19+ pedantically classifies it as -Wc2y-extensions; suppress it.
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-        add_compile_options(-Wno-c2y-extensions)
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag(-Wno-c2y-extensions HAS_NO_C2Y)
+        if(HAS_NO_C2Y)
+            add_compile_options(-Wno-c2y-extensions)
+        endif()
     endif()
 endif()
 
