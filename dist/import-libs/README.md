@@ -20,10 +20,19 @@ x64/                       x86/
 On **Linux / macOS** there is no import library: link the shipped
 `libopenace64.so` / `.dylib` (or its `libace64.*` drop-in copy) directly.
 
-All six libraries expose the same 348 entry points and reference the
+All six libraries expose the same entry points and reference the
 `ace64.dll` / `ace32.dll` drop-in name. Both `ace64.dll` and the default
 `openace64.dll` are byte-identical, so an import lib built against either
 name loads the same engine.
+
+## x86 `__stdcall` decoration
+
+The x86 import libs are built from `src/openads_ace_x86.def` which exports
+`__stdcall`-decorated (`@N`) names matching what Harbour's prebuilt
+`contrib/rddads` expects. The x64 import libs use the undecorated
+`src/openads_ace.def` (x64 has no `@N` decoration).
+
+(Reported by JONSSON RUSSI, RusSoft Ltda.)
 
 ## Regenerating
 

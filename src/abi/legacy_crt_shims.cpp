@@ -6,9 +6,11 @@
 // without rebuilding Harbour itself.
 //
 // The shims are exposed under OpenADS-prefixed names; openads_ace.def
-// then aliases the legacy names (_dclass, _dsign, _wfsopen) onto these
+// then aliases the legacy names (_dclass, _dsign) onto these
 // implementations so the public DLL exports match what hbcommon.lib
-// expects.
+// expects. _wfsopen is NOT shimmed — modern UCRT provides it natively
+// and exporting it caused a circular symbol resolution crash.
+// (Reported by JONSSON RUSSI, RusSoft Ltda.)
 //
 // Whole file is Windows-only; on POSIX builds the DLL is built
 // without these shims (no Harbour-MSVC2013 link concern there).
@@ -30,10 +32,6 @@ int openads_dclass(double x) {
 
 int openads_dsign(double x) {
     return std::signbit(x) ? 1 : 0;
-}
-
-FILE* openads_wfsopen(const wchar_t* path, const wchar_t* mode, int shflag) {
-    return ::_wfsopen(path, mode, shflag);
 }
 
 // Console / fd helpers used by Harbour's gtstd terminal driver.
