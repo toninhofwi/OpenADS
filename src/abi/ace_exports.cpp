@@ -1915,7 +1915,7 @@ UNSIGNED32 AdsCloseAllTables(void) {
 
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     {
-        if (auto* rt = get_remote_table(hTable)) {
+    if (get_remote_table(hTable)) {
             // conn is nulled out by AdsDisconnect before the RemoteConnection
             // is freed; skip the wire close op if the connection is already gone.
             if (rt->conn != nullptr)
