@@ -3539,8 +3539,19 @@ UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                          UNSIGNED16 /*usOption*/) {
+    if (pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        // M12.28 — remote table: delegate to AdsGetField which serves
+        // from the row cache or falls back to a GetField RPC.
+        UNSIGNED8 tmp[4096] = {0};
+        UNSIGNED32 cap = sizeof(tmp);
+        auto rc = AdsGetField(hTable, pucField, tmp, &cap, 0);
+        if (rc != 0) return rc;
+        return emit_utf16(pucBufW, pulLenW,
+                          std::string(reinterpret_cast<char*>(tmp), cap));
+    }
     Table* t = get_table(hTable);
-    if (!t || pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index_w(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
