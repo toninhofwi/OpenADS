@@ -24,7 +24,11 @@ enum class HandleKind {
     // OpenADS Plus — external SQL backend (sqlite:// …).
     SqliteConnection = 9,
     SqliteTable      = 10,
-    SqliteIndex      = 11
+    SqliteIndex      = 11,
+    // OpenADS Plus — PostgreSQL backend (postgresql:// …).
+    PostgresConnection = 12,
+    PostgresTable      = 13,
+    PostgresIndex      = 14
 };
 
 using Handle = std::uint64_t;

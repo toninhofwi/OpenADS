@@ -71,6 +71,8 @@ option(OPENADS_WITH_HTTP "Enable embedded HTTP web console (Studio) in openads_s
 # OpenADS Plus — optional SQLite-backed table driver (static amalgamation).
 # On by default; set OFF for dev builds that skip the FetchContent download.
 option(OPENADS_WITH_SQLITE "Enable the SQLite-backed table driver (vendors the SQLite amalgamation via FetchContent)" ON)
+# Optional PostgreSQL table driver (libpq). OFF by default.
+option(OPENADS_WITH_POSTGRESQL "Enable PostgreSQL-backed table driver (libpq)" OFF)
 
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each
@@ -160,12 +162,73 @@ if(OPENADS_WITH_SQLITE)
     message(STATUS "OpenADS: SQLite-backed table driver enabled")
 endif()
 
+if(OPENADS_WITH_POSTGRESQL)
+    set(_openads_pg_linked FALSE)
+    set(OPENADS_LIBPQ_INCLUDE "" CACHE PATH "Directory containing libpq-fe.h")
+    set(OPENADS_LIBPQ_LIBRARY "" CACHE FILEPATH "libpq import library (.lib/.a)")
+    if(OPENADS_LIBPQ_INCLUDE AND OPENADS_LIBPQ_LIBRARY)
+        set(_openads_pg_inc "${OPENADS_LIBPQ_INCLUDE}")
+        set(_openads_pg_lib "${OPENADS_LIBPQ_LIBRARY}")
+    endif()
+    if(NOT _openads_pg_lib)
+        if(DEFINED ENV{OPENADS_LIBPQ_LIBRARY})
+            set(_openads_pg_lib "$ENV{OPENADS_LIBPQ_LIBRARY}")
+        endif()
+        if(DEFINED ENV{OPENADS_LIBPQ_INCLUDE})
+            set(_openads_pg_inc "$ENV{OPENADS_LIBPQ_INCLUDE}")
+        endif()
+    endif()
+    if(NOT _openads_pg_lib OR NOT _openads_pg_inc)
+        if(DEFINED ENV{OPENADS_TOOLCHAIN_ROOT})
+            set(_openads_toolchain_root "$ENV{OPENADS_TOOLCHAIN_ROOT}")
+        elseif(DEFINED OPENADS_TOOLCHAIN_ROOT)
+            set(_openads_toolchain_root "${OPENADS_TOOLCHAIN_ROOT}")
+        endif()
+        if(_openads_toolchain_root)
+            if(NOT _openads_pg_inc)
+                find_path(_openads_pg_inc libpq-fe.h
+                    PATHS "${_openads_toolchain_root}/pgsql/include"
+                    NO_DEFAULT_PATH)
+            endif()
+            if(NOT _openads_pg_lib)
+                if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+                    find_library(_openads_pg_lib NAMES libpq pq
+                        PATHS "${_openads_toolchain_root}/libpq/x86"
+                              "${_openads_toolchain_root}/libpq/x86/lib"
+                        NO_DEFAULT_PATH)
+                else()
+                    find_library(_openads_pg_lib NAMES pq libpq
+                        PATHS "${_openads_toolchain_root}/pgsql/lib"
+                        NO_DEFAULT_PATH)
+                endif()
+            endif()
+        endif()
+    endif()
+    if(_openads_pg_inc AND _openads_pg_lib)
+        add_library(openads_libpq INTERFACE)
+        target_include_directories(openads_libpq INTERFACE "${_openads_pg_inc}")
+        target_link_libraries(openads_libpq INTERFACE "${_openads_pg_lib}")
+        set(_openads_pg_linked TRUE)
+        message(STATUS "OpenADS: PostgreSQL backend (libpq: ${_openads_pg_lib})")
+    endif()
+    if(NOT _openads_pg_linked)
+        find_package(PostgreSQL REQUIRED)
+        add_library(openads_libpq INTERFACE)
+        target_include_directories(openads_libpq INTERFACE PostgreSQL_INCLUDE_DIRS)
+        target_link_libraries(openads_libpq INTERFACE PostgreSQL::PostgreSQL)
+        message(STATUS "OpenADS: PostgreSQL backend (libpq via find_package)")
+    endif()
+endif()
+
 if(MSVC)
     add_compile_options(/W4 /permissive-)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     if(OPENADS_WARNINGS_AS_ERRORS)
         add_compile_options(/WX)
     endif()
+elseif(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # MinGW/winlibs: static link toolchain runtime; libpq.dll still loads at runtime.
+    add_link_options(-static)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion)
     # _CRT_SECURE_NO_WARNINGS: needed when clang-cl targets MSVC CRT on Windows;

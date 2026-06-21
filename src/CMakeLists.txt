@@ -58,9 +58,18 @@ add_library(openads_core STATIC
     mgmt/mg_collector.cpp
     network/mg_wire.cpp
     sql_backend/uri.cpp
+    sql_backend/sql_common.cpp
     sql_backend/sqlite_connection.cpp
     sql_backend/sqlite_backend.cpp
 )
+
+if(OPENADS_WITH_POSTGRESQL)
+    target_sources(openads_core PRIVATE
+        sql_backend/postgres_uri.cpp
+        sql_backend/postgres_backend.cpp
+        sql_backend/postgres_connection.cpp
+    )
+endif()
 
 if(WIN32)
     target_sources(openads_core PRIVATE
@@ -105,6 +114,11 @@ endif()
 if(OPENADS_WITH_SQLITE)
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_SQLITE=1)
     target_link_libraries(openads_core PRIVATE openads_sqlite3)
+endif()
+
+if(OPENADS_WITH_POSTGRESQL)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_POSTGRESQL=1)
+    target_link_libraries(openads_core PUBLIC openads_libpq)
 endif()
 
 # ----------------------------------------------------------------------
