@@ -39,13 +39,13 @@ AdmMemo::open(const std::string& path, MemoOpenMode mode) {
     if (!fres) return fres.error();
     file_ = std::move(fres).value();
 
-    // Read header block to recover next_avail_ (offset 20, uint32 LE).
-    std::uint8_t hdr[kBlockSize]{};
+    // Recover next_avail_ (offset 20, uint32 LE) from the file header prefix.
+    std::uint8_t hdr[32]{};
     auto got = file_.read_at(0, hdr, sizeof(hdr));
     if (!got) return got.error();
     if (got.value() >= 24) {
         next_avail_ = read_u32_le(hdr + 20);
-        if (next_avail_ == 0) next_avail_ = 1;
+        if (next_avail_ < kDataBlockOrigin) next_avail_ = kDataBlockOrigin;
     }
     return {};
 }
@@ -123,18 +123,23 @@ AdmMemo::create(const std::string& path) {
     if (!fres) return fres.error();
     platform::File file = std::move(fres).value();
 
-    // Write a minimal 256-byte header block. next_avail_ = 1 so block 0
-    // is reserved for the header and data starts at block 1.
-    std::uint8_t hdr[kBlockSize]{};
-    write_u32_le(hdr + 20, 1u);
-    auto wrote = file.write_at(0, hdr, sizeof(hdr));
+    // All-zero ADM headers are rejected by some clients; write a minimal prefix.
+    static const std::uint8_t kAdmPrefix[20] = {
+        0x00, 0x00, 0x37, 0xA0, 0x00, 0x00, 0x00, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    };
+    std::vector<std::uint8_t> hdr(1024, 0);
+    std::memcpy(hdr.data(), kAdmPrefix, sizeof(kAdmPrefix));
+    write_u32_le(hdr.data() + 20, kDataBlockOrigin);
+    auto wrote = file.write_at(0, hdr.data(), hdr.size());
     if (!wrote) return wrote.error();
     if (auto s = file.sync(); !s) return s.error();
 
     AdmMemo m;
     m.file_       = std::move(file);
     m.mode_       = MemoOpenMode::Shared;
-    m.next_avail_ = 1;
+    m.next_avail_ = kDataBlockOrigin;
     return m;
 }
 

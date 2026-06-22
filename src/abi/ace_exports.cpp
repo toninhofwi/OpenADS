@@ -1467,7 +1467,7 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         bool has_memo = false;
         for (auto& f : fields) {
             AdtFieldSpec sp = adt_spec_for(f);
-            if (sp.needs_memo) has_memo = true;
+            if (sp.adt_type == 5u) has_memo = true;  // MEMO .adm companion
             specs.push_back(sp);
         }
 
@@ -1492,6 +1492,12 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         w32(24, 0);        // rec_count = 0
         w32(32, hdr_len);  // hdr_len
         w32(36, rec_len);  // rec_len
+        // Proprietary header tail observed in reference fixtures.
+        adt_hdr[20]  = 1;
+        adt_hdr[356] = 4;
+        adt_hdr[358] = static_cast<std::uint8_t>(fields.size() & 0xFFu);
+        adt_hdr[359] = static_cast<std::uint8_t>((fields.size() >> 8) & 0xFFu);
+        if (has_memo) adt_hdr[88] = 1;
 
         // 200-byte field descriptors
         std::vector<std::uint8_t> fds(fields.size() * 200, 0);
@@ -1511,14 +1517,10 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
             fd[135] = static_cast<std::uint8_t>(sp.adt_length & 0xFFu);
             fd[136] = static_cast<std::uint8_t>((sp.adt_length >> 8) & 0xFFu);
             fd[137] = sp.adt_dec;
-            // ADT type 15 (AUTOINC): init next=1, step=1 in descriptor
-            if (sp.adt_type == 15u) {
-                fd[139] = 1;   // next value = 1
-                fd[140] = 0;
-                fd[141] = 0;
-                fd[142] = 0;
-                fd[143] = 1;   // step = 1
-            }
+            if (sp.adt_type == 10u)
+                fd[139] = sp.adt_dec ? sp.adt_dec : 2;
+            // AUTOINC tail (bytes 139-143) stays zero on disk; counter is
+            // seeded from existing data when the table is opened.
             fld_off = static_cast<std::uint16_t>(fld_off + sp.adt_length);
         }
 
@@ -4622,24 +4624,23 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         : std::string{};
 
     namespace fs = std::filesystem;
+    const bool is_adt_table = path_ends_with_ci(t->path(), ".adt");
+    const char* default_ext = is_adt_table ? ".adi" : ".cdx";
     fs::path p;
     if (bag.empty()) {
-        // No bag name supplied → structural CDX: same stem as the table,
-        // same directory.  Mirrors the auto-open logic in AdsOpenTable90
-        // (tp.replace_extension(".cdx")).  Using tdir/"" on Windows
-        // std::filesystem appends a trailing separator, making
-        // replace_extension produce ".cdx" with no stem — one shared file
-        // for the whole directory instead of one per table.
-        p = fs::path(t->path()).replace_extension(".cdx");
+        // No bag name supplied → structural index bag: same stem as the
+        // table (.cdx for DBF, .adi for ADT).  Mirrors AdsOpenTable90.
+        p = fs::path(t->path()).replace_extension(default_ext);
     } else {
         p = fs::path(bag);
         if (!p.is_absolute()) {
             fs::path tdir = fs::path(t->path()).parent_path();
             p = tdir / p;
         }
-        if (!p.has_extension()) p.replace_extension(".cdx");
+        if (!p.has_extension()) p.replace_extension(default_ext);
     }
     bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
+    bool is_adi = path_ends_with_ci(p.string(), ".adi");
 
     // ACE AdsCreateIndex* option bits (include/openads/ace.h, values
     // verified against the rddads contrib):
@@ -4676,9 +4677,76 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     bool exists = false;
     {
         std::error_code ec;
-        exists = is_cdx && fs::exists(p, ec);
+        exists = (is_cdx || is_adi) && fs::exists(p, ec);
     }
-    if (is_cdx && exists) {
+
+    if (is_adi && is_adt_table) {
+        // ADT tables use a single .adi bag; each tag indexes one field.
+        const std::string bare = openads::engine::strip_alias_qualifiers(expr);
+        std::int32_t fidx = t->field_index(bare);
+        if (fidx < 0) {
+            return fail(openads::AE_COLUMN_NOT_FOUND,
+                        "ADI index expression must be a bare field name");
+        }
+        const auto& fd = t->field_descriptor(static_cast<std::uint16_t>(fidx));
+        openads::drivers::adi::AdiIndex::CreateParams cp{};
+        cp.field_num   = static_cast<std::uint8_t>(fidx + 1);
+        cp.field_name  = fd.name;
+        cp.adt_type    = static_cast<std::uint16_t>(
+            static_cast<unsigned char>(fd.raw_type));
+        cp.fld_length  = fd.length;
+        cp.adt_hdr_len = t->driver()->header_length();
+        cp.adt_rec_len = t->driver()->record_length();
+        cp.unique      = unique;
+
+        const bool is_char_key =
+            cp.adt_type == openads::drivers::adi::ADT_TYPE_CHAR ||
+            cp.adt_type == openads::drivers::adi::ADT_TYPE_CICHAR;
+        klen = is_char_key ? fd.length : 8;
+
+        if (exists) {
+            auto tags = openads::drivers::adi::AdiIndex::list_tags(p.string());
+            bool have_tag = false;
+            if (tags) {
+                for (const auto& tn : tags.value()) {
+                    if (tn.size() == fd.name.size()) {
+                        bool eq = true;
+                        for (std::size_t i = 0; i < tn.size(); ++i) {
+                            if (std::tolower(static_cast<unsigned char>(tn[i])) !=
+                                std::tolower(static_cast<unsigned char>(
+                                    fd.name[i]))) {
+                                eq = false;
+                                break;
+                            }
+                        }
+                        if (eq) { have_tag = true; break; }
+                    }
+                }
+            }
+            if (have_tag) {
+                openads::drivers::adi::AdiIndex existing;
+                auto reopen = existing.open_named(
+                    p.string(), openads::drivers::IndexOpenMode::Shared,
+                    fd.name);
+                if (!reopen) return fail(reopen.error());
+                if (auto cl = existing.clear_data(); !cl) return fail(cl.error());
+                idx_owner = std::make_unique<
+                    openads::drivers::adi::AdiIndex>(std::move(existing));
+            } else {
+                auto added = openads::drivers::adi::AdiIndex::add_tag(
+                    p.string(), cp);
+                if (!added) return fail(added.error());
+                idx_owner = std::make_unique<
+                    openads::drivers::adi::AdiIndex>(std::move(added).value());
+            }
+        } else {
+            auto created = openads::drivers::adi::AdiIndex::create(
+                p.string(), cp);
+            if (!created) return fail(created.error());
+            idx_owner = std::make_unique<openads::drivers::adi::AdiIndex>(
+                std::move(created).value());
+        }
+    } else if (is_cdx && exists) {
         // Harbour rddads / Clipper semantics: re-creating an
         // existing tag is a silent overwrite, not an error. If the
         // tag already exists, open it and clear its B+tree so the
@@ -4715,6 +4783,9 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         if (!created) return fail(created.error());
         idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
             std::move(created).value());
+    } else if (is_adi) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "ADI index bag requires an ADT table");
     } else {
         auto created = openads::drivers::ntx::NtxIndex::create(
             p.string(), tag, expr, klen, unique, descend);

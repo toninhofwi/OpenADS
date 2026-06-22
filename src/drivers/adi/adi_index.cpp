@@ -1,6 +1,7 @@
 #include "drivers/adi/adi_index.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -107,7 +108,7 @@ std::uint32_t char_tree_entry_page(const std::uint8_t* pg, int idx,
 // ── Dense-leaf entry: starts at offset 24 ────────────────────────────────────
 // Format (entry_sz=3, wider key fields): recno[2 LE] + type_byte[1]
 // Format (entry_sz=2, 1-byte key fields): recno[1] + key_flags[1]
-// Confirmed by probe against SAP ACE ground truth (propertytransactions, 12331 rows).
+// Dense-leaf recno layout verified against reference ADI fixtures.
 
 std::uint32_t dense_entry_recno(const std::uint8_t* pg, int idx,
                                 std::uint32_t entry_sz) noexcept {
@@ -119,6 +120,8 @@ std::uint32_t dense_entry_recno(const std::uint8_t* pg, int idx,
 }
 
 // ── Key encoding ─────────────────────────────────────────────────────────────
+
+} // namespace (helpers above)
 
 // Pack a double into an 8-byte IEEE 754 total-order big-endian ADI key.
 // Positive values: flip sign bit only (0x80).
@@ -135,6 +138,8 @@ std::string pack_double_key(double v) {
     }
     return std::string(reinterpret_cast<char*>(raw), 8);
 }
+
+namespace {
 
 // Encode an ADT field value to ADI key bytes, given ADT type and field data.
 // For character types (CICHAR, CHAR): returns the raw field bytes (length bytes).
@@ -708,6 +713,54 @@ util::Result<SeekOutcome> AdiIndex::prev() {
 // Handles both char-key (padded, memcmp) and numeric (8-byte sign-flipped BE).
 
 util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) {
+    std::string nkey = key;
+    if (!char_key_) {
+        auto ascii_to_packed = [&](const std::string& raw) -> bool {
+            std::string trimmed = raw;
+            while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+            char* end = nullptr;
+            double dv = std::strtod(trimmed.c_str(), &end);
+            if (end == trimmed.c_str()) return false;
+            nkey = pack_double_key(dv);
+            return true;
+        };
+
+        if (nkey.size() == sizeof(double)) {
+            // ADI packed keys always have bit 7 of byte 0 set (sign-flip).
+            // Raw ADS_DOUBLEKEY bytes are IEEE754 LE with byte 0 usually < 0x80.
+            const bool likely_packed =
+                (static_cast<unsigned char>(nkey[0]) & 0x80u) != 0;
+            if (!likely_packed) {
+                double dv = 0.0;
+                std::memcpy(&dv, nkey.data(), sizeof(double));
+                nkey = pack_double_key(dv);
+            }
+        } else if (nkey.size() == 8u) {
+            // 8 bytes may be CDX-style space-padded ASCII, not a packed key.
+            bool printable = true;
+            for (unsigned char c : nkey) {
+                if (c != ' ' && (c < 0x30 || c > 0x39) && c != '.' && c != '-' &&
+                    c != '+') {
+                    printable = false;
+                    break;
+                }
+            }
+            if (printable && !ascii_to_packed(nkey)) {
+                nkey.resize(8, '\0');
+            }
+        } else if (nkey.size() != 8) {
+            if (!ascii_to_packed(nkey)) {
+                if (adt_type_ == ADT_TYPE_INTEGER && nkey.size() == 4u)
+                    nkey = encode_adt_key(adt_type_,
+                                          reinterpret_cast<const std::uint8_t*>(
+                                              nkey.data()),
+                                          4);
+                else
+                    nkey.resize(8, '\0');
+            }
+        }
+    }
+
     Page pg{};
     std::uint32_t dense_pg = ADI_INVALID_PAGE;
 
@@ -727,7 +780,7 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
             for (int i = 0; i < static_cast<int>(cnt); ++i) {
                 const std::uint8_t* ek = pg.data() + ADI_TREE_ENTRY_START
                     + static_cast<std::uint32_t>(i) * branch_entry_sz_;
-                if (std::memcmp(key.data(), ek, key_total_len_) <= 0) {
+                if (std::memcmp(nkey.data(), ek, key_total_len_) <= 0) {
                     chosen = i; break;
                 }
             }
@@ -736,7 +789,7 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
     } else {
         // Numeric-key ADI: descend until we hit a dense leaf.
         // Works for any depth (branch→dense, branch→sparse→dense, root=dense).
-        if (key.size() != 8) return navigate_leftmost_();
+        if (nkey.size() != 8) return navigate_leftmost_();
 
         std::uint32_t cur = root_page_;
         for (;;) {
@@ -749,7 +802,7 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
             int chosen = static_cast<int>(cnt) - 1;
             for (int i = 0; i < static_cast<int>(cnt); ++i) {
                 const std::uint8_t* ek = tree_entry_key(pg.data(), i);
-                if (std::memcmp(key.data(), ek, 8) <= 0) { chosen = i; break; }
+                if (std::memcmp(nkey.data(), ek, 8) <= 0) { chosen = i; break; }
             }
             cur = tree_entry_page(pg.data(), chosen);
         }
@@ -762,7 +815,7 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
         std::uint32_t rno = dense_entry_recno(cur_page_.data(), i, entry_size_);
         auto ck = key_for_recno_(rno);
         if (!ck) return ck.error();
-        int cmp = compare_keys_(ck.value(), key);
+        int cmp = compare_keys_(ck.value(), nkey);
         if (cmp > 0) {
             if (soft) {
                 cur_idx_     = i;
@@ -996,15 +1049,20 @@ util::Result<void> AdiIndex::insert(std::uint32_t recno,
     if (mode_ == IndexOpenMode::ReadOnly)
         return util::Error{5000, 0, "ADI index is read-only", ""};
 
-    // Normalise key to key_total_len_ bytes.
-    std::string ikey = key;
+    // Normalise key.  Numeric tags always index from live ADT bytes —
+    // evaluate_index_expr may supply ASCII padding that does not match
+    // encode_adt_key() used at navigation time.
+    std::string ikey;
     if (char_key_) {
+        ikey = key;
         if (ikey.size() < key_total_len_)
             ikey.append(key_total_len_ - ikey.size(), ' ');
         else
             ikey.resize(key_total_len_);
     } else {
-        ikey.resize(8, '\0');
+        auto kr = key_for_recno_(recno);
+        if (!kr) return kr.error();
+        ikey = std::move(kr).value();
     }
 
     // ── Descend from root, building the path stack ───────────────────────────
@@ -1298,6 +1356,389 @@ util::Result<void> AdiIndex::erase(std::uint32_t recno, const std::string& key) 
 
 util::Result<void> AdiIndex::flush() {
     return adi_file_.sync();
+}
+
+// ── ADI create helpers (legacy single-tag layout) ───────────────────────────
+
+bool adt_type_is_char_key(std::uint16_t adt_type) noexcept {
+    return adt_type == ADT_TYPE_CICHAR || adt_type == ADT_TYPE_CHAR;
+}
+
+void write_adi_file_header_page(AdiIndex::Page& pg) noexcept {
+    pg.fill(0);
+    set_u16_le(pg.data(), 2);
+    set_u16_le(pg.data() + 2, 0);
+    set_u32_le(pg.data() + 8, 1);
+    pg[12] = 0x80;
+    pg[14] = 0x60;
+    pg[15] = 0x20;
+    pg[17] = 0x04;
+    pg[19] = 0x02;
+    pg[20] = 0x29;
+    pg[21] = 0xC4;
+    pg[22] = 0xF6;
+    pg[23] = 0x1E;
+    pg[506] = 0x01;
+    pg[510] = 0x01;
+}
+
+void write_adi_tag_directory_page(AdiIndex::Page& pg,
+                                const AdiIndex::CreateParams& cp) noexcept {
+    pg.fill(0);
+    set_u16_le(pg.data(), ADI_LVL_TAGDIR);
+    set_u16_le(pg.data() + 2, 1);
+    for (int i = 4; i < 12; ++i) pg[i] = 0xFF;
+    if (cp.adt_hdr_len >= 528u) {
+        set_u16_le(pg.data() + 12,
+                   static_cast<std::uint16_t>(cp.adt_hdr_len - 528u));
+    }
+    for (int i = 14; i < 20; ++i) pg[i] = 0xFF;
+    pg[20] = 0x20;
+    pg[21] = 0x08;
+    pg[22] = 0x08;
+    pg[23] = 0x06;
+
+    // xx=3 → per-tag header page; F-marker page 4; root dense leaf page 5.
+    constexpr std::uint8_t kTagHdrPg = 3;
+    pg[ADI_TAGDIR_ENTRY_START]     = kTagHdrPg;
+    if (!cp.field_name.empty())
+        pg[ADI_TAGDIR_ENTRY_START + 5] =
+            static_cast<std::uint8_t>(cp.field_name[0]);
+
+    std::string footer;
+    footer.reserve(cp.field_name.size());
+    for (char c : cp.field_name)
+        footer.push_back(static_cast<char>(std::toupper(
+            static_cast<unsigned char>(c))));
+    if (footer.size() > 10) footer.resize(10);
+    if (!footer.empty()) {
+        const std::size_t off = ADI_PAGE_SIZE - footer.size();
+        std::memcpy(pg.data() + off, footer.data(), footer.size());
+    }
+}
+
+void write_adi_per_tag_header_page(AdiIndex::Page& pg,
+                                 const AdiIndex::CreateParams& cp,
+                                 std::uint16_t tag_ordinal = 0) noexcept {
+    pg.fill(0);
+    const bool is_char = adt_type_is_char_key(cp.adt_type);
+    std::uint16_t lvl = 5;
+    if (tag_ordinal == 0)
+        lvl = is_char ? 6 : 5;
+    else
+        lvl = is_char ? 8 : 6;
+    set_u16_le(pg.data(), lvl);
+    pg[12] = static_cast<std::uint8_t>(cp.fld_length & 0xFFu);
+    pg[14] = 0x60;
+    pg[15] = is_char ? 0x26 : 0x00;
+    if (cp.unique) pg[14] |= 0x01u;
+    pg[17] = 0x04;
+    pg[506] = 0x01;
+    pg[510] = 0x03;
+}
+
+void write_fmarker_page(AdiIndex::Page& pg, std::uint8_t field_num) noexcept {
+    pg.fill(0);
+    pg[0] = 'F';
+    std::string nums = std::to_string(static_cast<unsigned>(field_num));
+    if (nums.size() > 8) nums.resize(8);
+    std::memcpy(pg.data() + 1, nums.data(), nums.size());
+}
+
+void write_empty_dense_leaf_page(AdiIndex::Page& pg,
+                                 std::uint16_t adt_type,
+                                 std::uint16_t fld_length) noexcept {
+    pg.fill(0);
+    set_u16_le(pg.data(), ADI_LVL_DENSE);
+    set_u16_le(pg.data() + 2, 0);
+    set_u32_le(pg.data() + 4, ADI_INVALID_PAGE);
+    set_u32_le(pg.data() + 8, ADI_INVALID_PAGE);
+    pg[12] = 0xE8;
+    pg[13] = 0x01;
+    const bool is_char = adt_type_is_char_key(adt_type);
+    if (is_char && fld_length >= 20u) {
+        pg[14] = 0xFF;
+        pg[15] = 0x3F;
+        pg[18] = 0x1F;
+        pg[19] = 0x1F;
+        pg[20] = 0x0E;
+        pg[21] = 0x05;
+        pg[22] = 0x05;
+        pg[23] = 0x03;
+    } else {
+        pg[14] = 0xFF;
+        pg[15] = 0xFF;
+        pg[18] = 0x0F;
+        pg[19] = 0x0F;
+        pg[20] = 0x10;
+        pg[21] = 0x04;
+        pg[22] = 0x04;
+        pg[23] = 0x03;
+    }
+}
+
+// ── AdiIndex::create ─────────────────────────────────────────────────────────
+
+util::Result<AdiIndex> AdiIndex::create(const std::string& adi_path,
+                                        const CreateParams& params) {
+    if (params.field_num == 0)
+        return util::Error{5004, 0, "ADI create: field_num must be >= 1", ""};
+    if (params.field_name.empty())
+        return util::Error{5004, 0, "ADI create: field_name required", ""};
+    if (params.adt_hdr_len < 400 || params.adt_rec_len == 0)
+        return util::Error{5004, 0, "ADI create: invalid ADT layout", ""};
+
+    auto fres = platform::File::open(adi_path, platform::OpenMode::CreateRW);
+    if (!fres) return fres.error();
+    platform::File file = std::move(fres).value();
+
+    const bool is_char = adt_type_is_char_key(params.adt_type);
+    // Char-key first tag: 7 pages (spare dense leaf at pg 6).
+    // Numeric-key first tag: 6 pages (root dense leaf at pg 5 only).
+    const std::uint32_t kPages = is_char ? 7u : 6u;
+    for (std::uint32_t pgno = 0; pgno < kPages; ++pgno) {
+        Page pg{};
+        switch (pgno) {
+            case 0: write_adi_file_header_page(pg); break;
+            case 1: break;
+            case 2: write_adi_tag_directory_page(pg, params); break;
+            case 3: write_adi_per_tag_header_page(pg, params, 0); break;
+            case 4: write_fmarker_page(pg, params.field_num); break;
+            case 5:
+                write_empty_dense_leaf_page(pg, params.adt_type,
+                                            params.fld_length);
+                break;
+            case 6:
+                if (is_char) {
+                    write_empty_dense_leaf_page(pg, params.adt_type,
+                                                params.fld_length);
+                }
+                break;
+            default: break;
+        }
+        auto wrote = file.write_at(static_cast<std::uint64_t>(pgno) * ADI_PAGE_SIZE,
+                                   pg.data(), pg.size());
+        if (!wrote) return wrote.error();
+        if (wrote.value() != ADI_PAGE_SIZE)
+            return util::Error{5000, 0, "short ADI page write", adi_path};
+    }
+    if (auto s = file.sync(); !s) return s.error();
+
+    AdiIndex ix;
+    ix.adi_file_ = std::move(file);
+    ix.adi_path_ = adi_path;
+    ix.mode_     = IndexOpenMode::Shared;
+
+    std::string adt_p = adt_path_for(adi_path);
+    auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
+    if (!fa) return fa.error();
+    ix.adt_file_ = std::move(fa).value();
+
+    std::vector<std::uint16_t> types(1, params.adt_type);
+    std::vector<std::uint16_t> offsets(1, 0);
+    std::vector<std::uint16_t> lengths(1, params.fld_length);
+    std::vector<std::string>   names(1, params.field_name);
+
+    std::uint32_t hlen = params.adt_hdr_len, rlen = params.adt_rec_len;
+    auto fields = read_adt_fields(ix.adt_file_, hlen, rlen);
+    if (fields) {
+        types.clear();
+        offsets.clear();
+        lengths.clear();
+        names.clear();
+        for (const auto& fd : fields.value()) {
+            types.push_back(fd.type);
+            offsets.push_back(fd.offset);
+            lengths.push_back(fd.length);
+            names.push_back(fd.name);
+        }
+    }
+
+    std::vector<std::uint8_t> fnums{params.field_num};
+    constexpr std::uint32_t kRootPage = 5;
+    if (auto r = ix.apply_tag_(fnums, kRootPage, types, offsets, lengths, names,
+                               params.adt_hdr_len, params.adt_rec_len,
+                               params.unique);
+        !r) {
+        return r.error();
+    }
+    return ix;
+}
+
+std::string read_adi_footer_field_names(const AdiIndex::Page& pg2) {
+    std::string foot;
+    for (std::size_t i = 500; i < ADI_PAGE_SIZE; ++i) {
+        if (pg2[i] != 0)
+            foot.push_back(static_cast<char>(pg2[i]));
+    }
+    return foot;
+}
+
+void append_adi_footer_field_name(AdiIndex::Page& pg2,
+                                  const std::string& field_name) {
+    std::string foot = read_adi_footer_field_names(pg2);
+    for (char c : field_name)
+        foot.push_back(static_cast<char>(std::toupper(
+            static_cast<unsigned char>(c))));
+    if (foot.size() > 10) foot.resize(10);
+    std::memset(pg2.data() + 500, 0, 12);
+    if (!foot.empty()) {
+        const std::size_t off = ADI_PAGE_SIZE - foot.size();
+        std::memcpy(pg2.data() + off, foot.data(), foot.size());
+    }
+}
+
+// ── AdiIndex::add_tag ────────────────────────────────────────────────────────
+
+util::Result<AdiIndex> AdiIndex::add_tag(const std::string& adi_path,
+                                         const CreateParams& params) {
+    if (params.field_num == 0)
+        return util::Error{5004, 0, "ADI add_tag: field_num must be >= 1", ""};
+    if (params.field_name.empty())
+        return util::Error{5004, 0, "ADI add_tag: field_name required", ""};
+
+    auto fres = platform::File::open(adi_path, platform::OpenMode::OpenExisting);
+    if (!fres) return fres.error();
+    platform::File file = std::move(fres).value();
+
+    auto existing = list_tags(adi_path);
+    if (!existing) return existing.error();
+    for (const auto& tn : existing.value()) {
+        if (tn.size() != params.field_name.size()) continue;
+        bool eq = true;
+        for (std::size_t i = 0; i < tn.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(tn[i])) !=
+                std::tolower(static_cast<unsigned char>(params.field_name[i]))) {
+                eq = false;
+                break;
+            }
+        }
+        if (eq) {
+            return util::Error{5044, 0,
+                "ADI already has a tag for field: " + params.field_name, ""};
+        }
+    }
+
+    Page pg2{};
+    auto got = file.read_at(2 * ADI_PAGE_SIZE, pg2.data(), pg2.size());
+    if (!got || got.value() < ADI_PAGE_SIZE)
+        return util::Error{6106, 0, "can't read ADI tag directory", adi_path};
+
+    std::uint16_t count = page_count(pg2.data());
+    constexpr std::uint32_t kMaxTags =
+        (ADI_PAGE_SIZE - ADI_TAGDIR_ENTRY_START) / ADI_TAGDIR_ENTRY_SIZE;
+    if (count >= kMaxTags)
+        return util::Error{5000, 0, "ADI tag directory full", adi_path};
+
+    auto sz = file.size();
+    if (!sz) return sz.error();
+    const std::uint32_t hdr_pg =
+        static_cast<std::uint32_t>(sz.value() / ADI_PAGE_SIZE);
+    const std::uint32_t fmk_pg  = hdr_pg + 1u;
+    const std::uint32_t root_pg = hdr_pg + 2u;
+
+    Page hdr_pg_buf{};
+    write_adi_per_tag_header_page(hdr_pg_buf, params, count);
+    if (auto w = file.write_at(static_cast<std::uint64_t>(hdr_pg) * ADI_PAGE_SIZE,
+                               hdr_pg_buf.data(), hdr_pg_buf.size());
+        !w || w.value() != ADI_PAGE_SIZE) {
+        return util::Error{5000, 0, "ADI add_tag: short per-tag header write", ""};
+    }
+
+    Page fmk_pg_buf{};
+    write_fmarker_page(fmk_pg_buf, params.field_num);
+    if (auto w = file.write_at(static_cast<std::uint64_t>(fmk_pg) * ADI_PAGE_SIZE,
+                               fmk_pg_buf.data(), fmk_pg_buf.size());
+        !w || w.value() != ADI_PAGE_SIZE) {
+        return util::Error{5000, 0, "ADI add_tag: short F-marker write", ""};
+    }
+
+    Page dense_pg_buf{};
+    write_empty_dense_leaf_page(dense_pg_buf, params.adt_type, params.fld_length);
+    if (auto w = file.write_at(static_cast<std::uint64_t>(root_pg) * ADI_PAGE_SIZE,
+                               dense_pg_buf.data(), dense_pg_buf.size());
+        !w || w.value() != ADI_PAGE_SIZE) {
+        return util::Error{5000, 0, "ADI add_tag: short dense leaf write", ""};
+    }
+
+    // Prepend tag-directory entry (legacy dual-tag layout).
+    for (std::int32_t i = static_cast<std::int32_t>(count) - 1; i >= 0; --i) {
+        std::size_t src = ADI_TAGDIR_ENTRY_START
+                        + static_cast<std::size_t>(i) * ADI_TAGDIR_ENTRY_SIZE;
+        std::size_t dst = src + ADI_TAGDIR_ENTRY_SIZE;
+        std::memmove(pg2.data() + dst, pg2.data() + src, ADI_TAGDIR_ENTRY_SIZE);
+    }
+    pg2[ADI_TAGDIR_ENTRY_START] = static_cast<std::uint8_t>(hdr_pg);
+    if (!params.field_name.empty()) {
+        pg2[ADI_TAGDIR_ENTRY_START + 5] =
+            static_cast<std::uint8_t>(params.field_name[0]);
+    }
+    set_u16_le(pg2.data() + 2, count + 1);
+
+    std::uint16_t meta = u16_le(pg2.data() + 12);
+    if (meta >= 2) set_u16_le(pg2.data() + 12, meta - 2);
+
+    append_adi_footer_field_name(pg2, params.field_name);
+
+    if (auto w = file.write_at(2 * ADI_PAGE_SIZE, pg2.data(), pg2.size());
+        !w || w.value() != ADI_PAGE_SIZE) {
+        return util::Error{5000, 0, "ADI add_tag: short tag directory write", ""};
+    }
+    if (auto s = file.sync(); !s) return s.error();
+
+    AdiIndex ix;
+    ix.adi_file_ = std::move(file);
+    ix.adi_path_ = adi_path;
+    ix.mode_     = IndexOpenMode::Shared;
+
+    std::string adt_p = adt_path_for(adi_path);
+    auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
+    if (!fa) return fa.error();
+    ix.adt_file_ = std::move(fa).value();
+
+    std::uint32_t hlen = params.adt_hdr_len, rlen = params.adt_rec_len;
+    auto fields = read_adt_fields(ix.adt_file_, hlen, rlen);
+    if (!fields) return fields.error();
+
+    std::vector<std::uint16_t> types, offsets, lengths;
+    std::vector<std::string>   names;
+    for (const auto& fd : fields.value()) {
+        types.push_back(fd.type);
+        offsets.push_back(fd.offset);
+        lengths.push_back(fd.length);
+        names.push_back(fd.name);
+    }
+
+    std::vector<std::uint8_t> fnums{params.field_num};
+    if (auto r = ix.apply_tag_(fnums, root_pg, types, offsets, lengths, names,
+                               hlen, rlen, params.unique);
+        !r) {
+        return r.error();
+    }
+    return ix;
+}
+
+// ── AdiIndex::clear_data ─────────────────────────────────────────────────────
+
+util::Result<void> AdiIndex::clear_data() {
+    if (mode_ == IndexOpenMode::ReadOnly)
+        return util::Error{5000, 0, "ADI index is read-only", ""};
+
+    Page pg{};
+    if (auto r = read_adi_page_(root_page_, pg); !r) return r;
+    if (!is_dense_leaf(page_level(pg.data())))
+        return util::Error{5000, 0, "ADI clear_data: root is not a dense leaf", ""};
+
+    set_u16_le(pg.data() + 2, 0);
+    cur_pg_   = root_page_;
+    cur_page_ = pg;
+    cur_cnt_  = 0;
+    cur_idx_  = -1;
+    cur_lsib_ = page_lsib(pg.data());
+    cur_rsib_ = page_rsib(pg.data());
+    cur_recno_   = 0;
+    current_key_.clear();
+    return write_adi_page_(root_page_, pg);
 }
 
 } // namespace openads::drivers::adi

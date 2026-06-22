@@ -68,6 +68,9 @@ constexpr std::uint16_t ADT_TYPE_CICHAR    = 20;  // case-insensitive char (diff
 constexpr std::uint16_t ADT_TYPE_ROWVERSION= 21;  // (unconfirmed)
 constexpr std::uint16_t ADT_TYPE_MODTIME   = 22;  // 8-byte modification timestamp
 
+// Pack a numeric value into the 8-byte ADI total-order key (IEEE754 BE).
+std::string pack_double_key(double v);
+
 // Read-only ADI index.  Each instance represents one tag (one indexed field,
 // or a compound index on multiple fields).
 // Multi-tag discovery:  AdiIndex::list_tags(adi_path) → field names
@@ -107,6 +110,33 @@ public:
     util::Result<void> erase (std::uint32_t recno,
                               const std::string& key) override;
     util::Result<void> flush() override;
+
+    // Parameters for writing a fresh single-tag .adi skeleton.
+    struct CreateParams {
+        std::uint8_t  field_num   = 1;   // 1-based ADT field number (F-marker)
+        std::string   field_name;        // indexed field name (footer + yy byte)
+        std::uint16_t adt_type    = 0;   // ADT_TYPE_* of indexed field
+        std::uint16_t fld_length  = 0;   // byte width of indexed field
+        std::uint32_t adt_hdr_len = 0;   // ADT header length (bytes 32..35)
+        std::uint32_t adt_rec_len = 0;   // ADT record length
+        bool          unique      = false;
+    };
+
+    // Build a fresh 7-page .adi matching the legacy single-tag layout
+    // (file header + tag directory + per-tag header + F-marker + 2 empty
+    // dense-leaf pages).  Returns an index ready for insert()/flush().
+    static util::Result<AdiIndex>
+        create(const std::string& adi_path, const CreateParams& params);
+
+    // Append a new tag to an existing .adi (3 pages at EOF: per-tag
+    // header + F-marker + empty dense root).  New entry is prepended in
+    // the tag directory (legacy convention observed in dual-tag fixtures).
+    static util::Result<AdiIndex>
+        add_tag(const std::string& adi_path, const CreateParams& params);
+
+    // Wipe the B+tree for this tag (root dense leaf count → 0) so a
+    // CREATE INDEX overwrite can rebuild from scratch.
+    util::Result<void> clear_data();
 
     // Multi-tag API (mirrors CdxIndex)
     static util::Result<std::vector<std::string>>
