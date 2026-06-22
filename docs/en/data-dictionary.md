@@ -103,6 +103,22 @@ own implicit save on `AdsDisconnect`) writes atomically with
 write-then-rename so a crashed mid-save leaves the previous
 contents intact.
 
+## `system.*` SQL virtual tables
+
+When connected to a `.add` dictionary, SQL can query catalog
+tables such as `system.tables`, `system.indexes`,
+`system.permissions`, and `system.relations`. These are
+read-only cursors built from in-memory `DataDict` state.
+
+`system.permissions` returns one row per `(grantee, securable
+object)` pair. Rows with no stored ACL still appear with all
+privilege columns set to `0` (denied), so DA-Web and import
+tooling can render a full permission matrix without inferring
+missing entries.
+
+Smoke coverage: `tests/unit/abi_sql_smoke_test.cpp` (DD connect +
+`SELECT` on `system.permissions`).
+
 ## Milestones
 
 | Tag         | Scope |

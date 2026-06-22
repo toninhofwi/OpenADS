@@ -304,8 +304,11 @@ TEST_CASE("GRANT and REVOKE SQL statements") {
     REQUIRE(AdsConnect60(ap.data(), ADS_LOCAL_SERVER, nullptr, nullptr,
                          ADS_DEFAULT, &hConn) == 0);
 
-    // No ACL yet → effective = 4 (full)
-    CHECK(sql_count(hConn, "SELECT * FROM system.permissions WHERE OBJ_NAME = 'EMP'") == 0);
+    // No ACL yet → open access at runtime, but system.permissions still
+    // lists EMP×alice with zero flags (legacy parity).
+    CHECK(sql_count(hConn,
+                    "SELECT * FROM system.permissions "
+                    "WHERE OBJ_NAME = 'EMP' AND GRANTEE = 'alice'") == 1);
 
     REQUIRE(sql_exec(hConn, "GRANT SELECT ON EMP TO alice") == 0);
     // Now there should be an ACL entry
