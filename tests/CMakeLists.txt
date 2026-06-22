@@ -78,6 +78,9 @@ add_executable(openads_unit_tests
     unit/abi_ordlistadd_path_test.cpp
     unit/abi_gobottom_filtered_test.cpp
     unit/abi_rddtst_repro_test.cpp
+    unit/engine_navigation_empty_test.cpp
+    unit/abi_deleted_records_test.cpp
+    unit/abi_index_key_count_test.cpp
     unit/abi_copy_table_test.cpp
     unit/abi_find_table_test.cpp
     unit/abi_binary_memo_test.cpp
