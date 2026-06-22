@@ -24,11 +24,15 @@ util::Error os_error(const char* op) {
     return e;
 }
 
-intptr_t fd_from_native(void* p) {
-    return reinterpret_cast<intptr_t>(p);
+// Encode POSIX fds into void* so that the "not open" sentinel (nullptr)
+// never collides with a valid fd. fd 0 (stdin) is valid on POSIX and
+// can be returned by open() when stdin has been closed. Adding 1
+// maps fd 0 → (void*)1, avoiding the collision.
+int fd_from_native(void* p) {
+    return static_cast<int>(reinterpret_cast<intptr_t>(p) - 1);
 }
 void* native_from_fd(int fd) {
-    return reinterpret_cast<void*>(static_cast<intptr_t>(fd));
+    return reinterpret_cast<void*>(static_cast<intptr_t>(fd) + 1);
 }
 
 } // namespace
@@ -50,7 +54,7 @@ File::~File() { close_(); }
 
 void File::close_() noexcept {
     if (native_ != nullptr) {
-        ::close(static_cast<int>(fd_from_native(native_)));
+        ::close(fd_from_native(native_));
         native_ = nullptr;
     }
 }
@@ -70,35 +74,41 @@ util::Result<File> File::open(const std::string& path, OpenMode mode) {
 
 util::Result<std::size_t> File::read_at(std::uint64_t offset,
                                         void* buf, std::size_t n) {
-    int fd = static_cast<int>(fd_from_native(native_));
-    ssize_t got = ::pread(fd, buf, n, static_cast<off_t>(offset));
+    int fd = fd_from_native(native_);
+    ssize_t got;
+    do {
+        got = ::pread(fd, buf, n, static_cast<off_t>(offset));
+    } while (got < 0 && errno == EINTR);
     if (got < 0) return os_error("pread");
     return static_cast<std::size_t>(got);
 }
 
 util::Result<std::size_t> File::write_at(std::uint64_t offset,
                                          const void* buf, std::size_t n) {
-    int fd = static_cast<int>(fd_from_native(native_));
-    ssize_t wrote = ::pwrite(fd, buf, n, static_cast<off_t>(offset));
+    int fd = fd_from_native(native_);
+    ssize_t wrote;
+    do {
+        wrote = ::pwrite(fd, buf, n, static_cast<off_t>(offset));
+    } while (wrote < 0 && errno == EINTR);
     if (wrote < 0) return os_error("pwrite");
     return static_cast<std::size_t>(wrote);
 }
 
 util::Result<std::uint64_t> File::size() const {
-    int fd = static_cast<int>(fd_from_native(native_));
+    int fd = fd_from_native(native_);
     struct stat st{};
     if (::fstat(fd, &st) != 0) return os_error("fstat");
     return static_cast<std::uint64_t>(st.st_size);
 }
 
 util::Result<void> File::sync() {
-    int fd = static_cast<int>(fd_from_native(native_));
+    int fd = fd_from_native(native_);
     if (::fsync(fd) != 0) return os_error("fsync");
     return {};
 }
 
 util::Result<void> File::truncate(std::uint64_t size) {
-    int fd = static_cast<int>(fd_from_native(native_));
+    int fd = fd_from_native(native_);
     if (::ftruncate(fd, static_cast<off_t>(size)) != 0)
         return os_error("ftruncate");
     return {};

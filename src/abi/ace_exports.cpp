@@ -1467,7 +1467,7 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         bool has_memo = false;
         for (auto& f : fields) {
             AdtFieldSpec sp = adt_spec_for(f);
-            if (sp.needs_memo) has_memo = true;
+            if (sp.adt_type == 5u) has_memo = true;  // MEMO .adm companion
             specs.push_back(sp);
         }
 
@@ -1492,6 +1492,12 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         w32(24, 0);        // rec_count = 0
         w32(32, hdr_len);  // hdr_len
         w32(36, rec_len);  // rec_len
+        // Proprietary header tail observed in reference fixtures.
+        adt_hdr[20]  = 1;
+        adt_hdr[356] = 4;
+        adt_hdr[358] = static_cast<std::uint8_t>(fields.size() & 0xFFu);
+        adt_hdr[359] = static_cast<std::uint8_t>((fields.size() >> 8) & 0xFFu);
+        if (has_memo) adt_hdr[88] = 1;
 
         // 200-byte field descriptors
         std::vector<std::uint8_t> fds(fields.size() * 200, 0);
@@ -1511,14 +1517,10 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
             fd[135] = static_cast<std::uint8_t>(sp.adt_length & 0xFFu);
             fd[136] = static_cast<std::uint8_t>((sp.adt_length >> 8) & 0xFFu);
             fd[137] = sp.adt_dec;
-            // ADT type 15 (AUTOINC): init next=1, step=1 in descriptor
-            if (sp.adt_type == 15u) {
-                fd[139] = 1;   // next value = 1
-                fd[140] = 0;
-                fd[141] = 0;
-                fd[142] = 0;
-                fd[143] = 1;   // step = 1
-            }
+            if (sp.adt_type == 10u)
+                fd[139] = sp.adt_dec ? sp.adt_dec : 2;
+            // AUTOINC tail (bytes 139-143) stays zero on disk; counter is
+            // seeded from existing data when the table is opened.
             fld_off = static_cast<std::uint16_t>(fld_off + sp.adt_length);
         }
 
@@ -4622,34 +4624,35 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         : std::string{};
 
     namespace fs = std::filesystem;
+    const bool is_adt_table = path_ends_with_ci(t->path(), ".adt");
+    const char* default_ext = is_adt_table ? ".adi" : ".cdx";
     fs::path p;
     if (bag.empty()) {
-        // No bag name supplied → structural CDX: same stem as the table,
-        // same directory.  Mirrors the auto-open logic in AdsOpenTable90
-        // (tp.replace_extension(".cdx")).  Using tdir/"" on Windows
-        // std::filesystem appends a trailing separator, making
-        // replace_extension produce ".cdx" with no stem — one shared file
-        // for the whole directory instead of one per table.
-        p = fs::path(t->path()).replace_extension(".cdx");
+        // No bag name supplied → structural index bag: same stem as the
+        // table (.cdx for DBF, .adi for ADT).  Mirrors AdsOpenTable90.
+        p = fs::path(t->path()).replace_extension(default_ext);
     } else {
         p = fs::path(bag);
         if (!p.is_absolute()) {
             fs::path tdir = fs::path(t->path()).parent_path();
             p = tdir / p;
         }
-        if (!p.has_extension()) p.replace_extension(".cdx");
+        if (!p.has_extension()) p.replace_extension(default_ext);
     }
     bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
+    bool is_adi = path_ends_with_ci(p.string(), ".adi");
 
-    // ACE AdsCreateIndex* option bits (include/openads/ace.h):
-    //   ADS_UNIQUE 0x01  ADS_DESCENDING 0x02  ADS_CUSTOM 0x04
-    //   ADS_COMPOUND 0x08
-    // ADS_COMPOUND is redundant here (compound-ness comes from the
-    // .cdx extension) and MUST be ignored for direction — rddads and
-    // X#'s ADSRDD set it for every CDX/NTX tag. Reading it as
-    // "descending" (the old `& 0x08` bug) built every order
-    // descending: AdsGotoTop landed on the last key and SKIP walked
-    // backward. Direction comes only from ADS_DESCENDING (0x02).
+    // ACE AdsCreateIndex* option bits (include/openads/ace.h, values
+    // verified against the rddads contrib):
+    //   ADS_UNIQUE 0x01  ADS_COMPOUND 0x02  ADS_CUSTOM 0x04
+    //   ADS_DESCENDING 0x08
+    // ADS_COMPOUND (0x02) is redundant here (compound-ness comes from
+    // the .cdx extension) and MUST be ignored for direction — rddads
+    // and X#'s ADSRDD set it for EVERY CDX/NTX tag. `INDEX ON f TAG t`
+    // sends 0x02 alone; reading 0x02 as "descending" builds every
+    // order reversed (AdsGotoTop on the last key, SKIP walking
+    // backward). Direction comes ONLY from ADS_DESCENDING (0x08), which
+    // rddads adds for `... DESCENDING`.
     bool unique  = (ulOptions & ADS_UNIQUE) != 0;
     bool descend = (ulOptions & ADS_DESCENDING) != 0;
 
@@ -4674,9 +4677,80 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     bool exists = false;
     {
         std::error_code ec;
-        exists = is_cdx && fs::exists(p, ec);
+        exists = (is_cdx || is_adi) && fs::exists(p, ec);
     }
-    if (is_cdx && exists) {
+
+    if (is_adi && is_adt_table) {
+        // ADT tables use a single .adi bag; each tag indexes one field.
+        const std::string bare = openads::engine::strip_alias_qualifiers(expr);
+        std::int32_t fidx = t->field_index(bare);
+        if (fidx < 0) {
+            return fail(openads::AE_COLUMN_NOT_FOUND,
+                        "ADI index expression must be a bare field name");
+        }
+        if (fidx + 1 > 255) {
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "ADI index does not support field numbers greater than 255");
+        }
+        const auto& fd = t->field_descriptor(static_cast<std::uint16_t>(fidx));
+        openads::drivers::adi::AdiIndex::CreateParams cp{};
+        cp.field_num   = static_cast<std::uint8_t>(fidx + 1);
+        cp.field_name  = fd.name;
+        cp.adt_type    = static_cast<std::uint16_t>(
+            static_cast<unsigned char>(fd.raw_type));
+        cp.fld_length  = fd.length;
+        cp.adt_hdr_len = t->driver()->header_length();
+        cp.adt_rec_len = t->driver()->record_length();
+        cp.unique      = unique;
+
+        const bool is_char_key =
+            cp.adt_type == openads::drivers::adi::ADT_TYPE_CHAR ||
+            cp.adt_type == openads::drivers::adi::ADT_TYPE_CICHAR;
+        klen = is_char_key ? fd.length : 8;
+
+        if (exists) {
+            auto tags = openads::drivers::adi::AdiIndex::list_tags(p.string());
+            bool have_tag = false;
+            if (tags) {
+                for (const auto& tn : tags.value()) {
+                    if (tn.size() == fd.name.size()) {
+                        bool eq = true;
+                        for (std::size_t i = 0; i < tn.size(); ++i) {
+                            if (std::tolower(static_cast<unsigned char>(tn[i])) !=
+                                std::tolower(static_cast<unsigned char>(
+                                    fd.name[i]))) {
+                                eq = false;
+                                break;
+                            }
+                        }
+                        if (eq) { have_tag = true; break; }
+                    }
+                }
+            }
+            if (have_tag) {
+                openads::drivers::adi::AdiIndex existing;
+                auto reopen = existing.open_named(
+                    p.string(), openads::drivers::IndexOpenMode::Shared,
+                    fd.name);
+                if (!reopen) return fail(reopen.error());
+                if (auto cl = existing.clear_data(); !cl) return fail(cl.error());
+                idx_owner = std::make_unique<
+                    openads::drivers::adi::AdiIndex>(std::move(existing));
+            } else {
+                auto added = openads::drivers::adi::AdiIndex::add_tag(
+                    p.string(), cp);
+                if (!added) return fail(added.error());
+                idx_owner = std::make_unique<
+                    openads::drivers::adi::AdiIndex>(std::move(added).value());
+            }
+        } else {
+            auto created = openads::drivers::adi::AdiIndex::create(
+                p.string(), cp);
+            if (!created) return fail(created.error());
+            idx_owner = std::make_unique<openads::drivers::adi::AdiIndex>(
+                std::move(created).value());
+        }
+    } else if (is_cdx && exists) {
         // Harbour rddads / Clipper semantics: re-creating an
         // existing tag is a silent overwrite, not an error. If the
         // tag already exists, open it and clear its B+tree so the
@@ -4713,6 +4787,9 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         if (!created) return fail(created.error());
         idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
             std::move(created).value());
+    } else if (is_adi) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "ADI index bag requires an ADT table");
     } else {
         auto created = openads::drivers::ntx::NtxIndex::create(
             p.string(), tag, expr, klen, unique, descend);
@@ -6821,50 +6898,60 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
     std::string key;
-    // ADS_DOUBLEKEY (2): caller passed sizeof(double) raw bytes;
-    // engine indexes built from a field expression store ASCII-
-    // padded numerics (right-aligned, dec-padded). Convert the
-    // double to the same ASCII format using the active index's
-    // field schema so seek_key compares apples-to-apples.
-    if (u16KeyType == ADS_DOUBLEKEY && u16KeyLen == sizeof(double) &&
-        t->order() != nullptr && t->order()->index() != nullptr) {
+    (void)u16KeyType;
+    // Numeric seek keys arrive as sizeof(double) raw IEEE bytes. The ADS SDK
+    // names this ADS_DOUBLEKEY (2), but Harbour's rddads tags a numeric dbSeek
+    // with the field DATA type (ADS_STRING==4 in this ABI) — so gating on
+    // u16KeyType==ADS_DOUBLEKEY missed EVERY rddads numeric seek (the key fell
+    // through as 8 raw double bytes and never matched the stored ASCII key).
+    // Detect a double key by length + a numeric (ASCII-stored) active index
+    // field instead, and convert to the same right-aligned ASCII the index
+    // holds. Character / non-numeric indexes keep the raw-bytes path.
+    auto* dk_idx = (t->order() != nullptr) ? t->order()->index() : nullptr;
+    // Strip the `ALIAS->` qualifier the way the write side does
+    // (evaluate_index_expr -> strip_alias_qualifiers) so a tag built from
+    // `FIELD->ID` still resolves the field.
+    std::int32_t dk_fidx = (dk_idx != nullptr)
+        ? t->field_index(
+              openads::engine::strip_alias_qualifiers(dk_idx->expression()))
+        : -1;
+    bool dk_numeric = false;
+    if (dk_fidx >= 0) {
+        auto dkt = t->field_descriptor(
+            static_cast<std::uint16_t>(dk_fidx)).type;
+        dk_numeric = (dkt == openads::drivers::DbfFieldType::Numeric ||
+                      dkt == openads::drivers::DbfFieldType::Float);
+    }
+    if (dk_idx != nullptr && dk_numeric && u16KeyLen == sizeof(double)) {
         double dv = 0;
         std::memcpy(&dv, pucKey, sizeof(double));
-        auto* idx = t->order()->index();
-        std::uint16_t klen = idx->key_length();
-        // Format width matches the FIELD width (eg N,10,0 -> 10),
-        // not the index key_length: a stale key_length from an
-        // INDEX-on-empty-table run would otherwise produce a
-        // different right-aligned padding than evaluate_index_expr
-        // wrote, and seek_key would never find an exact match.
-        std::uint16_t fmt_w = klen;
-        std::uint16_t dec = 0;
-        // Strip the `ALIAS->` qualifier the way the write side does
-        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
-        // tag built from `FIELD->ID` never resolves the field, fmt_w
-        // stays at the stale key_length, and the numeric seek key is
-        // padded to a different width than the stored key.
-        std::int32_t fidx = t->field_index(
-            openads::engine::strip_alias_qualifiers(idx->expression()));
-        if (fidx >= 0) {
-            const auto& fd = t->field_descriptor(
-                static_cast<std::uint16_t>(fidx));
-            dec = static_cast<std::uint16_t>(fd.decimals);
-            if (fd.length > 0)
-                fmt_w = static_cast<std::uint16_t>(fd.length);
-        }
-        char buf[64];
-        if (dec > 0) {
-            std::snprintf(buf, sizeof(buf), "%*.*f",
-                          static_cast<int>(fmt_w),
-                          static_cast<int>(dec), dv);
-        } else {
-            std::snprintf(buf, sizeof(buf), "%*.0f",
-                          static_cast<int>(fmt_w), dv);
-        }
+        std::uint16_t klen = dk_idx->key_length();
+        // Format width matches the FIELD width (eg N,10,0 -> 10), not a stale
+        // index key_length (eg INDEX-on-empty-table), so the right-aligned
+        // padding equals what evaluate_index_expr wrote at build/sync time.
+        const auto& fd = t->field_descriptor(
+            static_cast<std::uint16_t>(dk_fidx));
+        std::uint16_t dec   = static_cast<std::uint16_t>(fd.decimals);
+        std::uint16_t fmt_w = (fd.length > 0)
+            ? static_cast<std::uint16_t>(fd.length) : klen;
+        // Buffer holds the widest valid xBase field width (255) plus
+        // sign, decimal point and NUL. snprintf is length-bounded and we
+        // assign only what it actually produced (clamped to the buffer),
+        // so an out-of-range fmt_w can never overread the stack buffer.
+        char buf[264];
+        int n = (dec > 0)
+            ? std::snprintf(buf, sizeof(buf), "%*.*f",
+                            static_cast<int>(fmt_w),
+                            static_cast<int>(dec), dv)
+            : std::snprintf(buf, sizeof(buf), "%*.0f",
+                            static_cast<int>(fmt_w), dv);
+        std::size_t take = (n < 0)
+            ? 0u
+            : std::min<std::size_t>(static_cast<std::size_t>(n),
+                                    sizeof(buf) - 1);
         // Pad to klen with trailing spaces (matches how
         // evaluate_index_expr right-pads the field's raw bytes).
-        key.assign(buf, fmt_w);
+        key.assign(buf, take);
         if (key.size() < klen) key.append(klen - key.size(), ' ');
     } else {
         key.assign(reinterpret_cast<const char*>(pucKey),
@@ -6998,16 +7085,21 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
             if (fd.length > 0)
                 fmt_w = static_cast<std::uint16_t>(fd.length);
         }
-        char buf[64];
-        if (dec > 0) {
-            std::snprintf(buf, sizeof(buf), "%*.*f",
-                          static_cast<int>(fmt_w),
-                          static_cast<int>(dec), dv);
-        } else {
-            std::snprintf(buf, sizeof(buf), "%*.0f",
-                          static_cast<int>(fmt_w), dv);
-        }
-        key.assign(buf, fmt_w);
+        // Length-bounded format + clamped assign: an out-of-range fmt_w
+        // can never overread the buffer (buf sized for the widest valid
+        // xBase field width plus sign, separator and NUL).
+        char buf[264];
+        int n = (dec > 0)
+            ? std::snprintf(buf, sizeof(buf), "%*.*f",
+                            static_cast<int>(fmt_w),
+                            static_cast<int>(dec), dv)
+            : std::snprintf(buf, sizeof(buf), "%*.0f",
+                            static_cast<int>(fmt_w), dv);
+        std::size_t take = (n < 0)
+            ? 0u
+            : std::min<std::size_t>(static_cast<std::size_t>(n),
+                                    sizeof(buf) - 1);
+        key.assign(buf, take);
         if (key.size() < klen) key.append(klen - key.size(), ' ');
     } else {
         key = pucScope
@@ -9735,8 +9827,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::memcpy(expr_buf.data(), ci.value().expression.data(),
                     ci.value().expression.size());
         UNSIGNED32 opts = 0;
-        if (ci.value().unique)     opts |= 0x01u;
-        if (ci.value().descending) opts |= 0x02u;
+        // Re-encode using the named ACE option bits so this round-trips
+        // through AdsCreateIndex61's `& ADS_DESCENDING` decode. Hardcoded
+        // literals here would silently lose the direction if the bit
+        // values are ever revisited.
+        if (ci.value().unique)     opts |= ADS_UNIQUE;
+        if (ci.value().descending) opts |= ADS_DESCENDING;
         ADSHANDLE hIdx = 0;
         UNSIGNED32 rc = AdsCreateIndex61(
             hTable, bag_buf.data(), tag_buf.data(),
