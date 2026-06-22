@@ -43,10 +43,11 @@ AdmMemo::open(const std::string& path, MemoOpenMode mode) {
     std::uint8_t hdr[32]{};
     auto got = file_.read_at(0, hdr, sizeof(hdr));
     if (!got) return got.error();
-    if (got.value() >= 24) {
-        next_avail_ = read_u32_le(hdr + 20);
-        if (next_avail_ < kDataBlockOrigin) next_avail_ = kDataBlockOrigin;
+    if (got.value() < 24) {
+        return util::Error{5103, 0, "ADM header truncated", ""};
     }
+    next_avail_ = read_u32_le(hdr + 20);
+    if (next_avail_ < kDataBlockOrigin) next_avail_ = kDataBlockOrigin;
     return {};
 }
 

@@ -4688,6 +4688,10 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             return fail(openads::AE_COLUMN_NOT_FOUND,
                         "ADI index expression must be a bare field name");
         }
+        if (fidx + 1 > 255) {
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "ADI index does not support field numbers greater than 255");
+        }
         const auto& fd = t->field_descriptor(static_cast<std::uint16_t>(fidx));
         openads::drivers::adi::AdiIndex::CreateParams cp{};
         cp.field_num   = static_cast<std::uint8_t>(fidx + 1);

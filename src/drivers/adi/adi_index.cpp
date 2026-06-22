@@ -1541,17 +1541,17 @@ util::Result<AdiIndex> AdiIndex::create(const std::string& adi_path,
 
     std::uint32_t hlen = params.adt_hdr_len, rlen = params.adt_rec_len;
     auto fields = read_adt_fields(ix.adt_file_, hlen, rlen);
-    if (fields) {
-        types.clear();
-        offsets.clear();
-        lengths.clear();
-        names.clear();
-        for (const auto& fd : fields.value()) {
-            types.push_back(fd.type);
-            offsets.push_back(fd.offset);
-            lengths.push_back(fd.length);
-            names.push_back(fd.name);
-        }
+    if (!fields) return fields.error();
+
+    types.clear();
+    offsets.clear();
+    lengths.clear();
+    names.clear();
+    for (const auto& fd : fields.value()) {
+        types.push_back(fd.type);
+        offsets.push_back(fd.offset);
+        lengths.push_back(fd.length);
+        names.push_back(fd.name);
     }
 
     std::vector<std::uint8_t> fnums{params.field_num};
