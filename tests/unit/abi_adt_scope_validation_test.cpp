@@ -24,6 +24,12 @@
 #  include <spawn.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
+#  if defined(__APPLE__)
+#    include <crt_externs.h>
+#    define environ (*_NSGetEnviron())
+#  else
+extern char** environ;
+#  endif
 #endif
 
 namespace fs = std::filesystem;
@@ -131,11 +137,12 @@ public:
         posix_spawn_file_actions_adddup2(&fa, pipefd_[1], STDERR_FILENO);
         posix_spawn_file_actions_addclose(&fa, pipefd_[0]);
 
+        std::string exe_s = exe.string();
         std::string host = "127.0.0.1";
         std::string port = "0";
         std::string data = data_dir.string();
         char* argv[] = {
-            const_cast<char*>(exe.string().c_str()),
+            exe_s.data(),
             const_cast<char*>("--host"), host.data(),
             const_cast<char*>("--port"), port.data(),
             const_cast<char*>("--data"), data.data(),
