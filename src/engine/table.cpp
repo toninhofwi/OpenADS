@@ -959,9 +959,25 @@ util::Result<void> Table::pack() {
         auto a = driver_->append_record_raw(buf.data(), buf.size());
         if (!a) return a.error();
     }
-    state_ = State::Bof;
-    recno_ = 0;
     record_buf_.assign(driver_->record_length(), 0);
+    // Clipper / DBFCDX semantics: PACK rebuilds the controlled indexes so a
+    // post-PACK index walk never references a recno beyond the compacted
+    // record count. (zap() above intentionally leaves bound indexes stale —
+    // without this rebuild, dbGoTop+dbSkip over a stale tag walks onto a
+    // dropped recno and raises ADSCDX/5000 "record number out of range".)
+    // Only needed when records were actually removed: if nothing was deleted
+    // (dst == total) the recnos are unchanged and the indexes stay valid.
+    bool removed = (dst < total);
+    bool has_index = (order_ && order_->index() != nullptr);
+    for (auto* x : extra_index_views_) {
+        if (x != nullptr) { has_index = true; break; }
+    }
+    if (removed && has_index) {
+        if (auto r = reindex(); !r) return r.error();   // sets Bof / recno 0
+    } else {
+        state_ = State::Bof;
+        recno_ = 0;
+    }
     return {};
 }
 
@@ -1258,28 +1274,13 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
     auto load = load_record_(r.value().recno);
     if (!load) return load.error();
     last_seek_found_ = exact;
-    // Clipper 5.2 / DBFCDX-baseline quirk: when a SOFT seek lands on
-    // a record whose key is strictly greater than the searched key
-    // (i.e. we positioned BEFORE the first equal-key entry — there
-    // is no equal-key entry at all), the baseline reports EOF
-    // instead of "positioned at next-greater". Reproduce that by
-    // probing the loaded record's key vs the search key.
-    if (!exact && soft && !last) {
-        std::string padded = key;
-        if (padded.size() < idx->key_length())
-            padded.append(idx->key_length() - padded.size(), ' ');
-        if (padded.size() > idx->key_length())
-            padded.resize(idx->key_length());
-        std::string ck = idx->current_key();
-        if (ck.size() < padded.size())
-            ck.append(padded.size() - ck.size(), ' ');
-        if (ck.size() > padded.size()) ck.resize(padded.size());
-        if (std::memcmp(padded.data(), ck.data(), padded.size()) < 0) {
-            state_ = State::Eof; recno_ = 0;
-            last_seek_found_ = false;
-            return false;
-        }
-    }
+    // SOFT seek with no exact match: DBFCDX leaves the cursor positioned on
+    // the next-greater key, with Found()=.F. and Eof()=.F. Only a key greater
+    // than EVERY entry yields Eof — and that case is already handled above,
+    // where the index returns not-positioned. Proven against the native
+    // DBFCDX baseline (same .exe): `SET SOFTSEEK ON ; dbSeek( <absent
+    // numeric> )` lands on the next key, NOT at Eof. (A prior revision forced
+    // Eof here on the strictly-greater landing, contradicting DBFCDX.)
     return exact;
 }
 
