@@ -13,11 +13,16 @@ abstraction to wade through:
 |--------|----------|-------------------|-------|
 | [`sqlite/`](sqlite/) | SQLite | `sqlite://./demo.db` | DLL built with `OPENADS_WITH_SQLITE` |
 | [`dbf/`](dbf/) | DBF (navigational) | a folder path | always available |
-| [`adt/`](adt/) | ADT (navigational) | a folder path + ADT file type | always available |
 | [`postgresql/`](postgresql/) | PostgreSQL | `postgresql://user:pass@host:5432/db` | `OPENADS_WITH_POSTGRESQL` + a server |
 | [`mariadb/`](mariadb/) | MariaDB / MySQL | `mariadb://user:pass@host:3306/db` | `OPENADS_WITH_MARIADB` + a server |
 | [`odbc/`](odbc/) | any ODBC engine | `odbc://Driver={...};...` | `OPENADS_WITH_ODBC` + a driver/DSN |
 | [`complete/`](complete/) | **all of the above** | each via its URI | opens every configured back-end |
+
+> **ADT tables?** The stable ORM's navigational open targets the DBF/CDX
+> table type, so an ADT (`.adt`) example lives in the **console track**
+> ([`../console/06_adt.prg`](../console/)), which selects the file type
+> directly through the RDD. The ORM API itself is identical once the
+> table is open.
 
 [`complete/`](complete/) opens every back-end you have configured, runs
 the full CRUD cycle on each, and finishes with an **auditable
@@ -32,13 +37,14 @@ aRows := oCn:Query( "SELECT id, name FROM people WHERE uf = 'SP'" )
 
 * Fluent builder -- Harbour calls, translated to SQL for you:
 oQ    := TORMQuery():New( oCn, "people" ):Where( "uf", "SP" ):OrderBy( "id", "DESC" )
-? oQ:Compiled()[ "sql" ]        // SEE the generated SQL before it runs
+? oQ:ToSql()                    // SEE the generated SQL before it runs
 aRows := oQ:Get()
 ```
 
-`:Compiled()` returns the generated `{ sql, params }` so you can learn
-exactly what the builder produced. The builder always uses bound
-parameters, so values never get concatenated into the SQL text.
+`:ToSql()` returns the generated SQL string so you can learn exactly what
+the builder produced before running it (`:ToAst()` gives the structured
+form). The builder uses bound parameters under the hood, so values never
+get concatenated into the SQL text.
 
 ## Model CRUD
 
@@ -58,9 +64,9 @@ oP:Delete()
 
 - **SQL back-ends** (SQLite / PostgreSQL / MariaDB / ODBC): SQL runs in
   the engine; `WHERE` / `ORDER BY` / `LIMIT` are evaluated there.
-- **Navigational back-ends** (DBF / ADT): there is no SQL server, so the
-  ORM walks records through the engine's cursor API. The model layer
-  (Find / Save / Delete) honours the deletion flag correctly on these.
+- **Navigational back-end** (DBF): there is no SQL server, so the ORM
+  walks records through the engine's cursor API. The model layer
+  (Find / Save / Delete) honours the deletion flag correctly here.
 
 The same `Model` / builder code works on both; the ORM picks the right
 path from the connection string.
