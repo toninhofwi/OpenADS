@@ -5,6 +5,42 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.1 — 2026-06-23
+
+- **`SKIP` honours `SET DELETED ON` in natural order.** `Table::skip`
+  on an unindexed table stepped straight onto deleted rows; it now
+  skips deleted records (matching the index-order path and
+  `GOTO TOP` / `GOTO BOTTOM`) when `SET DELETED` is ON. Fixes
+  `abi_deleted_records_test` ("middle records deleted: Skip sees only
+  live rows"), which had been failing the test step on every CI
+  platform.
+- **Native ADT / ADI create, read, write, and index seek (PR #41).**
+  OpenADS now operates end-to-end on native `.adt` / `.adi` / `.adm`
+  files: `AdsCreateTable(ADS_ADT)` writes a valid header + field
+  descriptors (+ optional `.adm` memo store), `AdsAppendRecord` /
+  `AdsWriteRecord` persist rows and memo payloads, re-open + field get
+  + memo round-trip on read, `AdsCreateIndex61` builds `.adi` bags, and
+  `AdsSeek` works on character and numeric ADI keys. AUTOINC counter is
+  seeded from existing rows at open.
+- **POSIX platform hardening.** `file_posix` stores handles as `(fd+1)`
+  so a real fd 0 (stdin closed) is not mistaken for the not-open
+  sentinel; `pread` / `pwrite` retry on `EINTR`; `map_readonly` rejects
+  zero-length maps; `LockMgr` refcounts repeated locks and releases the
+  OS lock only on the final unlock; `TxLog::read_all` bounds-checks
+  every UPDATE / APPEND field length against truncated / corrupt WAL.
+- **macOS / clang build fixes.** Resolved `-Werror` breaks introduced by
+  the ADT/ADI work: sign-conversion in `adi_index.cpp` and the
+  `environ` / dangling-pointer issues in the ADT scope-validation test.
+- **Documentation.** New SQLite backend guide (`sqlite://` connection
+  URI, `?key=` encryption, field-type mapping, limitations) and stored
+  procedures guide (custom AEP `CREATE`/`EXECUTE PROCEDURE` + the
+  built-in `sp_*` Data Dictionary procedures), all in EN / ES / PT.
+- **Cookbook (PR #44).** New `cookbook/` folder with runnable,
+  heavily-commented Harbour examples — a `console/` track (pure
+  `ADSCDX` xBase) and an `orm/` track (CRUD across SQLite / DBF /
+  PostgreSQL / MariaDB / ODBC back-ends), plus connection-string,
+  field-type and troubleshooting guides.
+
 ## 1.0.0-rc29 — 2026-05-26
 
 - **Turnkey `hbmk2` (`.hbp`) example for Harbour apps —

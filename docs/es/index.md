@@ -15,7 +15,7 @@ directo** del Advantage Client Engine (`ace32.dll` /
 que enlazan contra `contrib/rddads` siguen funcionando sin
 recompilar.
 
-Release actual: **v1.0.0-rc31**.
+Release actual: **v1.0.1**.
 
 ## Contenido
 
