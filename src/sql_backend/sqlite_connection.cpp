@@ -107,8 +107,9 @@ util::Result<void> load_current_row(sqlite3* db, SqliteTable* tbl) {
         tbl->current_nulls.resize(static_cast<std::size_t>(cols));
         for (int c = 0; c < cols; ++c) {
             bool is_null = false;
-            tbl->current_row[c] = format_sqlite_value(stmt, c, is_null);
-            tbl->current_nulls[c] = is_null;
+            auto ci = static_cast<std::size_t>(c);
+            tbl->current_row[ci] = format_sqlite_value(stmt, c, is_null);
+            tbl->current_nulls[ci] = is_null;
         }
         tbl->row_valid = true;
     } else if (rc == SQLITE_DONE) {

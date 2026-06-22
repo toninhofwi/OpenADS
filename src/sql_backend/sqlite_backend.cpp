@@ -103,7 +103,7 @@ util::Error sqlite_error(sqlite3* db, const char* context) {
 
 namespace {
 
-util::Result<void> exec_pragma(sqlite3* db, const std::string& sql) {
+[[maybe_unused]] util::Result<void> exec_pragma(sqlite3* db, const std::string& sql) {
     char* err = nullptr;
     const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err);
     if (rc != SQLITE_OK) {
@@ -114,7 +114,7 @@ util::Result<void> exec_pragma(sqlite3* db, const std::string& sql) {
     return util::Result<void>{};
 }
 
-std::string escape_pragma_key(const std::string& key) {
+[[maybe_unused]] std::string escape_pragma_key(const std::string& key) {
     std::string out;
     out.reserve(key.size());
     for (char c : key) {
