@@ -10,9 +10,7 @@
  *   - SET DELETED ON/OFF : hide or show deleted records.
  *   - RECALL  : un-delete (recover) a marked record.
  *   - PACK    : physically remove every deleted record.
- *   - UPPER() : case-insensitive matching in a filter/index key.
- *   - SET FILTER : show only the rows matching a condition.
- *   - OrdScopeSet : restrict an indexed walk to a key range (scope).
+ *   - UPPER() : case-insensitive matching in an index key.
  *
  * A "deleted" DBF record is not gone -- it is flagged. It stays hidden
  * while SET DELETED is ON and can be brought back with RECALL, until
@@ -109,21 +107,6 @@ PROCEDURE Main()
    PACK                          // removes id=4 for good; indexes auto-rebuilt
    ListAll( "After PACK (" + LTrim( Str( LastRec() ) ) + " rows)" )
 
-   /* ---- SET FILTER: only contacts in Lisbon -------------------- */
-   ? "-- SET FILTER to UPPER(CITY)='LISBON' --"
-   SET FILTER TO UPPER( FIELD->CITY ) == "LISBON"
-   ListAll( "Filtered view (Lisbon only)" )
-   SET FILTER TO                 // clear the filter
-
-   /* ---- SCOPE: restrict the BY_NAME walk to keys 'B'..'D' ------- */
-   ? "-- scope BY_NAME to keys in ['B'..'D'] --"
-   OrdSetFocus( "BY_NAME" )
-   OrdScope( 0, "B" )            // low bound  (TOP)
-   OrdScope( 1, "D" )            // high bound (BOTTOM)
-   ListWalk( "Scoped walk B..D" )
-   OrdScope( 0, NIL )            // clear scopes
-   OrdScope( 1, NIL )
-
    dbCloseArea()
    AdsDisconnect()
 
@@ -157,19 +140,5 @@ STATIC PROCEDURE ListAll( cTitle )
       dbSkip()
    ENDDO
    OrdSetFocus( nSave )
-   ?
-   RETURN
-
-/* Walk in the active index order (used to show scope effect).
- * The nGuard counter is a defensive bound so the loop always
- * terminates even if the active order misbehaves. */
-STATIC PROCEDURE ListWalk( cTitle )
-   LOCAL nGuard := 0
-   ? "  " + cTitle + ":"
-   dbGoTop()
-   DO WHILE ! Eof() .AND. ++nGuard <= 1000
-      ? "    " + PadR( AllTrim( FIELD->NAME ), 8 ) + AllTrim( FIELD->CITY )
-      dbSkip()
-   ENDDO
    ?
    RETURN
