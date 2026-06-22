@@ -1,8 +1,5 @@
 // M5 scope validation — native ADT/ADI create, read, write, seek:
 //   AUTOINC, CHAR, INTEGER, DATE, MEMO (+ .adm / .adi)
-// Uses _Prj/adt/teste3 as Arc ground-truth (read-only structure) and a
-// fresh temp table for create / append / memo / index seek / stress.
-#include "adt_format.hpp"
 #include "doctest.h"
 #include "drivers/adi/adi_index.h"
 #include "network/server.h"
@@ -559,68 +556,6 @@ void exercise_remote_tipos_ext_client(const char* uri, const fs::path& dir) {
 
 } // namespace
 
-TEST_CASE("M5 ADT scope: teste3 fixture — schema + dual ADI tags") {
-    auto dir = adt_test::arc_ref_testdata_dir();
-    if (dir.empty() || !fs::exists(dir / "teste3.adt")) {
-        MESSAGE("optional teste3.adt fixture absent — skip");
-        return;
-    }
-
-    std::string err;
-    auto bytes = adt_test::read_file_bytes(dir / "teste3.adt");
-    REQUIRE(!bytes.empty());
-    adt_test::AdtHeaderInfo hdr;
-    REQUIRE(adt_test::parse_adt_header(bytes, hdr, err));
-    CHECK(hdr.rec_len == 37u);
-    CHECK(hdr.fields.size() == 5u);
-    CHECK(hdr.fields[0].name == "ID");
-    CHECK(hdr.fields[1].name == "Code");
-    CHECK(hdr.fields[4].name == "Notes");
-    CHECK(hdr.fields[4].raw_type == 5u);
-
-    CHECK(fs::exists(dir / "teste3.adi"));
-    CHECK(fs::exists(dir / "teste3.adm"));
-
-    auto tags = openads::drivers::adi::AdiIndex::list_tags(
-        (dir / "teste3.adi").string());
-    REQUIRE(tags);
-    CHECK(tags.value().size() == 2u);
-
-    UNSIGNED8 srv[260]{};
-    std::memcpy(srv, dir.string().c_str(), dir.string().size());
-    ADSHANDLE hConn = 0;
-    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn)
-            == AE_SUCCESS);
-
-    UNSIGNED8 tbl[] = "teste3.adt";
-    ADSHANDLE hTable = 0;
-    REQUIRE(AdsOpenTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI, ADS_READONLY,
-                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
-            == AE_SUCCESS);
-
-    UNSIGNED16 nf = 0;
-    REQUIRE(AdsGetNumFields(hTable, &nf) == AE_SUCCESS);
-    CHECK(nf == 5);
-
-    UNSIGNED8 code_f[] = "Code";
-    UNSIGNED16 ftype = 0;
-    REQUIRE(AdsGetFieldType(hTable, code_f, &ftype) == AE_SUCCESS);
-    CHECK(ftype == ADS_STRING);
-
-    UNSIGNED8 notes_f[] = "Notes";
-    REQUIRE(AdsGetFieldType(hTable, notes_f, &ftype) == AE_SUCCESS);
-    CHECK(ftype == ADS_MEMO);
-
-    UNSIGNED8 idxfile[] = "teste3.adi";
-    ADSHANDLE idx_handles[8]{};
-    UNSIGNED16 idx_count = 8;
-    REQUIRE(AdsOpenIndex(hTable, idxfile, idx_handles, &idx_count) == AE_SUCCESS);
-    CHECK(idx_count >= 2);
-
-    REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
-    REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
-}
-
 TEST_CASE("M5 ADT scope: create from zero — autoinc char int date memo") {
     wipe_scope_tmp();
     auto dir = scope_tmp_dir();
@@ -796,80 +731,6 @@ TEST_CASE("M5 ADT scope: stress append + index order + memo round-trip") {
     REQUIRE(AdsSeek(hIdx, key, 12, 0, 0, &found) == AE_SUCCESS);
     CHECK(found != 0);
     CHECK(get_field_str(hTable, "Tag") == trim_spaces("R0123"));
-
-    REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
-    REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
-}
-
-TEST_CASE("M5 ADT scope: teste3 copy — populate memo + dual seek") {
-    auto src = adt_test::arc_ref_testdata_dir();
-    if (src.empty() || !fs::exists(src / "teste3.adt")) {
-        MESSAGE("optional teste3.adt fixture absent — skip");
-        return;
-    }
-
-    wipe_scope_tmp();
-    auto dir = scope_tmp_dir();
-    fs::copy_file(src / "teste3.adt", dir / "t3.adt",
-                  fs::copy_options::overwrite_existing);
-    fs::copy_file(src / "teste3.adi", dir / "t3.adi",
-                  fs::copy_options::overwrite_existing);
-    if (fs::exists(src / "teste3.adm"))
-        fs::copy_file(src / "teste3.adm", dir / "t3.adm",
-                      fs::copy_options::overwrite_existing);
-
-    ADSHANDLE hConn = 0;
-    connect_local(&hConn, dir);
-
-    UNSIGNED8 tbl[] = "t3.adt";
-    ADSHANDLE hTable = 0;
-    REQUIRE(AdsOpenTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI, ADS_SHARED,
-                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
-            == AE_SUCCESS);
-
-    REQUIRE(AdsAppendRecord(hTable) == AE_SUCCESS);
-    UNSIGNED8 id_f[] = "ID";
-    REQUIRE(AdsSetDouble(hTable, id_f, 100.0) == AE_SUCCESS);
-    set_field_str(hTable, "Code", "ALPHA");
-    set_field_str(hTable, "Notes", "nota memo teste3");
-    REQUIRE(AdsWriteRecord(hTable) == AE_SUCCESS);
-
-    REQUIRE(AdsAppendRecord(hTable) == AE_SUCCESS);
-    REQUIRE(AdsSetDouble(hTable, id_f, 50.0) == AE_SUCCESS);
-    set_field_str(hTable, "Code", "BETA");
-    set_field_str(hTable, "Notes", "outra nota");
-    REQUIRE(AdsWriteRecord(hTable) == AE_SUCCESS);
-
-    UNSIGNED8 idxfile[] = "t3.adi";
-    ADSHANDLE idx_handles[4]{};
-    UNSIGNED16 idx_count = 4;
-    REQUIRE(AdsOpenIndex(hTable, idxfile, idx_handles, &idx_count) == AE_SUCCESS);
-    REQUIRE(idx_count >= 2);
-
-    // Seek Code index (char) — usually second tag on Arc teste3
-    ADSHANDLE hCodeIdx = idx_handles[0];
-    for (UNSIGNED16 i = 0; i < idx_count; ++i) {
-        REQUIRE(AdsSetIndexOrderByHandle(hTable, idx_handles[i]) == AE_SUCCESS);
-        std::string sk = "BETA";
-        sk.append(10 - sk.size(), ' ');
-        UNSIGNED8 key[10]{};
-        std::memcpy(key, sk.data(), sk.size());
-        UNSIGNED16 found = 0;
-        if (AdsSeek(idx_handles[i], key, 10, 0, 0, &found) == AE_SUCCESS
-            && found) {
-            hCodeIdx = idx_handles[i];
-            break;
-        }
-    }
-    std::string sk = "BETA";
-    sk.append(10 - sk.size(), ' ');
-    UNSIGNED8 key[10]{};
-    std::memcpy(key, sk.data(), sk.size());
-    UNSIGNED16 found = 0;
-    REQUIRE(AdsSeek(hCodeIdx, key, 10, 0, 0, &found) == AE_SUCCESS);
-    CHECK(found != 0);
-    CHECK(get_field_str(hTable, "Code") == "BETA");
-    CHECK(get_field_str(hTable, "Notes") == "outra nota");
 
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);

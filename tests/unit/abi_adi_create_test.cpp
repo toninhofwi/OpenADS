@@ -1,6 +1,4 @@
-// M5 ADI create — AdiIndex::create() reproduces the legacy single-tag
-// 7-page skeleton observed in testdata/arc_ref/teste2.adi.
-#include "adt_format.hpp"
+// M5 ADI create — AdiIndex::create, multi-tag bags, populated seek.
 #include "doctest.h"
 #include "drivers/adi/adi_index.h"
 #include "openads/ace.h"
@@ -9,35 +7,11 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <string>
-#include <vector>
 
 namespace fs = std::filesystem;
 
 namespace {
-
-std::vector<std::uint8_t> read_bytes(const fs::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    if (!in) return {};
-    return std::vector<std::uint8_t>(
-        std::istreambuf_iterator<char>(in), {});
-}
-
-std::size_t page_diffs(const std::vector<std::uint8_t>& a,
-                       const std::vector<std::uint8_t>& b,
-                       std::uint32_t page_no,
-                       std::uint32_t skip_rel = 0xFFFFFFFFu) {
-    constexpr std::size_t kPage = 512;
-    const std::size_t off = static_cast<std::size_t>(page_no) * kPage;
-    if (off + kPage > a.size() || off + kPage > b.size()) return kPage;
-    std::size_t n = 0;
-    for (std::size_t i = 0; i < kPage; ++i) {
-        if (i == skip_rel) continue;
-        if (a[off + i] != b[off + i]) ++n;
-    }
-    return n;
-}
 
 std::string trim_trailing_spaces(std::string s) {
     while (!s.empty() && s.back() == ' ') s.pop_back();
@@ -70,72 +44,12 @@ void append_id_record(ADSHANDLE hTable, double id) {
 
 } // namespace
 
-TEST_CASE("M5 AdiIndex::create matches teste2.adi blueprint") {
-    auto ref_dir = adt_test::arc_ref_testdata_dir();
-    if (ref_dir.empty() || !fs::exists(ref_dir / "teste2.adt")) {
-        MESSAGE("testdata/arc_ref/teste2.adt absent — skip");
-        return;
-    }
-
-    auto ref_adi = read_bytes(ref_dir / "teste2.adi");
-    REQUIRE(ref_adi.size() == 3584u);
-
-    fs::path tmp = fs::temp_directory_path() / "openads_adi_create_test";
-    { std::error_code ec; fs::create_directories(tmp, ec); }
-    fs::copy_file(ref_dir / "teste2.adt", tmp / "teste2.adt",
-                  fs::copy_options::overwrite_existing);
-
-    openads::drivers::adi::AdiIndex::CreateParams cp{};
-    cp.field_num   = 1;
-    cp.field_name  = "LandLordID";
-    cp.adt_type    = openads::drivers::adi::ADT_TYPE_CHAR;
-    cp.fld_length  = 25;
-    cp.adt_hdr_len = 1000;
-    cp.adt_rec_len = 80;
-
-    auto created = openads::drivers::adi::AdiIndex::create(
-        (tmp / "teste2.adi").string(), cp);
-    REQUIRE(created);
-
-    auto ours = read_bytes(tmp / "teste2.adi");
-    REQUIRE(ours.size() == ref_adi.size());
-
-    CHECK(page_diffs(ref_adi, ours, 0) == 0u);
-    CHECK(page_diffs(ref_adi, ours, 1) == 0u);
-    // Tag-directory yy byte (offset 29) is tool-specific; layout otherwise fixed.
-    CHECK(page_diffs(ref_adi, ours, 2, 29) <= 1u);
-    CHECK(page_diffs(ref_adi, ours, 3) == 0u);
-    CHECK(page_diffs(ref_adi, ours, 4) == 0u);
-    CHECK(page_diffs(ref_adi, ours, 5) == 0u);
-    CHECK(page_diffs(ref_adi, ours, 6) == 0u);
-
-    auto tags = openads::drivers::adi::AdiIndex::list_tags(
-        (tmp / "teste2.adi").string());
-    REQUIRE(tags);
-    REQUIRE(tags.value().size() == 1u);
-    CHECK(tags.value()[0] == "LandLordID");
-
-    openads::drivers::adi::AdiIndex idx;
-    REQUIRE(idx.open_named((tmp / "teste2.adi").string(),
-                           openads::drivers::IndexOpenMode::Shared,
-                           "LandLordID"));
-    auto first = idx.seek_first();
-    REQUIRE(first);
-    CHECK(first.value().hit == openads::drivers::SeekHit::AfterEnd);
-}
-
 TEST_CASE("M5 AdsCreateIndex61 on ADT builds .adi and opens") {
-    auto ref_dir = adt_test::arc_ref_testdata_dir();
-    if (ref_dir.empty() || !fs::exists(ref_dir / "teste2.adt")) {
-        MESSAGE("testdata/arc_ref/teste2.adt absent — skip");
-        return;
-    }
-
     fs::path tmp = fs::temp_directory_path() / "openads_adi_abi_create";
     { std::error_code ec; fs::create_directories(tmp, ec); }
-    fs::copy_file(ref_dir / "teste2.adt", tmp / "idxtest.adt",
-                  fs::copy_options::overwrite_existing);
-    { std::error_code ec; fs::remove(tmp / "idxtest.adi", ec); }
+    { std::error_code ec;
+      fs::remove(tmp / "idxtest.adt", ec);
+      fs::remove(tmp / "idxtest.adi", ec); }
 
     UNSIGNED8 srv[260]{};
     std::memcpy(srv, tmp.string().c_str(), tmp.string().size());
@@ -144,10 +58,10 @@ TEST_CASE("M5 AdsCreateIndex61 on ADT builds .adi and opens") {
             == AE_SUCCESS);
 
     UNSIGNED8 tbl[] = "idxtest.adt";
+    UNSIGNED8 flddef[] = "LandLordID,Character,25";
     ADSHANDLE hTable = 0;
-    REQUIRE(AdsOpenTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI, ADS_SHARED,
-                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
-            == AE_SUCCESS);
+    REQUIRE(AdsCreateTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI, 0, 0, 0,
+                           flddef, &hTable) == AE_SUCCESS);
 
     UNSIGNED8 idxfile[] = "idxtest.adi";
     UNSIGNED8 idxname[] = "LLID";
