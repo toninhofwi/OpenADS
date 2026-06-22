@@ -6383,7 +6383,13 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
         // wrote, and seek_key would never find an exact match.
         std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
-        std::int32_t fidx = t->field_index(idx->expression());
+        // Strip the `ALIAS->` qualifier the way the write side does
+        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
+        // tag built from `FIELD->ID` never resolves the field, fmt_w
+        // stays at the stale key_length, and the numeric seek key is
+        // padded to a different width than the stored key.
+        std::int32_t fidx = t->field_index(
+            openads::engine::strip_alias_qualifiers(idx->expression()));
         if (fidx >= 0) {
             const auto& fd = t->field_descriptor(
                 static_cast<std::uint16_t>(fidx));
@@ -6505,7 +6511,13 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
         std::uint16_t klen = idx->key_length();
         std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
-        std::int32_t fidx = t->field_index(idx->expression());
+        // Strip the `ALIAS->` qualifier the way the write side does
+        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
+        // tag built from `FIELD->ID` never resolves the field, fmt_w
+        // stays at the stale key_length, and the numeric seek key is
+        // padded to a different width than the stored key.
+        std::int32_t fidx = t->field_index(
+            openads::engine::strip_alias_qualifiers(idx->expression()));
         if (fidx >= 0) {
             const auto& fd = t->field_descriptor(
                 static_cast<std::uint16_t>(fidx));

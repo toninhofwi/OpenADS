@@ -71,6 +71,8 @@ std::vector<Token> tokenize(const std::string& s) {
     return out;
 }
 
+} // namespace (anonymous)
+
 // Harbour key / FOR expressions arrive with the workarea alias still
 // attached — `INDEX ON CUST->NAME` reaches the RDD as the literal
 // text "CUST->NAME". An index belongs to exactly one table, so an
@@ -110,6 +112,8 @@ std::string strip_alias_qualifiers(const std::string& expr) {
     }
     return out;
 }
+
+namespace {
 
 // ---- AST + evaluator ------------------------------------------------
 
