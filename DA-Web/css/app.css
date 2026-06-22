@@ -675,6 +675,13 @@ html, body {
 .tbl-btn.tbl-btn-confirm:hover:not([disabled]) { background: #a6e3a1; color: #1e1e2e; }
 .tbl-btn.tbl-btn-save:not([disabled]) { color: #89b4fa; border-color: #89b4fa; }
 .tbl-btn.tbl-btn-save:hover:not([disabled]) { background: #89b4fa; color: #1e1e2e; }
+.tbl-edit-hint {
+  font-size: 10px;
+  color: #585b70;
+  margin-left: 2px;
+  user-select: none;
+  font-style: italic;
+}
 .tbl-btn-sep { width: 1px; background: #45475a; height: 16px; margin: 0 3px; flex-shrink: 0; }
 
 /* Dirty (unsaved) cell highlight */
