@@ -2613,6 +2613,12 @@ static const std::string& trigger_sql_body(const openads::engine::DataDict::Trig
 
 // Type alias to avoid MSVC C2562 when returning std::map<> from a function
 // inside an extern "C" / anonymous-namespace block.
+//
+// The trig_* helpers below return C++ types (std::string / std::vector /
+// TrigError_). Give them C++ linkage so MSVC does not raise C4190 (C-linkage
+// function returning a C++-incompatible type) under /W4 /WX.
+extern "C++" {
+
 using TrigFieldMap_ = std::map<std::string, std::string>;
 
 // SQL-quote a raw string value (escape embedded quotes, wrap in single quotes).
@@ -2984,6 +2990,8 @@ static TrigError_ trig_execute_body_(
     }
     return TrigError_{};
 }
+
+}  // extern "C++"  — trig_ helpers regain C++ linkage (silences C4190)
 
 // fire_triggers_ — fire all enabled, matching triggers for a given event + timing.
 // timing: 1=BEFORE  2=INSTEAD_OF  4=AFTER
