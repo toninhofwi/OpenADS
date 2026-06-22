@@ -41,6 +41,8 @@ Release atual: **v1.0.0-rc31**.
 - **[Compat rddads / X# RDD](rddads-compat/)** — superfície de
   compatibilidade Harbour `contrib/rddads` e X# `AXDBFCDX`
   (rc19 M12.22 / M12.23).
+- **[Backend SQLite](sqlite-backend/)** — abrir e operar um banco
+  de dados SQLite via ACE / rddads com uma URI `sqlite://`.
 - **[Implantação como serviço](servico-implantacao/)** — rodar
   `openads_serverd` como serviço Windows / unit systemd /
   launchd plist (rc14).
