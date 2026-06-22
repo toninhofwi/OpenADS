@@ -241,10 +241,14 @@ bool resolve_field_index(Table* tbl, UNSIGNED8* pucField, std::uint16_t* out) {
     }
     if (pucField == nullptr) return false;
     auto name = openads::abi::to_internal(pucField, 0);
-    for (std::uint16_t i = 0; i < tbl->field_count(); ++i) {
-        if (tbl->field_descriptor(i).name == name) { *out = i; return true; }
-    }
-    return false;
+    // Delegate to Table::field_index — case-insensitive (matches native
+    // ACE semantics) and cached. Field names in DBF/ADT storage are
+    // upper-cased, but callers (and CDX/NTX index expressions) may use
+    // any case; an exact-case compare here spuriously missed them.
+    std::int32_t idx = tbl->field_index(name);
+    if (idx < 0) return false;
+    *out = static_cast<std::uint16_t>(idx);
+    return true;
 }
 
 // lookup_table_by_index — defined further down once IndexBinding is
@@ -3853,10 +3857,14 @@ bool resolve_field_index_w(Table* tbl, UNSIGNED8* pucField,
     }
     if (pucField == nullptr) return false;
     auto name = openads::abi::to_internal(pucField, 0);
-    for (std::uint16_t i = 0; i < tbl->field_count(); ++i) {
-        if (tbl->field_descriptor(i).name == name) { *out = i; return true; }
-    }
-    return false;
+    // Delegate to Table::field_index — case-insensitive (matches native
+    // ACE semantics) and cached. Field names in DBF/ADT storage are
+    // upper-cased, but callers (and CDX/NTX index expressions) may use
+    // any case; an exact-case compare here spuriously missed them.
+    std::int32_t idx = tbl->field_index(name);
+    if (idx < 0) return false;
+    *out = static_cast<std::uint16_t>(idx);
+    return true;
 }
 
 UNSIGNED32 emit_utf16(UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
