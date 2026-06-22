@@ -2,6 +2,7 @@
 #include "engine/index_expr.h"
 #include "engine/table.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>

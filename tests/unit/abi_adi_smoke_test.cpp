@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 

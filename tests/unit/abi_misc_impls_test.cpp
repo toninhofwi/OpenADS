@@ -2,6 +2,7 @@
 #include "openads/ace.h"
 #include "openads/error.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
