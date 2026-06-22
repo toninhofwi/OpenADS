@@ -57,6 +57,7 @@ add_executable(openads_unit_tests
     unit/tx_log_test.cpp
     unit/abi_m5x_recovery_test.cpp
     unit/abi_savepoint_test.cpp
+    unit/abi_tx_rollback_append_test.cpp
     unit/data_dict_test.cpp
     unit/abi_dd_test.cpp
     unit/sql_parser_test.cpp

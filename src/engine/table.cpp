@@ -806,6 +806,49 @@ util::Result<void> Table::zap() {
     return {};
 }
 
+util::Result<void> Table::rollback_appends(std::vector<std::uint32_t> recnos) {
+    if (driver_ == nullptr || recnos.empty()) return {};
+    // High-to-low so the transaction's own trailing rows peel off the
+    // end one at a time.
+    std::sort(recnos.begin(), recnos.end(),
+              [](std::uint32_t a, std::uint32_t b) { return a > b; });
+    for (std::uint32_t r : recnos) {
+        if (r == 0) continue;
+        // Load the record so compute_index_key_ sees its current bytes,
+        // then erase its (recno, key) from every bound index. (A record
+        // appended and later updated in the same tx carries the updated
+        // key — the one currently in the index.)
+        bool loaded = false;
+        if (auto rec = driver_->read_record_raw(r); rec) {
+            record_buf_ = std::move(rec).value();
+            recno_      = r;
+            state_      = State::Positioned;
+            loaded      = true;
+            auto erase_idx = [&](drivers::IIndex* idx) {
+                if (idx == nullptr) return;
+                std::string key = compute_index_key_(idx->expression(),
+                                                     idx->key_length());
+                (void)idx->erase(r, key);
+            };
+            if (order_ && order_->index()) erase_idx(order_->index());
+            for (auto* x : extra_index_views_) erase_idx(x);
+        }
+        // Physically drop the row if it is the trailing record; if a
+        // concurrent append now sits above it, soft-delete instead.
+        auto popped = driver_->truncate_trailing(r);
+        if (popped && popped.value()) continue;
+        if (loaded) {
+            std::vector<std::uint8_t> buf = record_buf_;
+            drivers::set_record_deleted(buf.data(), buf.size(), true);
+            (void)driver_->write_record_raw(r, buf.data(), buf.size());
+        }
+    }
+    // Structural change — drop any cursor position.
+    state_ = State::Bof;
+    recno_ = 0;
+    return {};
+}
+
 util::Result<void> Table::pack() {
     if (mode_ == OpenMode::Read) {
         return util::Error{5000, 0, "table opened read-only", ""};
