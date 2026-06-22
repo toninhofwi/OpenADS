@@ -75,6 +75,7 @@ add_executable(openads_unit_tests
     unit/abi_ordsetfocus_test.cpp
     unit/abi_seek_empty_test.cpp
     unit/abi_open_index_order_test.cpp
+    unit/abi_ordlistadd_path_test.cpp
     unit/abi_gobottom_filtered_test.cpp
     unit/abi_rddtst_repro_test.cpp
     unit/abi_copy_table_test.cpp

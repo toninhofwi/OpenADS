@@ -3971,7 +3971,25 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     fs::path p(bag_name);
     if (!p.is_absolute()) {
         fs::path table_dir = fs::path(t->path()).parent_path();
-        p = table_dir / p;
+        // ADS places index files next to the table; when the caller uses a
+        // subdirectory-qualified path (e.g. "sub/table.adx") and the table's
+        // parent is already "sub/", avoid double-prefix by falling back to
+        // basename.  Example: table opened as "sub/t.adt" makes table_dir =
+        // ".../sub"; if the caller also passes "sub/t.adx" the naive join
+        // ".../sub/sub/t.adx" does not exist, so retry with just the
+        // filename ".../sub/t.adx".  A single-component relative path
+        // (p.filename() == p) takes the same first branch and is unaffected.
+        fs::path candidate = table_dir / p;
+        if (!fs::exists(candidate)) {
+            fs::path by_name = table_dir / p.filename();
+            if (fs::exists(by_name)) {
+                p = by_name;
+            } else {
+                p = candidate;  // preserve original path for the real "not found" error
+            }
+        } else {
+            p = candidate;
+        }
     }
     if (!p.has_extension()) {
         p.replace_extension(".cdx");
