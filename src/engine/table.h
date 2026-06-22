@@ -300,6 +300,13 @@ private:
         : driver_(std::move(drv)), mode_(mode),
           locking_(locking), type_(type) {}
 
+    // Case-insensitive name -> field index cache. The field set is fixed
+    // for the lifetime of an open table, and a work area is driven by a
+    // single thread at a time (xBase / ACE work-area model), so this
+    // lazily-filled cache needs no locking. Keyed by upper-cased name;
+    // stores -1 for names that do not resolve.
+    mutable std::unordered_map<std::string, std::int32_t> field_index_cache_;
+
     util::Result<void> load_record_(std::uint32_t recno);
     util::Result<void> writeback_record_();
 

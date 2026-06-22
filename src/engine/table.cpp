@@ -92,19 +92,38 @@ const drivers::DbfField& Table::field_descriptor(std::uint16_t idx) const {
 std::int32_t Table::field_index(const std::string& name) const noexcept {
     const auto& fs = driver_->fields();
     // Case-insensitive: DBF field names are always uppercase in storage;
-    // SQL column names may arrive in any case.
-    for (std::size_t i = 0; i < fs.size(); ++i) {
-        if (fs[i].name.size() != name.size()) continue;
-        bool eq = true;
-        for (std::size_t j = 0; j < name.size(); ++j) {
-            if (std::toupper(static_cast<unsigned char>(name[j])) !=
-                std::toupper(static_cast<unsigned char>(fs[i].name[j]))) {
-                eq = false; break;
+    // SQL column names / index expressions may arrive in any case.
+    auto scan = [&]() -> std::int32_t {
+        for (std::size_t i = 0; i < fs.size(); ++i) {
+            if (fs[i].name.size() != name.size()) continue;
+            bool eq = true;
+            for (std::size_t j = 0; j < name.size(); ++j) {
+                if (std::toupper(static_cast<unsigned char>(name[j])) !=
+                    std::toupper(static_cast<unsigned char>(fs[i].name[j]))) {
+                    eq = false; break;
+                }
             }
+            if (eq) return static_cast<std::int32_t>(i);
         }
-        if (eq) return static_cast<std::int32_t>(i);
+        return -1;
+    };
+    // O(1) repeat lookups via an upper-cased-name cache. Wrapped so an
+    // allocation failure degrades to the linear scan rather than violating
+    // noexcept.
+    try {
+        std::string key;
+        key.reserve(name.size());
+        for (char c : name)
+            key.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(c))));
+        auto it = field_index_cache_.find(key);
+        if (it != field_index_cache_.end()) return it->second;
+        std::int32_t found = scan();
+        field_index_cache_.emplace(std::move(key), found);
+        return found;
+    } catch (...) {
+        return scan();
     }
-    return -1;
 }
 
 std::uint32_t Table::record_count() const noexcept {

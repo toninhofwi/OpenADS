@@ -137,3 +137,52 @@ TEST_CASE("M4 ADT create: AdsCreateTable(ADS_ADT) + append + reopen") {
     AdsCloseTable(hTable);
     AdsDisconnect(hConn);
 }
+
+// Regression: field-name resolution through the ABI must be case-insensitive
+// (native ACE semantics). resolve_field_index used an exact-case compare, so
+// AdsGetString/AdsSetString with a case differing from the stored field name
+// — and, crucially, CDX/NTX index expressions stored in a different case than
+// the (upper-cased) DBF field names — spuriously failed with COLUMN_NOT_FOUND.
+TEST_CASE("ABI field-name resolution is case-insensitive") {
+    fs::path tmp = fs::temp_directory_path() / "openads_field_ci_test";
+    { std::error_code ec; fs::create_directories(tmp, ec);
+      fs::remove(tmp / "ci.adt", ec); fs::remove(tmp / "ci.adm", ec); }
+
+    UNSIGNED8 srv[260]{};
+    std::memcpy(srv, tmp.string().c_str(), tmp.string().size());
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn)
+            == AE_SUCCESS);
+
+    // Stored field name is mixed-case "MixedName".
+    UNSIGNED8 tbl[]    = "ci.adt";
+    UNSIGNED8 flddef[] = "MixedName,Character,20";
+    ADSHANDLE hT = 0;
+    REQUIRE(AdsCreateTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI, 0, 0, 0,
+                           flddef, &hT) == AE_SUCCESS);
+
+    // Write through a DIFFERENT case than stored.
+    REQUIRE(AdsAppendRecord(hT) == AE_SUCCESS);
+    UNSIGNED8 wf[] = "MIXEDNAME";
+    UNSIGNED8 wv[] = "hello";
+    REQUIRE(AdsSetString(hT, wf, wv,
+                         static_cast<UNSIGNED32>(std::strlen("hello")))
+            == AE_SUCCESS);
+    REQUIRE(AdsWriteRecord(hT) == AE_SUCCESS);
+    REQUIRE(AdsGotoTop(hT) == AE_SUCCESS);
+
+    // Read through several cases — all must resolve to the same field.
+    const char* variants[] = {"mixedname", "MIXEDNAME", "MixedName", "mIxEdNaMe"};
+    for (const char* v : variants) {
+        UNSIGNED8 rf[32]{};
+        std::memcpy(rf, v, std::strlen(v));
+        UNSIGNED8  rb[64]{};
+        UNSIGNED32 rl = sizeof(rb);
+        REQUIRE(AdsGetString(hT, rf, rb, &rl, 0) == AE_SUCCESS);
+        CHECK(std::string(reinterpret_cast<char*>(rb), rl) == "hello");
+    }
+
+    AdsCloseTable(hT);
+    AdsDisconnect(hConn);
+    { std::error_code ec; fs::remove_all(tmp, ec); }
+}
