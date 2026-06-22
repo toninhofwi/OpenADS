@@ -3,6 +3,9 @@
  * api/common.php — shared utilities for all API endpoints
  */
 
+/** Maximum SQL payload length accepted by execute_sql (admin console). */
+const API_SQL_MAX_LENGTH = 1048576;
+
 /**
  * Emit a JSON error response and exit.
  * Always includes the engine error code when non-zero so callers
@@ -69,6 +72,29 @@ function api_validate_identifier(string $name, string $label = 'identifier'): vo
 }
 
 /**
+/**
+ * Reject path strings with null bytes or directory traversal segments.
+ */
+function api_reject_unsafe_path(string $path, string $label = 'path'): void
+{
+    if ($path === '' || str_contains($path, "\0")) {
+        api_error(400, "invalid $label");
+    }
+    if (preg_match('#(^|[/\\\\])\.\.([/\\\\]|$)#', $path)) {
+        api_error(400, "invalid $label");
+    }
+}
+
+/**
+ * Escape a string for single-quoted SQL literals.
+ */
+function api_sql_quote(string $s): string
+{
+    return str_replace(["'", "\0"], ["''", ""], $s);
+}
+
+/**
+ * Resolve $candidate to an absolute path that exists and lies under $root.
  * Resolve $candidate to an absolute path that exists and lies under $root.
  * Returns null when the path escapes the root, contains traversal, or is missing.
  */
@@ -108,12 +134,4 @@ function api_resolve_path_under_root(string $candidate, string $root): ?string
     }
 
     return $real;
-}
-
-/**
- * Escape a string for single-quoted SQL literals.
- */
-function api_sql_quote(string $s): string
-{
-    return str_replace(["'", "\0"], ["''", ""], $s);
 }

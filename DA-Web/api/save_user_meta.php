@@ -19,18 +19,14 @@ $ddName = trim($body['dd']   ?? '');
 $user   = trim($body['user'] ?? '');
 $rows   = $body['rows'] ?? [];
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($user === '' || !is_array($rows)) {
+    api_error(400, 'user and rows are required');
 }
-if ($ddName === '' || $user === '' || !is_array($rows)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd, user and rows are required']);
-    exit;
+if (str_contains($user, "\0")) {
+    api_error(400, 'invalid user name');
 }
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];

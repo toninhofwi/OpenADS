@@ -16,18 +16,19 @@ $userName = trim($body['user'] ?? '');
 $newGroups = array_map('trim', $body['groups'] ?? []);
 $newGroups = array_unique(array_filter($newGroups, fn($g) => $g !== ''));
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($userName === '') {
+    api_error(400, 'user is required');
 }
-if ($ddName === '' || $userName === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd and user are required']);
-    exit;
+if (str_contains($userName, "\0")) {
+    api_error(400, 'invalid user name');
+}
+foreach ($newGroups as $g) {
+    if (str_contains($g, "\0")) {
+        api_error(400, 'invalid group name');
+    }
 }
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
@@ -37,8 +38,8 @@ try {
 
     // Current groups
     $current = [];
-    $escapedUser = str_replace("'", "''", $userName);
-    $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroupmembers WHERE USER_NAME = '$escapedUser'");
+    $qUser = api_sql_quote($userName);
+    $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroupmembers WHERE USER_NAME = '$qUser'");
     while ($row = $stmt->fetchAssoc()) {
         $g = $row['GROUP_NAME'] ?? '';
         if ($g !== '') $current[] = $g;
@@ -64,13 +65,15 @@ try {
     foreach ($toAdd as $g) {
         $gname = $newMap[$g] ?? $g;
         try {
-            $conn->execute("EXECUTE PROCEDURE sp_AddUserToGroup('$userName', '$gname')");
+            $conn->execute("EXECUTE PROCEDURE sp_AddUserToGroup('"
+                . api_sql_quote($userName) . "', '" . api_sql_quote($gname) . "')");
         } catch (Throwable $e) { $errs[] = "Add to $gname: " . $e->getMessage(); }
     }
     foreach ($toRemove as $g) {
         $gname = $currentMap[$g] ?? $g;
         try {
-            $conn->execute("EXECUTE PROCEDURE sp_RemoveUserFromGroup('$userName', '$gname')");
+            $conn->execute("EXECUTE PROCEDURE sp_RemoveUserFromGroup('"
+                . api_sql_quote($userName) . "', '" . api_sql_quote($gname) . "')");
         } catch (Throwable $e) { $errs[] = "Remove from $gname: " . $e->getMessage(); }
     }
 

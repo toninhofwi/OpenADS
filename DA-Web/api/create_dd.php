@@ -26,6 +26,7 @@ if ($name === '' || $path === '') {
     api_error(400, 'name and path are required');
 }
 api_validate_identifier($name, 'dictionary name');
+api_reject_unsafe_path($path, 'path');
 
 if (!function_exists('ads_dd_create')) {
     http_response_code(501);

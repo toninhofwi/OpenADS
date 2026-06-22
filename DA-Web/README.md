@@ -234,30 +234,32 @@ Click any view under **Views** to open its SQL definition in the editor.
 
 ## Security notes
 
-`api/ri_meta.php` resolves `system.indexes` paths with
-`api_resolve_path_under_root()` — index files must exist **and** stay
-inside the connected DD directory (blocks `../` and out-of-root absolute
-paths before `file_get_contents` on CDX/ADI).
-
-Table and RI names on `action=tags` / `ri=` are validated as SQL
-identifiers. Smoke: `php tests/tools/daweb_path_containment_test.php`.
-
-Complements index-API and wire-frame hardening elsewhere in DA-Web/engine.
-
 DA-Web is an **administration console**, not a public API. Hardening applied
 in the PHP layer:
 
 - **Session required** for config mutation (`dictionaries.php` POST,
-  `sql_scripts.php` POST, `create_dd.php`).
-- **Connection required** for engine operations (same as before).
-- **Identifier validation** on table/index/RI names — rejects SQL injection
-  and path-segment payloads before they reach `AdsConnection`.
+  `sql_scripts.php` POST, `create_dd.php`, `import_sap_dd.php`).
+- **Connection required** for all engine operations via `api_require_connection()`.
+- **Identifier validation** on table/index/RI/dictionary/script names before
+  they reach `AdsConnection` or stored-procedure calls.
+- **SQL literal quoting** via `api_sql_quote()` on user/group names and
+  table filters embedded in dynamic SQL.
+- **Path containment** on `ri_meta.php` index files via
+  `api_resolve_path_under_root()` (blocks `../` and out-of-root paths).
+- **Import path checks** on `import_sap_dd.php` (traversal rejection,
+  source must exist).
+- **`execute_sql.php`** caps payload at 1 MiB (`API_SQL_MAX_LENGTH`).
 - **Wire server** (`openads_serverd`) rejects inbound frames larger than
   16 MiB to avoid memory exhaustion.
 
-Smoke: `php tests/tools/daweb_api_validate_test.php` and
-`openads_unit_tests.exe --test-case=*oversized*`.
+Smoke tests:
 
+```bat
+php tests/tools/daweb_api_validate_test.php
+php tests/tools/daweb_path_containment_test.php
+```
+
+This sweep consolidates index/RI API hardening from open PRs #8 and #9.
 When exposing DA-Web beyond `127.0.0.1`, terminate HTTPS and authenticate
 at the reverse proxy.
 

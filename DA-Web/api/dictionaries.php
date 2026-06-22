@@ -98,10 +98,9 @@ if ($method === 'POST') {
             api_validate_identifier($name, 'dictionary name');
         }
         if ($name === '') {
-            http_response_code(400);
-            echo json_encode(['error' => 'name is required']);
-            exit;
+            api_error(400, 'name is required');
         }
+        api_validate_identifier($name, 'dictionary name');
         $dicts = loadDicts($configFile);
         $filtered = array_filter($dicts, fn($d) => $d['name'] !== $name);
         saveDicts($configFile, $filtered);
@@ -109,9 +108,7 @@ if ($method === 'POST') {
         exit;
     }
 
-    http_response_code(400);
-    echo json_encode(['error' => 'unknown action']);
-    exit;
+    api_error(400, 'unknown action');
 }
 
 http_response_code(405);

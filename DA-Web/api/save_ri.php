@@ -46,7 +46,6 @@ try {
         exit;
     }
 
-    // 'save': drop existing (if present) and recreate
     $parent    = trim($body['parent']     ?? '');
     $parentTag = trim($body['parent_tag'] ?? '');
     $child     = trim($body['child']      ?? '');

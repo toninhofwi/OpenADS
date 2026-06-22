@@ -34,18 +34,14 @@ $options  = isset($body['options']) ? (int)$body['options'] : null; // bitmask o
 // Build composite key for disambiguation when same trigger name exists on multiple tables.
 $trigKey = ($table !== '') ? "$table::$name" : $name;
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($name === '') {
+    api_error(400, 'name is required');
 }
-if ($ddName === '' || $name === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd and name are required']);
-    exit;
+if ($table !== '') {
+    api_validate_identifier($table, 'table name');
 }
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
