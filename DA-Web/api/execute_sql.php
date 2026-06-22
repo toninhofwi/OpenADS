@@ -12,19 +12,14 @@ $body   = json_decode(file_get_contents('php://input'), true) ?? [];
 $ddName = trim($body['dd']  ?? '');
 $sql    = trim($body['sql'] ?? '');
 
-if ($ddName === '' || $sql === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd and sql are required']);
-    exit;
+if ($sql === '') {
+    api_error(400, 'sql is required');
+}
+if (strlen($sql) > API_SQL_MAX_LENGTH) {
+    api_error(400, 'sql exceeds maximum length');
 }
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
-}
-
-$c = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 
 try {
     $opts = ['path' => $c['path']];

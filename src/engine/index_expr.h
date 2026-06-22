@@ -41,4 +41,12 @@ util::Result<std::string>
 // — the FOR clause then degrades to "include all").
 bool evaluate_index_expr_truthy(Table& t, const std::string& expr);
 
+// Drop `ALIAS->` workarea qualifiers from a key/FOR expression so a
+// bare `FIELD->NAME` resolves to the plain field name `NAME`. Used by
+// the evaluator (write side) and by the ABI seek path so a numeric
+// seek can recover the field width from the schema the same way the
+// stored key was built. Compound expressions keep their structure;
+// only the qualifier is removed (e.g. `UPPER(CUST->NAME)` -> `UPPER(NAME)`).
+std::string strip_alias_qualifiers(const std::string& expr);
+
 } // namespace openads::engine

@@ -2708,8 +2708,10 @@ DbfTypeSpec dbf_type_for(const std::string& name) {
         return {'D', 8, 0, false};
     if (eq("Memo") || eq("NMemo"))
         return {'M', 10, 0, true};
-    if (eq("Binary") || eq("Image"))
-        return {'Q', 10, 0, true};
+    if (eq("Binary"))
+        return {'Q', 9, 0, true};
+    if (eq("Image"))
+        return {'I', 9, 0, true};
     if (eq("Integer") || eq("LongLong"))
         return {'N', 0, 0, false};
     if (eq("Double") || eq("CurDouble"))
@@ -2805,6 +2807,7 @@ AdtFieldSpec adt_spec_for(const FieldOut& f) {
         case 'D': return { 3, 4,          0,     false};  // DATE (JDN uint32)
         case 'M': return { 5, 9,          0,     true };  // MEMO  (9-byte ref)
         case 'Q': return { 6, 9,          0,     true };  // BINARY (9-byte ref)
+        case 'I': return { 7, 9,          0,     true };  // IMAGE  (9-byte ref)
         case 'N':
             if (f.dec > 0) return {10, 8, f.dec, false}; // DOUBLE
             return              {11, 4, 0,     false};     // INTEGER
@@ -2918,6 +2921,14 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
             fd[135] = static_cast<std::uint8_t>(sp.adt_length & 0xFFu);
             fd[136] = static_cast<std::uint8_t>((sp.adt_length >> 8) & 0xFFu);
             fd[137] = sp.adt_dec;
+            // ADT type 15 (AUTOINC): init next=1, step=1 in descriptor
+            if (sp.adt_type == 15u) {
+                fd[139] = 1;   // next value = 1
+                fd[140] = 0;
+                fd[141] = 0;
+                fd[142] = 0;
+                fd[143] = 1;   // step = 1
+            }
             fld_off = static_cast<std::uint16_t>(fld_off + sp.adt_length);
         }
 
@@ -3721,6 +3732,14 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     *pusType = map_field_type(t->field_descriptor(idx).type);
+    // ADT IMAGE (raw type 7) vs BINARY (raw type 6): both map to
+    // DbfFieldType::Binary internally, but the ABI type differs.
+    const auto& fd = t->field_descriptor(idx);
+    if (fd.type == openads::drivers::DbfFieldType::Binary) {
+        auto raw = static_cast<unsigned char>(fd.raw_type);
+        if (raw == 7u) *pusType = static_cast<UNSIGNED16>(ADS_IMAGE);
+        else if (raw == 6u) *pusType = static_cast<UNSIGNED16>(ADS_BINARY);
+    }
     return ok();
 }
 
@@ -3946,7 +3965,7 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
     return ok();
 }
 
-UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
+UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
                              UNSIGNED32* pulRecordCount) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -3990,6 +4009,20 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
             ++pass;
         }
         *pulRecordCount = pass;
+    } else if (bFilterOption == ADS_RESPECTFILTERS &&
+               !openads::engine::show_deleted()) {
+        // ADS_RESPECTFILTERS: count live records only when deleted records
+        // are hidden (SET DELETED ON). Walk the raw record range, skipping
+        // deleted rows, then restore the cursor to its original position.
+        const std::uint32_t saved = t->recno();
+        std::uint32_t rc   = t->record_count();
+        std::uint32_t live = 0;
+        for (std::uint32_t r = 1; r <= rc; ++r) {
+            if (auto g = t->goto_record(r); !g) continue;
+            if (!t->is_deleted()) ++live;
+        }
+        t->goto_record(saved);
+        *pulRecordCount = live;
     } else {
         *pulRecordCount = t->record_count();
     }
@@ -4880,16 +4913,11 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
                            reinterpret_cast<const char*>(pucField),
                            bValue ? "1" : "0"))
             return ok();
-    // Remote table: mirror AdsSetString/AdsSetDouble -- send the DBF logical
-    // literal ('T'/'F') through the wire set_field. Without this a logical set
-    // against a tcp:// table fell through to the local-only get_table() and
-    // failed silently, dropping the write.
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
         std::string fname(reinterpret_cast<const char*>(pucField));
         rt->row_valid = false;
-        auto r = rt->conn->set_field(rt->id, fname,
-                                     std::string(bValue ? "T" : "F"));
+        auto r = rt->conn->set_field(rt->id, fname, bValue ? "1" : "0");
         if (!r) return fail(r.error());
         return ok();
     }
@@ -4919,15 +4947,11 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
                            std::string(nbuf)))
             return ok();
     }
-    // Remote table: mirror AdsSetString -- ship the value to the server as a
-    // string (locale-independent %.17g) over the wire set_field. Without this
-    // a numeric set against a tcp:// table fell through to the local-only
-    // get_table() path and failed silently, dropping the write.
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
         char nbuf[64];
         std::snprintf(nbuf, sizeof(nbuf), "%.17g", dValue);
-        std::string fname(reinterpret_cast<const char*>(pucField));
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, std::string(nbuf));
         if (!r) return fail(r.error());
@@ -5149,8 +5173,18 @@ UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                          UNSIGNED16 /*usOption*/) {
+    if (pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* _rt = get_remote_table(hTable); _rt != nullptr) {
+        (void)_rt;
+        UNSIGNED8 tmp[4096] = {0};
+        UNSIGNED32 cap = sizeof(tmp);
+        auto rc = AdsGetField(hTable, pucField, tmp, &cap, 0);
+        if (rc != 0) return rc;
+        return emit_utf16(pucBufW, pulLenW,
+                          std::string(reinterpret_cast<char*>(tmp), cap));
+    }
     Table* t = get_table(hTable);
-    if (!t || pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index_w(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -5573,7 +5607,25 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     fs::path p(bag_name);
     if (!p.is_absolute()) {
         fs::path table_dir = fs::path(t->path()).parent_path();
-        p = table_dir / p;
+        // ADS places index files next to the table; when the caller uses a
+        // subdirectory-qualified path (e.g. "sub/table.adx") and the table's
+        // parent is already "sub/", avoid double-prefix by falling back to
+        // basename.  Example: table opened as "sub/t.adt" makes table_dir =
+        // ".../sub"; if the caller also passes "sub/t.adx" the naive join
+        // ".../sub/sub/t.adx" does not exist, so retry with just the
+        // filename ".../sub/t.adx".  A single-component relative path
+        // (p.filename() == p) takes the same first branch and is unaffected.
+        fs::path candidate = table_dir / p;
+        if (!fs::exists(candidate)) {
+            fs::path by_name = table_dir / p.filename();
+            if (fs::exists(by_name)) {
+                p = by_name;
+            } else {
+                p = candidate;  // preserve original path for the real "not found" error
+            }
+        } else {
+            p = candidate;
+        }
     }
     if (!p.has_extension()) {
         p.replace_extension(".cdx");
@@ -7205,7 +7257,7 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     auto put_u32 = [&](std::uint32_t v) -> UNSIGNED32 {
         if (pBuf != nullptr && cap >= 4) {
             auto* b = static_cast<std::uint8_t*>(pBuf);
-            b[0]=v&0xFF; b[1]=(v>>8)&0xFF; b[2]=(v>>16)&0xFF; b[3]=(v>>24)&0xFF;
+            b[0]=static_cast<std::uint8_t>(v&0xFF); b[1]=static_cast<std::uint8_t>((v>>8)&0xFF); b[2]=static_cast<std::uint8_t>((v>>16)&0xFF); b[3]=static_cast<std::uint8_t>((v>>24)&0xFF);
         }
         *pusLen = 4; return ok();
     };
@@ -7715,10 +7767,11 @@ UNSIGNED32 AdsDDGetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     auto put_u32 = [&](std::uint32_t v) -> UNSIGNED32 {
         if (pBuf != nullptr && cap >= 4) {
             auto* b = static_cast<std::uint8_t*>(pBuf);
-            b[0]=v&0xFF; b[1]=(v>>8)&0xFF; b[2]=(v>>16)&0xFF; b[3]=(v>>24)&0xFF;
+            b[0]=static_cast<uint8_t>(v&0xFF); b[1]=static_cast<uint8_t>((v>>8)&0xFF); b[2]=static_cast<uint8_t>((v>>16)&0xFF); b[3]=static_cast<uint8_t>((v>>24)&0xFF);
         }
         *pusLen = 4; return ok();
     };
+
     switch (usProp) {
         case ADS_DD_RI_PARENT:      return put_str(e.parent);
         case ADS_DD_RI_CHILD:       return put_str(e.child);
@@ -8124,7 +8177,13 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
         // wrote, and seek_key would never find an exact match.
         std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
-        std::int32_t fidx = t->field_index(idx->expression());
+        // Strip the `ALIAS->` qualifier the way the write side does
+        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
+        // tag built from `FIELD->ID` never resolves the field, fmt_w
+        // stays at the stale key_length, and the numeric seek key is
+        // padded to a different width than the stored key.
+        std::int32_t fidx = t->field_index(
+            openads::engine::strip_alias_qualifiers(idx->expression()));
         if (fidx >= 0) {
             const auto& fd = t->field_descriptor(
                 static_cast<std::uint16_t>(fidx));
@@ -8315,7 +8374,13 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
         std::uint16_t klen = idx->key_length();
         std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
-        std::int32_t fidx = t->field_index(idx->expression());
+        // Strip the `ALIAS->` qualifier the way the write side does
+        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
+        // tag built from `FIELD->ID` never resolves the field, fmt_w
+        // stays at the stale key_length, and the numeric seek key is
+        // padded to a different width than the stored key.
+        std::int32_t fidx = t->field_index(
+            openads::engine::strip_alias_qualifiers(idx->expression()));
         if (fidx >= 0) {
             const auto& fd = t->field_descriptor(
                 static_cast<std::uint16_t>(fidx));
@@ -9769,7 +9834,6 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         // sap_bit: actual bit position in the ADS_PERMISSION mask.
         auto dml_col = [&perm_val](
                             uint32_t mask, bool is_grp, int sap_bit) -> std::string {
-            const uint32_t SAP_SENTINEL = 0x80000000u;
             if (mask & SAP_SENTINEL) {
                 // SAP sentinel: cannot decode actual level from encrypted blobs.
                 // For groups: approximate as full DML (SELECT+UPDATE+INSERT+DELETE).
@@ -9781,33 +9845,37 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
 
         // Execute column (ADS_PERMISSION_EXECUTE = bit 2 = 0x004).
         auto exe_col = [&perm_val](uint32_t mask, bool is_grp) -> std::string {
-            const uint32_t SAP_SENTINEL = 0x80000000u;
             if (mask & SAP_SENTINEL) return perm_val(is_grp, is_grp);
             return perm_val((mask >> 2) & 1u, is_grp);
         };
 
         std::vector<std::vector<std::string>> rows;
-        for (const auto& pe : dd->permissions()) {
-            const auto& t = pe.object_type;
-            bool is_table    = (t == "Table");
-            bool is_exec     = (t == "StoredProc" || t == "Function");
-            bool is_obj_user = (t == "User"  || t == "Group");
-            bool is_db       = (t == "Database");
-            bool is_grp      = pe.grantee_is_group;
-            uint32_t m = pe.bitmask;
+
+        auto top_key = [](const std::string& grantee,
+                          const std::string& obj_name,
+                          const std::string& type_code) -> std::string {
+            return grantee + '\x1f' + obj_name + '\x1f' + type_code;
+        };
+
+        auto emit_top_row = [&](const std::string& obj_name,
+                                const std::string& type_code,
+                                const std::string& obj_type,
+                                const std::string& grantee,
+                                bool is_grp,
+                                uint32_t m) {
+            bool is_table    = (obj_type == "Table");
+            bool is_exec     = (obj_type == "StoredProc" || obj_type == "Function");
+            bool is_obj_user = (obj_type == "User"  || obj_type == "Group");
+            bool is_db       = (obj_type == "Database");
 
             bool show_dml    = (is_table || is_db);
             bool show_exec   = (is_exec  || is_db);
-            // Groups don't use INHERIT (they are the inheritable entity).
-            // Users: show INHERIT if SAP sentinel set (0x80000000) or INHERIT bit (0x008) set.
             bool show_inherit = !is_grp && !is_obj_user;
             auto inherit_val  = [&]() -> std::string {
                 if (!show_inherit) return "";
                 bool set = (m & SAP_SENTINEL) || (m & 0x008u);
                 return set ? "1" : "0";
             };
-
-            // ALTER (0x100) and DROP (0x200).
             auto alt_val = [&]() -> std::string {
                 if (is_obj_user || is_exec) return "";
                 if (m & SAP_SENTINEL) return perm_val(is_grp, is_grp);
@@ -9820,56 +9888,117 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
             };
 
             rows.push_back({
-                pe.object_name,
-                std::to_string(pe.object_type_code),
-                "",                                                   // PARENT (top-level)
-                pe.grantee,
-                show_dml  ? dml_col(m, is_grp, 0)  : "",             // SELECT  (bit 0)
-                show_dml  ? dml_col(m, is_grp, 1)  : "",             // UPDATE  (bit 1)
-                show_dml  ? dml_col(m, is_grp, 4)  : "",             // INSERT  (bit 4)
-                show_dml  ? dml_col(m, is_grp, 5)  : "",             // DELETE  (bit 5)
-                show_exec ? exe_col(m, is_grp)      : "",             // EXECUTE (bit 2)
-                (is_db && is_grp) ? dml_col(m, is_grp, 6) : "",      // ACCESS  (bit 6)
-                inherit_val(),                                         // INHERIT
-                (is_db && is_grp) ? dml_col(m, is_grp, 7) : "",      // CREATE  (bit 7)
-                alt_val(),                                             // ALTER   (bit 8)
-                drop_val(),                                            // DROP    (bit 9)
+                obj_name,
+                type_code,
+                "",
+                grantee,
+                show_dml  ? dml_col(m, is_grp, 0)  : "",
+                show_dml  ? dml_col(m, is_grp, 1)  : "",
+                show_dml  ? dml_col(m, is_grp, 4)  : "",
+                show_dml  ? dml_col(m, is_grp, 5)  : "",
+                show_exec ? exe_col(m, is_grp)      : "",
+                (is_db && is_grp) ? dml_col(m, is_grp, 6) : "",
+                inherit_val(),
+                (is_db && is_grp) ? dml_col(m, is_grp, 7) : "",
+                alt_val(),
+                drop_val(),
             });
+        };
 
-            // Field-level rows: one row per field with OBJ_TYPE=4 and PARENT=table.
-            // SELECT/UPDATE/INSERT inherit from the table; DELETE/EXECUTE/etc. are N/A.
-            if (is_table) {
+        std::unordered_set<std::string> seen_top;
+
+        for (const auto& pe : dd->permissions()) {
+            const std::string type_code = std::to_string(pe.object_type_code);
+            if (!seen_top.insert(top_key(pe.grantee, pe.object_name,
+                                         type_code)).second)
+                continue;
+            emit_top_row(pe.object_name, type_code, pe.object_type,
+                         pe.grantee, pe.grantee_is_group, pe.bitmask);
+
+            // Field-level rows: OBJ_TYPE=4, PARENT=table.  Skip fields that
+            // only carry the binary-load ordinal placeholder (not registered
+            // FIELDPROP / DD field metadata).
+            if (pe.object_type == "Table") {
                 auto fp_it = dd->field_props().find(pe.object_name);
                 if (fp_it != dd->field_props().end()) {
                     std::vector<std::string> fnames;
                     fnames.reserve(fp_it->second.size());
-                    for (const auto& [fn, _] : fp_it->second)
+                    for (const auto& [fn, fprops] : fp_it->second) {
+                        if (fprops.size() == 1 && fprops.count("ordinal"))
+                            continue;
                         fnames.push_back(fn);
+                    }
                     std::sort(fnames.begin(), fnames.end());
-                    std::string fsel = dml_col(m, is_grp, 0);
-                    std::string fupd = dml_col(m, is_grp, 1);
-                    std::string fins = dml_col(m, is_grp, 4);
+                    std::string fsel = dml_col(pe.bitmask, pe.grantee_is_group, 0);
+                    std::string fupd = dml_col(pe.bitmask, pe.grantee_is_group, 1);
+                    std::string fins = dml_col(pe.bitmask, pe.grantee_is_group, 4);
                     for (const auto& fname : fnames) {
                         rows.push_back({
                             fname,
-                            "4",               // OBJ_TYPE = ADS_DD_FIELD_OBJECT
-                            pe.object_name,    // PARENT = table name
+                            "4",
+                            pe.object_name,
                             pe.grantee,
-                            fsel,              // SELECT
-                            fupd,              // UPDATE
-                            fins,              // INSERT
-                            "",                // DELETE (N/A for fields)
-                            "",                // EXECUTE
-                            "",                // ACCESS
-                            "",                // INHERIT
-                            "",                // CREATE
-                            "",                // ALTER
-                            "",                // DROP
+                            fsel,
+                            fupd,
+                            fins,
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
                         });
                     }
                 }
             }
         }
+
+        // Legacy parity: emit a zero-permission row for every (grantee, object)
+        // pair that has no Permission record (flag columns "0", not omitted).
+        struct SecObj {
+            std::string name;
+            std::string type;
+            std::string code;
+        };
+        std::vector<SecObj> objects;
+        objects.reserve(dd->tables().size() + dd->views().size() +
+                        dd->procs().size() + dd->functions().size() +
+                        dd->links().size() + 8);
+        for (const auto& [alias, _] : dd->tables())
+            objects.push_back({alias, "Table", "1"});
+        for (const auto& [name, _] : dd->views())
+            objects.push_back({name, "View", "6"});
+        for (const auto& [name, _] : dd->procs())
+            objects.push_back({name, "StoredProc", "10"});
+        for (const auto& [name, _] : dd->functions())
+            objects.push_back({name, "Function", "18"});
+        for (const auto& [alias, _] : dd->links())
+            objects.push_back({alias, "Link", "12"});
+        for (const auto& u : dd->users())
+            objects.push_back({u, "User", "8"});
+        for (const auto& g : dd->groups())
+            objects.push_back({g, "Group", "9"});
+        if (!dd->users().empty() || !dd->groups().empty())
+            objects.push_back({"Database", "Database", "11"});
+
+        struct Grantee { std::string name; bool is_group; };
+        std::vector<Grantee> grantees;
+        grantees.reserve(dd->users().size() + dd->groups().size());
+        for (const auto& u : dd->users())
+            grantees.push_back({u, false});
+        for (const auto& g : dd->groups())
+            grantees.push_back({g, true});
+
+        for (const auto& gr : grantees) {
+            for (const auto& obj : objects) {
+                const auto key = top_key(gr.name, obj.name, obj.code);
+                if (!seen_top.insert(key).second) continue;
+                emit_top_row(obj.name, obj.code, obj.type, gr.name, gr.is_group,
+                             0u);
+            }
+        }
+
         return build(cols, rows);
     }
     if (sys_name == "effectivepermissions") {
@@ -15940,7 +16069,9 @@ UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE h, double pos) {
     if (!r) return fail(r.error());
     return ok();
 }
-UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+// Not yet implemented — return AE_FUNCTION_NOT_AVAILABLE so callers know to
+// use a workaround rather than silently getting no relation following.
+UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
 UNSIGNED32 AdsSetScopedRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetServerType(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }

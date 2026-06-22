@@ -16,18 +16,12 @@ $ddName = trim($body['dd']    ?? '');
 $table  = trim($body['table'] ?? '');
 $rows   = $body['rows'] ?? [];
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($table === '' || !is_array($rows)) {
+    api_error(400, 'invalid parameters');
 }
-if ($ddName === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $table) || !is_array($rows)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid parameters']);
-    exit;
-}
+api_validate_identifier($table, 'table name');
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
@@ -41,6 +35,7 @@ try {
     foreach ($rows as $row) {
         $field = trim($row['Field'] ?? '');
         if ($field === '') continue;
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $field)) continue;
 
         // ADS_DD_FIELD_REQUIRED = 305 ('True' = required / cannot be null)
         if (isset($row['Required'])) {

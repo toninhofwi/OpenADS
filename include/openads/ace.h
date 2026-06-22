@@ -943,7 +943,17 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 // Extra AE_* error codes referenced by Harbour rddads.
 #define AE_INVALID_HANDLE          5024
 #define AE_INVALID_RECORD_NUMBER   5025
-#define AE_NO_CURRENT_RECORD       5026
+// 5026 = AE_INVALID_WORKAREA in the SAP ADS SDK. It was previously
+// (incorrectly) labelled AE_NO_CURRENT_RECORD here. The correct value
+// for "no current record" per the ADS SDK is 5068. Harbour's rddads
+// contrib driver (contrib/rddads/ads1.c) special-cases exactly 5068 to
+// substitute blank-typed field values when the cursor is at BOF or EOF;
+// any other error code — including 5026 — is raised as a hard runtime
+// error. Using 5026 here therefore caused hard errors in any application
+// that read fields while navigating past the record set (TBrowse painting,
+// FOR...NEXT loops at EOF, WHILE .NOT. EOF() patterns, etc.).
+#define AE_INVALID_WORKAREA        5026
+#define AE_NO_CURRENT_RECORD       5068
 #define AE_TABLE_NOT_LOCKED        5034
 #define AE_RECORD_NOT_LOCKED       5035
 #define AE_TABLE_NOT_SHARED        5036

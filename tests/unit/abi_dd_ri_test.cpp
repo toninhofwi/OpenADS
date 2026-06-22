@@ -333,7 +333,7 @@ TEST_CASE("RI DELETE SETNULL: child FK blanked when parent deleted") {
 static UNSIGNED32 set_id_and_write(ADSHANDLE h, const char* id) {
     UNSIGNED8 fld[4] = "ID";
     UNSIGNED8 val[8] = {};
-    std::strncpy(reinterpret_cast<char*>(val), id, 4);
+    std::memcpy(val, id, 4);
     if (UNSIGNED32 rc = AdsSetString(h, fld, val, 4); rc != 0) return rc;
     return AdsWriteRecord(h);
 }

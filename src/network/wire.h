@@ -158,6 +158,10 @@ enum class Opcode : std::uint8_t {
     Error              = 0xFF,
 };
 
+// Inbound cap — symmetric with encode_frame's outbound check; prevents
+// multi-gigabyte resize on a malicious 4-byte length prefix.
+inline constexpr std::uint32_t kMaxFramePayload = 16u * 1024u * 1024u;
+
 struct Frame {
     Opcode                    opcode = Opcode::Hello;
     std::vector<std::uint8_t> payload;

@@ -1790,6 +1790,85 @@
 
   document.getElementById('new-tab-btn').addEventListener('click', () => openSqlTab());
 
+  // ── Table browse: PK detection + value normalisation for row_ops updates ───
+
+  /** Uppercase PK field names from field metadata and primary index tag. */
+  function derivePkFieldsUpper(fields, indexTags) {
+    const pk = new Set();
+    (fields || []).forEach(f => {
+      if ((f.Index || '') === 'Primary' && f.Field) pk.add(f.Field.toUpperCase());
+    });
+    if (pk.size === 0) {
+      const primaryTag = (indexTags || []).find(t => (t.Primary || '') === 'Yes');
+      if (primaryTag) {
+        const expr = primaryTag.Expression || primaryTag.Tag || '';
+        expr.split(/[;+,]/).forEach(part => {
+          const p = part.trim().replace(/^['"]|['"]$/g, '');
+          if (/^[A-Za-z_][A-Za-z0-9_]*$/i.test(p)) pk.add(p.toUpperCase());
+        });
+      }
+    }
+    return pk;
+  }
+
+  /** Convert grid display values back to engine/storage form before row_ops. */
+  function normalizeValueForApi(baseType, value) {
+    if (value === null || value === undefined) return null;
+    switch (baseType) {
+      case 'Date':
+      case 'AdtDate': {
+        const s = String(value).trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.replace(/-/g, '');
+        return s;
+      }
+      case 'DateTime':
+      case 'Timestamp':
+      case 'AdtTimestamp':
+      case 'ModTime': {
+        const s = String(value).trim();
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}):(\d{2}))?$/);
+        if (m) return m[1] + m[2] + m[3] + (m[4] || '00') + (m[5] || '00') + (m[6] || '00');
+        return s;
+      }
+      case 'Logical': {
+        if (value === true || value === 1) return true;
+        if (value === false || value === 0) return false;
+        const u = String(value).toUpperCase();
+        if (u === 'T' || u === 'Y' || u === 'TRUE' || u === '✓') return true;
+        if (u === 'F' || u === 'N' || u === 'FALSE' || u === '✗' || u === '') return false;
+        return value;
+      }
+      default:
+        return value;
+    }
+  }
+
+  /** Only fields that changed (non-PK) — sent to row_ops update. */
+  function buildChangedRow(orig, current, pkFieldsUpper, fieldBaseTypeMap) {
+    const row = {};
+    for (const [k, v] of Object.entries(current)) {
+      if (pkFieldsUpper.has((k || '').toUpperCase())) continue;
+      const baseType = fieldBaseTypeMap[(k || '').toUpperCase()] || '';
+      const normNew  = normalizeValueForApi(baseType, v);
+      const normOrig = normalizeValueForApi(baseType, orig[k]);
+      const sNew  = normNew  === null || normNew  === undefined ? '' : String(normNew);
+      const sOrig = normOrig === null || normOrig === undefined ? '' : String(normOrig);
+      if (sNew !== sOrig) row[k] = normNew;
+    }
+    return row;
+  }
+
+  function discardDirtyRows(inst) {
+    if (!inst?.dirtyRows) return;
+    for (const [row, { orig }] of inst.dirtyRows.entries()) {
+      row.update(orig);
+      row.getCells().forEach(c => c.getElement()?.classList.remove('cell-dirty'));
+    }
+    inst.dirtyRows.clear();
+    if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = true;
+    if (inst.discardEditsBtn) inst.discardEditsBtn.disabled = true;
+  }
+
   // ── Table data loading ─────────────────────────────────────────────────────
   // ── Table data: load rows with optional index ordering, seek, and AOF filter ─
   // opts: { orderby, orderdir, seekVal, aofExpr }
@@ -1823,10 +1902,8 @@
       return;
     }
 
-    // Set of PK field names (uppercase) — these cells are read-only for existing rows
-    const pkFieldsUpper = new Set(
-      fields.filter(f => f.Index === 'Primary').map(f => (f.Field || '').toUpperCase())
-    );
+    // PK columns stay read-only on existing rows (field metadata + primary index tag).
+    const pkFieldsUpper = derivePkFieldsUpper(fields, indexTags);
 
     // Map: field name (uppercase) → BaseType — used to apply display formatters
     const fieldBaseTypeMap = {};
@@ -1979,9 +2056,19 @@
           const baseType   = fieldBaseTypeMap[fieldUpper] || '';
           const isROType   = READ_ONLY_TYPES.has(baseType);
           const fmtr       = makeTypeFormatter(baseType);
+          let editor = false;
+          if (!isROType) {
+            if (baseType === 'Logical') {
+              editor = 'tickCross';
+            } else if (baseType === 'Memo') {
+              editor = 'textarea';
+            } else {
+              editor = 'input';
+            }
+          }
           const col = {
             ...def,
-            editor: isROType ? false : 'input',
+            editor,
             editable: function (cell) {
               if (isROType) return false;
               const inst = tblState[tabId];
@@ -1990,9 +2077,14 @@
               return !isPk;
             },
             cssClass: isPk ? 'cell-pk' : '',
+            headerClass: isPk ? 'col-pk' : '',
           };
-          if (isPk)    col.headerTooltip = 'Primary key — read only';
+          if (isPk) col.headerTooltip = 'Primary key — read only';
           if (isROType) col.headerTooltip = baseType + ' — read only';
+          if (!isPk && !isROType) col.headerTooltip = 'Double-click to edit';
+          if (baseType === 'Date' || baseType === 'AdtDate') {
+            col.editorParams = { elementAttributes: { placeholder: 'YYYYMMDD or YYYY-MM-DD' } };
+          }
           if (fmtr !== null) {
             if (fmtr === 'textarea') {
               col.formatter      = 'textarea';
@@ -2001,6 +2093,11 @@
             } else {
               col.formatter = fmtr;
             }
+          }
+          if (baseType === 'Memo' && !isROType) {
+            col.formatter      = 'textarea';
+            col.variableHeight = true;
+            col.width          = 280;
           }
           return col;
         });
@@ -2040,6 +2137,8 @@
         <button class="tbl-btn tbl-btn-confirm" data-act="confirm" title="Confirm insert" disabled>&#x2714;</button>
         <span class="tbl-btn-sep"></span>
         <button class="tbl-btn tbl-btn-save" data-act="save-edits" title="Save cell edits" disabled>&#x1F4BE;</button>
+        <button class="tbl-btn" data-act="discard-edits" title="Discard unsaved edits" disabled>&#x21BA;</button>
+        <span class="tbl-edit-hint" title="Double-click a non-PK cell to edit">edit</span>
         <span class="tbl-btn-sep"></span>`;
       bar.addEventListener('click', e => {
         const btn = e.target.closest('[data-act]');
@@ -2051,9 +2150,11 @@
         tbl, dd, table, rowIdx: -1, pendingRow: null,
         orderby, orderdir, seekVal, seekField, aofExpr,
         pkFields: [...pkFieldsUpper],
+        fieldBaseTypeMap,
         dirtyRows: new Map(),
-        confirmBtn:   bar.querySelector('[data-act="confirm"]'),
-        saveEditsBtn: bar.querySelector('[data-act="save-edits"]'),
+        confirmBtn:      bar.querySelector('[data-act="confirm"]'),
+        saveEditsBtn:    bar.querySelector('[data-act="save-edits"]'),
+        discardEditsBtn: bar.querySelector('[data-act="discard-edits"]'),
       };
 
       // Warn if table has no PK — edits cannot be saved without one
@@ -2078,12 +2179,13 @@
         }
       });
 
-      // Enable Save button and mark cell dirty after any cell is changed
+      // Enable Save/Discard and mark cell dirty after any cell is changed
       tbl.on('cellEdited', (cell) => {
         const inst = tblState[tabId];
         if (!inst) return;
         if (cell.getRow() === inst.pendingRow) return;
         if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = false;
+        if (inst.discardEditsBtn) inst.discardEditsBtn.disabled = false;
         cell.getElement()?.classList.add('cell-dirty');
       });
 
@@ -2192,38 +2294,58 @@
           setStatus('Cannot save: no primary key defined for this table', 'error');
           return;
         }
+        const pkSet = new Set(inst.pkFields.map(f => f.toUpperCase()));
         const jobs = [];
         const rowEntries = [...inst.dirtyRows.entries()];
         for (const [row, { orig }] of rowEntries) {
+          const changed = buildChangedRow(
+            orig, row.getData(), pkSet, inst.fieldBaseTypeMap || {}
+          );
+          if (Object.keys(changed).length === 0) {
+            row.getCells().forEach(c => c.getElement()?.classList.remove('cell-dirty'));
+            inst.dirtyRows.delete(row);
+            continue;
+          }
           jobs.push(
             apiFetch('api/row_ops.php', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 action: 'update', dd: inst.dd, table: inst.table,
-                orig, row: row.getData(), pkFields: inst.pkFields,
+                orig, row: changed, pkFields: inst.pkFields,
               }),
             })
             .then(() => ({ row, ok: true }))
             .catch(e => ({ row, error: e.message }))
           );
         }
+        if (jobs.length === 0) {
+          if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = true;
+          if (inst.discardEditsBtn) inst.discardEditsBtn.disabled = true;
+          setStatus('No changes to save');
+          break;
+        }
         Promise.all(jobs).then(results => {
           const errs = results.filter(r => r.error);
           const saved = results.filter(r => r.ok);
-          // Clear dirty highlighting and tracking for successful rows
           saved.forEach(({ row }) => {
             row.getCells().forEach(c => c.getElement()?.classList.remove('cell-dirty'));
             inst.dirtyRows.delete(row);
           });
-          if (inst.dirtyRows.size === 0 && inst.saveEditsBtn)
-            inst.saveEditsBtn.disabled = true;
+          if (inst.dirtyRows.size === 0) {
+            if (inst.saveEditsBtn) inst.saveEditsBtn.disabled = true;
+            if (inst.discardEditsBtn) inst.discardEditsBtn.disabled = true;
+          }
           setStatus(errs.length
             ? `${errs.length} row(s) failed: ${errs.map(r => r.error).join('; ')}`
             : `Saved ${saved.length} row(s)`);
         });
         break;
       }
+      case 'discard-edits':
+        discardDirtyRows(inst);
+        setStatus('Edits discarded');
+        break;
       case 'refresh': {
         const ob  = inst.orderby  || '';
         const od  = inst.orderdir || 'ASC';

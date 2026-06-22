@@ -125,7 +125,7 @@ void worker(int tid,
 
     while (!stop->load(std::memory_order_relaxed)) {
         for (int op = 0; op < ops_per_iter; ++op) {
-            std::uint32_t pick = rng() % 100;
+            std::uint32_t pick = static_cast<std::uint32_t>(rng() % 100);
             if (pick < 50) {
                 // READ: random row (or recno 1 fallback).
                 UNSIGNED32 rc = 0;

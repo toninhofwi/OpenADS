@@ -43,6 +43,7 @@ DbfFieldType classify_adt_field(std::uint16_t raw_type) {
         case  4: return DbfFieldType::Character;
         case  5: return DbfFieldType::Memo;
         case  6: return DbfFieldType::Binary;
+        case  7: return DbfFieldType::Binary;  // IMAGE (raw type 7, same internal type as Binary)
         case 10: return DbfFieldType::Double;
         case 11: return DbfFieldType::Integer;
         case 12: return DbfFieldType::ShortInt;

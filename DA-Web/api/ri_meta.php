@@ -12,6 +12,7 @@
 header('Content-Type: application/json');
 session_start();
 require_once __DIR__ . '/common.php';
+require_once __DIR__ . '/openads_stubs.php';
 
 $ddName = trim($_GET['dd']     ?? '');
 $action = trim($_GET['action'] ?? '');
@@ -207,21 +208,41 @@ function fetchTagsFromAdi(string $adiPath): array {
 
 // ── Index tag resolver ────────────────────────────────────────────────────────
 
-// Resolve a potentially-relative index file path using the DD directory.
+// Resolve index file path; must exist and stay under the DD directory.
 function resolveIndexPath(string $idxFile, string $addDir): string {
-    if ($idxFile === '') return '';
-    // Absolute: Windows drive (X:\ or X:/) or UNC (\\) or Unix (/)
-    if (preg_match('/^([a-zA-Z]:[\\\\\/]|\\\\\\\\|\/)/', $idxFile)) {
-        return $idxFile;
-    }
-    return $addDir . DIRECTORY_SEPARATOR . $idxFile;
+    return api_resolve_path_under_root($idxFile, $addDir) ?? '';
 }
 
-// Fetch index tags for $tableName by querying system.indexes and parsing files.
-// Falls back to probing the DD directory for {table}.adi / {table}.cdx when
-// system.indexes has no registered entry for the table (e.g. unregistered indexes).
+// Primary path: ask the engine (auto-opens sibling .adi/.cdx like AdsOpenTable).
+function fetchIndexTagsFromEngine(AdsConnection $conn, string $tableName): array {
+    if ($tableName === '') return [];
+    try {
+        $tbl  = AdsTable::open($conn, $tableName, 0);
+        $raw  = $tbl->getIndexTags();
+        $tbl->close();
+        $tags = [];
+        foreach ($raw as $entry) {
+            $tag = trim((string)($entry['tag'] ?? ''));
+            if ($tag !== '') $tags[] = $tag;
+        }
+        $tags = array_values(array_unique($tags));
+        sort($tags);
+        return $tags;
+    } catch (Throwable) {
+        return [];
+    }
+}
+
+// Fallback: parse CDX/ADI from system.indexes paths or DD directory probes.
 function fetchIndexTags(AdsConnection $conn, string $addDir, string $tableName): array {
     if ($tableName === '') return [];
+    if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $tableName)) {
+        return [];
+    }
+
+    $engine = fetchIndexTagsFromEngine($conn, $tableName);
+    if (!empty($engine)) return $engine;
+
     try {
         $tags = [];
         $found = false;
@@ -290,6 +311,12 @@ try {
     // ── Return tag names for a table (user changed table select) ──────────
     if ($action === 'tags') {
         $table = trim($_GET['table'] ?? '');
+        if ($table === '') {
+            http_response_code(400);
+            echo json_encode(['error' => 'table is required'], JSON_FLAGS);
+            exit;
+        }
+        api_validate_identifier($table, 'table name');
         $tags  = fetchIndexTags($conn, $addDir, $table);
         $conn->close();
         echo json_encode(['tags' => $tags], JSON_FLAGS);
@@ -302,6 +329,7 @@ try {
         echo json_encode(['error' => 'ri name or action required']);
         exit;
     }
+    api_validate_identifier($riName, 'RI name');
 
     $ri   = null;
     $stmt = $conn->query("SELECT * FROM system.relations");

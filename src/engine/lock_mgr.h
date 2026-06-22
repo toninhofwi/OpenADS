@@ -63,6 +63,15 @@ public:
                              TableTypeForLock t, LockingMode m,
                              std::uint32_t recno);
 
+    // Release the per-key bookkeeping for a lock the caller is unlocking, so
+    // the NEXT acquire takes a fresh OS-level byte lock. The owning LockHandle
+    // (which holds the OS lock) is released by the caller separately; without
+    // this the held_ entry lingers forever and every subsequent acquire on the
+    // same byte range returns an empty (no-op) handle -> lost concurrency.
+    void unlock_table (platform::File& f, TableTypeForLock t, LockingMode m);
+    void unlock_record(platform::File& f, TableTypeForLock t, LockingMode m,
+                       std::uint32_t recno);
+
     static std::uint64_t file_lock_offset(TableTypeForLock t, LockingMode m);
     static std::uint64_t record_lock_offset(TableTypeForLock t, LockingMode m,
                                             std::uint32_t recno);
@@ -81,6 +90,8 @@ private:
                    std::hash<std::uint64_t>{}(k.offset);
         }
     };
+    void forget_(const Key& k) noexcept;
+
     std::unordered_map<Key, int, KeyHash> held_;
 };
 

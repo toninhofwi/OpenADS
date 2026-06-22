@@ -94,16 +94,25 @@ async fn api_kill_session(
     let Some(base) = st.cfg.http.clone() else {
         return (StatusCode::BAD_REQUEST, "monitor started without --http").into_response();
     };
-    match HttpClient::new(&base).kill_session(id) {
-        Ok(()) => {
-            if let Ok(mut state) = st.poll.write() {
-                state.refresh(&st.cfg);
-                if let Ok(mut out) = st.snap.write() {
-                    *out = state.to_snapshot(&st.cfg);
+    let poll = st.poll.clone();
+    let snap = st.snap.clone();
+    let cfg = st.cfg.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new(&base);
+        client.kill_session(id).map(|_| {
+            if let Ok(mut state) = poll.write() {
+                state.refresh(&cfg);
+                if let Ok(mut out) = snap.write() {
+                    *out = state.to_snapshot(&cfg);
                 }
             }
-            StatusCode::OK.into_response()
-        }
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        })
+    })
+    .await;
+
+    match res {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

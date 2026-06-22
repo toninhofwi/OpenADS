@@ -527,3 +527,58 @@ TEST_CASE("AdsOpenTable expands view alias to SQL cursor") {
     AdsDisconnect(hConn);
     fs::remove_all(dir, ec);
 }
+
+// ---------------------------------------------------------------------------
+// system.permissions — zero-rows for (grantee, object) without ACL
+// ---------------------------------------------------------------------------
+
+static UNSIGNED32 sql_exec(ADSHANDLE hConn, const char* sql) {
+    ADSHANDLE stmt = 0;
+    if (AdsCreateSQLStatement(hConn, &stmt) != 0) return 1;
+    std::vector<UNSIGNED8> buf(std::strlen(sql) + 1);
+    std::memcpy(buf.data(), sql, buf.size());
+    ADSHANDLE cur = 0;
+    const UNSIGNED32 rc = AdsExecuteSQLDirect(stmt, buf.data(), &cur);
+    AdsCloseSQLStatement(stmt);
+    return rc;
+}
+
+TEST_CASE("system.permissions emits zero-rows for ungranted grantee x object") {
+    const auto dir = fs::temp_directory_path() / "openads_sysperm_zero";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    make_dbf0(dir / "a.dbf");
+    make_dbf0(dir / "b.dbf");
+    write_dd(dir / "test.add",
+             "TABLE A=a.dbf\n"
+             "TABLE B=b.dbf\n"
+             "USER u1\n"
+             "GROUP readers\n"
+             "MEMBER u1=readers\n");
+
+    UNSIGNED8 addpath[512];
+    auto ap = (dir / "test.add").string();
+    std::memcpy(addpath, ap.c_str(), ap.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(addpath, 1, nullptr, nullptr, 0, &hConn) == 0);
+
+    CHECK(sql_count(hConn,
+                    "SELECT * FROM system.permissions "
+                    "WHERE GRANTEE = 'u1' AND OBJ_NAME = 'B'") == 1);
+
+    REQUIRE(sql_exec(hConn, "GRANT SELECT ON A TO u1") == 0);
+    CHECK(sql_count(hConn,
+                    "SELECT * FROM system.permissions "
+                    "WHERE GRANTEE = 'u1' AND OBJ_NAME = 'B'") == 1);
+    CHECK(sql_count(hConn,
+                    "SELECT * FROM system.permissions "
+                    "WHERE GRANTEE = 'u1' AND OBJ_NAME = 'A'") == 1);
+    CHECK(sql_count(hConn,
+                    "SELECT * FROM system.permissions "
+                    "WHERE GRANTEE = 'readers' AND OBJ_NAME = 'A'") == 1);
+
+    AdsDisconnect(hConn);
+    fs::remove_all(dir, ec);
+}

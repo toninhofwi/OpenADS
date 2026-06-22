@@ -27,18 +27,16 @@ $unique     = strcasecmp(trim($body['unique']     ?? 'No'), 'Yes') === 0;
 $binary     = strcasecmp(trim($body['binary']     ?? 'No'), 'Yes') === 0;
 $primary    = strcasecmp(trim($body['primary']    ?? 'No'), 'Yes') === 0;
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($table === '' || $tag === '' || $expression === '') {
+    api_error(400, 'table, tag and expression are required');
 }
-if ($ddName === '' || $table === '' || $tag === '' || $expression === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd, table, tag and expression are required']);
-    exit;
+api_validate_identifier($table, 'table name');
+api_validate_identifier($tag, 'index tag');
+if ($origTag !== '') {
+    api_validate_identifier($origTag, 'original index tag');
 }
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
@@ -70,13 +68,16 @@ try {
     // Drop existing tag using origTag (handles renames; ignore error if not found)
     if ($origTag !== '') {
         try {
-            $conn->execute("DROP INDEX $origTag ON $table");
+            $conn->execute('DROP INDEX "' . $origTag . '" ON "' . $table . '"');
         } catch (Throwable $e) {}
     }
 
     // Recreate index
-    $esc = fn($s) => str_replace("'", "''", $s);
-    $sql = "EXECUTE PROCEDURE sp_CreateIndex90('{$esc($table)}', '{$esc($indexFile)}', '{$esc($tag)}', '{$esc($expression)}', '', $flags, 512, '')";
+    $sql = "EXECUTE PROCEDURE sp_CreateIndex90('"
+         . api_sql_quote($table) . "', '"
+         . api_sql_quote($indexFile) . "', '"
+         . api_sql_quote($tag) . "', '"
+         . api_sql_quote($expression) . "', '', $flags, 512, '')";
     $conn->execute($sql);
 
     // Update primary key property if requested (ADS_DD_TABLE_PRIMARY_KEY = 202)

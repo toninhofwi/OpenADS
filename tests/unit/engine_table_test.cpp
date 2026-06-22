@@ -101,11 +101,11 @@ TEST_CASE("Table navigates top / skip / bottom and tracks BOF/EOF") {
 }
 
 TEST_CASE("Table::read_field at EOF/BOF reports AE_NO_CURRENT_RECORD") {
-    // ACE-conformant callers (Harbour rddads' adsGetValue) special-case
-    // AE_NO_CURRENT_RECORD (5026) as the graceful "read past the last
-    // record" path — every other code is raised as a hard error
-    // (the ADSCDX/5000 TBrowse failure). read_field at a non-positioned
-    // cursor must therefore report 5026, not the generic 5000.
+    // Harbour rddads' adsGetValue special-cases AE_NO_CURRENT_RECORD (5068)
+    // as the graceful "read past the last record" path and substitutes a
+    // blank value; any other error code — including 5026 (AE_INVALID_WORKAREA)
+    // — is raised as a hard error (the ADSCDX/5000 TBrowse failure).
+    // read_field at a non-positioned cursor must therefore report 5068.
     auto p = make_fixture("table_nocurrec");
     {
         auto opened = Table::open(p.string(), TableType::Cdx);
@@ -117,13 +117,13 @@ TEST_CASE("Table::read_field at EOF/BOF reports AE_NO_CURRENT_RECORD") {
         REQUIRE(t.eof());
         auto at_eof = t.read_field(0);
         REQUIRE_FALSE(at_eof.has_value());
-        CHECK(at_eof.error().code == 5026);
+        CHECK(at_eof.error().code == 5068);
 
         REQUIRE(t.skip(-99).has_value());
         REQUIRE(t.bof());
         auto at_bof = t.read_field(0);
         REQUIRE_FALSE(at_bof.has_value());
-        CHECK(at_bof.error().code == 5026);
+        CHECK(at_bof.error().code == 5068);
     }
     fs::remove(p);
 }

@@ -13,25 +13,20 @@ $ddName = trim($body['dd']    ?? '');
 $table  = trim($body['table'] ?? '');
 $tag    = trim($body['tag']   ?? '');
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+$c = api_require_connection($ddName);
+if ($table === '' || $tag === '') {
+    api_error(400, 'table and tag are required');
 }
-if ($ddName === '' || $table === '' || $tag === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd, table and tag are required']);
-    exit;
-}
+api_validate_identifier($table, 'table name');
+api_validate_identifier($tag, 'index tag');
 
-$c    = $_SESSION['connections'][$ddName];
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 
 try {
     $conn = AdsConnection::connect($opts);
-    $conn->execute("DROP INDEX $tag ON $table");
+    $conn->execute('DROP INDEX "' . $tag . '" ON "' . $table . '"');
     $conn->close();
     echo json_encode(['deleted' => $tag]);
 } catch (Throwable $e) {

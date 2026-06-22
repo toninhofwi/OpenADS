@@ -672,7 +672,7 @@ int main(int argc, char** argv) {
                 std::rewind(fh);
                 if (sz > 0) {
                     addData.resize(static_cast<std::size_t>(sz));
-                    std::fread(addData.data(), 1, addData.size(), fh);
+                    [[maybe_unused]] auto _r1 = std::fread(addData.data(), 1, addData.size(), fh);
                     read_ok = true;
                 }
                 std::fclose(fh);
@@ -769,7 +769,7 @@ int main(int argc, char** argv) {
                 std::rewind(fh);
                 if (sz > 0) {
                     addData2.resize(static_cast<std::size_t>(sz));
-                    std::fread(addData2.data(), 1, addData2.size(), fh);
+                    [[maybe_unused]] auto _r2 = std::fread(addData2.data(), 1, addData2.size(), fh);
                     read_ok2 = true;
                 }
                 std::fclose(fh);
@@ -802,7 +802,7 @@ int main(int argc, char** argv) {
                 std::rewind(fh);
                 if (sz > 0) {
                     amData.resize(static_cast<std::size_t>(sz));
-                    std::fread(amData.data(), 1, amData.size(), fh);
+                    [[maybe_unused]] auto _r3 = std::fread(amData.data(), 1, amData.size(), fh);
                     am_read_ok = true;
                 }
                 std::fclose(fh);
@@ -961,7 +961,7 @@ int main(int argc, char** argv) {
             std::fseek(fh, 0, SEEK_END);
             long sz = std::ftell(fh);
             std::rewind(fh);
-            if (sz > 0) { out.resize(static_cast<std::size_t>(sz)); std::fread(out.data(), 1, out.size(), fh); }
+            if (sz > 0) { out.resize(static_cast<std::size_t>(sz)); [[maybe_unused]] auto _r4 = std::fread(out.data(), 1, out.size(), fh); }
             std::fclose(fh);
             return !out.empty();
         };

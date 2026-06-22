@@ -25,6 +25,8 @@
 #undef AE_REMOTE_ERROR
 #undef AE_SAP_PERMS_NEED_IMPORT
 #undef AE_UNIQUE_INDEX_VIOLATION
+#undef AE_INVALID_WORKAREA
+#undef AE_NO_CURRENT_RECORD
 
 namespace openads {
 
@@ -51,7 +53,14 @@ enum : std::uint32_t {
     AE_REMOTE_ERROR             = 5172,
     AE_SAP_PERMS_NEED_IMPORT    = 5174, // DD has SAP-format permissions; run import tool
     AE_RI_VIOLATION             = 508,  // referential integrity constraint failed
-    AE_UNIQUE_INDEX_VIOLATION   = 5135  // duplicate key in unique/candidate index
+    AE_UNIQUE_INDEX_VIOLATION   = 5135, // duplicate key in unique/candidate index
+    // 5026 = AE_INVALID_WORKAREA (SAP SDK). Previously mislabelled as
+    // AE_NO_CURRENT_RECORD in this codebase; kept here for completeness.
+    AE_INVALID_WORKAREA         = 5026,
+    // 5068 = AE_NO_CURRENT_RECORD (SAP SDK). Harbour rddads special-cases
+    // this exact code to return blank-typed values at BOF/EOF; any other
+    // error code causes a hard runtime error in the caller.
+    AE_NO_CURRENT_RECORD        = 5068
 };
 
 } // namespace openads

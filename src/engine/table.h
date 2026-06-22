@@ -143,6 +143,14 @@ public:
     // changed externally.
     util::Result<void> reindex();
 
+    // Undo the appends made during a transaction being rolled back.
+    // For each recno (processed high-to-low so trailing rows peel off
+    // cleanly), erase the record's entries from every bound index, then
+    // physically drop it if it is the last physical record; if a
+    // concurrent append sits above it, fall back to a soft-delete. After
+    // this the cursor position is reset to BOF.
+    util::Result<void> rollback_appends(std::vector<std::uint32_t> recnos);
+
     // Locking surface.
     util::Result<void> lock_record_excl(std::uint32_t recno);
     util::Result<void> unlock_record    (std::uint32_t recno);

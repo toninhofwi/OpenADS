@@ -21,39 +21,30 @@ $seek      = $_GET['seek']           ?? '';
 $seekfield = trim($_GET['seekfield'] ?? '');
 $aof       = trim($_GET['aof']       ?? '');
 
-if ($ddName === '' || $table === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd and table are required']);
-    exit;
+if ($table === '') {
+    api_error(400, 'table is required');
 }
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
-}
+api_validate_identifier($table, 'table name');
 
-// Whitelist table name
-if (!preg_match('/^[A-Za-z_][A-Za-z0-9_ ]*$/', $table)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'invalid table name']);
-    exit;
-}
+$c = api_require_connection($ddName);
 
 // Build WHERE conditions array.
 $conditions = [];
 
-// AOF filter expression — accepted as-is (user is authenticated; same trust
-// level as the SQL console).  Strip leading/trailing WHERE keyword if present.
+// AOF filter expression — strip any leading WHERE keyword, then validate
+// before splicing into the query.  AOF (ad-hoc filter) is admin-only, but
+// we still sanitize to prevent injection via CSRF or a compromised session.
 if ($aof !== '') {
     $aofStripped = preg_replace('/^\s*WHERE\s+/i', '', $aof);
     if ($aofStripped !== '') {
+        api_validate_aof_expression($aofStripped);
         $conditions[] = '(' . $aofStripped . ')';
     }
 }
 
 // Seek condition: seekfield >= 'value'
 if ($seek !== '' && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $seekfield)) {
-    $escapedSeek  = str_replace("'", "''", $seek);
+    $escapedSeek  = api_sql_quote((string)$seek);
     $conditions[] = "$seekfield >= '$escapedSeek'";
 }
 
@@ -75,7 +66,6 @@ if ($orderby !== '') {
     }
 }
 
-$c    = $_SESSION['connections'][$ddName];
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];

@@ -79,6 +79,10 @@ impl TuiState {
     fn refresh(&mut self, cfg: &MonitorConfig) {
         self.inner.refresh(cfg);
         self.last_refresh = Instant::now();
+        let len = self.inner.http.sessions.len();
+        if self.selected_session >= len {
+            self.selected_session = len.saturating_sub(1);
+        }
     }
 }
 
@@ -165,77 +169,81 @@ fn run_tui(app: &mut TuiState, cfg: &MonitorConfig, args: &Args) -> Result<()> {
     let tick = Duration::from_secs(cfg.interval_secs);
     let mut needs_redraw = true;
 
-    loop {
-        if needs_redraw || app.last_refresh.elapsed() >= tick {
-            app.refresh(cfg);
-            needs_redraw = true;
-        }
+    let res = (|| -> Result<()> {
+        loop {
+            if needs_redraw || app.last_refresh.elapsed() >= tick {
+                app.refresh(cfg);
+                needs_redraw = true;
+            }
 
-        if needs_redraw {
-            term.draw(|f| ui(f, app, cfg, args))?;
-            needs_redraw = false;
-        }
+            if needs_redraw {
+                term.draw(|f| ui(f, app, cfg, args))?;
+                needs_redraw = false;
+            }
 
-        if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('r') => {
-                        app.refresh(cfg);
-                        app.status_msg = "refreshed".into();
-                        needs_redraw = true;
+            if event::poll(Duration::from_millis(200))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
                     }
-                    KeyCode::Up => {
-                        app.selected_session = app.selected_session.saturating_sub(1);
-                        needs_redraw = true;
-                    }
-                    KeyCode::Down => {
-                        if !app.inner.http.sessions.is_empty() {
-                            app.selected_session =
-                                (app.selected_session + 1).min(app.inner.http.sessions.len() - 1);
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('r') => {
+                            app.refresh(cfg);
+                            app.status_msg = "refreshed".into();
+                            needs_redraw = true;
                         }
-                        needs_redraw = true;
-                    }
-                    KeyCode::Char('g') => {
-                        app.show_graphs = !app.show_graphs;
-                        app.status_msg = if app.show_graphs {
-                            "graphs on".into()
-                        } else {
-                            "graphs off".into()
-                        };
-                        needs_redraw = true;
-                    }
-                    KeyCode::Char('k') => {
-                        if let (Some(base), Some(sess)) =
-                            (&cfg.http, app.inner.http.sessions.get(app.selected_session))
-                        {
-                            let client = HttpClient::new(base);
-                            match client.kill_session(sess.id) {
-                                Ok(()) => {
-                                    app.status_msg = format!("killed session {}", sess.id);
-                                    app.refresh(cfg);
-                                }
-                                Err(e) => app.status_msg = format!("kill failed: {e}"),
+                        KeyCode::Up => {
+                            app.selected_session = app.selected_session.saturating_sub(1);
+                            needs_redraw = true;
+                        }
+                        KeyCode::Down => {
+                            if !app.inner.http.sessions.is_empty() {
+                                app.selected_session = (app.selected_session + 1)
+                                    .min(app.inner.http.sessions.len() - 1);
                             }
                             needs_redraw = true;
-                        } else {
-                            app.status_msg = "kill needs --http and a selected session".into();
+                        }
+                        KeyCode::Char('g') => {
+                            app.show_graphs = !app.show_graphs;
+                            app.status_msg = if app.show_graphs {
+                                "graphs on".into()
+                            } else {
+                                "graphs off".into()
+                            };
                             needs_redraw = true;
                         }
+                        KeyCode::Char('k') => {
+                            if let (Some(base), Some(sess)) =
+                                (&cfg.http, app.inner.http.sessions.get(app.selected_session))
+                            {
+                                let client = HttpClient::new(base);
+                                match client.kill_session(sess.id) {
+                                    Ok(()) => {
+                                        app.status_msg = format!("killed session {}", sess.id);
+                                        app.refresh(cfg);
+                                    }
+                                    Err(e) => app.status_msg = format!("kill failed: {e}"),
+                                }
+                                needs_redraw = true;
+                            } else {
+                                app.status_msg =
+                                    "kill needs --http and a selected session".into();
+                                needs_redraw = true;
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
-    }
+        Ok(())
+    })();
 
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
     ratatui::restore();
-    Ok(())
+    res
 }
 
 fn ui(f: &mut Frame, app: &TuiState, cfg: &MonitorConfig, args: &Args) {

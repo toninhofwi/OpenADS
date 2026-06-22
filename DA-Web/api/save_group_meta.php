@@ -19,18 +19,14 @@ $ddName = trim($body['dd']    ?? '');
 $group  = trim($body['group'] ?? '');
 $rows   = $body['rows'] ?? [];
 
-if (!isset($_SESSION['connections'][$ddName])) {
-    http_response_code(401);
-    echo json_encode(['error' => "Not connected to '$ddName'"]);
-    exit;
+if ($group === '' || !is_array($rows)) {
+    api_error(400, 'group and rows are required');
 }
-if ($ddName === '' || $group === '' || !is_array($rows)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'dd, group and rows are required']);
-    exit;
+if (str_contains($group, "\0")) {
+    api_error(400, 'invalid group name');
 }
 
-$c    = $_SESSION['connections'][$ddName];
+$c = api_require_connection($ddName);
 $opts = ['path' => $c['path']];
 if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
 if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];

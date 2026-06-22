@@ -30,6 +30,23 @@ namespace openads::abi { inline bool show_deleted() noexcept {
 
 namespace openads::engine {
 
+namespace {
+
+void write_adt_blob_ref(std::uint8_t* dst, std::uint32_t block_no,
+                        std::uint32_t data_len) noexcept {
+    dst[0] = static_cast<std::uint8_t>( block_no        & 0xFFu);
+    dst[1] = static_cast<std::uint8_t>((block_no >>  8) & 0xFFu);
+    dst[2] = static_cast<std::uint8_t>((block_no >> 16) & 0xFFu);
+    dst[3] = static_cast<std::uint8_t>((block_no >> 24) & 0xFFu);
+    dst[4] = static_cast<std::uint8_t>( data_len        & 0xFFu);
+    dst[5] = static_cast<std::uint8_t>((data_len >>  8) & 0xFFu);
+    dst[6] = static_cast<std::uint8_t>((data_len >> 16) & 0xFFu);
+    dst[7] = static_cast<std::uint8_t>((data_len >> 24) & 0xFFu);
+    dst[8] = 0x00;
+}
+
+} // namespace
+
 util::Result<Table> Table::open(const std::string& path,
                                 TableType type,
                                 OpenMode mode,
@@ -172,7 +189,9 @@ util::Result<void> Table::sync_all_indexes_(
 
 util::Result<void> Table::writeback_record_() {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     if (tx_ && tx_->active()) {
         auto cur = driver_->read_record_raw(recno_);
@@ -504,12 +523,13 @@ util::Result<void> Table::skip(std::int32_t delta) {
 util::Result<drivers::DbfFieldValue>
 Table::read_field(std::uint16_t field_index) {
     if (state_ != State::Positioned) {
-        // 5026 = AE_NO_CURRENT_RECORD. ACE-conformant callers (Harbour
-        // rddads' adsGetValue) special-case this exact code as the
-        // graceful "read past the last record" path and substitute a
-        // blank value; any other code is raised as a hard error — the
-        // ADSCDX/5000 failure TBrowse hits when it paints an EOF row.
-        return util::Error{5026, 0, "table not positioned on a record",
+        // 5068 = AE_NO_CURRENT_RECORD (SAP ADS SDK). Harbour rddads'
+        // adsGetValue special-cases this exact code as the graceful
+        // "read past the last record" path and substitutes a blank value;
+        // any other error code — including 5026 (AE_INVALID_WORKAREA) — is
+        // raised as a hard error (the ADSCDX/5000 failure TBrowse hits when
+        // it paints an EOF row).
+        return util::Error{5068, 0, "table not positioned on a record",
                            ""};
     }
     if (field_index >= driver_->fields().size()) {
@@ -606,7 +626,9 @@ util::Result<void> Table::append_record() {
 
 util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -615,22 +637,32 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
 
     auto snap = snapshot_index_keys_();
 
-    // Memo fields write to the memo store, then store the resulting
-    // block number as a right-aligned ASCII string in the record.
-    if (f.type == drivers::DbfFieldType::Memo) {
+    // Memo/Binary fields write to the memo store, then store the
+    // resulting block number in the record. ADT uses a 9-byte binary
+    // reference (block_no u32 LE + data_len u32 LE + 0x00); DBF uses
+    // a right-aligned ASCII string.
+    if (f.type == drivers::DbfFieldType::Memo ||
+        (f.type == drivers::DbfFieldType::Binary && f.length == 9)) {
         if (!memo_) {
             return util::Error{5004, 0, "memo store not attached", ""};
         }
         auto wm = memo_->write(v);
         if (!wm) return wm.error();
-        char buf[16];
-        int n = std::snprintf(buf, sizeof(buf), "%*u",
-                              static_cast<int>(f.length),
-                              static_cast<unsigned>(wm.value()));
-        if (n < 0 || static_cast<std::size_t>(n) > f.length) {
-            return util::Error{5000, 0, "memo block number overflows field", ""};
+        std::uint8_t* dst = record_buf_.data() + f.record_offset;
+        if (f.length == 9) {
+            write_adt_blob_ref(dst, wm.value(),
+                               static_cast<std::uint32_t>(v.size()));
+        } else {
+            char buf[16];
+            int n = std::snprintf(buf, sizeof(buf), "%*u",
+                                  static_cast<int>(f.length),
+                                  static_cast<unsigned>(wm.value()));
+            if (n < 0 || static_cast<std::size_t>(n) > f.length) {
+                return util::Error{5000, 0,
+                                   "memo block number overflows field", ""};
+            }
+            std::memcpy(dst, buf, f.length);
         }
-        std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
         if (auto wb = writeback_record_(); !wb) return wb.error();
         return sync_all_indexes_(snap);
     }
@@ -644,7 +676,9 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
 
 util::Result<void> Table::set_field(std::uint16_t idx, double v) {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -660,7 +694,9 @@ util::Result<void> Table::set_field(std::uint16_t idx, double v) {
 
 util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -678,13 +714,16 @@ util::Result<void>
 Table::set_field_binary(std::uint16_t idx, const std::string& payload,
                         drivers::MemoBlockType type) {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
     const auto& f = driver_->fields().at(idx);
-    if (f.type != drivers::DbfFieldType::Memo) {
+    if (f.type != drivers::DbfFieldType::Memo &&
+        !(f.type == drivers::DbfFieldType::Binary && f.length == 9)) {
         return util::Error{5063, 0, "field is not a memo column", ""};
     }
     if (!memo_) {
@@ -693,14 +732,20 @@ Table::set_field_binary(std::uint16_t idx, const std::string& payload,
     auto snap = snapshot_index_keys_();
     auto wm = memo_->write_typed(payload, type);
     if (!wm) return wm.error();
-    char buf[16];
-    int n = std::snprintf(buf, sizeof(buf), "%*u",
-                          static_cast<int>(f.length),
-                          static_cast<unsigned>(wm.value()));
-    if (n < 0 || static_cast<std::size_t>(n) > f.length) {
-        return util::Error{5000, 0, "memo block number overflows field", ""};
+    std::uint8_t* dst = record_buf_.data() + f.record_offset;
+    if (f.length == 9) {
+        write_adt_blob_ref(dst, wm.value(),
+                           static_cast<std::uint32_t>(payload.size()));
+    } else {
+        char buf[16];
+        int n = std::snprintf(buf, sizeof(buf), "%*u",
+                              static_cast<int>(f.length),
+                              static_cast<unsigned>(wm.value()));
+        if (n < 0 || static_cast<std::size_t>(n) > f.length) {
+            return util::Error{5000, 0, "memo block number overflows field", ""};
+        }
+        std::memcpy(dst, buf, f.length);
     }
-    std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
     if (auto wb = writeback_record_(); !wb) return wb.error();
     return sync_all_indexes_(snap);
 }
@@ -708,7 +753,9 @@ Table::set_field_binary(std::uint16_t idx, const std::string& payload,
 util::Result<drivers::MemoBlockType>
 Table::field_memo_type(std::uint16_t idx) {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -734,7 +781,9 @@ Table::field_memo_type(std::uint16_t idx) {
 
 util::Result<void> Table::mark_deleted() {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     drivers::set_record_deleted(record_buf_.data(), record_buf_.size(), true);
     return writeback_record_();
@@ -742,7 +791,9 @@ util::Result<void> Table::mark_deleted() {
 
 util::Result<void> Table::recall_deleted() {
     if (state_ != State::Positioned) {
-        return util::Error{5026, 0, "no record positioned", ""};
+        // rddads (Harbour contrib RDD) special-cases 5068 (AE_NO_CURRENT_RECORD)
+        // to return blank field values at BOF/EOF; 5026 causes a hard error.
+        return util::Error{5068, 0, "no record positioned", ""};
     }
     drivers::set_record_deleted(record_buf_.data(), record_buf_.size(), false);
     return writeback_record_();
@@ -786,6 +837,49 @@ util::Result<void> Table::zap() {
     state_ = State::Bof;
     recno_ = 0;
     record_buf_.assign(driver_->record_length(), 0);
+    return {};
+}
+
+util::Result<void> Table::rollback_appends(std::vector<std::uint32_t> recnos) {
+    if (driver_ == nullptr || recnos.empty()) return {};
+    // High-to-low so the transaction's own trailing rows peel off the
+    // end one at a time.
+    std::sort(recnos.begin(), recnos.end(),
+              [](std::uint32_t a, std::uint32_t b) { return a > b; });
+    for (std::uint32_t r : recnos) {
+        if (r == 0) continue;
+        // Load the record so compute_index_key_ sees its current bytes,
+        // then erase its (recno, key) from every bound index. (A record
+        // appended and later updated in the same tx carries the updated
+        // key — the one currently in the index.)
+        bool loaded = false;
+        if (auto rec = driver_->read_record_raw(r); rec) {
+            record_buf_ = std::move(rec).value();
+            recno_      = r;
+            state_      = State::Positioned;
+            loaded      = true;
+            auto erase_idx = [&](drivers::IIndex* idx) {
+                if (idx == nullptr) return;
+                std::string key = compute_index_key_(idx->expression(),
+                                                     idx->key_length());
+                (void)idx->erase(r, key);
+            };
+            if (order_ && order_->index()) erase_idx(order_->index());
+            for (auto* x : extra_index_views_) erase_idx(x);
+        }
+        // Physically drop the row if it is the trailing record; if a
+        // concurrent append now sits above it, soft-delete instead.
+        auto popped = driver_->truncate_trailing(r);
+        if (popped && popped.value()) continue;
+        if (loaded) {
+            std::vector<std::uint8_t> buf = record_buf_;
+            drivers::set_record_deleted(buf.data(), buf.size(), true);
+            (void)driver_->write_record_raw(r, buf.data(), buf.size());
+        }
+    }
+    // Structural change — drop any cursor position.
+    state_ = State::Bof;
+    recno_ = 0;
     return {};
 }
 
@@ -936,6 +1030,7 @@ util::Result<void> Table::unlock_record(std::uint32_t recno) {
     if (it != recno_locks_.end()) {
         it->second.release();
         recno_locks_.erase(it);
+        locks_.unlock_record(driver_->file(), to_lock_type_(), locking_, recno);
     }
     return {};
 }
@@ -969,6 +1064,7 @@ util::Result<void> Table::unlock_table() {
     if (table_lock_) {
         table_lock_->release();
         table_lock_.reset();
+        locks_.unlock_table(driver_->file(), to_lock_type_(), locking_);
     }
     return {};
 }
@@ -1039,6 +1135,33 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
         return false;
     }
     bool exact = r.value().hit == drivers::SeekHit::Exact;
+    // SET DELETED ON: a seek must not report a deleted row as found.
+    // goto_top/goto_bottom/skip already honor show_deleted() but seek_key
+    // did not (the B+tree match landed on a deleted row and was returned
+    // as found). Skip forward over deleted records at the landing, then
+    // re-derive `exact` from the row we actually land on (Clipper/DBFCDX:
+    // if the only matching rows are deleted, Found() is .F. and the cursor
+    // sits on the next live record or Eof).
+    if (!openads::abi::show_deleted()) {
+        std::string del_key = key;
+        del_key.resize(idx->key_length(), ' ');
+        while (r.value().positioned) {
+            if (auto ld = load_record_(r.value().recno); !ld) return ld.error();
+            if (!is_deleted()) break;
+            r = idx->next();
+            if (!r) return r.error();
+        }
+        if (!r.value().positioned) {
+            state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                    : State::Eof;
+            recno_ = 0;
+            last_seek_found_ = false;
+            return false;
+        }
+        std::string ck = idx->current_key();
+        ck.resize(del_key.size(), ' ');
+        exact = (ck == del_key);
+    }
     // DESCEND order treats the FIRST match in walk direction as
     // the LAST entry in the equal-key group when sorted ASC. Walk
     // duplicates regardless of `last` flag.
@@ -1050,19 +1173,14 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
     // the last matching entry; load_record_ syncs the table buffer.
     if (walk_to_last && exact) {
         std::string padded_key = key;
-        if (padded_key.size() < idx->key_length())
-            padded_key.append(idx->key_length() - padded_key.size(), ' ');
-        if (padded_key.size() > idx->key_length())
-            padded_key.resize(idx->key_length());
+        padded_key.resize(idx->key_length(), ' ');
         std::uint32_t last_recno = r.value().recno;
         while (true) {
             auto step = idx->next();
             if (!step || !step.value().positioned) break;
             std::string ck = idx->current_key();
-            if (ck.size() < padded_key.size())
-                ck.append(padded_key.size() - ck.size(), ' ');
-            if (std::memcmp(ck.data(), padded_key.data(),
-                             padded_key.size()) != 0) {
+            ck.resize(padded_key.size(), ' ');
+            if (ck != padded_key) {
                 // Past the equal-key run — step back one to leave
                 // cursor on the last matching entry.
                 (void)idx->prev();
@@ -1072,6 +1190,29 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
         }
         auto load = load_record_(last_recno);
         if (!load) return load.error();
+        if (!openads::abi::show_deleted()) {
+            while (is_deleted()) {
+                auto step = idx->prev();
+                if (!step || !step.value().positioned) {
+                    state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                            : State::Eof;
+                    recno_ = 0;
+                    last_seek_found_ = false;
+                    return false;
+                }
+                std::string ck = idx->current_key();
+                ck.resize(padded_key.size(), ' ');
+                if (ck != padded_key) {
+                    state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                            : State::Eof;
+                    recno_ = 0;
+                    last_seek_found_ = false;
+                    return false;
+                }
+                if (auto ld = load_record_(step.value().recno); !ld)
+                    return ld.error();
+            }
+        }
         last_seek_found_ = true;
         return true;
     }

@@ -278,12 +278,11 @@ BUG 3 (MEDIUM): Built-in DD groups not showing (DB:Public, DB:Backup, DB:Admin, 
   - Find where these groups are stored in the .add/.am binary and expose them
     in the tree alongside user-created groups.
 
-FEATURE 1 (MEDIUM): Inline table editing in Tabulator
-  File: DA-Web/js/app.js, DA-Web/api/row_ops.php (or table_data.php)
-  - Users need to edit non-primary-key fields directly in the data grid.
-  - Add Tabulator cell editing for non-PK columns.
-  - A Save button commits changes via the existing row_ops.php endpoint.
-  - Primary key columns must remain read-only (detect from schema/index data).
+FEATURE 1 (DONE 2026-06-20): Inline table editing in Tabulator
+  File: DA-Web/js/app.js, DA-Web/api/row_ops.php
+  - Non-PK cells editable (double-click); PK from field metadata + primary index tag.
+  - Save / Discard toolbar buttons; dirty-cell highlight; type-aware editors.
+  - row_ops update sends only changed fields; Logical uses TRUE/FALSE in SQL.
 
 FEATURE 2 (LOW): ACE editor auto-download in setup.bat
   File: DA-Web/setup.bat, DA-Web/README.md
@@ -320,7 +319,7 @@ Short-term (0.3.x deferred, low effort):
   6. Linux Harbour smoke CI leg
 
 Medium-term (DA-Web features + docs):
-  7. Inline table editing in Tabulator (DA-Web FEATURE 1)
+  7. [DONE] Inline table editing in Tabulator (DA-Web FEATURE 1)
   8. README cleanup: openace64 naming, status table, bindings explanation
   9. wire-protocol.md DD functions update
 

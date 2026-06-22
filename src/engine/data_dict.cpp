@@ -186,14 +186,14 @@ static bool json_to_trigger(const std::string& json,
     if (m.count("type") && m.at("type") != "Trigger") return false;
     if (m.count("name"))      e.name        = m.at("name");
     if (m.count("table"))     e.table_alias = m.at("table");
-    if (m.count("event"))     try { e.event_mask = std::stoul(m.at("event"));   } catch (...) {}
-    if (m.count("timing"))    try { e.timing     = std::stoul(m.at("timing"));  } catch (...) {}
+    if (m.count("event"))     try { e.event_mask = static_cast<std::uint32_t>(std::stoul(m.at("event")));   } catch (...) {}
+    if (m.count("timing"))    try { e.timing     = static_cast<std::uint32_t>(std::stoul(m.at("timing")));  } catch (...) {}
     if (m.count("priority"))  try { e.priority   = static_cast<std::uint32_t>(std::stoi(m.at("priority"))); } catch (...) {}
     if (m.count("enabled"))   e.enabled   = (m.at("enabled") == "true");
     if (m.count("container")) e.container = m.at("container");
     if (m.count("procedure")) e.procedure = m.at("procedure");
     if (m.count("comment"))   e.comment   = m.at("comment");
-    if (m.count("options"))   try { e.options = std::stoul(m.at("options")); } catch (...) {}
+    if (m.count("options"))   try { e.options = static_cast<std::uint32_t>(std::stoul(m.at("options"))); } catch (...) {}
     return true;
 }
 
@@ -854,16 +854,16 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                 // The parent_id lookup gives "Database" for newly-created triggers,
                 // so always prefer parts[0] when it is non-empty.
                 if (parts.size() > 0 && !parts[0].empty()) e.table_alias = parts[0];
-                if (parts.size() > 1) try { e.event_mask = std::stoul(parts[1]); } catch (...) {}
+                if (parts.size() > 1) try { e.event_mask = static_cast<std::uint32_t>(std::stoul(parts[1])); } catch (...) {}
                 if (parts.size() >= 8) {
                     // New format with timing in slot 2
-                    try { e.timing   = std::stoul(parts[2]); } catch (...) {}
+                    try { e.timing   = static_cast<std::uint32_t>(std::stoul(parts[2])); } catch (...) {}
                     try { e.priority = static_cast<std::uint32_t>(std::stoi(parts[3])); } catch (...) {}
                     if (parts.size() > 4) e.enabled   = (parts[4] == "1");
                     if (parts.size() > 5) e.container = parts[5];
                     if (parts.size() > 6) e.procedure = parts[6];
                     if (parts.size() > 7) e.comment   = parts[7];
-                    if (parts.size() > 8) try { e.options = std::stoul(parts[8]); } catch (...) {}
+                    if (parts.size() > 8) try { e.options = static_cast<std::uint32_t>(std::stoul(parts[8])); } catch (...) {}
                 } else {
                     // Old format without timing (timing defaults to 0)
                     try { e.priority = static_cast<std::uint32_t>(std::stoi(parts[2])); } catch (...) {}

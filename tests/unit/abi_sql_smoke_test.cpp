@@ -174,3 +174,76 @@ TEST_CASE("ABI SQL: parse error on unsupported syntax") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+namespace {
+
+void write_dd_smoke(const fs::path& p, const std::string& body) {
+    std::ofstream f(p);
+    f << "# OpenADS Data Dictionary v1\n" << body;
+}
+
+void make_dbf0_smoke(const fs::path& path) {
+    std::vector<std::uint8_t> file;
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0] = 0x03;
+    const std::uint16_t hl = 32 + 32 + 1, rl = 1 + 10;
+    hdr[8]  = static_cast<std::uint8_t>( hl       & 0xFFu);
+    hdr[9]  = static_cast<std::uint8_t>((hl >> 8) & 0xFFu);
+    hdr[10] = static_cast<std::uint8_t>( rl       & 0xFFu);
+    hdr[11] = static_cast<std::uint8_t>((rl >> 8) & 0xFFu);
+    file.insert(file.end(), hdr.begin(), hdr.end());
+    std::array<std::uint8_t, 32> fd{};
+    std::memcpy(fd.data(), "NAME", 4);
+    fd[11] = 'C'; fd[16] = 10;
+    file.insert(file.end(), fd.begin(), fd.end());
+    file.push_back(0x0D);
+    file.push_back(0x1A);
+    std::ofstream(path, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+}
+
+int sql_count_smoke(ADSHANDLE hConn, const char* sql) {
+    ADSHANDLE stmt = 0;
+    if (AdsCreateSQLStatement(hConn, &stmt) != 0) return -1;
+    std::vector<UNSIGNED8> buf(std::strlen(sql) + 1);
+    std::memcpy(buf.data(), sql, buf.size());
+    ADSHANDLE cur = 0;
+    if (AdsExecuteSQLDirect(stmt, buf.data(), &cur) != 0) {
+        AdsCloseSQLStatement(stmt);
+        return -1;
+    }
+    UNSIGNED32 cnt = 0;
+    AdsGetRecordCount(cur, 0, &cnt);
+    AdsCloseSQLStatement(stmt);
+    return static_cast<int>(cnt);
+}
+
+} // namespace
+
+TEST_CASE("ABI SQL smoke: system.permissions zero-row for ungranted pair") {
+    const auto dir = fs::temp_directory_path() / "openads_sql_smoke_sysperm";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf0_smoke(dir / "a.dbf");
+    make_dbf0_smoke(dir / "b.dbf");
+    write_dd_smoke(dir / "test.add",
+                   "TABLE A=a.dbf\n"
+                   "TABLE B=b.dbf\n"
+                   "USER u1\n");
+
+    UNSIGNED8 addpath[512];
+    const auto ap = (dir / "test.add").string();
+    std::memcpy(addpath, ap.c_str(), ap.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(addpath, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    CHECK(sql_count_smoke(hConn,
+                          "SELECT * FROM system.permissions "
+                          "WHERE GRANTEE = 'u1' AND OBJ_NAME = 'B'") == 1);
+
+    AdsDisconnect(hConn);
+    fs::remove_all(dir, ec);
+}

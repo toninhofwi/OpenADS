@@ -278,7 +278,7 @@ TEST_CASE("AdsCreateTable: stamps the header last-update with today's date") {
 #else
     gmtime_r(&now, &tm_utc);
 #endif
-    char expected[16] = {0};
+    char expected[48] = {0};
     std::snprintf(expected, sizeof(expected), "%04d-%02d-%02d",
                   tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday);
 

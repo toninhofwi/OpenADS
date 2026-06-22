@@ -179,6 +179,11 @@ fn read_frame(stream: &mut TcpStream) -> Result<(u8, Vec<u8>)> {
         .read_exact(&mut header)
         .context("read frame header")?;
     let len = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+    if len > 16 * 1024 * 1024 {
+        return Err(anyhow::anyhow!(
+            "frame length {len} exceeds maximum limit of 16MB"
+        ));
+    }
     let opcode = header[4];
     let mut payload = vec![0u8; len];
     if len > 0 {

@@ -443,7 +443,7 @@ parse_cmp(Cursor& c, const std::string& sql) {
                 for (char ch : id)
                     uid.push_back(static_cast<char>(
                         std::toupper(static_cast<unsigned char>(ch))));
-                char datebuf[24] = {};
+                char datebuf[80] = {};
                 std::time_t t = std::time(nullptr);
                 std::tm tm_l{};
 #ifdef _WIN32
