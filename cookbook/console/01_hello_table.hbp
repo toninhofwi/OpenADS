@@ -1,0 +1,23 @@
+# Generic hbmk2 build script for the OpenADS cookbook -- NO hardcoded paths.
+#
+# Set these environment variables before building (build.cmd / build.sh do it):
+#   OPENADS_LIB     = folder that holds the OpenADS DLL + its import lib
+#   OPENADS_ACELIB  = import-lib base name without extension
+#                     (release builds: ace64 ; 64-bit plus builds: openace64)
+#
+# The toolchain (-comp / -cpu) is selected on the hbmk2 command line by
+# build.cmd / build.sh, so this file stays toolchain-neutral.
+#
+# Only the two link entries below differ from an ordinary Harbour project:
+#   -L${OPENADS_LIB}   points the linker at the OpenADS import lib
+#   -l${OPENADS_ACELIB}  links it instead of any other ACE-compatible lib
+# Everything else (-lrddads + the core RDDs) is the stock Harbour stack.
+
+01_hello_table.prg
+
+-lrddads
+-L${OPENADS_LIB}
+-l${OPENADS_ACELIB}
+-lrddcdx
+-lrddntx
+-lrddfpt

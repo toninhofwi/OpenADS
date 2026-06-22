@@ -1,0 +1,21 @@
+# Build / run artifacts -- never commit these.
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.ppo
+# Runtime data created by the examples (they re-create it on each run):
+*.db
+*.dbf
+*.cdx
+*.ntx
+*.fpt
+*.dbt
+*.adt
+*.adi
+*.adm
+# The ORM build.cmd GENERATES a .hbp next to each ORM example:
+orm/**/*.hbp
+# Local demo data folders the examples create:
+_demo_*/
