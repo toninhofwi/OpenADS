@@ -185,22 +185,25 @@ std::string encode_adt_key(std::uint16_t adt_type, const std::uint8_t* data,
         case ADT_TYPE_LOGICAL: {
             const unsigned char c = length > 0 ? data[0] : 0;
             const bool truthy = (c == 'T' || c == 't' || c == 'Y' || c == 'y' ||
-                                 c == '1');
+                                 c == '1' || c == 1);
             val = truthy ? 1.0 : 0.0;
             break;
         }
         case ADT_TYPE_MONEY: {
+            if (length < 8) break;
             std::int64_t raw = 0;
             std::memcpy(&raw, data, 8);
             return pack_double_key(static_cast<double>(raw));
         }
         case ADT_TYPE_DOUBLE: {
+            if (length < 8) break;
             double v;
             std::memcpy(&v, data, 8);
             return pack_double_key(v);
         }
         case ADT_TYPE_TIMESTAMP:
         case ADT_TYPE_MODTIME: {
+            if (length < 8) return pack_u64_key(0);
             // Index total-order: JDN in high dword, ms in low (on-disk is the
             // reverse — bytes 0..3 JDN, 4..7 ms).
             const std::uint32_t jdn = u32_le(data);

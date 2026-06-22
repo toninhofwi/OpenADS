@@ -26,7 +26,9 @@ void wipe_types_tmp() {
 
 void connect_local(ADSHANDLE* hConn, const fs::path& dir) {
     UNSIGNED8 srv[260]{};
-    std::memcpy(srv, dir.string().c_str(), dir.string().size());
+    const std::string dir_str = dir.string();
+    REQUIRE(dir_str.size() < sizeof(srv));
+    std::memcpy(srv, dir_str.c_str(), dir_str.size());
     REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, hConn)
             == AE_SUCCESS);
 }
