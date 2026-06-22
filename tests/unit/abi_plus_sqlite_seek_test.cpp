@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #if defined(OPENADS_WITH_SQLITE)
 #include <sqlite3.h>
