@@ -15,6 +15,7 @@ Each file is heavily commented and self-contained. Read them in order:
 | [`04_dbf_maintenance`](04_dbf_maintenance.prg) | intermediate | `DELETE` (mark) / `SET DELETED` / `RECALL` / `PACK`, with `UPPER()` keys |
 | [`05_sql`](05_sql.prg) | intermediate | run SQL on the engine with `AdsExecuteSQLDirect` — filtered `SELECT` + `ORDER BY`, `COUNT`/`SUM`, `DISTINCT`; read the cursor with `dbSkip` |
 | [`06_adt`](06_adt.prg) | intermediate | the engine's native **ADT** table type (`AdsSetFileType( ADS_ADT )`): create a multi-type table, round-trip numeric/char/date/logical values |
+| [`07_remote`](07_remote.prg) | intermediate | connect to a **remote** `openads_serverd` over TCP (`AdsConnect60` + a `tcp://host:port/dir` URI) and read a server-side table; same verbs, over the wire |
 
 ## Build & run
 
