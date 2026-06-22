@@ -6821,38 +6821,42 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
     std::string key;
-    // ADS_DOUBLEKEY (2): caller passed sizeof(double) raw bytes;
-    // engine indexes built from a field expression store ASCII-
-    // padded numerics (right-aligned, dec-padded). Convert the
-    // double to the same ASCII format using the active index's
-    // field schema so seek_key compares apples-to-apples.
-    if (u16KeyType == ADS_DOUBLEKEY && u16KeyLen == sizeof(double) &&
-        t->order() != nullptr && t->order()->index() != nullptr) {
+    (void)u16KeyType;
+    // Numeric seek keys arrive as sizeof(double) raw IEEE bytes. The ADS SDK
+    // names this ADS_DOUBLEKEY (2), but Harbour's rddads tags a numeric dbSeek
+    // with the field DATA type (ADS_STRING==4 in this ABI) — so gating on
+    // u16KeyType==ADS_DOUBLEKEY missed EVERY rddads numeric seek (the key fell
+    // through as 8 raw double bytes and never matched the stored ASCII key).
+    // Detect a double key by length + a numeric (ASCII-stored) active index
+    // field instead, and convert to the same right-aligned ASCII the index
+    // holds. Character / non-numeric indexes keep the raw-bytes path.
+    auto* dk_idx = (t->order() != nullptr) ? t->order()->index() : nullptr;
+    // Strip the `ALIAS->` qualifier the way the write side does
+    // (evaluate_index_expr -> strip_alias_qualifiers) so a tag built from
+    // `FIELD->ID` still resolves the field.
+    std::int32_t dk_fidx = (dk_idx != nullptr)
+        ? t->field_index(
+              openads::engine::strip_alias_qualifiers(dk_idx->expression()))
+        : -1;
+    bool dk_numeric = false;
+    if (dk_fidx >= 0) {
+        auto dkt = t->field_descriptor(
+            static_cast<std::uint16_t>(dk_fidx)).type;
+        dk_numeric = (dkt == openads::drivers::DbfFieldType::Numeric ||
+                      dkt == openads::drivers::DbfFieldType::Float);
+    }
+    if (dk_idx != nullptr && dk_numeric && u16KeyLen == sizeof(double)) {
         double dv = 0;
         std::memcpy(&dv, pucKey, sizeof(double));
-        auto* idx = t->order()->index();
-        std::uint16_t klen = idx->key_length();
-        // Format width matches the FIELD width (eg N,10,0 -> 10),
-        // not the index key_length: a stale key_length from an
-        // INDEX-on-empty-table run would otherwise produce a
-        // different right-aligned padding than evaluate_index_expr
-        // wrote, and seek_key would never find an exact match.
-        std::uint16_t fmt_w = klen;
-        std::uint16_t dec = 0;
-        // Strip the `ALIAS->` qualifier the way the write side does
-        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
-        // tag built from `FIELD->ID` never resolves the field, fmt_w
-        // stays at the stale key_length, and the numeric seek key is
-        // padded to a different width than the stored key.
-        std::int32_t fidx = t->field_index(
-            openads::engine::strip_alias_qualifiers(idx->expression()));
-        if (fidx >= 0) {
-            const auto& fd = t->field_descriptor(
-                static_cast<std::uint16_t>(fidx));
-            dec = static_cast<std::uint16_t>(fd.decimals);
-            if (fd.length > 0)
-                fmt_w = static_cast<std::uint16_t>(fd.length);
-        }
+        std::uint16_t klen = dk_idx->key_length();
+        // Format width matches the FIELD width (eg N,10,0 -> 10), not a stale
+        // index key_length (eg INDEX-on-empty-table), so the right-aligned
+        // padding equals what evaluate_index_expr wrote at build/sync time.
+        const auto& fd = t->field_descriptor(
+            static_cast<std::uint16_t>(dk_fidx));
+        std::uint16_t dec   = static_cast<std::uint16_t>(fd.decimals);
+        std::uint16_t fmt_w = (fd.length > 0)
+            ? static_cast<std::uint16_t>(fd.length) : klen;
         char buf[64];
         if (dec > 0) {
             std::snprintf(buf, sizeof(buf), "%*.*f",
