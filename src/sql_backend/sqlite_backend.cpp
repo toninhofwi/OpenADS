@@ -90,6 +90,7 @@ util::Error sqlite_error(sqlite3* db, const char* context) {
                        ""};
 }
 
+#if defined(OPENADS_WITH_SQLCIPHER)
 namespace {
 
 util::Result<void> exec_pragma(sqlite3* db, const std::string& sql) {
@@ -114,6 +115,7 @@ std::string escape_pragma_key(const std::string& key) {
 }
 
 } // namespace
+#endif  // OPENADS_WITH_SQLCIPHER
 
 util::Result<void> apply_cipher_key(sqlite3* db, const std::string& key) {
     if (key.empty()) return util::Result<void>{};
