@@ -173,7 +173,7 @@ util::Result<SqliteConnection> SqliteConnection::open(const SqliteUri& uri) {
         }
     }
     conn.impl_->db = raw;
-    return std::move(conn);
+    return conn;
 #else
     (void)uri;
     return util::Error{5004, 0,
