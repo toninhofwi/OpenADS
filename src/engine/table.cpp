@@ -1039,6 +1039,33 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
         return false;
     }
     bool exact = r.value().hit == drivers::SeekHit::Exact;
+    // SET DELETED ON: a seek must not report a deleted row as found.
+    // goto_top/goto_bottom/skip already honor show_deleted() but seek_key
+    // did not (the B+tree match landed on a deleted row and was returned
+    // as found). Skip forward over deleted records at the landing, then
+    // re-derive `exact` from the row we actually land on (Clipper/DBFCDX:
+    // if the only matching rows are deleted, Found() is .F. and the cursor
+    // sits on the next live record or Eof).
+    if (!openads::abi::show_deleted()) {
+        std::string del_key = key;
+        del_key.resize(idx->key_length(), ' ');
+        while (r.value().positioned) {
+            if (auto ld = load_record_(r.value().recno); !ld) return ld.error();
+            if (!is_deleted()) break;
+            r = idx->next();
+            if (!r) return r.error();
+        }
+        if (!r.value().positioned) {
+            state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                    : State::Eof;
+            recno_ = 0;
+            last_seek_found_ = false;
+            return false;
+        }
+        std::string ck = idx->current_key();
+        ck.resize(del_key.size(), ' ');
+        exact = (ck == del_key);
+    }
     // DESCEND order treats the FIRST match in walk direction as
     // the LAST entry in the equal-key group when sorted ASC. Walk
     // duplicates regardless of `last` flag.
@@ -1050,19 +1077,14 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
     // the last matching entry; load_record_ syncs the table buffer.
     if (walk_to_last && exact) {
         std::string padded_key = key;
-        if (padded_key.size() < idx->key_length())
-            padded_key.append(idx->key_length() - padded_key.size(), ' ');
-        if (padded_key.size() > idx->key_length())
-            padded_key.resize(idx->key_length());
+        padded_key.resize(idx->key_length(), ' ');
         std::uint32_t last_recno = r.value().recno;
         while (true) {
             auto step = idx->next();
             if (!step || !step.value().positioned) break;
             std::string ck = idx->current_key();
-            if (ck.size() < padded_key.size())
-                ck.append(padded_key.size() - ck.size(), ' ');
-            if (std::memcmp(ck.data(), padded_key.data(),
-                             padded_key.size()) != 0) {
+            ck.resize(padded_key.size(), ' ');
+            if (ck != padded_key) {
                 // Past the equal-key run — step back one to leave
                 // cursor on the last matching entry.
                 (void)idx->prev();
@@ -1072,6 +1094,29 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
         }
         auto load = load_record_(last_recno);
         if (!load) return load.error();
+        if (!openads::abi::show_deleted()) {
+            while (is_deleted()) {
+                auto step = idx->prev();
+                if (!step || !step.value().positioned) {
+                    state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                            : State::Eof;
+                    recno_ = 0;
+                    last_seek_found_ = false;
+                    return false;
+                }
+                std::string ck = idx->current_key();
+                ck.resize(padded_key.size(), ' ');
+                if (ck != padded_key) {
+                    state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                            : State::Eof;
+                    recno_ = 0;
+                    last_seek_found_ = false;
+                    return false;
+                }
+                if (auto ld = load_record_(step.value().recno); !ld)
+                    return ld.error();
+            }
+        }
         last_seek_found_ = true;
         return true;
     }
