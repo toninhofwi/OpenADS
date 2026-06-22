@@ -59,8 +59,6 @@ add_library(openads_core STATIC
     network/mg_wire.cpp
     sql_backend/uri.cpp
     sql_backend/sql_common.cpp
-    sql_backend/sqlite_connection.cpp
-    sql_backend/sqlite_backend.cpp
 )
 
 if(OPENADS_WITH_POSTGRESQL)
@@ -128,6 +126,14 @@ if(OPENADS_WITH_TLS)
 endif()
 
 if(OPENADS_WITH_SQLITE)
+    # Gate the SQLite backend sources too: with OPENADS_WITH_SQLITE=OFF the
+    # FetchContent that provides sqlite3.h is skipped, so compiling these
+    # unconditionally fails with a missing-header error (reported by a
+    # downstream OFF build). Only build them when the backend is enabled.
+    target_sources(openads_core PRIVATE
+        sql_backend/sqlite_connection.cpp
+        sql_backend/sqlite_backend.cpp
+    )
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_SQLITE=1)
     target_link_libraries(openads_core PRIVATE openads_sqlite3)
 endif()
