@@ -31,11 +31,13 @@ $c = api_require_connection($ddName);
 // Build WHERE conditions array.
 $conditions = [];
 
-// AOF filter expression — accepted as-is (user is authenticated; same trust
-// level as the SQL console).  Strip leading/trailing WHERE keyword if present.
+// AOF filter expression — strip any leading WHERE keyword, then validate
+// before splicing into the query.  AOF (ad-hoc filter) is admin-only, but
+// we still sanitize to prevent injection via CSRF or a compromised session.
 if ($aof !== '') {
     $aofStripped = preg_replace('/^\s*WHERE\s+/i', '', $aof);
     if ($aofStripped !== '') {
+        api_validate_aof_expression($aofStripped);
         $conditions[] = '(' . $aofStripped . ')';
     }
 }
