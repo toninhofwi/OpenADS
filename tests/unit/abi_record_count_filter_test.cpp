@@ -183,6 +183,6 @@ TEST_CASE("AdsSetRelation returns AE_FUNCTION_NOT_AVAILABLE") {
     // AdsSetRelation is not yet implemented. Verify it returns the proper
     // "not available" error code so callers are not silently misled.
     UNSIGNED32 rc = AdsSetRelation(0, 0, nullptr);
-    CHECK(rc == AE_FUNCTION_NOT_AVAILABLE);
-    CHECK(rc != AE_SUCCESS);
+    CHECK(rc == openads::AE_FUNCTION_NOT_AVAILABLE);
+    CHECK(rc != openads::AE_SUCCESS);
 }

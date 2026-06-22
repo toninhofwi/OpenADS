@@ -1294,8 +1294,10 @@ DbfTypeSpec dbf_type_for(const std::string& name) {
         return {'D', 8, 0, false};
     if (eq("Memo") || eq("NMemo"))
         return {'M', 10, 0, true};
-    if (eq("Binary") || eq("Image"))
-        return {'Q', 10, 0, true};
+    if (eq("Binary"))
+        return {'Q', 9, 0, true};
+    if (eq("Image"))
+        return {'I', 9, 0, true};
     if (eq("Integer") || eq("LongLong"))
         return {'N', 0, 0, false};
     if (eq("Double") || eq("CurDouble"))
@@ -1391,6 +1393,7 @@ AdtFieldSpec adt_spec_for(const FieldOut& f) {
         case 'D': return { 3, 4,          0,     false};  // DATE (JDN uint32)
         case 'M': return { 5, 9,          0,     true };  // MEMO  (9-byte ref)
         case 'Q': return { 6, 9,          0,     true };  // BINARY (9-byte ref)
+        case 'I': return { 7, 9,          0,     true };  // IMAGE  (9-byte ref)
         case 'N':
             if (f.dec > 0) return {10, 8, f.dec, false}; // DOUBLE
             return              {11, 4, 0,     false};     // INTEGER
@@ -1504,6 +1507,14 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
             fd[135] = static_cast<std::uint8_t>(sp.adt_length & 0xFFu);
             fd[136] = static_cast<std::uint8_t>((sp.adt_length >> 8) & 0xFFu);
             fd[137] = sp.adt_dec;
+            // ADT type 15 (AUTOINC): init next=1, step=1 in descriptor
+            if (sp.adt_type == 15u) {
+                fd[139] = 1;   // next value = 1
+                fd[140] = 0;
+                fd[141] = 0;
+                fd[142] = 0;
+                fd[143] = 1;   // step = 1
+            }
             fld_off = static_cast<std::uint16_t>(fld_off + sp.adt_length);
         }
 
@@ -2389,6 +2400,14 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     *pusType = map_field_type(t->field_descriptor(idx).type);
+    // ADT IMAGE (raw type 7) vs BINARY (raw type 6): both map to
+    // DbfFieldType::Binary internally, but the ABI type differs.
+    const auto& fd = t->field_descriptor(idx);
+    if (fd.type == openads::drivers::DbfFieldType::Binary) {
+        auto raw = static_cast<unsigned char>(fd.raw_type);
+        if (raw == 7u) *pusType = static_cast<UNSIGNED16>(ADS_IMAGE);
+        else if (raw == 6u) *pusType = static_cast<UNSIGNED16>(ADS_BINARY);
+    }
     return ok();
 }
 
@@ -2698,7 +2717,7 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
         }
         *pulRecordCount = pass;
     } else if (bFilterOption == ADS_RESPECTFILTERS &&
-               !openads::abi::show_deleted()) {
+               !openads::engine::show_deleted()) {
         // ADS_RESPECTFILTERS: count live records only when deleted records
         // are hidden (SET DELETED ON). Walk the raw record range, skipping
         // deleted rows, then restore the cursor to its original position.
@@ -3624,6 +3643,14 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
                            reinterpret_cast<const char*>(pucField),
                            bValue ? "1" : "0"))
             return ok();
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname, bValue ? "1" : "0");
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
@@ -3649,6 +3676,16 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
                            reinterpret_cast<const char*>(pucField),
                            std::string(nbuf)))
             return ok();
+    }
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        char nbuf[64];
+        std::snprintf(nbuf, sizeof(nbuf), "%.17g", dValue);
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname, std::string(nbuf));
+        if (!r) return fail(r.error());
+        return ok();
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");

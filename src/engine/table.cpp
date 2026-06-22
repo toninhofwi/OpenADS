@@ -30,6 +30,23 @@ namespace openads::abi { inline bool show_deleted() noexcept {
 
 namespace openads::engine {
 
+namespace {
+
+void write_adt_blob_ref(std::uint8_t* dst, std::uint32_t block_no,
+                        std::uint32_t data_len) noexcept {
+    dst[0] = static_cast<std::uint8_t>( block_no        & 0xFFu);
+    dst[1] = static_cast<std::uint8_t>((block_no >>  8) & 0xFFu);
+    dst[2] = static_cast<std::uint8_t>((block_no >> 16) & 0xFFu);
+    dst[3] = static_cast<std::uint8_t>((block_no >> 24) & 0xFFu);
+    dst[4] = static_cast<std::uint8_t>( data_len        & 0xFFu);
+    dst[5] = static_cast<std::uint8_t>((data_len >>  8) & 0xFFu);
+    dst[6] = static_cast<std::uint8_t>((data_len >> 16) & 0xFFu);
+    dst[7] = static_cast<std::uint8_t>((data_len >> 24) & 0xFFu);
+    dst[8] = 0x00;
+}
+
+} // namespace
+
 util::Result<Table> Table::open(const std::string& path,
                                 TableType type,
                                 OpenMode mode,
@@ -620,22 +637,32 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
 
     auto snap = snapshot_index_keys_();
 
-    // Memo fields write to the memo store, then store the resulting
-    // block number as a right-aligned ASCII string in the record.
-    if (f.type == drivers::DbfFieldType::Memo) {
+    // Memo/Binary fields write to the memo store, then store the
+    // resulting block number in the record. ADT uses a 9-byte binary
+    // reference (block_no u32 LE + data_len u32 LE + 0x00); DBF uses
+    // a right-aligned ASCII string.
+    if (f.type == drivers::DbfFieldType::Memo ||
+        (f.type == drivers::DbfFieldType::Binary && f.length == 9)) {
         if (!memo_) {
             return util::Error{5004, 0, "memo store not attached", ""};
         }
         auto wm = memo_->write(v);
         if (!wm) return wm.error();
-        char buf[16];
-        int n = std::snprintf(buf, sizeof(buf), "%*u",
-                              static_cast<int>(f.length),
-                              static_cast<unsigned>(wm.value()));
-        if (n < 0 || static_cast<std::size_t>(n) > f.length) {
-            return util::Error{5000, 0, "memo block number overflows field", ""};
+        std::uint8_t* dst = record_buf_.data() + f.record_offset;
+        if (f.length == 9) {
+            write_adt_blob_ref(dst, wm.value(),
+                               static_cast<std::uint32_t>(v.size()));
+        } else {
+            char buf[16];
+            int n = std::snprintf(buf, sizeof(buf), "%*u",
+                                  static_cast<int>(f.length),
+                                  static_cast<unsigned>(wm.value()));
+            if (n < 0 || static_cast<std::size_t>(n) > f.length) {
+                return util::Error{5000, 0,
+                                   "memo block number overflows field", ""};
+            }
+            std::memcpy(dst, buf, f.length);
         }
-        std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
         if (auto wb = writeback_record_(); !wb) return wb.error();
         return sync_all_indexes_(snap);
     }
@@ -695,7 +722,8 @@ Table::set_field_binary(std::uint16_t idx, const std::string& payload,
         return util::Error{5063, 0, "field index out of range", ""};
     }
     const auto& f = driver_->fields().at(idx);
-    if (f.type != drivers::DbfFieldType::Memo) {
+    if (f.type != drivers::DbfFieldType::Memo &&
+        !(f.type == drivers::DbfFieldType::Binary && f.length == 9)) {
         return util::Error{5063, 0, "field is not a memo column", ""};
     }
     if (!memo_) {
@@ -704,14 +732,20 @@ Table::set_field_binary(std::uint16_t idx, const std::string& payload,
     auto snap = snapshot_index_keys_();
     auto wm = memo_->write_typed(payload, type);
     if (!wm) return wm.error();
-    char buf[16];
-    int n = std::snprintf(buf, sizeof(buf), "%*u",
-                          static_cast<int>(f.length),
-                          static_cast<unsigned>(wm.value()));
-    if (n < 0 || static_cast<std::size_t>(n) > f.length) {
-        return util::Error{5000, 0, "memo block number overflows field", ""};
+    std::uint8_t* dst = record_buf_.data() + f.record_offset;
+    if (f.length == 9) {
+        write_adt_blob_ref(dst, wm.value(),
+                           static_cast<std::uint32_t>(payload.size()));
+    } else {
+        char buf[16];
+        int n = std::snprintf(buf, sizeof(buf), "%*u",
+                              static_cast<int>(f.length),
+                              static_cast<unsigned>(wm.value()));
+        if (n < 0 || static_cast<std::size_t>(n) > f.length) {
+            return util::Error{5000, 0, "memo block number overflows field", ""};
+        }
+        std::memcpy(dst, buf, f.length);
     }
-    std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
     if (auto wb = writeback_record_(); !wb) return wb.error();
     return sync_all_indexes_(snap);
 }

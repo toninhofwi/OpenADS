@@ -14,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -1791,7 +1792,36 @@ void Server::session_loop(Socket s) {
                 if (!tbl) { reply = err("SetField: lookup failed"); break; }
                 std::int32_t fi = tbl->field_index(fname);
                 if (fi < 0) { reply = err("SetField: column not found"); break; }
-                auto r = tbl->set_field(static_cast<std::uint16_t>(fi), val);
+                const auto& fdesc =
+                    tbl->field_descriptor(static_cast<std::uint16_t>(fi));
+                util::Result<void> r;
+                auto fi_u = static_cast<std::uint16_t>(fi);
+                switch (fdesc.type) {
+                    case drivers::DbfFieldType::Logical: {
+                        bool lv = !val.empty() &&
+                            (val[0] == '1' || val[0] == 'T' || val[0] == 't' ||
+                             val[0] == 'Y' || val[0] == 'y');
+                        r = tbl->set_field(fi_u, lv);
+                        break;
+                    }
+                    case drivers::DbfFieldType::Integer:
+                    case drivers::DbfFieldType::AutoInc:
+                    case drivers::DbfFieldType::Double:
+                    case drivers::DbfFieldType::ShortInt:
+                    case drivers::DbfFieldType::Currency:
+                    case drivers::DbfFieldType::AdtMoney:
+                    case drivers::DbfFieldType::Time:
+                    case drivers::DbfFieldType::Numeric:
+                        try {
+                            r = tbl->set_field(fi_u, std::stod(val));
+                        } catch (...) {
+                            r = tbl->set_field(fi_u, val);
+                        }
+                        break;
+                    default:
+                        r = tbl->set_field(fi_u, val);
+                        break;
+                }
                 if (!r) { reply = err("SetField: write failed"); break; }
                 reply.opcode = Opcode::SetFieldAck;
                 break;
