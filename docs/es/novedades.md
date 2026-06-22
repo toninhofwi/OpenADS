@@ -36,6 +36,28 @@ de parches estructurales (F1–F7) y verificaciones a nivel de
 registro (R1–R3), reforzando las garantías de integridad para
 archivos `.adt` producidos por SAP Advantage.
 
+### Creación, Lectura, Escritura y Búsqueda en Índice ADT/ADI Nativo
+
+OpenADS ahora puede operar de extremo a extremo con archivos
+nativos `.adt` / `.adi` / `.adm`:
+
+- **Crear** — `AdsCreateTable(ADS_ADT)` escribe una cabecera de
+  tabla válida, descriptores de campo y un almacén de memo
+  `.adm` opcional.
+- **Escribir** — `AdsAppendRecord` / `AdsWriteRecord` persisten
+  filas y payloads de memo.
+- **Leer** — Reabrir, obtener campos, conteo de registros,
+  ida y vuelta de memo.
+- **Índice** — `AdsCreateIndex61` construye bolsas `.adi`
+  (primer tag vía `AdiIndex::create`, tags adicionales vía
+  `add_tag`).
+- **Buscar** — `AdsSeek` en claves ADI de carácter y numéricas.
+- **AUTOINC** — contador sembrado desde filas existentes al
+  abrir; bytes 139–143 del descriptor permanecen en cero en
+  disco.
+- **Layout de memo ADM** — bloques de 8 bytes con un prefijo
+  de metadatos de 1024 bytes.
+
 ### Ruta de Escritura ADI
 
 El driver de índices ADI ahora soporta operaciones de escritura
@@ -209,8 +231,12 @@ ARIES-lite.
 
 ## Pruebas
 
-- **517 pruebas unitarias** pasando en todas las plataformas.
-- Nuevos archivos de prueba para SQLite read/seek, numeric alias
-  seek, record-count filter, transaction rollback append,
-  empty-table navigation y deleted-record navigation.
+- **564 pruebas unitarias** pasando en todas las plataformas
+  (48 127 aserciones).
+- Nuevos archivos de prueba: `abi_adi_create_test.cpp` (creación
+  ADI, multi-tag, skip/seek poblado) y
+  `abi_adt_scope_validation_test.cpp` (creación desde cero,
+  búsqueda dual-tag, ida y vuelta de memo, stress append, wire
+  remoto, subproceso serverd).
 - Smoke test de índices NTX de Wilson agregado.
+- Demo de Harbour en `examples/adt-native/` (por glokcode).

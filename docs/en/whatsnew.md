@@ -35,6 +35,24 @@ patches (F1–F7) and record-level checks (R1–R3), strengthening
 the integrity guarantees for `.adt` files produced by SAP
 Advantage.
 
+### Native ADT/ADI Create, Read, Write, and Index Seek
+
+OpenADS can now operate end-to-end on native `.adt` / `.adi` /
+`.adm` files:
+
+- **Create** — `AdsCreateTable(ADS_ADT)` writes a valid table
+  header, field descriptors, and an optional `.adm` memo store.
+- **Write** — `AdsAppendRecord` / `AdsWriteRecord` persist rows
+  and memo payloads.
+- **Read** — Re-open, field get, record count, memo round-trip.
+- **Index** — `AdsCreateIndex61` builds `.adi` bags (first tag
+  via `AdiIndex::create`, additional tags via `add_tag`).
+- **Seek** — `AdsSeek` on character and numeric ADI keys.
+- **AUTOINC** — counter seeded from existing rows at open time;
+  descriptor tail bytes 139–143 stay zero on disk.
+- **ADM memo layout** — 8-byte blocks with a 1024-byte metadata
+  prefix.
+
 ### ADI Write Path
 
 The ADI index driver now supports write operations — `insert`,
@@ -191,8 +209,12 @@ records, completing the ARIES-lite recovery model.
 
 ## Testing
 
-- **517 unit tests** passing across all platforms.
-- New test files for SQLite read/seek, numeric alias seek,
-  record-count filter, transaction rollback append, empty-table
-  navigation, and deleted-record navigation.
+- **564 unit tests** passing across all platforms (48 127
+  assertions).
+- New test files: `abi_adi_create_test.cpp` (ADI create,
+  multi-tag, populated skip/seek) and
+  `abi_adt_scope_validation_test.cpp` (create-from-zero, dual-tag
+  seek, memo round-trip, stress append, remote wire, serverd
+  subprocess).
 - Wilson NTX index smoke test added.
+- Harbour demo in `examples/adt-native/` (by glokcode).
