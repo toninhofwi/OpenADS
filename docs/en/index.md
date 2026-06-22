@@ -45,6 +45,9 @@ Current release: **v1.0.0-rc31**.
   (rc19 M12.22 / M12.23).
 - **[SQLite backend](sqlite-backend/)** — open and drive a SQLite
   database through ACE / rddads via a `sqlite://` connection URI.
+- **[Stored procedures](stored-procedures/)** — custom AEP
+  procedures (external DLL/SO) and the built-in `sp_*` Data
+  Dictionary procedures.
 - **[Service deployment](service-deployment/)** — run
   `openads_serverd` as a Windows Service / systemd unit / macOS
   launchd plist (rc14).
