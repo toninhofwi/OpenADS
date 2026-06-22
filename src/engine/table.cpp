@@ -523,9 +523,20 @@ util::Result<void> Table::skip(std::int32_t delta) {
     if (auto r = load_record_(static_cast<std::uint32_t>(target)); !r) {
         return r.error();
     }
-    if (filter_) {
+    // Step over rows the cursor must not land on: deleted rows when
+    // SET DELETED is ON (show_deleted() == false) and rows rejected by
+    // an active filter. The index-order path above already skips
+    // deleted rows; the natural-order path must do the same.
+    const bool skip_deleted = !openads::abi::show_deleted();
+    auto must_skip = [&]() -> bool {
+        if (state_ != State::Positioned) return false;
+        if (skip_deleted && is_deleted()) return true;
+        if (filter_ && !filter_(*this)) return true;
+        return false;
+    };
+    if (skip_deleted || filter_) {
         std::int64_t step = (delta >= 0) ? 1 : -1;
-        while (state_ == State::Positioned && !filter_(*this)) {
+        while (must_skip()) {
             std::int64_t nt = static_cast<std::int64_t>(recno_) + step;
             if (nt < 1) { state_ = State::Bof; recno_ = 0; return {}; }
             if (nt > static_cast<std::int64_t>(n)) {
