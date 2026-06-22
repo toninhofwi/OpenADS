@@ -2377,7 +2377,7 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
     return ok();
 }
 
-UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
+UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
                              UNSIGNED32* pulRecordCount) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -2419,6 +2419,20 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
             ++pass;
         }
         *pulRecordCount = pass;
+    } else if (bFilterOption == ADS_RESPECTFILTERS &&
+               !openads::abi::show_deleted()) {
+        // ADS_RESPECTFILTERS: count live records only when deleted records
+        // are hidden (SET DELETED ON). Walk the raw record range, skipping
+        // deleted rows, then restore the cursor to its original position.
+        const std::uint32_t saved = t->recno();
+        std::uint32_t rc   = t->record_count();
+        std::uint32_t live = 0;
+        for (std::uint32_t r = 1; r <= rc; ++r) {
+            if (auto g = t->goto_record(r); !g) continue;
+            if (!t->is_deleted()) ++live;
+        }
+        t->goto_record(saved);
+        *pulRecordCount = live;
     } else {
         *pulRecordCount = t->record_count();
     }
@@ -14156,7 +14170,9 @@ UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE h, double pos) {
     if (!r) return fail(r.error());
     return ok();
 }
-UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+// Not yet implemented — return AE_FUNCTION_NOT_AVAILABLE so callers know to
+// use a workaround rather than silently getting no relation following.
+UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
 UNSIGNED32 AdsSetScopedRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetServerType(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
