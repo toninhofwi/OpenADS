@@ -738,7 +738,8 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
         } else if (nkey.size() == 8u) {
             // 8 bytes may be CDX-style space-padded ASCII, not a packed key.
             bool printable = true;
-            for (unsigned char c : nkey) {
+            for (char ch : nkey) {
+                unsigned char c = static_cast<unsigned char>(ch);
                 if (c != ' ' && (c < 0x30 || c > 0x39) && c != '.' && c != '-' &&
                     c != '+') {
                     printable = false;
@@ -1387,12 +1388,12 @@ void write_adi_tag_directory_page(AdiIndex::Page& pg,
     pg.fill(0);
     set_u16_le(pg.data(), ADI_LVL_TAGDIR);
     set_u16_le(pg.data() + 2, 1);
-    for (int i = 4; i < 12; ++i) pg[i] = 0xFF;
+    for (std::size_t i = 4; i < 12; ++i) pg[i] = 0xFF;
     if (cp.adt_hdr_len >= 528u) {
         set_u16_le(pg.data() + 12,
                    static_cast<std::uint16_t>(cp.adt_hdr_len - 528u));
     }
-    for (int i = 14; i < 20; ++i) pg[i] = 0xFF;
+    for (std::size_t i = 14; i < 20; ++i) pg[i] = 0xFF;
     pg[20] = 0x20;
     pg[21] = 0x08;
     pg[22] = 0x08;
