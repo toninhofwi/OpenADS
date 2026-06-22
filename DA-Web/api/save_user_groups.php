@@ -36,14 +36,15 @@ if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
 try {
     $conn = AdsConnection::connect($opts);
 
-    // Current groups
+    // Current groups — filter in PHP (padded CHAR / case-safe)
     $current = [];
     $qUser = api_sql_quote($userName);
     $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroupmembers WHERE USER_NAME = '$qUser'");
     while ($row = $stmt->fetchAssoc()) {
-        $g = $row['GROUP_NAME'] ?? '';
+        $g = trim((string)($row['GROUP_NAME'] ?? $row['Group_Name'] ?? ''));
         if ($g !== '') $current[] = $g;
     }
+    $stmt->close();
 
     // Filter out DB: built-in groups — they are managed by SAP's per-user cipher
     // and cannot be persistently changed via OpenADS (no XOR token encoding support).
