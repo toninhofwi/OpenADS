@@ -15,10 +15,13 @@ de banco de dados compatível com ADS. Funciona como
 fazem link com `contrib/rddads` continuam funcionando sem
 recompilar.
 
-Release atual: **v1.0.0-rc29**.
+Release atual: **v1.0.0-rc31**.
 
 ## Conteúdo
 
+- **[Novidades](novidades/)** — resumo das mudanças desde
+  v1.0.0-rc29 (driver SQLite, triggers, DA-Web, escrita ADI, e
+  mais).
 - **[Como contribuir](contribuindo/)** — build, PRs, política de
   protocolo paralelo e checklist.
 - **[Primeiros passos](primeiros-passos/)** — instalação,

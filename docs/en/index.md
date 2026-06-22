@@ -14,10 +14,13 @@ for the Advantage Client Engine (`ace32.dll` / `ace64.dll` /
 `libace.so`) — Harbour / Clipper applications that link against
 `contrib/rddads` keep working without recompilation.
 
-Current release: **v1.0.0-rc29**.
+Current release: **v1.0.0-rc31**.
 
 ## What's in here
 
+- **[What's New](whatsnew/)** — summary of changes since
+  v1.0.0-rc29 (SQLite driver, triggers, DA-Web, ADI write, and
+  more).
 - **[Getting started](getting-started/)** — install, first build,
   smoke test.
 - **[Architecture](architecture/)** — five-layer architecture

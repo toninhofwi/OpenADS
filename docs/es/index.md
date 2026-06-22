@@ -15,10 +15,13 @@ directo** del Advantage Client Engine (`ace32.dll` /
 que enlazan contra `contrib/rddads` siguen funcionando sin
 recompilar.
 
-Release actual: **v1.0.0-rc29**.
+Release actual: **v1.0.0-rc31**.
 
 ## Contenido
 
+- **[Novedades](novedades/)** — resumen de cambios desde
+  v1.0.0-rc29 (driver SQLite, triggers, DA-Web, escritura ADI,
+  y más).
 - **[Primeros pasos](primeros-pasos/)** — instalación, primer
   build, smoke test.
 - **[Arquitectura](arquitectura/)** — arquitectura de cinco
