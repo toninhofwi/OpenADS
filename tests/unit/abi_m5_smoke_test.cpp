@@ -96,7 +96,7 @@ TEST_CASE("ABI M5 smoke: BeginTransaction + update + Rollback restores the origi
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("ABI M5 smoke: AppendRecord inside tx + Rollback marks the appended record deleted") {
+TEST_CASE("ABI M5 smoke: AppendRecord inside tx + Rollback removes the appended record") {
     const auto dir = fs::temp_directory_path() / "openads_m5_abi_rollback_append";
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -124,15 +124,15 @@ TEST_CASE("ABI M5 smoke: AppendRecord inside tx + Rollback marks the appended re
 
     REQUIRE(AdsRollbackTransaction(hConn) == 0);
 
-    // Record count is still 2 (we don't truncate), but recno 2 is now
-    // marked deleted.
+    // ADS leaves no trace of a rolled-back AppendRecord: the row is
+    // physically dropped, so RECCOUNT returns to its pre-transaction
+    // value and only the baseline (live) record remains.
     REQUIRE(AdsGetRecordCount(hTable, 0, &rc) == 0);
-    CHECK(rc == 2);
+    CHECK(rc == 1);
     REQUIRE(AdsGotoTop(hTable) == 0);
-    REQUIRE(AdsSkip(hTable, 1) == 0);
     UNSIGNED16 deleted = 0;
     REQUIRE(AdsIsRecordDeleted(hTable, &deleted) == 0);
-    CHECK(deleted == 1);
+    CHECK(deleted == 0);
 
     REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
