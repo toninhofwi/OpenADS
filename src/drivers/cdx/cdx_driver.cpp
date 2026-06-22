@@ -261,6 +261,32 @@ util::Result<void> CdxDriver::zap() {
     return file_.sync();
 }
 
+util::Result<bool> CdxDriver::truncate_trailing(std::uint32_t recno) {
+    if (mode_ == DriverOpenMode::ReadOnly) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (recno == 0) return false;
+    // Hold the same header lock the append path uses, then re-read the
+    // on-disk count so a concurrent append is observed.
+    auto lk = acquire_with_retry_(file_, 0, 32);
+    if (!lk) return lk.error();
+    if (auto rh = refresh_record_count_(); !rh) return rh.error();
+    if (recno != rec_count_) {
+        // Another connection appended above this record — it is no
+        // longer trailing, so it can't be popped. Caller soft-deletes.
+        return false;
+    }
+    rec_count_ = recno - 1;
+    if (auto r = rewrite_header_(); !r) return r.error();
+    // EOF marker right after the last surviving record.
+    std::uint64_t eof_off = static_cast<std::uint64_t>(hdr_len_) +
+                            static_cast<std::uint64_t>(rec_count_) *
+                            static_cast<std::uint64_t>(rec_len_);
+    std::uint8_t eof = 0x1A;
+    if (auto w = file_.write_at(eof_off, &eof, 1); !w) return w.error();
+    return true;
+}
+
 util::Result<std::uint32_t>
 CdxDriver::bump_autoinc(std::uint16_t field_index) {
     if (field_index >= fields_.size()) {

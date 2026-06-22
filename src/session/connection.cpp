@@ -259,17 +259,19 @@ util::Result<void> Connection::rollback_tx() {
                 (void)drv->write_record_raw(k.recno, bytes.data(), bytes.size());
             }
         });
+    // Undo appends: physically pop the trailing rows (de-indexing them)
+    // so RECCOUNT returns to its pre-transaction value, the way ADS
+    // leaves no trace of a rolled-back AppendRecord. Group by table so
+    // each table peels its rows high-to-low in one pass.
+    std::unordered_map<Handle, std::vector<std::uint32_t>> appends_by_table;
     tx_.for_each_append([&](const engine::Tx::RecordKey& k) {
-        auto it = tables_.find(static_cast<Handle>(k.table));
-        if (it == tables_.end()) return;
-        auto* drv = it->second->driver();
-        if (!drv) return;
-        auto rec = drv->read_record_raw(k.recno);
-        if (!rec) return;
-        auto buf = std::move(rec).value();
-        openads::drivers::set_record_deleted(buf.data(), buf.size(), true);
-        (void)drv->write_record_raw(k.recno, buf.data(), buf.size());
+        appends_by_table[static_cast<Handle>(k.table)].push_back(k.recno);
     });
+    for (auto& [h, recnos] : appends_by_table) {
+        auto it = tables_.find(h);
+        if (it == tables_.end()) continue;
+        (void)it->second->rollback_appends(std::move(recnos));
+    }
     if (auto r = tx_log_.append_abort(tx_.id()); !r) return r.error();
     for (auto& [h, holder] : tables_) {
         (void)h;
@@ -304,22 +306,42 @@ Connection::rollback_to_savepoint(const std::string& name) {
         return util::Error{5000, 0, "savepoint not found", name};
     }
     const auto& ops = tx_.ops();
+    // Collect the appends made after the savepoint, per table. They are
+    // de-indexed and physically removed first (using their current
+    // bytes for the index keys), so RECCOUNT drops just like a full
+    // rollback — and so an in-place update op on the same row isn't
+    // written back over a row we're about to delete.
+    std::unordered_map<Handle, std::vector<std::uint32_t>> appends_by_table;
+    std::unordered_set<std::uint64_t> appended_keys;
+    auto rk = [](Handle h, std::uint32_t r) {
+        return (static_cast<std::uint64_t>(h) << 32) | r;
+    };
+    for (std::size_t i = idx; i < ops.size(); ++i) {
+        const auto& op = ops[i];
+        if (!op.is_append) continue;
+        appends_by_table[static_cast<Handle>(op.table)].push_back(op.recno);
+        appended_keys.insert(rk(static_cast<Handle>(op.table), op.recno));
+    }
+    for (auto& [h, recnos] : appends_by_table) {
+        auto it = tables_.find(h);
+        if (it != tables_.end()) {
+            (void)it->second->rollback_appends(std::move(recnos));
+        }
+    }
+    // Revert in-place updates newest-first, skipping rows that were
+    // appended after the savepoint (already physically gone).
     for (std::size_t i = ops.size(); i > idx; --i) {
         const auto& op = ops[i - 1];
+        if (op.is_append) continue;
+        if (appended_keys.count(rk(static_cast<Handle>(op.table), op.recno))) {
+            continue;
+        }
         auto it = tables_.find(static_cast<Handle>(op.table));
         if (it == tables_.end()) continue;
         auto* drv = it->second->driver();
         if (!drv) continue;
-        if (op.is_append) {
-            auto rec = drv->read_record_raw(op.recno);
-            if (!rec) continue;
-            auto buf = std::move(rec).value();
-            openads::drivers::set_record_deleted(buf.data(), buf.size(), true);
-            (void)drv->write_record_raw(op.recno, buf.data(), buf.size());
-        } else {
-            (void)drv->write_record_raw(op.recno,
-                                        op.before.data(), op.before.size());
-        }
+        (void)drv->write_record_raw(op.recno,
+                                    op.before.data(), op.before.size());
     }
     tx_.truncate_ops_to(idx);
     return {};

@@ -49,6 +49,17 @@ public:
     // override to also reset their internal record-cache state.
     virtual util::Result<void> zap() = 0;
 
+    // Roll back a trailing append. If `recno` is currently the last
+    // physical record, drop it — lower the header record count and
+    // rewrite the EOF marker — and return true. If a concurrent append
+    // now sits above `recno`, return false so the caller soft-deletes
+    // instead (a buried record can't be popped without a pack). The
+    // default rejects with false for drivers that don't implement
+    // physical removal, preserving the soft-delete fallback.
+    virtual util::Result<bool> truncate_trailing(std::uint32_t /*recno*/) {
+        return false;
+    }
+
     // VFP autoinc bump (M10.11). Returns the value to use for the
     // pending append (the field's current `autoinc_next`), advances
     // the in-memory counter by `autoinc_step`, and persists the new

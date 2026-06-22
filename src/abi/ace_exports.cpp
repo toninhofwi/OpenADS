@@ -2637,7 +2637,7 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
     return ok();
 }
 
-UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
+UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
                              UNSIGNED32* pulRecordCount) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -2697,6 +2697,20 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
             ++pass;
         }
         *pulRecordCount = pass;
+    } else if (bFilterOption == ADS_RESPECTFILTERS &&
+               !openads::abi::show_deleted()) {
+        // ADS_RESPECTFILTERS: count live records only when deleted records
+        // are hidden (SET DELETED ON). Walk the raw record range, skipping
+        // deleted rows, then restore the cursor to its original position.
+        const std::uint32_t saved = t->recno();
+        std::uint32_t rc   = t->record_count();
+        std::uint32_t live = 0;
+        for (std::uint32_t r = 1; r <= rc; ++r) {
+            if (auto g = t->goto_record(r); !g) continue;
+            if (!t->is_deleted()) ++live;
+        }
+        t->goto_record(saved);
+        *pulRecordCount = live;
     } else {
         *pulRecordCount = t->record_count();
     }
@@ -2912,6 +2926,12 @@ static const std::string& trigger_sql_body(const openads::engine::DataDict::Trig
 
 // Type alias to avoid MSVC C2562 when returning std::map<> from a function
 // inside an extern "C" / anonymous-namespace block.
+//
+// The trig_* helpers below return C++ types (std::string / std::vector /
+// TrigError_). Give them C++ linkage so MSVC does not raise C4190 (C-linkage
+// function returning a C++-incompatible type) under /W4 /WX.
+extern "C++" {
+
 using TrigFieldMap_ = std::map<std::string, std::string>;
 
 // SQL-quote a raw string value (escape embedded quotes, wrap in single quotes).
@@ -3283,6 +3303,8 @@ static TrigError_ trig_execute_body_(
     }
     return TrigError_{};
 }
+
+}  // extern "C++"  — trig_ helpers regain C++ linkage (silences C4190)
 
 // fire_triggers_ — fire all enabled, matching triggers for a given event + timing.
 // timing: 1=BEFORE  2=INSTEAD_OF  4=AFTER
@@ -6772,7 +6794,13 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
         // wrote, and seek_key would never find an exact match.
         std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
-        std::int32_t fidx = t->field_index(idx->expression());
+        // Strip the `ALIAS->` qualifier the way the write side does
+        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
+        // tag built from `FIELD->ID` never resolves the field, fmt_w
+        // stays at the stale key_length, and the numeric seek key is
+        // padded to a different width than the stored key.
+        std::int32_t fidx = t->field_index(
+            openads::engine::strip_alias_qualifiers(idx->expression()));
         if (fidx >= 0) {
             const auto& fd = t->field_descriptor(
                 static_cast<std::uint16_t>(fidx));
@@ -6911,7 +6939,13 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
         std::uint16_t klen = idx->key_length();
         std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
-        std::int32_t fidx = t->field_index(idx->expression());
+        // Strip the `ALIAS->` qualifier the way the write side does
+        // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
+        // tag built from `FIELD->ID` never resolves the field, fmt_w
+        // stays at the stale key_length, and the numeric seek key is
+        // padded to a different width than the stored key.
+        std::int32_t fidx = t->field_index(
+            openads::engine::strip_alias_qualifiers(idx->expression()));
         if (fidx >= 0) {
             const auto& fd = t->field_descriptor(
                 static_cast<std::uint16_t>(fidx));
@@ -14544,7 +14578,9 @@ UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE h, double pos) {
     if (!r) return fail(r.error());
     return ok();
 }
-UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+// Not yet implemented — return AE_FUNCTION_NOT_AVAILABLE so callers know to
+// use a workaround rather than silently getting no relation following.
+UNSIGNED32 AdsSetRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
 UNSIGNED32 AdsSetScopedRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetServerType(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }

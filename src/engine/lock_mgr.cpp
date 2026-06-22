@@ -119,4 +119,17 @@ LockMgr::try_lock_record_excl(platform::File& f, TableTypeForLock t, LockingMode
     return LockHandle{std::move(bl).value(), off, 1};
 }
 
+void LockMgr::forget_(const Key& k) noexcept {
+    held_.erase(k);
+}
+
+void LockMgr::unlock_table(platform::File& f, TableTypeForLock t, LockingMode m) {
+    forget_(Key{&f, file_lock_offset(t, m)});
+}
+
+void LockMgr::unlock_record(platform::File& f, TableTypeForLock t, LockingMode m,
+                            std::uint32_t recno) {
+    forget_(Key{&f, record_lock_offset(t, m, recno)});
+}
+
 } // namespace openads::engine

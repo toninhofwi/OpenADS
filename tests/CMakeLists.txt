@@ -57,6 +57,7 @@ add_executable(openads_unit_tests
     unit/tx_log_test.cpp
     unit/abi_m5x_recovery_test.cpp
     unit/abi_savepoint_test.cpp
+    unit/abi_tx_rollback_append_test.cpp
     unit/data_dict_test.cpp
     unit/abi_dd_test.cpp
     unit/sql_parser_test.cpp
@@ -70,6 +71,7 @@ add_executable(openads_unit_tests
     unit/abi_refresh_extract_test.cpp
     unit/abi_create_index61_test.cpp
     unit/abi_zap_pack_test.cpp
+    unit/abi_record_count_filter_test.cpp
     unit/abi_reindex_test.cpp
     unit/ntx_multilevel_test.cpp
     unit/cdx_multilevel_test.cpp
@@ -77,10 +79,14 @@ add_executable(openads_unit_tests
     unit/abi_ordsetfocus_test.cpp
     unit/abi_seek_empty_test.cpp
     unit/abi_open_concurrent_header_test.cpp
+    unit/abi_seek_numeric_alias_test.cpp
     unit/abi_open_index_order_test.cpp
     unit/abi_ordlistadd_path_test.cpp
     unit/abi_gobottom_filtered_test.cpp
     unit/abi_rddtst_repro_test.cpp
+    unit/engine_navigation_empty_test.cpp
+    unit/abi_deleted_records_test.cpp
+    unit/abi_index_key_count_test.cpp
     unit/abi_copy_table_test.cpp
     unit/abi_find_table_test.cpp
     unit/abi_binary_memo_test.cpp
@@ -148,6 +154,7 @@ add_executable(openads_unit_tests
     unit/abi_dd_proc_view_test.cpp
     unit/abi_sql_system_tables_test.cpp
     unit/abi_sql_dd_sql_test.cpp
+    unit/abi_no_current_record_test.cpp
 )
 
 # M11.4 — side DLL with stored procedures used by abi_aep_test.
