@@ -70,6 +70,16 @@ public:
         bump_autoinc(std::uint16_t /*field_index*/) {
         return util::Error{5004, 0, "autoinc not supported", ""};
     }
+
+    // Drop any read-ahead block the driver is holding so the next
+    // read_record_raw goes back to disk. The engine calls this at
+    // coherence points where the in-memory block may be stale relative
+    // to disk: an explicit record refresh, and absolute repositioning
+    // (GoTo / GoTop / GoBottom) — which is also how a workarea observes
+    // a write made through another handle (e.g. a trigger updating a
+    // second table). Sequential SKIP does NOT call this, so a scan keeps
+    // serving from the block. Default no-op for drivers without a cache.
+    virtual void invalidate_read_cache() noexcept {}
 };
 
 } // namespace openads::drivers

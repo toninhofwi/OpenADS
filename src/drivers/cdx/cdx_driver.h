@@ -37,6 +37,8 @@ public:
     util::Result<std::uint32_t>
         bump_autoinc(std::uint16_t field_index) override;
 
+    void invalidate_read_cache() noexcept override { invalidate_read_cache_(); }
+
     // M11.2 — encrypted DBF support. `encrypted()` reflects the
     // header version byte (0xC3 = OpenADS-encrypted variant);
     // `set_encryption_key` installs the AES-256 key the driver uses
@@ -50,6 +52,25 @@ public:
 
 private:
     util::Result<void> rewrite_header_();
+    // Read-ahead block cache (#4 perf). Sequential scans otherwise pay
+    // one positioned ReadFile + one heap alloc PER record in
+    // read_record_raw; with N records that is N syscalls (and, over a
+    // network share or in server mode, N round-trips). Instead we read
+    // one ALIGNED block of up to kReadAheadBytes worth of records and
+    // serve subsequent records from it (forward AND backward within the
+    // block). The cache holds RAW (still-encrypted) file bytes; the
+    // CTR keystream is applied per served record (it is recno-keyed).
+    // Invalidated on every mutation routed through this driver instance
+    // (write / append / zap / truncate / autoinc / re-key). Cross-process
+    // update coherence in shared mode is bounded by the block size — a
+    // record changed by ANOTHER connection after we buffered it is served
+    // stale until the block is refetched; the lock path can force a
+    // refetch via invalidate_read_cache_(). [review caveat]
+    static constexpr std::size_t kReadAheadBytes = 64u * 1024u;
+    void invalidate_read_cache_() noexcept {
+        read_cache_first_ = 0;
+        read_cache_recs_  = 0;
+    }
     // Re-read bytes 0..7 of the DBF header from disk and refresh
     // rec_count_ from the on-disk truth. Caller must hold an
     // exclusive byte-lock on the header before invoking, otherwise
@@ -74,6 +95,11 @@ private:
     // aes_ is populated once the connection's password key is bound.
     bool                        encrypted_ = false;
     std::optional<engine::Aes>  aes_;
+    // Read-ahead block cache state (raw file bytes). read_cache_first_ == 0
+    // means empty; otherwise it holds records [first .. first+recs-1].
+    std::vector<std::uint8_t>   read_cache_;
+    std::uint32_t               read_cache_first_ = 0;
+    std::uint32_t               read_cache_recs_  = 0;
 };
 
 } // namespace openads::drivers::cdx
