@@ -93,6 +93,9 @@ examples/fivewin/err.txt
 .DS_Store
 Thumbs.db
 
+# Rust (openmonitor)
+tools/openmonitor/target/
+
 # Compiler / linker artefacts
 *.obj
 *.o

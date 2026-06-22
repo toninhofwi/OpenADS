@@ -14,6 +14,8 @@ header('Content-Type: application/json');
 session_start();
 require_once __DIR__ . '/common.php';
 
+api_require_session();
+
 $body     = json_decode(file_get_contents('php://input'), true) ?? [];
 $name     = trim($body['name']     ?? '');
 $path     = trim($body['path']     ?? '');
@@ -21,10 +23,9 @@ $password = $body['password']      ?? '';
 $connType = trim($body['connType'] ?? 'local');
 
 if ($name === '' || $path === '') {
-    http_response_code(400);
-    echo json_encode(['error' => 'name and path are required']);
-    exit;
+    api_error(400, 'name and path are required');
 }
+api_validate_identifier($name, 'dictionary name');
 
 if (!function_exists('ads_dd_create')) {
     http_response_code(501);

@@ -6,6 +6,9 @@
  * POST { action:'delete', name }     → remove a script
  */
 header('Content-Type: application/json');
+session_start();
+require_once __DIR__ . '/common.php';
+
 $file = __DIR__ . '/../config/sql_scripts.json';
 
 function loadScripts(string $f): array {
@@ -21,13 +24,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     exit;
 }
 
+api_require_session();
+
 $body   = json_decode(file_get_contents('php://input'), true) ?? [];
 $action = trim($body['action'] ?? '');
 
 if ($action === 'save') {
     $name = trim($body['name'] ?? '');
     $sql  = $body['sql']  ?? '';
-    if ($name === '') { http_response_code(400); echo json_encode(['error' => 'name required']); exit; }
+    if ($name === '') {
+        api_error(400, 'name required');
+    }
+    api_validate_identifier($name, 'script name');
     $scripts = loadScripts($file);
     $scripts[$name] = $sql;
     saveScripts($file, $scripts);
@@ -36,11 +44,15 @@ if ($action === 'save') {
 }
 if ($action === 'delete') {
     $name = trim($body['name'] ?? '');
+    if ($name === '') {
+        api_error(400, 'name required');
+    }
+    api_validate_identifier($name, 'script name');
     $scripts = loadScripts($file);
     unset($scripts[$name]);
     saveScripts($file, $scripts);
     echo json_encode(['ok' => true]);
     exit;
 }
-http_response_code(400);
-echo json_encode(['error' => 'unknown action']);
+
+api_error(400, 'unknown action');

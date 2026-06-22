@@ -19,6 +19,8 @@ Release atual: **v1.0.0-rc29**.
 
 ## Conteúdo
 
+- **[Como contribuir](contribuindo/)** — build, PRs, política de
+  protocolo paralelo e checklist.
 - **[Primeiros passos](primeiros-passos/)** — instalação,
   primeiro build, smoke test.
 - **[Arquitetura](arquitetura/)** — arquitetura de cinco

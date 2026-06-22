@@ -5,6 +5,8 @@
 · [Español](https://fivetechsoft.github.io/OpenADS/es/)
 · [Português](https://fivetechsoft.github.io/OpenADS/pt/)
 
+🤝 **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+
 A free and open-source implementation compatible with Advantage Database Server (ADS), discontinued by SAP.
 
 The goal is to provide a *drop-in* replacement for the Advantage Client Engine (`ace32.dll` / `ace64.dll` / `libace.so`) so existing applications — particularly Harbour/Clipper apps using `contrib/rddads` — keep working without recompilation.
@@ -1195,6 +1197,7 @@ OpenADS/
 │   ├── import_dd/              # openads_import_dd — SAP .add → OpenADS import
 │   │   └── main.cpp
 │   ├── bench/                  # openads_bench — synthetic SQL benchmark
+│   ├── openmonitor/            # openmonitor — TUI + web dashboard for openads_serverd
 │   ├── harbour_patch/          # rddads compatibility patches + ADS baseline fixture
 │   ├── scripts/
 │   │   ├── systemd/            # openads-serverd.service (Linux)

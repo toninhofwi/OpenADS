@@ -7963,27 +7963,32 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         };
 
         std::vector<std::vector<std::string>> rows;
-        for (const auto& pe : dd->permissions()) {
-            const auto& t = pe.object_type;
-            bool is_table    = (t == "Table");
-            bool is_exec     = (t == "StoredProc" || t == "Function");
-            bool is_obj_user = (t == "User"  || t == "Group");
-            bool is_db       = (t == "Database");
-            bool is_grp      = pe.grantee_is_group;
-            uint32_t m = pe.bitmask;
+
+        auto top_key = [](const std::string& grantee,
+                          const std::string& obj_name,
+                          const std::string& type_code) -> std::string {
+            return grantee + '\x1f' + obj_name + '\x1f' + type_code;
+        };
+
+        auto emit_top_row = [&](const std::string& obj_name,
+                                const std::string& type_code,
+                                const std::string& obj_type,
+                                const std::string& grantee,
+                                bool is_grp,
+                                uint32_t m) {
+            bool is_table    = (obj_type == "Table");
+            bool is_exec     = (obj_type == "StoredProc" || obj_type == "Function");
+            bool is_obj_user = (obj_type == "User"  || obj_type == "Group");
+            bool is_db       = (obj_type == "Database");
 
             bool show_dml    = (is_table || is_db);
             bool show_exec   = (is_exec  || is_db);
-            // Groups don't use INHERIT (they are the inheritable entity).
-            // Users: show INHERIT if SAP sentinel set (0x80000000) or INHERIT bit (0x008) set.
             bool show_inherit = !is_grp && !is_obj_user;
             auto inherit_val  = [&]() -> std::string {
                 if (!show_inherit) return "";
                 bool set = (m & SAP_SENTINEL) || (m & 0x008u);
                 return set ? "1" : "0";
             };
-
-            // ALTER (0x100) and DROP (0x200).
             auto alt_val = [&]() -> std::string {
                 if (is_obj_user || is_exec) return "";
                 if (m & SAP_SENTINEL) return perm_val(is_grp, is_grp);
@@ -7996,56 +8001,117 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
             };
 
             rows.push_back({
-                pe.object_name,
-                std::to_string(pe.object_type_code),
-                "",                                                   // PARENT (top-level)
-                pe.grantee,
-                show_dml  ? dml_col(m, is_grp, 0)  : "",             // SELECT  (bit 0)
-                show_dml  ? dml_col(m, is_grp, 1)  : "",             // UPDATE  (bit 1)
-                show_dml  ? dml_col(m, is_grp, 4)  : "",             // INSERT  (bit 4)
-                show_dml  ? dml_col(m, is_grp, 5)  : "",             // DELETE  (bit 5)
-                show_exec ? exe_col(m, is_grp)      : "",             // EXECUTE (bit 2)
-                (is_db && is_grp) ? dml_col(m, is_grp, 6) : "",      // ACCESS  (bit 6)
-                inherit_val(),                                         // INHERIT
-                (is_db && is_grp) ? dml_col(m, is_grp, 7) : "",      // CREATE  (bit 7)
-                alt_val(),                                             // ALTER   (bit 8)
-                drop_val(),                                            // DROP    (bit 9)
+                obj_name,
+                type_code,
+                "",
+                grantee,
+                show_dml  ? dml_col(m, is_grp, 0)  : "",
+                show_dml  ? dml_col(m, is_grp, 1)  : "",
+                show_dml  ? dml_col(m, is_grp, 4)  : "",
+                show_dml  ? dml_col(m, is_grp, 5)  : "",
+                show_exec ? exe_col(m, is_grp)      : "",
+                (is_db && is_grp) ? dml_col(m, is_grp, 6) : "",
+                inherit_val(),
+                (is_db && is_grp) ? dml_col(m, is_grp, 7) : "",
+                alt_val(),
+                drop_val(),
             });
+        };
 
-            // Field-level rows: one row per field with OBJ_TYPE=4 and PARENT=table.
-            // SELECT/UPDATE/INSERT inherit from the table; DELETE/EXECUTE/etc. are N/A.
-            if (is_table) {
+        std::unordered_set<std::string> seen_top;
+
+        for (const auto& pe : dd->permissions()) {
+            const std::string type_code = std::to_string(pe.object_type_code);
+            if (!seen_top.insert(top_key(pe.grantee, pe.object_name,
+                                         type_code)).second)
+                continue;
+            emit_top_row(pe.object_name, type_code, pe.object_type,
+                         pe.grantee, pe.grantee_is_group, pe.bitmask);
+
+            // Field-level rows: OBJ_TYPE=4, PARENT=table.  Skip fields that
+            // only carry the binary-load ordinal placeholder (not registered
+            // FIELDPROP / DD field metadata).
+            if (pe.object_type == "Table") {
                 auto fp_it = dd->field_props().find(pe.object_name);
                 if (fp_it != dd->field_props().end()) {
                     std::vector<std::string> fnames;
                     fnames.reserve(fp_it->second.size());
-                    for (const auto& [fn, _] : fp_it->second)
+                    for (const auto& [fn, fprops] : fp_it->second) {
+                        if (fprops.size() == 1 && fprops.count("ordinal"))
+                            continue;
                         fnames.push_back(fn);
+                    }
                     std::sort(fnames.begin(), fnames.end());
-                    std::string fsel = dml_col(m, is_grp, 0);
-                    std::string fupd = dml_col(m, is_grp, 1);
-                    std::string fins = dml_col(m, is_grp, 4);
+                    std::string fsel = dml_col(pe.bitmask, pe.grantee_is_group, 0);
+                    std::string fupd = dml_col(pe.bitmask, pe.grantee_is_group, 1);
+                    std::string fins = dml_col(pe.bitmask, pe.grantee_is_group, 4);
                     for (const auto& fname : fnames) {
                         rows.push_back({
                             fname,
-                            "4",               // OBJ_TYPE = ADS_DD_FIELD_OBJECT
-                            pe.object_name,    // PARENT = table name
+                            "4",
+                            pe.object_name,
                             pe.grantee,
-                            fsel,              // SELECT
-                            fupd,              // UPDATE
-                            fins,              // INSERT
-                            "",                // DELETE (N/A for fields)
-                            "",                // EXECUTE
-                            "",                // ACCESS
-                            "",                // INHERIT
-                            "",                // CREATE
-                            "",                // ALTER
-                            "",                // DROP
+                            fsel,
+                            fupd,
+                            fins,
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
                         });
                     }
                 }
             }
         }
+
+        // Legacy parity: emit a zero-permission row for every (grantee, object)
+        // pair that has no Permission record (flag columns "0", not omitted).
+        struct SecObj {
+            std::string name;
+            std::string type;
+            std::string code;
+        };
+        std::vector<SecObj> objects;
+        objects.reserve(dd->tables().size() + dd->views().size() +
+                        dd->procs().size() + dd->functions().size() +
+                        dd->links().size() + 8);
+        for (const auto& [alias, _] : dd->tables())
+            objects.push_back({alias, "Table", "1"});
+        for (const auto& [name, _] : dd->views())
+            objects.push_back({name, "View", "6"});
+        for (const auto& [name, _] : dd->procs())
+            objects.push_back({name, "StoredProc", "10"});
+        for (const auto& [name, _] : dd->functions())
+            objects.push_back({name, "Function", "18"});
+        for (const auto& [alias, _] : dd->links())
+            objects.push_back({alias, "Link", "12"});
+        for (const auto& u : dd->users())
+            objects.push_back({u, "User", "8"});
+        for (const auto& g : dd->groups())
+            objects.push_back({g, "Group", "9"});
+        if (!dd->users().empty() || !dd->groups().empty())
+            objects.push_back({"Database", "Database", "11"});
+
+        struct Grantee { std::string name; bool is_group; };
+        std::vector<Grantee> grantees;
+        grantees.reserve(dd->users().size() + dd->groups().size());
+        for (const auto& u : dd->users())
+            grantees.push_back({u, false});
+        for (const auto& g : dd->groups())
+            grantees.push_back({g, true});
+
+        for (const auto& gr : grantees) {
+            for (const auto& obj : objects) {
+                const auto key = top_key(gr.name, obj.name, obj.code);
+                if (!seen_top.insert(key).second) continue;
+                emit_top_row(obj.name, obj.code, obj.type, gr.name, gr.is_group,
+                             0u);
+            }
+        }
+
         return build(cols, rows);
     }
     if (sys_name == "effectivepermissions") {

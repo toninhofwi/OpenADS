@@ -48,6 +48,13 @@ TEST_CASE("M12.1 wire decode rejects header-only buffer < 5 bytes") {
     CHECK_FALSE(dec.has_value());
 }
 
+TEST_CASE("wire decode rejects oversized payload length") {
+    // Length prefix 256 MiB — must fail before allocating payload.
+    std::vector<std::uint8_t> hdr = {0x10, 0x00, 0x00, 0x00, 0x01};
+    auto dec = decode_frame(hdr.data(), hdr.size());
+    CHECK_FALSE(dec.has_value());
+}
+
 TEST_CASE("M12.1 wire encode + decode an empty-payload frame") {
     Frame f;
     f.opcode = Opcode::Disconnect;
