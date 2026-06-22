@@ -6859,18 +6859,24 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
         std::uint16_t dec   = static_cast<std::uint16_t>(fd.decimals);
         std::uint16_t fmt_w = (fd.length > 0)
             ? static_cast<std::uint16_t>(fd.length) : klen;
-        char buf[64];
-        if (dec > 0) {
-            std::snprintf(buf, sizeof(buf), "%*.*f",
-                          static_cast<int>(fmt_w),
-                          static_cast<int>(dec), dv);
-        } else {
-            std::snprintf(buf, sizeof(buf), "%*.0f",
-                          static_cast<int>(fmt_w), dv);
-        }
+        // Buffer holds the widest valid xBase field width (255) plus
+        // sign, decimal point and NUL. snprintf is length-bounded and we
+        // assign only what it actually produced (clamped to the buffer),
+        // so an out-of-range fmt_w can never overread the stack buffer.
+        char buf[264];
+        int n = (dec > 0)
+            ? std::snprintf(buf, sizeof(buf), "%*.*f",
+                            static_cast<int>(fmt_w),
+                            static_cast<int>(dec), dv)
+            : std::snprintf(buf, sizeof(buf), "%*.0f",
+                            static_cast<int>(fmt_w), dv);
+        std::size_t take = (n < 0)
+            ? 0u
+            : std::min<std::size_t>(static_cast<std::size_t>(n),
+                                    sizeof(buf) - 1);
         // Pad to klen with trailing spaces (matches how
         // evaluate_index_expr right-pads the field's raw bytes).
-        key.assign(buf, fmt_w);
+        key.assign(buf, take);
         if (key.size() < klen) key.append(klen - key.size(), ' ');
     } else {
         key.assign(reinterpret_cast<const char*>(pucKey),
@@ -7004,16 +7010,21 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
             if (fd.length > 0)
                 fmt_w = static_cast<std::uint16_t>(fd.length);
         }
-        char buf[64];
-        if (dec > 0) {
-            std::snprintf(buf, sizeof(buf), "%*.*f",
-                          static_cast<int>(fmt_w),
-                          static_cast<int>(dec), dv);
-        } else {
-            std::snprintf(buf, sizeof(buf), "%*.0f",
-                          static_cast<int>(fmt_w), dv);
-        }
-        key.assign(buf, fmt_w);
+        // Length-bounded format + clamped assign: an out-of-range fmt_w
+        // can never overread the buffer (buf sized for the widest valid
+        // xBase field width plus sign, separator and NUL).
+        char buf[264];
+        int n = (dec > 0)
+            ? std::snprintf(buf, sizeof(buf), "%*.*f",
+                            static_cast<int>(fmt_w),
+                            static_cast<int>(dec), dv)
+            : std::snprintf(buf, sizeof(buf), "%*.0f",
+                            static_cast<int>(fmt_w), dv);
+        std::size_t take = (n < 0)
+            ? 0u
+            : std::min<std::size_t>(static_cast<std::size_t>(n),
+                                    sizeof(buf) - 1);
+        key.assign(buf, take);
         if (key.size() < klen) key.append(klen - key.size(), ' ');
     } else {
         key = pucScope
