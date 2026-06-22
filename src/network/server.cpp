@@ -57,6 +57,9 @@ util::Result<Frame> decode_after_recv(std::uint8_t hdr[5],
         (static_cast<std::uint32_t>(hdr[1]) << 16) |
         (static_cast<std::uint32_t>(hdr[2]) <<  8) |
          static_cast<std::uint32_t>(hdr[3]);
+    if (n > kMaxFramePayload) {
+        return util::Error{5000, 0, "frame payload too large", ""};
+    }
     Frame f;
     f.opcode = static_cast<Opcode>(hdr[4]);
     if (n > 0) {
