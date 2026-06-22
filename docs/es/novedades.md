@@ -166,6 +166,13 @@ ARIES-lite.
   con cero registros.
 - **Navegación de registros eliminados** — estado correcto tras
   saltar filas eliminadas.
+- **Recuento de bloqueos LockMgr** — los bloqueos repetidos sobre
+  la misma clave ahora se cuentan por referencia; el bloqueo del
+  SO se libera solo cuando el último poseedor desbloquea.
+- **Comprobación de límites de registros WAL** —
+  `TxLog::read_all` valida la longitud de cada campo
+  UPDATE/APPEND antes de leer, evitando lecturas excesivas en
+  archivos WAL truncados o corruptos.
 
 ### ABI
 
@@ -200,6 +207,15 @@ ARIES-lite.
   en x64 corregidos.
 - **Clang** — guardia `-Wc2y-extensions` para Apple Clang
   anterior.
+- **Colisión de fd 0 en POSIX** — los manejadores de archivo
+  ahora se almacenan como `(fd + 1)` para que un fd 0 real
+  (devuelto por `open()` cuando stdin está cerrado) no se
+  confunda con el centinela "no abierto".
+- **Reintento `EINTR` en POSIX** — `pread` / `pwrite` reintentan
+  ante interrupción por señal en lugar de fallar la E/S.
+- **mmap de longitud cero en POSIX** — `map_readonly` rechaza
+  mapeos de longitud cero en lugar de llamar a `mmap` con
+  longitud 0.
 
 ### CDX
 

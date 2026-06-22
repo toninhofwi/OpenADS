@@ -150,6 +150,12 @@ records, completing the ARIES-lite recovery model.
   records.
 - **Deleted-record navigation** — proper state after skip past
   deleted rows.
+- **LockMgr lock refcount** — repeated locks on the same key are
+  now refcounted; the OS lock is released only when the final
+  holder unlocks.
+- **WAL record bounds checks** — `TxLog::read_all` validates each
+  UPDATE/APPEND field length before reading, so truncated or
+  corrupt WAL files no longer over-read.
 
 ### ABI
 
@@ -181,6 +187,13 @@ records, completing the ARIES-lite recovery model.
 - **MSVC** — x86 `__stdcall` decoration mismatch and x64
   `_wfsopen` crash fixed.
 - **Clang** — `-Wc2y-extensions` guard for older Apple Clang.
+- **POSIX fd-0 collision** — file handles are now stored as
+  `(fd + 1)` so a real fd 0 (returned by `open()` when stdin is
+  closed) is no longer mistaken for the "not open" sentinel.
+- **POSIX `EINTR` retry** — `pread` / `pwrite` retry on signal
+  interruption instead of failing the I/O.
+- **POSIX zero-length mmap** — `map_readonly` rejects zero-length
+  maps instead of calling `mmap` with length 0.
 
 ### CDX
 
