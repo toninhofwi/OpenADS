@@ -40,15 +40,15 @@ platform::OpenMode map_mode(DriverOpenMode m) {
 // case (multiple openads_serverd / openads_concurrency_stress
 // invocations against the same DBF).
 util::Result<platform::ByteLock>
-acquire_with_retry_(platform::File& f,
-                    std::uint64_t   offset,
-                    std::uint64_t   length,
-                    int             max_retries = 200)
+acquire_with_retry_(platform::File&      f,
+                    std::uint64_t        offset,
+                    std::uint64_t        length,
+                    platform::LockKind   kind = platform::LockKind::Exclusive,
+                    int                  max_retries = 200)
 {
     util::Error last_err{};
     for (int i = 0; i < max_retries; ++i) {
-        auto lk = platform::ByteLock::try_acquire(f, offset, length,
-                                                   platform::LockKind::Exclusive);
+        auto lk = platform::ByteLock::try_acquire(f, offset, length, kind);
         if (lk) return std::move(lk).value();
         last_err = lk.error();
         std::this_thread::sleep_for(
@@ -65,6 +65,17 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     auto fres = platform::File::open(path, map_mode(mode));
     if (!fres) return fres.error();
     file_ = std::move(fres).value();
+
+    // Coordinate the header read with concurrent appenders. An append
+    // holds an EXCLUSIVE byte-lock on the header (offset 0..31) while it
+    // bumps the record count; on Windows a ReadFile over a region another
+    // handle locked exclusively fails with ERROR_LOCK_VIOLATION. Take a
+    // SHARED lock (retried with back-off) so open waits for any in-flight
+    // append, then reads a consistent header. Concurrent opens share the
+    // lock freely. The lock is released at end of scope.
+    auto hdr_lock = acquire_with_retry_(file_, 0, 32,
+                                        platform::LockKind::Shared);
+    if (!hdr_lock) return hdr_lock.error();
 
     std::uint8_t hdr_buf[32]{};
     auto got = file_.read_at(0, hdr_buf, sizeof(hdr_buf));
