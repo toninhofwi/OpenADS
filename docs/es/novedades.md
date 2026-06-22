@@ -242,6 +242,13 @@ ARIES-lite.
 - **README** — actualización completa del estado post-rc29
   cubriendo ruta de escritura ADI, creación ADT, modo AES y
   alcance de DA-Web.
+- **Cookbook** — nueva carpeta `cookbook/` con ejemplos Harbour
+  ejecutables y muy comentados (simple → avanzado): pista
+  `console/` (xBase puro `ADSCDX` — crear, seek por índice,
+  transacciones, mantenimiento DBF) y pista `orm/` (CRUD vía un
+  ORM Harbour compañero sobre back-ends SQLite / DBF / PostgreSQL
+  / MariaDB / ODBC), más guías de cadenas de conexión, tipos de
+  campo y resolución de problemas.
 
 ---
 

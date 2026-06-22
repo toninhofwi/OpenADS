@@ -217,6 +217,13 @@ records, completing the ARIES-lite recovery model.
   interface.
 - **README** — comprehensive post-rc29 status update covering
   ADI write path, ADT creation, AES mode, and DA-Web scope.
+- **Cookbook** — new `cookbook/` folder with runnable,
+  heavily-commented Harbour examples (simple → advanced): a
+  `console/` track (pure `ADSCDX` xBase — create, index seek,
+  transactions, DBF maintenance) and an `orm/` track (CRUD through
+  a companion Harbour ORM across SQLite / DBF / PostgreSQL /
+  MariaDB / ODBC back-ends), plus connection-string, field-type
+  and troubleshooting guides.
 
 ---
 

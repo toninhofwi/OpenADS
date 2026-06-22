@@ -44,6 +44,9 @@ Release actual: **v1.0.0-rc31**.
 - **[Stored procedures](stored-procedures/)** — procedimientos AEP
   personalizados (DLL/SO externa) y los procedimientos `sp_*`
   integrados del Data Dictionary.
+- **[Cookbook](https://github.com/FiveTechSoft/OpenADS/tree/main/cookbook)**
+  — ejemplos Harbour ejecutables y comentados (pistas console +
+  ORM), de simple a avanzado.
 - **[Despliegue como servicio](servicio-despliegue/)** — correr
   `openads_serverd` como servicio Windows / unit systemd /
   launchd plist (rc14).
