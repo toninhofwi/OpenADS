@@ -953,6 +953,7 @@ util::Result<void> Table::unlock_record(std::uint32_t recno) {
     if (it != recno_locks_.end()) {
         it->second.release();
         recno_locks_.erase(it);
+        locks_.unlock_record(driver_->file(), to_lock_type_(), locking_, recno);
     }
     return {};
 }
@@ -986,6 +987,7 @@ util::Result<void> Table::unlock_table() {
     if (table_lock_) {
         table_lock_->release();
         table_lock_.reset();
+        locks_.unlock_table(driver_->file(), to_lock_type_(), locking_);
     }
     return {};
 }
