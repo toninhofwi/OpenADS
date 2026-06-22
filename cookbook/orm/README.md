@@ -17,6 +17,7 @@ abstraction to wade through:
 | [`mariadb/`](mariadb/) | MariaDB / MySQL | `mariadb://user:pass@host:3306/db` | `OPENADS_WITH_MARIADB` + a server |
 | [`odbc/`](odbc/) | any ODBC engine | `odbc://Driver={...};...` | `OPENADS_WITH_ODBC` + a driver/DSN |
 | [`complete/`](complete/) | **all of the above** | each via its URI | opens every configured back-end |
+| [`advanced/`](advanced/) | SQLite | `sqlite://./demo_advanced.db` | the **next-revision** ORM sources |
 
 > **ADT tables?** The stable ORM's navigational open targets the DBF/CDX
 > table type, so an ADT (`.adt`) example lives in the **console track**
