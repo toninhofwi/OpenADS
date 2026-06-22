@@ -4641,15 +4641,17 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     }
     bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
 
-    // ACE AdsCreateIndex* option bits (include/openads/ace.h):
-    //   ADS_UNIQUE 0x01  ADS_DESCENDING 0x02  ADS_CUSTOM 0x04
-    //   ADS_COMPOUND 0x08
-    // ADS_COMPOUND is redundant here (compound-ness comes from the
-    // .cdx extension) and MUST be ignored for direction — rddads and
-    // X#'s ADSRDD set it for every CDX/NTX tag. Reading it as
-    // "descending" (the old `& 0x08` bug) built every order
-    // descending: AdsGotoTop landed on the last key and SKIP walked
-    // backward. Direction comes only from ADS_DESCENDING (0x02).
+    // ACE AdsCreateIndex* option bits (include/openads/ace.h, values
+    // verified against the rddads contrib):
+    //   ADS_UNIQUE 0x01  ADS_COMPOUND 0x02  ADS_CUSTOM 0x04
+    //   ADS_DESCENDING 0x08
+    // ADS_COMPOUND (0x02) is redundant here (compound-ness comes from
+    // the .cdx extension) and MUST be ignored for direction — rddads
+    // and X#'s ADSRDD set it for EVERY CDX/NTX tag. `INDEX ON f TAG t`
+    // sends 0x02 alone; reading 0x02 as "descending" builds every
+    // order reversed (AdsGotoTop on the last key, SKIP walking
+    // backward). Direction comes ONLY from ADS_DESCENDING (0x08), which
+    // rddads adds for `... DESCENDING`.
     bool unique  = (ulOptions & ADS_UNIQUE) != 0;
     bool descend = (ulOptions & ADS_DESCENDING) != 0;
 
@@ -9739,8 +9741,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::memcpy(expr_buf.data(), ci.value().expression.data(),
                     ci.value().expression.size());
         UNSIGNED32 opts = 0;
-        if (ci.value().unique)     opts |= 0x01u;
-        if (ci.value().descending) opts |= 0x02u;
+        // Re-encode using the named ACE option bits so this round-trips
+        // through AdsCreateIndex61's `& ADS_DESCENDING` decode. Hardcoded
+        // literals here would silently lose the direction if the bit
+        // values are ever revisited.
+        if (ci.value().unique)     opts |= ADS_UNIQUE;
+        if (ci.value().descending) opts |= ADS_DESCENDING;
         ADSHANDLE hIdx = 0;
         UNSIGNED32 rc = AdsCreateIndex61(
             hTable, bag_buf.data(), tag_buf.data(),
