@@ -71,6 +71,9 @@ constexpr std::uint16_t ADT_TYPE_MODTIME   = 22;  // 8-byte modification timesta
 // Pack a numeric value into the 8-byte ADI total-order key (IEEE754 BE).
 std::string pack_double_key(double v);
 
+// Pack a uint64 into an 8-byte unsigned total-order key (BE, high-bit flip).
+std::string pack_u64_key(std::uint64_t v);
+
 // Read-only ADI index.  Each instance represents one tag (one indexed field,
 // or a compound index on multiple fields).
 // Multi-tag discovery:  AdiIndex::list_tags(adi_path) → field names
