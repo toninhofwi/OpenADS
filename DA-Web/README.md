@@ -232,6 +232,20 @@ Click any view under **Views** to open its SQL definition in the editor.
 
 ---
 
+## Security notes
+
+`api/ri_meta.php` resolves `system.indexes` paths with
+`api_resolve_path_under_root()` — index files must exist **and** stay
+inside the connected DD directory (blocks `../` and out-of-root absolute
+paths before `file_get_contents` on CDX/ADI).
+
+Table and RI names on `action=tags` / `ri=` are validated as SQL
+identifiers. Smoke: `php tests/tools/daweb_path_containment_test.php`.
+
+Complements index-API and wire-frame hardening elsewhere in DA-Web/engine.
+
+---
+
 ## API Reference
 
 | Endpoint | Method | Purpose |

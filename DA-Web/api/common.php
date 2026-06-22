@@ -30,3 +30,55 @@ function api_exception(int $httpStatus, Throwable $e, array $extra = []): void
 {
     api_error($httpStatus, $e->getMessage(), (int)$e->getCode(), $extra);
 }
+
+/**
+ * Validate SQL object identifiers (table, index tag, RI name, etc.).
+ */
+function api_validate_identifier(string $name, string $label = 'identifier'): void
+{
+    if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
+        api_error(400, "invalid $label");
+    }
+}
+
+/**
+ * Resolve $candidate to an absolute path that exists and lies under $root.
+ * Returns null when the path escapes the root, contains traversal, or is missing.
+ */
+function api_resolve_path_under_root(string $candidate, string $root): ?string
+{
+    if ($candidate === '' || $root === '') {
+        return null;
+    }
+    if (str_contains($candidate, "\0")) {
+        return null;
+    }
+
+    $rootReal = realpath($root);
+    if ($rootReal === false) {
+        return null;
+    }
+
+    $isAbs = (bool)preg_match('/^([a-zA-Z]:[\\\\\/]|\\\\\\\\|\/)/', $candidate);
+    $combined = $isAbs
+        ? $candidate
+        : rtrim($rootReal, '/\\') . DIRECTORY_SEPARATOR . $candidate;
+
+    if (preg_match('#(^|[/\\\\])\.\.([/\\\\]|$)#', $combined)) {
+        return null;
+    }
+
+    $real = realpath($combined);
+    if ($real === false) {
+        return null;
+    }
+
+    $norm = strtolower(str_replace('\\', '/', $real));
+    $rootNorm = strtolower(str_replace('\\', '/', $rootReal));
+    $rootNormDir = rtrim($rootNorm, '/') . '/';
+    if ($norm !== $rootNorm && !str_starts_with($norm, $rootNormDir)) {
+        return null;
+    }
+
+    return $real;
+}
