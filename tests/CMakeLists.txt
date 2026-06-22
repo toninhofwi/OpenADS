@@ -61,6 +61,8 @@ add_executable(openads_unit_tests
     unit/abi_dd_test.cpp
     unit/sql_parser_test.cpp
     unit/abi_sql_smoke_test.cpp
+    unit/abi_plus_sqlite_read_test.cpp
+    unit/abi_plus_sqlite_seek_test.cpp
     unit/lsn_map_test.cpp
     unit/index_expr_test.cpp
     unit/abi_m92_real_test.cpp
@@ -169,6 +171,12 @@ target_include_directories(openads_unit_tests PRIVATE
 )
 
 target_link_libraries(openads_unit_tests PRIVATE openads_core)
+
+if(OPENADS_WITH_SQLITE)
+    # The sqlite read/seek tests seed a fixture DB through the SQLite C
+    # API directly, so they need the amalgamation header + symbols.
+    target_link_libraries(openads_unit_tests PRIVATE openads_sqlite3)
+endif()
 
 add_test(NAME openads_unit_tests COMMAND openads_unit_tests)
 

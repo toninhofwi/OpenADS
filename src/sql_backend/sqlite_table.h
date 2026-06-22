@@ -1,0 +1,46 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace openads::sql_backend {
+
+class SqliteConnection;
+
+// Per-handle table state — mirrors network::RemoteTable layout so the
+// ABI bridge can reuse the same caching patterns (schema, row, recno).
+struct SqliteTable {
+    SqliteConnection* conn = nullptr;
+    std::string       name;
+
+    struct FieldDesc {
+        std::string   name;
+        std::uint16_t type     = 0;  // ADS_* field type code
+        std::uint32_t length   = 0;
+        std::uint16_t decimals = 0;
+        bool          nullable = true;
+    };
+
+    std::vector<FieldDesc> fields;
+    bool                   fields_cached = false;
+
+    std::vector<std::string> current_row;
+    bool                     row_valid = false;
+
+    std::int64_t current_rowid   = 0;
+    bool         current_deleted = false;
+
+    std::uint32_t cached_rec_count = 0;
+    bool          rec_count_cached = false;
+
+    // Navigation state (ordered by SQLite rowid).
+    std::vector<std::int64_t> rowids;
+    std::size_t               pos         = 0;
+    bool                      positioned = false;
+    std::vector<bool>         current_nulls;
+
+    bool last_seek_found = false;
+};
+
+} // namespace openads::sql_backend

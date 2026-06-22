@@ -4,6 +4,10 @@ build-*/
 out/
 cmake-build-*/
 
+# Vendored SQLite amalgamation — fetched via CMake FetchContent when absent,
+# or dropped in locally for offline builds. Never committed.
+/third_party/sqlite/
+
 # CMake
 CMakeCache.txt
 CMakeFiles/
