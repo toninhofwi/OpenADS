@@ -1166,28 +1166,6 @@ util::Result<void> CdxIndex::set_options(bool unique, bool descend,
     return {};
 }
 
-std::uint32_t CdxIndex::alloc_page_() {
-    std::uint32_t off;
-    if (free_ptr_ != 0xFFFFFFFFu && free_ptr_ != 0) {
-        // Reuse a page from the free list. Its first 4 bytes hold the
-        // next free offset (written by free_tree_).
-        off = free_ptr_;
-        std::uint32_t next = 0xFFFFFFFFu;
-        if (auto pg = get_page_(off); pg) {
-            next = read_u32_le(pg.value()->data());
-        }
-        free_ptr_ = next;
-    } else {
-        off = static_cast<std::uint32_t>(
-            std::max<std::uint64_t>(file_size_, CDX_SUB_DATA_BASE));
-        file_size_ = static_cast<std::uint64_t>(off) + CDX_PAGE_LEN;
-    }
-    // Hand back a fresh zeroed page for the caller to encode into.
-    page_cache_[off] = Page{};
-    dirty_[off] = true;
-    return off;
-}
-
 util::Result<void> CdxIndex::free_tree_(std::uint32_t off) {
     if (off == 0 || off == 0xFFFFFFFFu) return {};
     // Read the page to learn whether it is a branch (recurse children
@@ -1203,8 +1181,8 @@ util::Result<void> CdxIndex::free_tree_(std::uint32_t off) {
         }
     }
     // Push this page onto the free list: write the current head into its
-    // first 4 bytes (straight to disk so alloc_page_ can read it after the
-    // cache is cleared) and make it the new head.
+    // first 4 bytes (straight to disk so allocate_page_ can read it after
+    // the cache is cleared) and make it the new head.
     Page link{};
     write_u32_le(link.data(), free_ptr_);
     auto w = file_.write_at(off, link.data(), link.size());
@@ -1238,6 +1216,24 @@ util::Result<void> CdxIndex::clear_data() {
 }
 
 std::uint32_t CdxIndex::allocate_page_() {
+    // Reuse a page from the per-tag free list first (free_tree_ chains
+    // reclaimed pages onto free_ptr_), so CREATE INDEX / reindex does not
+    // grow the .cdx without bound. The page's first 4 bytes hold the next
+    // free offset.
+    if (free_ptr_ != 0xFFFFFFFFu && free_ptr_ != 0) {
+        std::uint32_t off = free_ptr_;
+        std::uint32_t next = 0xFFFFFFFFu;
+        if (auto pg = get_page_(off); pg) {
+            next = read_u32_le(pg.value()->data());
+        }
+        free_ptr_ = next;
+        page_cache_[off] = Page{};
+        dirty_[off] = true;
+        return off;
+    }
+    // Otherwise extend the file. The global tail map (keyed by path) keeps
+    // concurrent tags on the same .cdx from handing out the same offset —
+    // the multi-tag allocator invariant.
     std::lock_guard<std::mutex> lk(g_cdx_alloc_mu);
     auto& tail = g_cdx_alloc_tail[path_];
     if (auto sz = file_.size()) {
@@ -1249,6 +1245,7 @@ std::uint32_t CdxIndex::allocate_page_() {
     tail += CDX_PAGE_LEN;
     file_size_ = tail;
     page_cache_.emplace(off, Page{});
+    dirty_[off] = true;
     return off;
 }
 
