@@ -110,6 +110,21 @@ larger touch targets. A long-standing dark-theme bug — the
 self-referential, so panels and borders rendered transparent — is
 fixed as part of this work.
 
+### Remote Scan Performance (sequential prefetch)
+
+A forward scan over the `tcp://` wire used to cost roughly one TCP
+round-trip per record (`Skip` + `AtEOF` + `IsFound`). A
+sequential-prefetch path (negotiated via a Connect capability flag)
+now piggybacks a lookahead block of rows onto forward-`Skip` acks;
+the client serves them locally and folds the consumed count back
+into the next wire step so the server cursor never desyncs.
+`AdsAtEOF` / `AdsAtBOF` are answered from the cached current row and
+`AdsIsFound` from a cached `Found()` flag. Result: a 50k-record
+loopback scan is **~3.9× faster** (NAV-only) / **~3.3×** (3-field
+read), with `IsFound` round-trips dropping to zero. The change is
+additive and backward-compatible — old clients (no capability
+advertised) keep the previous wire behaviour byte-for-byte.
+
 ### PHP Native Extension (`php_openads`)
 
 A native Zend PHP extension (`php_openads.dll`) is now available
@@ -230,12 +245,17 @@ records, completing the ARIES-lite recovery model.
 - **README** — comprehensive post-rc29 status update covering
   ADI write path, ADT creation, AES mode, and DA-Web scope.
 - **Cookbook** — new `cookbook/` folder with runnable,
-  heavily-commented Harbour examples (simple → advanced): a
-  `console/` track (pure `ADSCDX` xBase — create, index seek,
-  transactions, DBF maintenance) and an `orm/` track (CRUD through
-  a companion Harbour ORM across SQLite / DBF / PostgreSQL /
-  MariaDB / ODBC back-ends), plus connection-string, field-type
-  and troubleshooting guides.
+  heavily-commented Harbour examples (simple → advanced). The
+  `console/` track is pure xBase: create / index seek /
+  transactions / DBF maintenance (`ADSCDX`), SQL via
+  `AdsCreateSQLStatement` + `AdsExecuteSQLDirect`, native ADT
+  (`ADSADT` + `.adi`), and a `tcp://` remote client. The `orm/`
+  track runs the same CRUD through a companion Harbour ORM across
+  SQLite / DBF / PostgreSQL / MariaDB / ODBC back-ends, capped by an
+  all-back-ends benchmark (`orm/complete/`) with a cross-back-end
+  content checksum and a seek-vs-scan headline. A FiveWin
+  `xbrowse` CRUD sample and connection-string / field-type /
+  troubleshooting guides round it out.
 
 ---
 

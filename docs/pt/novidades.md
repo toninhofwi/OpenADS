@@ -119,6 +119,22 @@ toque maiores. Também corrige um bug antigo do tema escuro — as
 variáveis CSS `--panel` / `--panel-2` / `--border` eram
 auto-referenciais, então painéis e bordas ficavam transparentes.
 
+### Desempenho de varredura remota (prefetch sequencial)
+
+Uma varredura para a frente sobre o wire `tcp://` custava cerca de
+um round-trip TCP por registro (`Skip` + `AtEOF` + `IsFound`). Um
+caminho de prefetch sequencial (negociado por um flag de capacidade
+no Connect) agora anexa um bloco de lookahead aos acks de `Skip`
+para a frente; o cliente os serve localmente e dobra a contagem
+consumida no próximo passo do wire, de modo que o cursor do servidor
+nunca dessincroniza. `AdsAtEOF` / `AdsAtBOF` são respondidos a
+partir da linha atual em cache e `AdsIsFound` de um flag `Found()`
+em cache. Resultado: uma varredura de 50k registros em loopback é
+**~3,9× mais rápida** (só NAV) / **~3,3×** (leitura de 3 campos),
+com os round-trips de `IsFound` zerados. A mudança é aditiva e
+retrocompatível — clientes antigos (sem capacidade anunciada)
+mantêm o comportamento do wire idêntico.
+
 ### Extensão Nativa PHP (`php_openads`)
 
 Uma extensão nativa Zend PHP (`php_openads.dll`) está agora
@@ -252,12 +268,17 @@ ARIES-lite.
   caminho de escrita ADI, criação ADT, modo AES e escopo do
   DA-Web.
 - **Cookbook** — nova pasta `cookbook/` com exemplos Harbour
-  executáveis e muito comentados (simples → avançado): trilha
-  `console/` (xBase puro `ADSCDX` — criar, seek por índice,
-  transações, manutenção DBF) e trilha `orm/` (CRUD via um ORM
+  executáveis e muito comentados (simples → avançado). A trilha
+  `console/` é xBase puro: criar / seek por índice / transações /
+  manutenção DBF (`ADSCDX`), SQL via `AdsCreateSQLStatement` +
+  `AdsExecuteSQLDirect`, ADT nativo (`ADSADT` + `.adi`) e um cliente
+  remoto `tcp://`. A trilha `orm/` roda o mesmo CRUD via um ORM
   Harbour companheiro sobre back-ends SQLite / DBF / PostgreSQL /
-  MariaDB / ODBC), além de guias de strings de conexão, tipos de
-  campo e solução de problemas.
+  MariaDB / ODBC, coroada por um benchmark de todos os back-ends
+  (`orm/complete/`) com checksum de conteúdo entre back-ends e
+  manchete seek-vs-scan. Um exemplo CRUD `xbrowse` de FiveWin e
+  guias de strings de conexão / tipos de campo / solução de
+  problemas completam o conjunto.
 
 ---
 

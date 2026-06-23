@@ -121,6 +121,22 @@ bug antiguo del tema oscuro — las variables CSS `--panel` /
 `--panel-2` / `--border` eran auto-referenciales, por lo que
 paneles y bordes se mostraban transparentes.
 
+### Rendimiento de escaneo remoto (prefetch secuencial)
+
+Un escaneo hacia adelante sobre el wire `tcp://` costaba más o menos
+un round-trip TCP por registro (`Skip` + `AtEOF` + `IsFound`). Un
+camino de prefetch secuencial (negociado con un flag de capacidad en
+Connect) ahora adjunta un bloque de lookahead a los acks de
+`Skip` hacia adelante; el cliente los sirve localmente y vuelve a
+plegar el conteo consumido en el siguiente paso del wire, de modo
+que el cursor del servidor nunca se desincroniza. `AdsAtEOF` /
+`AdsAtBOF` se responden desde la fila actual cacheada y `AdsIsFound`
+desde un flag `Found()` cacheado. Resultado: un escaneo de 50k
+registros en loopback es **~3.9× más rápido** (solo NAV) / **~3.3×**
+(lectura de 3 campos), con los round-trips de `IsFound` a cero. El
+cambio es aditivo y retrocompatible — los clientes antiguos (sin
+capacidad anunciada) mantienen el comportamiento del wire idéntico.
+
 ### Extensión Nativa PHP (`php_openads`)
 
 Una extensión nativa Zend PHP (`php_openads.dll`) está ahora
@@ -256,12 +272,17 @@ ARIES-lite.
   cubriendo ruta de escritura ADI, creación ADT, modo AES y
   alcance de DA-Web.
 - **Cookbook** — nueva carpeta `cookbook/` con ejemplos Harbour
-  ejecutables y muy comentados (simple → avanzado): pista
-  `console/` (xBase puro `ADSCDX` — crear, seek por índice,
-  transacciones, mantenimiento DBF) y pista `orm/` (CRUD vía un
-  ORM Harbour compañero sobre back-ends SQLite / DBF / PostgreSQL
-  / MariaDB / ODBC), más guías de cadenas de conexión, tipos de
-  campo y resolución de problemas.
+  ejecutables y muy comentados (simple → avanzado). La pista
+  `console/` es xBase puro: crear / seek por índice / transacciones
+  / mantenimiento DBF (`ADSCDX`), SQL vía `AdsCreateSQLStatement` +
+  `AdsExecuteSQLDirect`, ADT nativo (`ADSADT` + `.adi`) y un cliente
+  remoto `tcp://`. La pista `orm/` corre el mismo CRUD vía un ORM
+  Harbour compañero sobre back-ends SQLite / DBF / PostgreSQL /
+  MariaDB / ODBC, rematada por un benchmark de todos los back-ends
+  (`orm/complete/`) con checksum de contenido entre back-ends y
+  titular seek-vs-scan. Un ejemplo CRUD `xbrowse` de FiveWin y guías
+  de cadenas de conexión / tipos de campo / resolución de problemas
+  lo completan.
 
 ---
 
