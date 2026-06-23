@@ -114,6 +114,20 @@ face anything other than `localhost`).
 
 ![Studio home pane — table list + welcome](/OpenADS/assets/img/studio/01-home.png)
 
+## Phone & tablet (responsive)
+
+Studio adapts to small screens — it is usable from a phone or
+tablet, not just a desktop browser. Below ~768 px the left table
+list collapses into a slide-in **drawer**: tap the **☰** button in
+the header to open it, pick a table, and it closes automatically.
+A dimmed backdrop covers the work area while the drawer is open —
+tap it to dismiss. The tab bar scrolls horizontally, forms stack
+into a single column, modals fit the viewport width, and touch
+targets are enlarged. No separate app or build is needed; just
+open the same URL in the phone's browser.
+
+![Studio on a phone — table drawer open](/OpenADS/assets/img/studio/09-mobile.png)
+
 ## Header
 
 The top bar carries:

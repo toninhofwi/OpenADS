@@ -115,6 +115,21 @@ algo além de `localhost`).
 
 ![Aba inicial do Studio](/OpenADS/assets/img/studio/01-home.png)
 
+## Telefone e tablet (responsive)
+
+O Studio se adapta a telas pequenas — pode ser usado de um
+telefone ou tablet, não apenas de um navegador desktop. Abaixo de
+~768 px a lista de tabelas à esquerda vira um **drawer**
+deslizante: toque no botão **☰** do header para abri-lo, escolha
+uma tabela e ele se fecha sozinho. Um fundo escurecido cobre a
+área de trabalho enquanto o drawer está aberto — toque nele para
+fechar. A barra de abas rola horizontalmente, os formulários
+empilham em uma coluna, os modais cabem na largura da tela e os
+alvos de toque são maiores. Não é preciso outro app nem compilar
+nada; basta abrir a mesma URL no navegador do telefone.
+
+![Studio em um telefone — drawer de tabelas aberto](/OpenADS/assets/img/studio/09-mobile.png)
+
 ## Header
 
 A barra superior tem:

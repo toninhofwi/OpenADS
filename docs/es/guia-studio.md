@@ -116,6 +116,22 @@ distinto de `localhost`).
 
 ![Pestaña inicio de Studio](/OpenADS/assets/img/studio/01-home.png)
 
+## Teléfono y tablet (responsive)
+
+Studio se adapta a pantallas pequeñas — se puede usar desde un
+teléfono o tablet, no solo desde un navegador de escritorio. Por
+debajo de ~768 px la lista de tablas de la izquierda se convierte
+en un **drawer** deslizante: toca el botón **☰** del header para
+abrirlo, elige una tabla y se cierra solo. Un fondo atenuado cubre
+el área de trabajo mientras el drawer está abierto — tócalo para
+cerrarlo. La barra de pestañas hace scroll horizontal, los
+formularios se apilan en una columna, los modales caben en el
+ancho de la pantalla y los objetivos táctiles son más grandes. No
+hace falta otra app ni compilar nada; basta con abrir la misma URL
+en el navegador del teléfono.
+
+![Studio en un teléfono — drawer de tablas abierto](/OpenADS/assets/img/studio/09-mobile.png)
+
 ## Header
 
 La barra superior tiene:
