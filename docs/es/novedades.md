@@ -252,6 +252,16 @@ ARIES-lite.
   inserciones concurrentes no fallen.
 - CDX estructural nombrado por tabla, no por sesión de
   directorio.
+- **Refresco del conteo de registros obsoleto en la ruta de
+  lectura** — el driver cachea el conteo de registros del DBF al
+  abrir; en un despliegue multiusuario un append de otro proceso
+  podía dejar la caché desfasada, de modo que un recorrido por
+  índice que alcanzaba una fila recién agregada (p. ej. en mitad de
+  `REPLACE … FOR`) fallaba con un error 5000 espurio.
+  `read_record_raw` / `write_record_raw` ahora releen el conteo en
+  disco bajo un bloqueo de cabecera compartido antes de declarar un
+  recno fuera de rango (solo ruta lenta — un escaneo normal hacia
+  adelante no paga nada).
 
 ### Remoto (Wire)
 

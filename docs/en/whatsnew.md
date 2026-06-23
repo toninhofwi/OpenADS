@@ -226,6 +226,14 @@ records, completing the ARIES-lite recovery model.
 
 - Shared header lock on open so concurrent appends don't fail.
 - Structural CDX named per-table, not per-directory session.
+- **Stale record-count refresh on the fetch path** — a driver
+  caches the DBF record count at open; in a multiuser deployment a
+  peer append could leave the cache lagging, so an index walk that
+  reached a just-appended row (e.g. mid-`REPLACE … FOR`) failed
+  hard with spurious error 5000. `read_record_raw` /
+  `write_record_raw` now re-read the on-disk count under a shared
+  header lock before declaring a recno out of range (slow path
+  only — a normal forward scan pays nothing).
 
 ### Remote (Wire)
 

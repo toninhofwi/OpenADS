@@ -248,6 +248,16 @@ ARIES-lite.
   inserções concorrentes não falhem.
 - CDX estrutural nomeado por tabela, não por sessão de
   diretório.
+- **Atualização da contagem de registros obsoleta no caminho de
+  leitura** — o driver faz cache da contagem de registros do DBF na
+  abertura; em uma implantação multiusuário um append de outro
+  processo podia deixar o cache defasado, então um percurso por
+  índice que alcançava uma linha recém-adicionada (p. ex. no meio de
+  `REPLACE … FOR`) falhava com um erro 5000 espúrio.
+  `read_record_raw` / `write_record_raw` agora releem a contagem em
+  disco sob um bloqueio de cabeçalho compartilhado antes de declarar
+  um recno fora de alcance (apenas caminho lento — uma varredura
+  normal para a frente não paga nada).
 
 ### Remoto (Wire)
 
