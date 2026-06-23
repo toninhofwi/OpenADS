@@ -41,6 +41,40 @@ foreach ($sql in @(
     "INSERT INTO clientes (id,nome,saldo) VALUES (3,'Cid',0.0)")) {
     $cmd = $c.CreateCommand(); $cmd.CommandText = $sql; [void]$cmd.ExecuteNonQuery()
 }
+
+# Seed pedidos via ADOX for composite-PK + date + decimal coverage.
+# Composite PKs in Jet require ADOX Key append; best-effort -- if ADOX rejects
+# the composite key, the test opens pedidos and skips gracefully.
+try {
+    $adInteger = 3; $adNumeric = 131; $adDate = 7
+    $tbl = New-Object -ComObject ADOX.Table; $tbl.Name = "pedidos"
+    $tbl.Columns.Append("cliente_id", $adInteger) | Out-Null
+    $tbl.Columns.Append("item_id",    $adInteger) | Out-Null
+    $nc = New-Object -ComObject ADOX.Column
+    $nc.Name = "qtd"; $nc.Type = $adNumeric
+    $nc.Properties.Item("Precision").Value   = 10
+    $nc.Properties.Item("Numeric Scale").Value = 2
+    $tbl.Columns.Append($nc) | Out-Null
+    $tbl.Columns.Append("data", $adDate) | Out-Null
+    $cat.Tables.Append($tbl) | Out-Null
+
+    # Composite PK via ADOX Key (may throw on older ACE; caught below)
+    $key = New-Object -ComObject ADOX.Key
+    $key.Name = "pk_pedidos"; $key.Type = 1   # adKeyPrimary
+    $key.Columns.Append("cliente_id") | Out-Null
+    $key.Columns.Append("item_id")    | Out-Null
+    $cat.Tables.Item("pedidos").Keys.Append($key) | Out-Null
+
+    foreach ($sql in @(
+        "INSERT INTO pedidos (cliente_id,item_id,qtd,data) VALUES (1,10,2.50,#2026-01-15#)",
+        "INSERT INTO pedidos (cliente_id,item_id,qtd,data) VALUES (1,20,100.00,#2026-02-20#)",
+        "INSERT INTO pedidos (cliente_id,item_id,qtd,data) VALUES (2,10,7.25,#2026-03-05#)")) {
+        $cmd = $c.CreateCommand(); $cmd.CommandText = $sql; [void]$cmd.ExecuteNonQuery()
+    }
+} catch {
+    Write-Warning "pedidos ADOX seeding skipped (composite-PK not supported by this ACE version): $_"
+}
+
 $c.Close()
 
 $env:OPENADS_TEST_ODBC_CONNSTR = $connstr

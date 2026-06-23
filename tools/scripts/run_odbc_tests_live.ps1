@@ -48,6 +48,11 @@ Invoke-Sql "CREATE TABLE clientes (id INT NOT NULL PRIMARY KEY, nome VARCHAR(64)
 Invoke-Sql "INSERT INTO clientes (id, nome, saldo) VALUES (1, 'Ana', 10.5)"
 Invoke-Sql "INSERT INTO clientes (id, nome, saldo) VALUES (2, 'Bob', NULL)"
 Invoke-Sql "INSERT INTO clientes (id, nome, saldo) VALUES (3, 'Cid', 0.0)"
+Invoke-Sql "DROP TABLE pedidos" $true
+Invoke-Sql "CREATE TABLE pedidos (cliente_id INT NOT NULL, item_id INT NOT NULL, qtd DECIMAL(10,2), data DATE, PRIMARY KEY (cliente_id, item_id))"
+Invoke-Sql "INSERT INTO pedidos (cliente_id, item_id, qtd, data) VALUES (1, 10, 2.50, CAST('2026-01-15' AS DATE))"
+Invoke-Sql "INSERT INTO pedidos (cliente_id, item_id, qtd, data) VALUES (1, 20, 100.00, CAST('2026-02-20' AS DATE))"
+Invoke-Sql "INSERT INTO pedidos (cliente_id, item_id, qtd, data) VALUES (2, 10, 7.25, CAST('2026-03-05' AS DATE))"
 $c.Close()
 
 $env:OPENADS_TEST_ODBC_CONNSTR = $ConnStr

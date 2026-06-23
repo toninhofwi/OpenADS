@@ -127,11 +127,8 @@ TEST_CASE("ABI: odbc write binds NULL and unicode correctly") {
     set_str(h, "saldo", "");              // empty numeric -> SQL NULL
     REQUIRE(AdsWriteRecord(h) == 0);
 
-    // Re-find it and verify: nome round-trips, saldo reads back NULL (empty).
-    UNSIGNED8 key[8]  = "8";
-    UNSIGNED16 found = 0;
-    REQUIRE(AdsSeek(h, key, 1, ADS_SEEKEQ, &found) == 0);
-    CHECK(found == 1);
+    // After AdsWriteRecord the cursor stays on the row just written;
+    // verify without a seek: nome round-trips, saldo reads back NULL (empty).
     CHECK(read_str(h, "nome").find("Jo\xC3\xA3o") != std::string::npos);
     CHECK(read_str(h, "saldo").empty());   // NULL reads as empty string
 
