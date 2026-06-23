@@ -5989,6 +5989,32 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     bool unique  = (ulOptions & ADS_UNIQUE) != 0;
     bool descend = (ulOptions & ADS_DESCENDING) != 0;
 
+    // Validate the key expression: a bare identifier that is not a column
+    // is a bug in the caller's PRG (typo / renamed field). Native
+    // Harbour/Clipper raises "Variable does not exist" at INDEX time;
+    // silently accepting it builds an all-blank, useless index and hides
+    // the mistake. Mirror evaluate_index_expr()'s bare-field detection
+    // (single alnum/underscore token) so computed expressions still pass.
+    {
+        std::string ident = expr;
+        while (!ident.empty() &&
+               std::isspace(static_cast<unsigned char>(ident.front())))
+            ident.erase(ident.begin());
+        while (!ident.empty() &&
+               std::isspace(static_cast<unsigned char>(ident.back())))
+            ident.pop_back();
+        const bool bare_ident = !ident.empty() &&
+            std::all_of(ident.begin(), ident.end(), [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+            }) &&
+            !std::isdigit(static_cast<unsigned char>(ident.front()));
+        if (bare_ident && t->field_index(ident) < 0) {
+            return fail(openads::util::Error{
+                openads::AE_COLUMN_NOT_FOUND, 0,
+                "index expression references unknown column", ident});
+        }
+    }
+
     // Determine key length by evaluating the expression against the
     // first live record. Empty tables get a 32-char default.
     std::uint16_t klen = 32;
