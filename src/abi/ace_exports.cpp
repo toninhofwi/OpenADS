@@ -6715,7 +6715,9 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         std::string kbytes;
         if (cdx_numeric_key) {
             double dv = 0.0;
-            openads::engine::evaluate_index_expr_number(*t, expr, dv);
+            if (!openads::engine::evaluate_index_expr_number(*t, expr, dv))
+                return fail(openads::AE_INTERNAL_ERROR,
+                            "failed to evaluate numeric index expression");
             kbytes = openads::engine::fox_numeric_key(dv);
         } else {
             auto k = openads::engine::evaluate_index_expr(*t, expr, klen);
@@ -6780,8 +6782,9 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                     std::string k2b;
                     if (sib_fox) {
                         double dv = 0.0;
-                        openads::engine::evaluate_index_expr_number(
-                            *t, sib_expr, dv);
+                        if (!openads::engine::evaluate_index_expr_number(
+                                *t, sib_expr, dv))
+                            continue;
                         k2b = openads::engine::fox_numeric_key(dv);
                     } else {
                         auto k2 = openads::engine::evaluate_index_expr(
@@ -6969,7 +6972,10 @@ UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
     std::string kb;
     if (idx->key_encoding() == openads::drivers::KeyEncoding::FoxNumeric) {
         double dv = 0.0;
-        openads::engine::evaluate_index_expr_number(*t, idx->expression(), dv);
+        if (!openads::engine::evaluate_index_expr_number(
+                *t, idx->expression(), dv))
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "failed to evaluate numeric index expression");
         kb = openads::engine::fox_numeric_key(dv);
     } else {
         auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
@@ -6999,7 +7005,10 @@ UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex) {
     std::string kb;
     if (idx->key_encoding() == openads::drivers::KeyEncoding::FoxNumeric) {
         double dv = 0.0;
-        openads::engine::evaluate_index_expr_number(*t, idx->expression(), dv);
+        if (!openads::engine::evaluate_index_expr_number(
+                *t, idx->expression(), dv))
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "failed to evaluate numeric index expression");
         kb = openads::engine::fox_numeric_key(dv);
     } else {
         auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);

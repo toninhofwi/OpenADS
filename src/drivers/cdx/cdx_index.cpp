@@ -386,14 +386,17 @@ build_subtag_header(std::uint32_t root_page,
     // trailing NUL, and the FOR slot points just past the key NUL. Writing
     // keyExpPos=512 made the native reader's bounds check
     // (uiKeyPos + uiKeyLen > CDX_HEADEREXPLEN) fail -> "Corruption detected".
+    // Bound the length to what actually fits the pool: lengths are derived
+    // from the bytes we copy, never from the raw expr size, so the reader
+    // can't be told to read past the copied region / the header buffer.
+    const std::size_t   copy_len    = std::min<std::size_t>(key_expr.size(), 510);
     const std::uint16_t exp_len_nul =
-        static_cast<std::uint16_t>(key_expr.size() + 1);
+        static_cast<std::uint16_t>(copy_len + 1);
     write_u16_le(hdr.data() + 504, exp_len_nul);  // forExpPos = keyLen+1
     write_u16_le(hdr.data() + 506, 1);            // forExpLen = 1 (NUL only)
     write_u16_le(hdr.data() + 508, 0);            // keyExpPos = 0
     write_u16_le(hdr.data() + 510, exp_len_nul);  // keyExpLen = keyLen+1
-    std::memcpy(hdr.data() + 512, key_expr.data(),
-                std::min<std::size_t>(key_expr.size(), 510));
+    std::memcpy(hdr.data() + 512, key_expr.data(), copy_len);
     // The sub-tag's name lives in the structure tag's leaf; we also
     // mirror it into reserved2 of the sub-tag header for diagnostics
     // and for legacy single-tag readers.

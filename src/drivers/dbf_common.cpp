@@ -325,7 +325,9 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
                 std::snprintf(tmp, sizeof(tmp), "%.*f",
                               static_cast<int>(field.decimals), v.as_double);
             } else {
-                std::snprintf(tmp, sizeof(tmp), "%.15g", v.as_double);
+                // 17 significant digits guarantees a lossless round-trip for
+                // an IEEE-754 double (15 can lose the last ulp on the wire).
+                std::snprintf(tmp, sizeof(tmp), "%.17g", v.as_double);
             }
             v.as_string = tmp;
             break;
