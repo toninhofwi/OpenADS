@@ -139,6 +139,14 @@ std::string pack_double_key(double v) {
     return std::string(reinterpret_cast<char*>(raw), 8);
 }
 
+std::string pack_u64_key(std::uint64_t v) {
+    std::uint8_t raw[8];
+    for (int i = 0; i < 8; ++i)
+        raw[7 - i] = static_cast<std::uint8_t>((v >> (i * 8)) & 0xFFu);
+    raw[0] ^= 0x80u;
+    return std::string(reinterpret_cast<char*>(raw), 8);
+}
+
 namespace {
 
 // Encode an ADT field value to ADI key bytes, given ADT type and field data.
@@ -174,18 +182,36 @@ std::string encode_adt_key(std::uint16_t adt_type, const std::uint8_t* data,
             val = static_cast<double>(v);
             break;
         }
-        case ADT_TYPE_DOUBLE:
-        case ADT_TYPE_MONEY:
-        case ADT_TYPE_MODTIME: {
+        case ADT_TYPE_LOGICAL: {
+            const unsigned char c = length > 0 ? data[0] : 0;
+            const bool truthy = (c == 'T' || c == 't' || c == 'Y' || c == 'y' ||
+                                 c == '1' || c == 1);
+            val = truthy ? 1.0 : 0.0;
+            break;
+        }
+        case ADT_TYPE_MONEY: {
+            if (length < 8) break;
+            std::int64_t raw = 0;
+            std::memcpy(&raw, data, 8);
+            return pack_double_key(static_cast<double>(raw));
+        }
+        case ADT_TYPE_DOUBLE: {
+            if (length < 8) break;
             double v;
             std::memcpy(&v, data, 8);
             return pack_double_key(v);
         }
-        case ADT_TYPE_TIMESTAMP: {
-            std::uint64_t v = static_cast<std::uint64_t>(u32_le(data)) |
-                              (static_cast<std::uint64_t>(u32_le(data+4)) << 32);
-            val = static_cast<double>(v);
-            break;
+        case ADT_TYPE_TIMESTAMP:
+        case ADT_TYPE_MODTIME: {
+            if (length < 8) return pack_u64_key(0);
+            // Index total-order: JDN in high dword, ms in low (on-disk is the
+            // reverse — bytes 0..3 JDN, 4..7 ms).
+            const std::uint32_t jdn = u32_le(data);
+            const std::uint32_t ms  = u32_le(data + 4);
+            const std::uint64_t v =
+                (static_cast<std::uint64_t>(jdn) << 32) |
+                static_cast<std::uint64_t>(ms);
+            return pack_u64_key(v);
         }
         default:
             (void)length;
