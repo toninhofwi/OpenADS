@@ -1207,8 +1207,15 @@ util::Result<void> CdxIndex::free_tree_(std::uint32_t off) {
     // cache is cleared) and make it the new head.
     Page link{};
     write_u32_le(link.data(), free_ptr_);
-    if (auto w = file_.write_at(off, link.data(), link.size()); !w)
-        return w.error();
+    auto w = file_.write_at(off, link.data(), link.size());
+    if (!w) return w.error();
+    if (w.value() < link.size()) {
+        // A short write would leave a dangling free-list head pointing at a
+        // page whose next-free link was never fully stored — fail loud
+        // rather than silently corrupt the chain.
+        return util::Error{6106, 0,
+            "CDX free-list link short write", ""};
+    }
     page_cache_.erase(off);
     dirty_.erase(off);
     free_ptr_ = off;
