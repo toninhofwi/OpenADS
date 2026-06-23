@@ -111,13 +111,13 @@ PROCEDURE Main()
    ? "  livros com preco > 35 (mais caro primeiro):"
    FOR EACH hR IN aRows
       ? "    id=" + hb_CStr( hR[ "id" ] ) + ;
-        "  preco=" + hb_CStr( hR[ "preco" ] ) + ;
+        "  preco=" + FmtN( hR[ "preco" ] ) + ;
         "  titulo=" + AllTrim( hb_CStr( hR[ "titulo" ] ) )
    NEXT
 
    /* aggregates */
    xTotal := TORMQuery():New( oConn, "livros" ):Sum( "preco" )
-   ? "  total preco (Sum):", xTotal
+   ? "  total preco (Sum):", FmtN( xTotal )
 
    nQt := TORMQuery():New( oConn, "livros" ):Count()
    ? "  total livros (Count):", nQt
@@ -153,3 +153,8 @@ PROCEDURE Main()
    ? "========================================================"
    ?
    RETURN
+
+/* ---- helpers ------------------------------------------------------ */
+
+STATIC FUNCTION FmtN( xVal )
+   RETURN LTrim( Str( iif( HB_ISNUMERIC( xVal ), xVal, Val( hb_CStr( xVal ) ) ), 14, 2 ) )
