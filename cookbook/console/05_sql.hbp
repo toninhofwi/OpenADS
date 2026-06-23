@@ -1,0 +1,11 @@
+# See 01_hello_table.hbp for what each line means. Only the OpenADS
+# import lib (-L/-l) differs from a stock Harbour project.
+
+05_sql.prg
+
+-lrddads
+-L${OPENADS_LIB}
+-l${OPENADS_ACELIB}
+-lrddcdx
+-lrddntx
+-lrddfpt

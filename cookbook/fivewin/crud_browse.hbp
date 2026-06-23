@@ -1,0 +1,66 @@
+# crud_browse.hbp -- FiveWin + Harbour (MSVC 64-bit) over OpenADS.
+#
+# No drive letters are baked in. build.cmd sets these before hbmk2:
+#   FWDIR64       = FiveWin install (holds include\ + lib\FiveH64.lib)
+#   MSVC_UCRT_X64 = Windows SDK ucrt x64 lib dir
+#   OPENADS_LIB   = folder with the OpenADS DLL + import lib
+#   OPENADS_ACELIB= import-lib base name (e.g. openace64)
+#
+# Everything outside the FWH + OpenADS link lines is the stock FWH stack.
+
+-gui
+-w3
+-i.
+
+crud_browse.prg
+
+# --- FiveWin ---
+-i${FWDIR64}/include
+-L${FWDIR64}/lib
+-lFiveH64
+-lFiveHC64
+
+# --- Harbour contribs FWH pulls in ---
+xhb.hbc
+hbct.hbc
+hbwin.hbc
+hbmzip.hbc
+hbziparc.hbc
+
+# --- Windows system libraries FWH needs ---
+-lgdiplus
+-lole32
+-lOleDlg
+-lversion
+-lgdi32
+-luser32
+-lkernel32
+-lcomctl32
+-lcomdlg32
+-ladvapi32
+-lshell32
+-loleaut32
+-luuid
+-liphlpapi
+-lwsock32
+-lmsimg32
+-lpsapi
+-lwinmm
+-lws2_32
+-luxtheme
+-lshlwapi
+
+# --- CRT compatibility (Harbour libs target an older CRT) ---
+-ldflag=/NODEFAULTLIB:msvcrt
+-ldflag=/NODEFAULTLIB:libucrt
+-ldflag=/NODEFAULTLIB:libvcruntime.lib
+-ldflag=/FORCE:MULTIPLE
+-L"${MSVC_UCRT_X64}"
+-lucrt
+-lvcruntime
+-llegacy_stdio_definitions
+
+# --- the engine: stock rddads RDD + the OpenADS import lib ---
+-lrddads
+-L${OPENADS_LIB}
+-l${OPENADS_ACELIB}
