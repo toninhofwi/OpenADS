@@ -81,6 +81,9 @@ void parse_row_trailer_into(RemoteTable* rt,
         return;
     }
     rt->prefetch_queue.clear();
+    // M12.21 option C — every nav ack re-anchors the server cursor to the
+    // client's logical position, so the consumed-row lag resets to zero.
+    rt->prefetch_consumed = 0;
     std::uint8_t has_row = pl[pos++];
     if (has_row == 0) {
         rt->row_valid = false;
@@ -194,6 +197,12 @@ void connect_pack_payload(std::vector<std::uint8_t>& payload,
     pushstr(payload, data_dir);
     pushstr(payload, user);
     pushstr(payload, password);
+    // M12.21 option C — advertise the prefetch-consume capability so the
+    // server may piggyback lookahead rows on forward-Skip acks. Trailing
+    // and optional: pre-M12.21 servers ignore the extra 4 bytes.
+    std::uint32_t caps = kCapPrefetchConsume;
+    for (int i = 0; i < 4; ++i)
+        payload.push_back(static_cast<std::uint8_t>((caps >> (8 * i)) & 0xFFu));
 }
 
 } // namespace
@@ -320,7 +329,13 @@ util::Result<void> RemoteConnection::skip(RemoteTable* rt,
     Frame req;
     req.opcode = Opcode::Skip;
     write_u32_le(rt->id, req.payload);
-    write_u32_le(static_cast<std::uint32_t>(step), req.payload);
+    // M12.21 option C — the server cursor lags the client's logical
+    // position by prefetch_consumed rows (those served locally from the
+    // queue without a round-trip). Fold that lag into the wire step so
+    // the server lands where the client logically is + step. Cleared by
+    // parse_row_trailer_into on the ack below.
+    std::int32_t eff = step + static_cast<std::int32_t>(rt->prefetch_consumed);
+    write_u32_le(static_cast<std::uint32_t>(eff), req.payload);
     auto rep = request(req);
     if (!rep) return rep.error();
     if (rep.value().opcode != Opcode::SkipAck) {

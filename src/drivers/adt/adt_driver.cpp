@@ -43,7 +43,7 @@ DbfFieldType classify_adt_field(std::uint16_t raw_type) {
         case  4: return DbfFieldType::Character;
         case  5: return DbfFieldType::Memo;
         case  6: return DbfFieldType::Binary;
-        case  7: return DbfFieldType::Binary;  // IMAGE (raw type 7, same internal type as Binary)
+        case  7: return DbfFieldType::Binary;   // IMAGE — 9-byte .adm ref (Harbour 'P')
         case 10: return DbfFieldType::Double;
         case 11: return DbfFieldType::Integer;
         case 12: return DbfFieldType::ShortInt;
@@ -155,6 +155,24 @@ AdtDriver::open(const std::string& path, DriverOpenMode mode) {
 
         fields_.push_back(std::move(f));
     }
+
+    // autoinc_next is not persisted in the field descriptor; seed from data.
+    for (auto& fld : fields_) {
+        if (!fld.autoinc || fld.autoinc_next != 0) continue;
+        std::uint32_t max_val = 0;
+        for (std::uint32_t rn = 1; rn <= rec_count_; ++rn) {
+            auto raw = read_record_raw(rn);
+            if (!raw) continue;
+            const auto& rec = raw.value();
+            const std::size_t off = fld.record_offset;
+            if (off + 4 > rec.size()) continue;
+            const std::uint32_t v = read_u32_le(rec.data() + off);
+            if (v > max_val) max_val = v;
+        }
+        const std::uint32_t step = fld.autoinc_step ? fld.autoinc_step : 1u;
+        fld.autoinc_next = max_val > 0 ? max_val + step : 1u;
+    }
+
     return {};
 }
 
@@ -322,20 +340,7 @@ AdtDriver::bump_autoinc(std::uint16_t field_index) {
     std::uint32_t curr = f.autoinc_next;
     std::uint32_t step = f.autoinc_step ? f.autoinc_step : 1u;
     f.autoinc_next = curr + step;
-
-    // Field descriptor starts at 400 + 200*field_index; autoinc_next at
-    // byte 139 within the descriptor.
-    std::uint64_t off = 400u +
-                        static_cast<std::uint64_t>(field_index) * 200u +
-                        139u;
-    std::uint8_t buf[4] = {
-        static_cast<std::uint8_t>( f.autoinc_next        & 0xFFu),
-        static_cast<std::uint8_t>((f.autoinc_next >>  8) & 0xFFu),
-        static_cast<std::uint8_t>((f.autoinc_next >> 16) & 0xFFu),
-        static_cast<std::uint8_t>((f.autoinc_next >> 24) & 0xFFu),
-    };
-    auto w = file_.write_at(off, buf, sizeof(buf));
-    if (!w) return w.error();
+    // In-memory only — bytes 139-143 of AUTOINC descriptors stay zero on disk.
     return curr;
 }
 

@@ -15,10 +15,13 @@ de banco de dados compatível com ADS. Funciona como
 fazem link com `contrib/rddads` continuam funcionando sem
 recompilar.
 
-Release atual: **v1.0.0-rc29**.
+Release atual: **v1.0.4**.
 
 ## Conteúdo
 
+- **[Novidades](novidades/)** — resumo das mudanças desde
+  v1.0.0-rc29 (driver SQLite, triggers, DA-Web, escrita ADI, e
+  mais).
 - **[Como contribuir](contribuindo/)** — build, PRs, política de
   protocolo paralelo e checklist.
 - **[Primeiros passos](primeiros-passos/)** — instalação,
@@ -38,6 +41,14 @@ Release atual: **v1.0.0-rc29**.
 - **[Compat rddads / X# RDD](rddads-compat/)** — superfície de
   compatibilidade Harbour `contrib/rddads` e X# `AXDBFCDX`
   (rc19 M12.22 / M12.23).
+- **[Backend SQLite](sqlite-backend/)** — abrir e operar um banco
+  de dados SQLite via ACE / rddads com uma URI `sqlite://`.
+- **[Stored procedures](stored-procedures/)** — procedimentos AEP
+  personalizados (DLL/SO externa) e os procedimentos `sp_*`
+  integrados do Data Dictionary.
+- **[Cookbook](https://github.com/FiveTechSoft/OpenADS/tree/main/cookbook)**
+  — exemplos Harbour executáveis e comentados (trilhas console +
+  ORM), de simples a avançado.
 - **[Implantação como serviço](servico-implantacao/)** — rodar
   `openads_serverd` como serviço Windows / unit systemd /
   launchd plist (rc14).

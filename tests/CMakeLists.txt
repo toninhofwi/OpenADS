@@ -82,6 +82,7 @@ add_executable(openads_unit_tests
     unit/abi_ordsetfocus_test.cpp
     unit/abi_seek_empty_test.cpp
     unit/abi_open_concurrent_header_test.cpp
+    unit/cdx_peer_append_5000_test.cpp
     unit/abi_seek_numeric_alias_test.cpp
     unit/abi_open_index_order_test.cpp
     unit/abi_ordlistadd_path_test.cpp
@@ -112,6 +113,7 @@ add_executable(openads_unit_tests
     unit/abi_restructure_test.cpp
     unit/abi_versioned_overloads_test.cpp
     unit/abi_remote_overloads_test.cpp
+    unit/abi_remote_prefetch_test.cpp
     unit/abi_append_autolock_test.cpp
     unit/abi_dd_persistence_test.cpp
     unit/dbf_vfp_test.cpp
@@ -143,6 +145,8 @@ add_executable(openads_unit_tests
     unit/network_server_test.cpp
     unit/abi_adt_smoke_test.cpp
     unit/abi_adt_create_test.cpp
+    unit/abi_adi_create_test.cpp
+    unit/abi_adt_scope_validation_test.cpp
     unit/abi_adi_smoke_test.cpp
     unit/abi_adt_sql_test.cpp
     unit/abi_dd_table_prop_test.cpp

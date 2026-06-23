@@ -261,17 +261,23 @@ util::Result<std::vector<TxRecord>> TxLog::read_all() {
         if (r.type == TxRecordType::Update && plen >= 10) {
             const std::uint8_t* p = buf.data() + pos + WAL_HEADER_LEN;
             std::uint16_t pl = read_u16_le(p + 0);
+            std::size_t off = 2 + static_cast<std::size_t>(pl);
+            if (off + 4 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
             r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
-            std::size_t off = 2 + pl;
             r.update.recno = read_u32_le(p + off); off += 4;
+            if (off + 2 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
             std::uint16_t bl = read_u16_le(p + off);
+            if (off + 2 + bl > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
             r.update.before.assign(p + off + 2, p + off + 2 + bl);
             off += 2 + bl;
+            if (off + 2 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
             std::uint16_t al = read_u16_le(p + off);
+            if (off + 2 + al > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
             r.update.after.assign(p + off + 2, p + off + 2 + al);
         } else if (r.type == TxRecordType::Append && plen >= 6) {
             const std::uint8_t* p = buf.data() + pos + WAL_HEADER_LEN;
             std::uint16_t pl = read_u16_le(p + 0);
+            if (2 + static_cast<std::size_t>(pl) + 4 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
             r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
             r.update.recno = read_u32_le(p + 2 + pl);
         }

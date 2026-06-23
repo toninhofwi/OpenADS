@@ -14,10 +14,13 @@ for the Advantage Client Engine (`ace32.dll` / `ace64.dll` /
 `libace.so`) — Harbour / Clipper applications that link against
 `contrib/rddads` keep working without recompilation.
 
-Current release: **v1.0.0-rc29**.
+Current release: **v1.0.4**.
 
 ## What's in here
 
+- **[What's New](whatsnew/)** — summary of changes since
+  v1.0.0-rc29 (SQLite driver, triggers, DA-Web, ADI write, and
+  more).
 - **[Getting started](getting-started/)** — install, first build,
   smoke test.
 - **[Architecture](architecture/)** — five-layer architecture
@@ -40,6 +43,14 @@ Current release: **v1.0.0-rc29**.
 - **[rddads / X# RDD compat](rddads-compat/)** — Harbour
   `contrib/rddads` and X# `AXDBFCDX` compatibility surface
   (rc19 M12.22 / M12.23).
+- **[SQLite backend](sqlite-backend/)** — open and drive a SQLite
+  database through ACE / rddads via a `sqlite://` connection URI.
+- **[Stored procedures](stored-procedures/)** — custom AEP
+  procedures (external DLL/SO) and the built-in `sp_*` Data
+  Dictionary procedures.
+- **[Cookbook](https://github.com/FiveTechSoft/OpenADS/tree/main/cookbook)**
+  — runnable, commented Harbour examples (console + ORM tracks),
+  simple → advanced.
 - **[Service deployment](service-deployment/)** — run
   `openads_serverd` as a Windows Service / systemd unit / macOS
   launchd plist (rc14).

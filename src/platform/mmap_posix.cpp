@@ -53,7 +53,11 @@ void FileMap::unmap_() noexcept {
 
 util::Result<FileMap> FileMap::map_readonly(File& f, std::uint64_t offset,
                                             std::size_t length) {
-    int fd = static_cast<int>(reinterpret_cast<intptr_t>(f.native_handle()));
+    if (length == 0) {
+        return util::Error{5000, 0, "mmap: cannot map zero length", ""};
+    }
+    // native_handle() stores (fd + 1) to avoid the nullptr/fd-0 collision.
+    int fd = static_cast<int>(reinterpret_cast<intptr_t>(f.native_handle()) - 1);
     void* v = ::mmap(nullptr, length, PROT_READ, MAP_PRIVATE, fd,
                      static_cast<off_t>(offset));
     if (v == MAP_FAILED) return os_error("mmap");

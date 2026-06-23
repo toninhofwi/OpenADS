@@ -5,6 +5,87 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.4 — 2026-06-23
+
+- **CDX stale record-count refresh on the fetch path (PR #50).** A
+  `CdxDriver` caches the DBF record count at `open()`. In a
+  multiuser deployment a peer connection can append rows afterward,
+  leaving that cache lagging; an index walk that reached a
+  just-appended recno (e.g. mid-`REPLACE … FOR` / DBEVAL) then
+  failed hard with a spurious ADSCDX error 5000. `read_record_raw` /
+  `write_record_raw` now re-read the on-disk count under a shared
+  header lock before declaring a recno out of range, with an
+  unlocked-refresh fallback. Slow path only — a normal forward scan
+  never reads past the count, so the single-writer case pays
+  nothing.
+
+## 1.0.3 — 2026-06-23
+
+- **Round-trip-thrifty remote scan (PR #47).** A forward scan over
+  the `tcp://` wire no longer costs ~one TCP round-trip per record.
+  A sequential-prefetch path — negotiated via a Connect capability
+  flag — piggybacks a lookahead block onto forward-`Skip` acks; the
+  client serves them locally and folds the consumed count back into
+  the next wire step so the server cursor never desyncs. `AdsAtEOF` /
+  `AdsAtBOF` are answered from the cached current row and `AdsIsFound`
+  from a cached `Found()` flag. A 50k-record loopback scan is ~3.9×
+  faster (NAV-only) / ~3.3× (3-field read), `IsFound` round-trips
+  drop to zero. Additive and backward-compatible: clients that don't
+  advertise the capability keep the previous wire behaviour.
+- **Cookbook expansion (PR #46).** New `console/` examples (SQL via
+  `AdsExecuteSQLDirect`, native ADT with `ADSADT` + `.adi`, a
+  `tcp://` remote client), a FiveWin `xbrowse` CRUD sample, and an
+  all-back-ends ORM benchmark (`orm/complete/`) with a cross-back-end
+  content checksum and a seek-vs-scan headline.
+
+## 1.0.2 — 2026-06-23
+
+- **Responsive Studio web console.** The Studio SPA
+  (`tools/serverd/spa_index.h`) now adapts to phones and tablets:
+  the table-list sidebar collapses into a slide-in drawer (☰ in the
+  header, dimmed backdrop, auto-close on select) below ~768 px;
+  tabs scroll horizontally; on phones forms stack to one column,
+  modals fit the viewport width, and touch targets are enlarged.
+  Also fixes a pre-existing dark-theme bug where `--panel` /
+  `--panel-2` / `--border` were self-referential CSS variables, so
+  panels and borders rendered transparent.
+
+## 1.0.1 — 2026-06-23
+
+- **`SKIP` honours `SET DELETED ON` in natural order.** `Table::skip`
+  on an unindexed table stepped straight onto deleted rows; it now
+  skips deleted records (matching the index-order path and
+  `GOTO TOP` / `GOTO BOTTOM`) when `SET DELETED` is ON. Fixes
+  `abi_deleted_records_test` ("middle records deleted: Skip sees only
+  live rows"), which had been failing the test step on every CI
+  platform.
+- **Native ADT / ADI create, read, write, and index seek (PR #41).**
+  OpenADS now operates end-to-end on native `.adt` / `.adi` / `.adm`
+  files: `AdsCreateTable(ADS_ADT)` writes a valid header + field
+  descriptors (+ optional `.adm` memo store), `AdsAppendRecord` /
+  `AdsWriteRecord` persist rows and memo payloads, re-open + field get
+  + memo round-trip on read, `AdsCreateIndex61` builds `.adi` bags, and
+  `AdsSeek` works on character and numeric ADI keys. AUTOINC counter is
+  seeded from existing rows at open.
+- **POSIX platform hardening.** `file_posix` stores handles as `(fd+1)`
+  so a real fd 0 (stdin closed) is not mistaken for the not-open
+  sentinel; `pread` / `pwrite` retry on `EINTR`; `map_readonly` rejects
+  zero-length maps; `LockMgr` refcounts repeated locks and releases the
+  OS lock only on the final unlock; `TxLog::read_all` bounds-checks
+  every UPDATE / APPEND field length against truncated / corrupt WAL.
+- **macOS / clang build fixes.** Resolved `-Werror` breaks introduced by
+  the ADT/ADI work: sign-conversion in `adi_index.cpp` and the
+  `environ` / dangling-pointer issues in the ADT scope-validation test.
+- **Documentation.** New SQLite backend guide (`sqlite://` connection
+  URI, `?key=` encryption, field-type mapping, limitations) and stored
+  procedures guide (custom AEP `CREATE`/`EXECUTE PROCEDURE` + the
+  built-in `sp_*` Data Dictionary procedures), all in EN / ES / PT.
+- **Cookbook (PR #44).** New `cookbook/` folder with runnable,
+  heavily-commented Harbour examples — a `console/` track (pure
+  `ADSCDX` xBase) and an `orm/` track (CRUD across SQLite / DBF /
+  PostgreSQL / MariaDB / ODBC back-ends), plus connection-string,
+  field-type and troubleshooting guides.
+
 ## 1.0.0-rc29 — 2026-05-26
 
 - **Turnkey `hbmk2` (`.hbp`) example for Harbour apps —

@@ -389,6 +389,12 @@ void Server::session_loop(Socket s) {
     std::unique_ptr<openads::session::Connection> sess_conn;
     std::unordered_map<std::uint32_t, openads::session::Handle> tbls;
     std::unordered_map<std::uint32_t, ADSHANDLE>                cursor_tbls;
+    // M12.21 option C — set from the Connect payload's capability word.
+    // Gates the sequential-prefetch lookahead block: only a client that
+    // advertised kCapPrefetchConsume (and therefore does the consumed-
+    // counter resync) gets lookahead rows; everyone else keeps the
+    // one-round-trip-per-Skip behavior, so no version mix desyncs.
+    bool client_prefetch_ok = false;
     // M12.16 — lazy-promoted ABI handle parallel to tbls. Populated
     // on demand the first time the wire dispatch needs to call an
     // ABI-only function (index ops). Once present, every operation
@@ -771,6 +777,17 @@ void Server::session_loop(Socket s) {
                     reply = err("Connect: bad payload");
                     break;
                 }
+                // M12.21 option C — optional trailing [u32 LE caps].
+                // Absent for pre-M12.21 clients (p == pl.size()).
+                if (p + 4 <= pl.size()) {
+                    std::uint32_t caps =
+                        static_cast<std::uint32_t>(pl[p]) |
+                        (static_cast<std::uint32_t>(pl[p + 1]) <<  8) |
+                        (static_cast<std::uint32_t>(pl[p + 2]) << 16) |
+                        (static_cast<std::uint32_t>(pl[p + 3]) << 24);
+                    client_prefetch_ok =
+                        (caps & openads::network::kCapPrefetchConsume) != 0;
+                }
                 if (require_auth()) {
                     auto cit = creds_.find(user);
                     if (cit == creds_.end() || cit->second != pw) {
@@ -878,17 +895,16 @@ void Server::session_loop(Socket s) {
                 // M12.21 — sequential Skip(1) is the xbrowse PgDn
                 // pattern; piggyback up to 19 lookahead rows so the
                 // remaining cells in the repaint hit the client cache.
-                // M12.21 disabled (option B). Sequential prefetch is
-                // correct only when client + server agree on the
-                // logical cursor; the lookahead variant didn't carry
-                // a "prefetch_consumed" hint, so a Skip(-1) after K
-                // drained prefetch rows reads from server cursor at
-                // N+1 instead of N+K, surfacing the wrong row. Until
-                // option C (bidirectional prefetch with consumed-
-                // counter sync) lands, ack with no lookahead — every
-                // other M12.17/18/19/20 win still applies.
-                std::uint16_t lookahead = 0;
-                (void)step;
+                // M12.21 option C — re-enabled. A forward Skip from a
+                // prefetch-capable client piggybacks up to K lookahead
+                // rows; the client serves them locally and folds the
+                // consumed count back into the next wire step, so the
+                // server cursor never desyncs (the bug that shelved
+                // option B). Non-capable clients and non-forward steps
+                // get no lookahead, preserving the old behavior.
+                constexpr std::uint16_t kPrefetchLookahead = 64;
+                std::uint16_t lookahead =
+                    (client_prefetch_ok && step >= 1) ? kPrefetchLookahead : 0;
                 if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
                     (void)AdsSkip(cit->second, step);
                     reply.opcode = Opcode::SkipAck;

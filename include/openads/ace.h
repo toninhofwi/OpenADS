@@ -665,12 +665,18 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 // contrib expects so existing Harbour applications and tests
 // (rddtst.prg, cdxcl52.prg, ntxcl52.prg) compile and run unchanged.
 
-// Index option flags (AdsCreateIndex61 ulOptions).
+// Index option flags (AdsCreateIndex61 ulOptions). The numeric values
+// match the Advantage Database SDK exactly — VERIFIED empirically against
+// the Harbour rddads contrib: `INDEX ON f TAG t` sends 0x02 (COMPOUND),
+// `... DESCENDING` adds 0x08 (DESCENDING), `... UNIQUE` adds 0x01.
+// rddads / X#'s ADSRDD set COMPOUND on EVERY .cdx tag, so COMPOUND must
+// never be mistaken for DESCENDING (that mistake builds every order
+// reversed). DO NOT swap DESCENDING and COMPOUND again.
 #define ADS_DEFAULT_INDEX  0x00000000
 #define ADS_UNIQUE         0x00000001
-#define ADS_DESCENDING     0x00000002
+#define ADS_COMPOUND       0x00000002
 #define ADS_CUSTOM         0x00000004
-#define ADS_COMPOUND       0x00000008
+#define ADS_DESCENDING     0x00000008
 #define ADS_FTS_INDEX_ORDER 0x00000010
 #define ADS_INDEX_ORDER    0x00000020
 

@@ -92,19 +92,38 @@ const drivers::DbfField& Table::field_descriptor(std::uint16_t idx) const {
 std::int32_t Table::field_index(const std::string& name) const noexcept {
     const auto& fs = driver_->fields();
     // Case-insensitive: DBF field names are always uppercase in storage;
-    // SQL column names may arrive in any case.
-    for (std::size_t i = 0; i < fs.size(); ++i) {
-        if (fs[i].name.size() != name.size()) continue;
-        bool eq = true;
-        for (std::size_t j = 0; j < name.size(); ++j) {
-            if (std::toupper(static_cast<unsigned char>(name[j])) !=
-                std::toupper(static_cast<unsigned char>(fs[i].name[j]))) {
-                eq = false; break;
+    // SQL column names / index expressions may arrive in any case.
+    auto scan = [&]() -> std::int32_t {
+        for (std::size_t i = 0; i < fs.size(); ++i) {
+            if (fs[i].name.size() != name.size()) continue;
+            bool eq = true;
+            for (std::size_t j = 0; j < name.size(); ++j) {
+                if (std::toupper(static_cast<unsigned char>(name[j])) !=
+                    std::toupper(static_cast<unsigned char>(fs[i].name[j]))) {
+                    eq = false; break;
+                }
             }
+            if (eq) return static_cast<std::int32_t>(i);
         }
-        if (eq) return static_cast<std::int32_t>(i);
+        return -1;
+    };
+    // O(1) repeat lookups via an upper-cased-name cache. Wrapped so an
+    // allocation failure degrades to the linear scan rather than violating
+    // noexcept.
+    try {
+        std::string key;
+        key.reserve(name.size());
+        for (char c : name)
+            key.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(c))));
+        auto it = field_index_cache_.find(key);
+        if (it != field_index_cache_.end()) return it->second;
+        std::int32_t found = scan();
+        field_index_cache_.emplace(std::move(key), found);
+        return found;
+    } catch (...) {
+        return scan();
     }
-    return -1;
 }
 
 std::uint32_t Table::record_count() const noexcept {
@@ -504,18 +523,20 @@ util::Result<void> Table::skip(std::int32_t delta) {
     if (auto r = load_record_(static_cast<std::uint32_t>(target)); !r) {
         return r.error();
     }
-    // SET DELETE ON (no active index) and/or an active filter hide rows
-    // from the natural-order walk: step in the skip direction until a
-    // visible row appears or we run off either end. goto_top/goto_bottom
-    // already do this for deleted rows (576746e); skip was overlooked.
+    // Step over rows the cursor must not land on: deleted rows when
+    // SET DELETED is ON (show_deleted() == false) and rows rejected by
+    // an active filter. The index-order path above already skips
+    // deleted rows; the natural-order path must do the same.
     const bool skip_deleted = !openads::abi::show_deleted();
+    auto must_skip = [&]() -> bool {
+        if (state_ != State::Positioned) return false;
+        if (skip_deleted && is_deleted()) return true;
+        if (filter_ && !filter_(*this)) return true;
+        return false;
+    };
     if (skip_deleted || filter_) {
         std::int64_t step = (delta >= 0) ? 1 : -1;
-        auto hidden = [&]() {
-            return (skip_deleted && is_deleted()) ||
-                   (filter_ && !filter_(*this));
-        };
-        while (state_ == State::Positioned && hidden()) {
+        while (must_skip()) {
             std::int64_t nt = static_cast<std::int64_t>(recno_) + step;
             if (nt < 1) { state_ = State::Bof; recno_ = 0; return {}; }
             if (nt > static_cast<std::int64_t>(n)) {

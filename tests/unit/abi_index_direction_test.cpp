@@ -107,8 +107,8 @@ TEST_CASE("M10.4 AdsSetIndexDirection reverses traversal") {
 }
 
 TEST_CASE("AdsCreateIndex61 ADS_COMPOUND option builds an ascending order") {
-    // rddads / X#'s ADSRDD pass ADS_COMPOUND (0x08) for every CDX/NTX
-    // tag. ADS_COMPOUND must NOT be decoded as ADS_DESCENDING (0x02) —
+    // rddads / X#'s ADSRDD pass ADS_COMPOUND (0x02) for every CDX/NTX
+    // tag. ADS_COMPOUND must NOT be decoded as ADS_DESCENDING (0x08) —
     // doing so builds every order descending: GotoTop lands on the
     // last key and SKIP walks backward.
     auto dir = fs::temp_directory_path() / "openads_idx_compound_dir";

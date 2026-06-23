@@ -162,6 +162,16 @@ enum class Opcode : std::uint8_t {
 // multi-gigabyte resize on a malicious 4-byte length prefix.
 inline constexpr std::uint32_t kMaxFramePayload = 16u * 1024u * 1024u;
 
+// M12.21 option C — client capability flags, advertised as a trailing
+// [u32 LE] appended to the Connect payload (after the password field).
+// A server only piggybacks the sequential-prefetch lookahead block onto
+// forward-Skip acks for clients that set kCapPrefetchConsume, because
+// draining that queue locally requires the consumed-counter cursor
+// resync. Older clients omit the field (caps = 0) and keep the
+// one-round-trip-per-Skip behavior, so the wire stays backward
+// compatible in every version-mix direction.
+inline constexpr std::uint32_t kCapPrefetchConsume = 0x00000001u;
+
 struct Frame {
     Opcode                    opcode = Opcode::Hello;
     std::vector<std::uint8_t> payload;

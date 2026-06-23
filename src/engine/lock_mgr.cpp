@@ -120,7 +120,11 @@ LockMgr::try_lock_record_excl(platform::File& f, TableTypeForLock t, LockingMode
 }
 
 void LockMgr::forget_(const Key& k) noexcept {
-    held_.erase(k);
+    auto it = held_.find(k);
+    if (it == held_.end()) return;
+    if (--it->second <= 0) {
+        held_.erase(it);
+    }
 }
 
 void LockMgr::unlock_table(platform::File& f, TableTypeForLock t, LockingMode m) {

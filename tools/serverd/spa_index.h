@@ -41,9 +41,9 @@ inline constexpr const char kSpaPart1[] = R"OPENADS_SPA(
   :root {
     --bg:        #1e1e1e;
     --fg:        #ddd;
-    --panel:     var(--panel);
-    --panel-2:   var(--panel-2);
-    --border:    var(--border);
+    --panel:     #252526;
+    --panel-2:   #2d2d30;
+    --border:    #3c3c3c;
     --accent:    #0d6efd;
     --accent-2:  #094771;
     --danger:    #d9534f;
@@ -162,10 +162,65 @@ inline constexpr const char kSpaPart1[] = R"OPENADS_SPA(
   body.light .sql-cmt { color: #008000; }
   td.sel-col { width: 30px; text-align: center; }
   td.sel-col input { transform: scale(1.3); cursor: pointer; }
+
+  /* ============================================================
+     Responsive — phone & tablet. The table-list <aside> turns
+     into a slide-in drawer toggled by the header hamburger; the
+     work area, tabs, forms and modals reflow to one column.
+     ============================================================ */
+  html { -webkit-text-size-adjust: 100%; }
+  #nav-toggle { display: none; background: transparent; color: white;
+                border: 1px solid rgba(255,255,255,0.4); border-radius: 3px;
+                font-size: 20px; line-height: 1; padding: 4px 13px;
+                cursor: pointer; margin-right: 14px; }
+  #nav-backdrop { display: none; position: fixed; inset: 0;
+                  background: rgba(0,0,0,0.5); z-index: 8; }
+  #nav-backdrop.show { display: block; }
+
+  /* ---- Tablet and below ---- */
+  @media (max-width: 768px) {
+    body { font-size: 17px; }
+    header { padding: 12px 16px; }
+    header h1 { font-size: 20px; }
+    header .status { display: none; }
+    #nav-toggle { display: inline-block; }
+    /* sidebar becomes an off-canvas drawer */
+    aside { position: fixed; top: 0; left: 0; height: 100vh;
+            width: min(300px, 82vw); z-index: 9;
+            transform: translateX(-100%);
+            transition: transform 0.22s ease;
+            box-shadow: 2px 0 14px rgba(0,0,0,0.4); }
+    aside.open { transform: translateX(0); }
+    nav.tabs { overflow-x: auto; flex-wrap: nowrap;
+               -webkit-overflow-scrolling: touch; }
+    nav.tabs button { padding: 12px 18px; white-space: nowrap; }
+    .pane { padding: 14px; }
+    .kv { grid-template-columns: 160px 1fr; }
+  }
+
+  /* ---- Phone ---- */
+  @media (max-width: 480px) {
+    header { flex-wrap: wrap; row-gap: 8px; }
+    header h1 { font-size: 18px; }
+    header > div { gap: 10px !important; flex-wrap: wrap; }
+    .pane { padding: 10px; }
+    .toolbar { gap: 8px; }
+    .form-row { flex-direction: column; align-items: stretch; gap: 4px; }
+    .form-row label { width: auto; }
+    .kv { grid-template-columns: 1fr; gap: 2px 0; max-width: none; }
+    .kv > div:nth-child(even) { margin-bottom: 8px; }
+    .modal { min-width: 0 !important; width: 94vw; padding: 16px; }
+    .col-row { grid-template-columns: 1.2fr 0.7fr 0.5fr 0.5fr auto; gap: 4px; }
+    .col-row input, .col-row select { font-size: 13px; padding: 5px; }
+    /* larger touch targets */
+    .toolbar button, .btn, nav.tabs button { min-height: 42px; }
+    aside li { padding: 13px 18px; }
+  }
 </style>
 </head>
 <body>
 <header>
+  <button id="nav-toggle" aria-label="Toggle table list">&#9776;</button>
   <h1>OpenADS Studio</h1>
   <div style="display:flex;gap:18px;align-items:center">
     <select id="lang-pick"
@@ -201,6 +256,7 @@ inline constexpr const char kSpaPart1[] = R"OPENADS_SPA(
     <div class="status" id="status">…</div>
   </div>
 </header>
+<div id="nav-backdrop"></div>
 <main>
   <aside>
     <div class="aside-head">
@@ -500,6 +556,7 @@ function selectTable(name) {
   document.querySelectorAll("aside li").forEach(li =>
     li.classList.toggle("active", li.dataset.name === name));
   showTab("browse");
+  closeNav();
 }
 
 async function loadBrowse() {
@@ -1251,7 +1308,19 @@ async function loadSessions() {
 
 document.querySelectorAll("nav.tabs button").forEach(b =>
   b.addEventListener("click", () => showTab(b.dataset.tab)));
-$("server-link").addEventListener("click", () => showTab("server"));
+$("server-link").addEventListener("click", () => { showTab("server"); closeNav(); });
+
+/* ---- mobile nav drawer (studio responsive) ---- */
+function closeNav() {
+  document.querySelector("aside").classList.remove("open");
+  $("nav-backdrop").classList.remove("show");
+}
+function toggleNav() {
+  const open = document.querySelector("aside").classList.toggle("open");
+  $("nav-backdrop").classList.toggle("show", open);
+}
+$("nav-toggle").addEventListener("click", toggleNav);
+$("nav-backdrop").addEventListener("click", closeNav);
 $("sql-run").addEventListener("click", runSql);
 $("sql-export").addEventListener("click", exportCsv);
 $("sql-export-json").addEventListener("click", exportJson);

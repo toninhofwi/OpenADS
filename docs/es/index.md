@@ -15,10 +15,13 @@ directo** del Advantage Client Engine (`ace32.dll` /
 que enlazan contra `contrib/rddads` siguen funcionando sin
 recompilar.
 
-Release actual: **v1.0.0-rc29**.
+Release actual: **v1.0.4**.
 
 ## Contenido
 
+- **[Novedades](novedades/)** — resumen de cambios desde
+  v1.0.0-rc29 (driver SQLite, triggers, DA-Web, escritura ADI,
+  y más).
 - **[Primeros pasos](primeros-pasos/)** — instalación, primer
   build, smoke test.
 - **[Arquitectura](arquitectura/)** — arquitectura de cinco
@@ -36,6 +39,14 @@ Release actual: **v1.0.0-rc29**.
 - **[Compat rddads / X# RDD](rddads-compat/)** — superficie de
   compatibilidad Harbour `contrib/rddads` y X# `AXDBFCDX`
   (rc19 M12.22 / M12.23).
+- **[Backend SQLite](sqlite-backend/)** — abrir y operar una base
+  de datos SQLite vía ACE / rddads con una URI `sqlite://`.
+- **[Stored procedures](stored-procedures/)** — procedimientos AEP
+  personalizados (DLL/SO externa) y los procedimientos `sp_*`
+  integrados del Data Dictionary.
+- **[Cookbook](https://github.com/FiveTechSoft/OpenADS/tree/main/cookbook)**
+  — ejemplos Harbour ejecutables y comentados (pistas console +
+  ORM), de simple a avanzado.
 - **[Despliegue como servicio](servicio-despliegue/)** — correr
   `openads_serverd` como servicio Windows / unit systemd /
   launchd plist (rc14).
