@@ -55,6 +55,12 @@ private:
     // exclusive byte-lock on the header before invoking, otherwise
     // the refresh races against other writers.
     util::Result<void> refresh_record_count_();
+    // Re-read the on-disk record count under a shared header lock, used
+    // by the fetch path when a recno appears to be past the end: a peer
+    // connection may have appended since we cached rec_count_ at open().
+    // Best-effort — falls back to an unlocked refresh if the lock can't
+    // be taken in time, never leaving rec_count_ worse than it was.
+    util::Result<void> refresh_count_shared_();
     void               apply_ctr_(std::uint8_t* buf, std::size_t n,
                                   std::uint32_t recno) const;
 
