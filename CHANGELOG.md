@@ -5,6 +5,25 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.1.0 — 2026-06-23
+
+- **SQL backends: PostgreSQL / MariaDB / ODBC behind a pluggable
+  backend-ops registry (PR #31).** OpenADS can now open tables on
+  PostgreSQL, MariaDB / MySQL and any ODBC-reachable engine behind
+  the ACE ABI, selected by the connection URI (`postgresql://` /
+  `mariadb://` / `odbc://`) exactly like the SQLite backend.
+  Navigation, field read and column SEEK work; write is
+  per-backend. The four SQL backends register one `BackendTableOps`
+  struct each (17 function pointers), so the ~17 ABI navigation /
+  field functions stay backend-agnostic instead of multiplying a
+  per-backend `if` block — adding a further backend is one ops
+  struct plus one registration line. Identifiers are validated to
+  safe ASCII and SEEK values use prepared-statement parameters. The
+  native local DBF / ADT and `tcp://` remote paths are unchanged
+  fall-throughs. See `docs/OPENADS_PLUS.md`. Verified: full unit
+  suite 572/572; PostgreSQL/MariaDB/ODBC e2e (41/45/59 assertions)
+  against live servers on the contributor's side.
+
 ## 1.0.4 — 2026-06-23
 
 - **CDX stale record-count refresh on the fetch path (PR #50).** A

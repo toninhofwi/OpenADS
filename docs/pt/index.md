@@ -15,7 +15,7 @@ de banco de dados compatível com ADS. Funciona como
 fazem link com `contrib/rddads` continuam funcionando sem
 recompilar.
 
-Release atual: **v1.0.4**.
+Release atual: **v1.1.0**.
 
 ## Conteúdo
 

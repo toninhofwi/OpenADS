@@ -20,8 +20,8 @@ A free, open-source, ADS-compatible engine and web Studio.
 
 - Source: [github.com/FiveTechSoft/OpenADS](https://github.com/FiveTechSoft/OpenADS)
 - License: Apache License 2.0
-- Latest release: **v1.0.4** —
-  [release notes](https://github.com/FiveTechSoft/OpenADS/releases/tag/v1.0.4)
+- Latest release: **v1.1.0** —
+  [release notes](https://github.com/FiveTechSoft/OpenADS/releases/tag/v1.1.0)
   · [all releases](https://github.com/FiveTechSoft/OpenADS/releases)
   · [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md)
 
