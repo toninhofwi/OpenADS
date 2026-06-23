@@ -5,6 +5,18 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.2 — 2026-06-23
+
+- **Responsive Studio web console.** The Studio SPA
+  (`tools/serverd/spa_index.h`) now adapts to phones and tablets:
+  the table-list sidebar collapses into a slide-in drawer (☰ in the
+  header, dimmed backdrop, auto-close on select) below ~768 px;
+  tabs scroll horizontally; on phones forms stack to one column,
+  modals fit the viewport width, and touch targets are enlarged.
+  Also fixes a pre-existing dark-theme bug where `--panel` /
+  `--panel-2` / `--border` were self-referential CSS variables, so
+  panels and borders rendered transparent.
+
 ## 1.0.1 — 2026-06-23
 
 - **`SKIP` honours `SET DELETED ON` in natural order.** `Table::skip`

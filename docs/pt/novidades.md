@@ -107,6 +107,18 @@ Uma nova ferramenta `openmonitor` fornece tanto uma interface de
 terminal (TUI) quanto um painel web para monitorar e administrar
 `openads_serverd`.
 
+### OpenADS Studio — Responsive (telefone / tablet)
+
+O console web Studio agora se adapta a telas pequenas — pode ser
+usado de um telefone ou tablet, não apenas de um navegador
+desktop. Abaixo de ~768 px a lista de tabelas vira um **drawer**
+deslizante (☰ no header, fundo escurecido, fechamento automático
+ao escolher); a barra de abas rola horizontalmente e os
+formulários / modais se reorganizam em uma coluna com alvos de
+toque maiores. Também corrige um bug antigo do tema escuro — as
+variáveis CSS `--panel` / `--panel-2` / `--border` eram
+auto-referenciais, então painéis e bordas ficavam transparentes.
+
 ### Extensão Nativa PHP (`php_openads`)
 
 Uma extensão nativa Zend PHP (`php_openads.dll`) está agora

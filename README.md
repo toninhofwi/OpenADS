@@ -77,7 +77,7 @@ generated baseline; OpenADS clears every line of the regenerated
 ADS-flavoured baseline. The session that closed the last gap is
 recorded across 28 incremental commits ending at `28be1be`.
 
-**Current release: v1.0.1 (2026-06-23).** Full Data Dictionary
+**Current release: v1.0.2 (2026-06-23).** Full Data Dictionary
 engine enforcement, DA-Web management UI, SAP DD import, and TCP
 remote server are all in production. `openads_serverd` serves the
 OpenADS wire protocol; clients connect with
