@@ -85,6 +85,15 @@ if(OPENADS_WITH_ODBC)
     )
 endif()
 
+if(OPENADS_WITH_FIREBIRD)
+    target_sources(openads_core PRIVATE
+        sql_backend/firebird_uri.cpp
+        sql_backend/firebird_connection.cpp
+    )
+    # sql_common.cpp is already compiled unconditionally above (shared by the
+    # SQLite/ODBC/PostgreSQL/MariaDB backends) — do NOT add it again here.
+endif()
+
 if(WIN32)
     target_sources(openads_core PRIVATE
         platform/file_win32.cpp
@@ -157,6 +166,29 @@ if(OPENADS_WITH_ODBC)
         target_link_libraries(openads_core PUBLIC odbc32)
     else()
         target_link_libraries(openads_core PUBLIC odbc)
+    endif()
+endif()
+
+if(OPENADS_WITH_FIREBIRD)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_FIREBIRD=1)
+    # The Firebird client SDK is located via FIREBIRD_ROOT (no hard-coded
+    # paths). The native connection links libfbclient via its import library.
+    if(FIREBIRD_ROOT)
+        target_include_directories(openads_core PRIVATE ${FIREBIRD_ROOT}/include)
+        target_link_libraries(openads_core PUBLIC ${FIREBIRD_ROOT}/lib/fbclient_ms.lib)
+        if(MSVC AND OPENADS_FIREBIRD_DELAYLOAD)
+            # Delay-load so fbclient.dll is only required when a Firebird
+            # connection is actually opened: the unit-test binary links this
+            # backend but must still run where the Firebird runtime is absent.
+            # delayimp.lib provides the __delayLoadHelper2 thunk.
+            target_link_options(openads_core INTERFACE /DELAYLOAD:fbclient.dll)
+            target_link_libraries(openads_core PUBLIC delayimp.lib)
+        endif()
+    else()
+        message(FATAL_ERROR
+            "OPENADS_WITH_FIREBIRD=ON but FIREBIRD_ROOT was not set "
+            "(point it at the Firebird client SDK: include/ibase.h + "
+            "lib/fbclient_ms.lib)")
     endif()
 endif()
 
