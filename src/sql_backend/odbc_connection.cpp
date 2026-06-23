@@ -774,29 +774,34 @@ util::Result<bool> OdbcConnection::seek_index(
 
     const std::string& q      = impl_->quote;
     const std::string  pkcols = pk_select_list(q, *tbl);
-    const std::string  esc    = (kind == IndexExprKind::UpperColumn)
-                                    ? escape_literal(key)
-                                    : format_literal(*tbl, sql_col, key);
     const std::string  qexpr  = index_column_sql(q, sql_col, kind);
     const std::string  from   = " FROM " + quote_ident(q, tbl->sql_table);
+
+    std::vector<BoundParam> params;
+    if (kind == IndexExprKind::UpperColumn) {
+        BoundParam p; p.sql_type = SQL_VARCHAR; p.value = key;
+        params.push_back(p);
+    } else {
+        params.push_back(param_for(*tbl, sql_col, key));
+    }
 
     std::string sql;
     if (last_key) {
         sql = soft
-            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " <= " + esc +
+            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " <= ?"
               " ORDER BY " + qexpr + " DESC"
-            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = " + esc +
+            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = ?"
               " ORDER BY " + qexpr + " DESC";
     } else {
         sql = soft
-            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " >= " + esc +
+            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " >= ?"
               " ORDER BY " + qexpr + " ASC"
-            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = " + esc;
+            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = ?";
     }
 
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
-    auto r = run_query(impl_->dbc, sql, rows, nulls, /*max_rows=*/1);
+    auto r = run_query(impl_->dbc, sql, params, rows, nulls, /*max_rows=*/1);
     if (!r) return r.error();
 
     bool found = false;

@@ -149,6 +149,7 @@ if(OPENADS_WITH_ODBC)
         unit/abi_plus_odbc_read_test.cpp
         unit/abi_plus_odbc_seek_test.cpp
         unit/abi_plus_odbc_write_test.cpp
+        unit/abi_plus_odbc_bind_test.cpp
     )
 endif()
 
