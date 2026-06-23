@@ -240,6 +240,9 @@ void Table::set_recno_sequence(std::vector<std::uint32_t> seq) {
 }
 
 util::Result<void> Table::goto_top() {
+    // Absolute reposition: drop any read-ahead block so we observe
+    // writes made through another handle and start the scan fresh.
+    driver_->invalidate_read_cache();
     // Empty table → Limbo regardless of active order / sequence.
     if (driver_->record_count() == 0) {
         state_ = State::Limbo; recno_ = 0; return {};
@@ -312,6 +315,8 @@ util::Result<void> Table::goto_top() {
 }
 
 util::Result<void> Table::goto_bottom() {
+    // Absolute reposition: drop any read-ahead block (see goto_top).
+    driver_->invalidate_read_cache();
     // Empty table → Limbo regardless of active order / sequence.
     if (driver_->record_count() == 0) {
         state_ = State::Limbo; recno_ = 0; return {};
@@ -371,6 +376,10 @@ util::Result<void> Table::goto_bottom() {
 }
 
 util::Result<void> Table::goto_record(std::uint32_t recno) {
+    // Absolute reposition / AdsRefreshRecord: drop any read-ahead block
+    // so the (re)read hits disk — this is how a workarea sees an edit
+    // made through another handle, and how RefreshRecord re-reads.
+    driver_->invalidate_read_cache();
     // Harbour / SAP-ACE / Clipper convention: GO 0 is the phantom
     // position. On empty table → Limbo (BOF+EOF). Otherwise → Eof,
     // unless we were already sitting in Limbo (e.g. after a

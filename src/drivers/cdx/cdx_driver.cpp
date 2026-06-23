@@ -136,14 +136,57 @@ CdxDriver::read_record_raw(std::uint32_t recno) {
         }
     }
     std::vector<std::uint8_t> buf(rec_len_, 0);
+
+    // Fast path: the record is already in the read-ahead block -> serve
+    // it with a memcpy, no syscall. The block holds raw (encrypted-on-
+    // disk) bytes; apply the recno-keyed CTR stream on the copy we return.
+    if (read_cache_first_ != 0 &&
+        recno >= read_cache_first_ &&
+        recno <  read_cache_first_ + read_cache_recs_) {
+        std::size_t pos = static_cast<std::size_t>(recno - read_cache_first_) *
+                          rec_len_;
+        std::memcpy(buf.data(), read_cache_.data() + pos, rec_len_);
+        if (encrypted_ && aes_) {
+            apply_ctr_(buf.data(), buf.size(), recno);
+        }
+        return buf;
+    }
+
+    // Miss: fetch the ALIGNED block that contains recno. Aligning (rather
+    // than starting at recno) keeps backward scans and local random reads
+    // hitting the cache too, and bounds a record to exactly one block.
+    std::uint32_t blk_recs = rec_len_ != 0
+        ? static_cast<std::uint32_t>(kReadAheadBytes / rec_len_)
+        : 1u;
+    if (blk_recs == 0) blk_recs = 1;
+    std::uint32_t first = ((recno - 1) / blk_recs) * blk_recs + 1;
+    std::uint32_t last  = first + blk_recs - 1;
+    if (last > rec_count_) last = rec_count_;
+    std::uint32_t nrecs = last - first + 1;
+
     std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
-                           static_cast<std::uint64_t>(recno - 1) *
+                           static_cast<std::uint64_t>(first - 1) *
                            static_cast<std::uint64_t>(rec_len_);
-    auto got = file_.read_at(offset, buf.data(), buf.size());
-    if (!got) return got.error();
-    if (got.value() < buf.size()) {
+    std::size_t block_bytes = static_cast<std::size_t>(nrecs) * rec_len_;
+    read_cache_.assign(block_bytes, 0);
+    auto got = file_.read_at(offset, read_cache_.data(), block_bytes);
+    if (!got) { invalidate_read_cache_(); return got.error(); }
+
+    // A short read still yields whole records up to what landed; the
+    // target recno is the first record of the block, so any non-empty
+    // read covers it. Keep only complete records in the cache window.
+    std::uint32_t got_recs = rec_len_ != 0
+        ? static_cast<std::uint32_t>(got.value() / rec_len_)
+        : 0u;
+    if (got_recs == 0 || recno >= first + got_recs) {
+        invalidate_read_cache_();
         return util::Error{5000, 0, "short read on record body", ""};
     }
+    read_cache_first_ = first;
+    read_cache_recs_  = got_recs;
+
+    std::size_t pos = static_cast<std::size_t>(recno - first) * rec_len_;
+    std::memcpy(buf.data(), read_cache_.data() + pos, rec_len_);
     if (encrypted_ && aes_) {
         apply_ctr_(buf.data(), buf.size(), recno);
     }
@@ -156,6 +199,7 @@ CdxDriver::write_record_raw(std::uint32_t recno,
     if (mode_ == DriverOpenMode::ReadOnly) {
         return util::Error{5000, 0, "table opened read-only", ""};
     }
+    invalidate_read_cache_();   // record body about to change on disk
     if (recno == 0) {
         return util::Error{5000, 0, "record number out of range", ""};
     }
@@ -196,6 +240,7 @@ CdxDriver::append_record_raw(const std::uint8_t* buf, std::size_t n) {
     if (mode_ == DriverOpenMode::ReadOnly) {
         return util::Error{5000, 0, "table opened read-only", ""};
     }
+    invalidate_read_cache_();   // rec_count_ / trailing block change
     if (n != rec_len_) {
         return util::Error{5000, 0, "record buffer length mismatch", ""};
     }
@@ -282,6 +327,7 @@ util::Result<void> CdxDriver::zap() {
     if (mode_ == DriverOpenMode::ReadOnly) {
         return util::Error{5000, 0, "table opened read-only", ""};
     }
+    invalidate_read_cache_();
     rec_count_ = 0;
     if (auto r = rewrite_header_(); !r) return r.error();
     // Place an EOF marker right after the field-descriptor block;
@@ -297,6 +343,7 @@ util::Result<bool> CdxDriver::truncate_trailing(std::uint32_t recno) {
         return util::Error{5000, 0, "table opened read-only", ""};
     }
     if (recno == 0) return false;
+    invalidate_read_cache_();
     // Hold the same header lock the append path uses, then re-read the
     // on-disk count so a concurrent append is observed.
     auto lk = acquire_with_retry_(file_, 0, 32);
@@ -396,6 +443,7 @@ CdxDriver::encrypt_in_place(const std::array<std::uint8_t, 32>& key) {
     if (encrypted_) {
         return util::Error{5000, 0, "table is already encrypted", ""};
     }
+    invalidate_read_cache_();   // every record body is rewritten below
     std::vector<std::vector<std::uint8_t>> plain;
     plain.reserve(rec_count_);
     for (std::uint32_t r = 1; r <= rec_count_; ++r) {
