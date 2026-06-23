@@ -102,7 +102,14 @@ std::uint32_t char_tree_entry_page(const std::uint8_t* pg, int idx,
                                    std::uint32_t key_padded_len) noexcept {
     const std::uint8_t* e = pg + ADI_TREE_ENTRY_START
                             + static_cast<std::uint32_t>(idx) * entry_sz;
-    return static_cast<std::uint32_t>(e[key_padded_len + 4]);
+    // Child page number: 4 bytes little-endian (mirrors the numeric branch
+    // entry's 4-byte page). A previous 1-byte read capped char-key indexes at
+    // 256 pages and silently truncated larger page numbers -> corrupt tree.
+    const std::uint8_t* p = e + key_padded_len + 4;
+    return static_cast<std::uint32_t>(p[0])
+         | (static_cast<std::uint32_t>(p[1]) << 8)
+         | (static_cast<std::uint32_t>(p[2]) << 16)
+         | (static_cast<std::uint32_t>(p[3]) << 24);
 }
 
 // ── Dense-leaf entry: starts at offset 24 ────────────────────────────────────
@@ -552,7 +559,9 @@ util::Result<void> AdiIndex::apply_tag_(
 
     if (char_key_) {
         char_key_padded_len_ = (total_key_len + 3u) & ~3u;
-        branch_entry_sz_     = char_key_padded_len_ + 5u;
+        // padded_key + cum[4] + page[4]  (page widened from 1 byte; see
+        // char_tree_entry_page / write_branch_entry).
+        branch_entry_sz_     = char_key_padded_len_ + 8u;
     } else {
         char_key_padded_len_ = 0;
         branch_entry_sz_     = ADI_TREE_ENTRY_SIZE;
@@ -899,7 +908,18 @@ util::Result<void> AdiIndex::write_adi_page_(std::uint32_t page_no,
 util::Result<std::uint32_t> AdiIndex::alloc_page_() {
     auto sz = adi_file_.size();
     if (!sz) return sz.error();
-    return static_cast<std::uint32_t>(sz.value() / ADI_PAGE_SIZE);
+    std::uint32_t pno = static_cast<std::uint32_t>(sz.value() / ADI_PAGE_SIZE);
+    // Reserve the page NOW by extending the file with a zeroed page. Without
+    // this, alloc_page_() only computed end-of-file/PAGE without growing the
+    // file, so two allocations issued before the first page was written (or an
+    // allocation whose number coincided with a page about to be repurposed as a
+    // branch) handed out the SAME page number. That produced a branch entry
+    // whose child pointer referenced the branch's own page -> the insert-time
+    // descent looped forever, growing the path stack until the build ran away
+    // in time and memory once the tree first went multi-level.
+    Page zero{};
+    if (auto w = write_adi_page_(pno, zero); !w) return w.error();
+    return pno;
 }
 
 // ── AdiIndex::build_dense_entry_ ────────────────────────────────────────────
@@ -956,7 +976,11 @@ util::Result<void> AdiIndex::promote_split_(
             std::memset(dst, 0, branch_entry_sz_);
             std::size_t klen = std::min((std::size_t)key_total_len_, key.size());
             std::memcpy(dst, key.data(), klen);
-            dst[char_key_padded_len_ + 4] = static_cast<std::uint8_t>(page_no & 0xFFu);
+            std::uint8_t* pp = dst + char_key_padded_len_ + 4;
+            pp[0] = static_cast<std::uint8_t>( page_no        & 0xFFu);
+            pp[1] = static_cast<std::uint8_t>((page_no >>  8) & 0xFFu);
+            pp[2] = static_cast<std::uint8_t>((page_no >> 16) & 0xFFu);
+            pp[3] = static_cast<std::uint8_t>((page_no >> 24) & 0xFFu);
         } else {
             // key[8 BE] + cum[4 BE]=0 + page[4 BE]
             std::memset(dst, 0, 16);
@@ -1047,10 +1071,27 @@ util::Result<void> AdiIndex::promote_split_(
     if (!rp_r) return rp_r.error();
     std::uint32_t right_branch_pg = rp_r.value();
 
-    // Rewrite parent (left half).
+    // Where does the LEFT half live? Normally the branch stays in place at
+    // frame.page_no (its parent already points there). BUT when this branch
+    // IS the root (no parent left on the path), promote_split_ will rewrite
+    // root_page_ (== frame.page_no) as the *new* root branch — so the left
+    // half must move to a FRESH page, otherwise the new root's first child
+    // would point at root_page_ itself (a self-referential child that makes
+    // the insert-time descent loop forever). Mirrors the root dense-leaf
+    // split, which likewise pushes both halves onto new pages.
+    const bool splitting_root = path.empty();
+    std::uint32_t left_branch_pg = frame.page_no;
+    if (splitting_root) {
+        auto lp_r = alloc_page_();
+        if (!lp_r) return lp_r.error();
+        left_branch_pg = lp_r.value();
+    }
+
+    // Write the left half (to its fresh page when splitting the root, else
+    // back in place at frame.page_no).
     set_u16_le(parent.data() + 2, static_cast<std::uint16_t>(left_cnt));
     std::memcpy(src, combo.data(), left_cnt * branch_entry_sz_);
-    if (auto r = write_adi_page_(frame.page_no, parent); !r) return r;
+    if (auto r = write_adi_page_(left_branch_pg, parent); !r) return r;
 
     // Write right branch page.
     Page right_branch{};
@@ -1063,9 +1104,11 @@ util::Result<void> AdiIndex::promote_split_(
                 right_cnt * branch_entry_sz_);
     if (auto r = write_adi_page_(right_branch_pg, right_branch); !r) return r;
 
-    // Recurse: promote branch split.
+    // Recurse: promote branch split. When splitting the root, promote_split_
+    // sees an empty path and rewrites root_page_ as a 2-entry branch pointing
+    // at the two halves (left_branch_pg + right_branch_pg).
     return promote_split_(path,
-                          frame.page_no, new_left_max,
+                          left_branch_pg, new_left_max,
                           right_branch_pg, new_right_max);
 }
 
@@ -1098,6 +1141,18 @@ util::Result<void> AdiIndex::insert(std::uint32_t recno,
     std::uint32_t cur = root_page_;
 
     for (;;) {
+        // Defense-in-depth: a healthy B-tree is only a handful of levels deep.
+        // If the descent ever exceeds a sane bound, the index is corrupt
+        // (e.g. a self-referential child pointer); fail loudly instead of
+        // looping forever and exhausting memory.
+        // Defense-in-depth: a healthy B-tree is only a handful of levels deep.
+        // If the descent ever exceeds a sane bound the index is corrupt (e.g. a
+        // self-referential child pointer); fail loudly instead of looping
+        // forever and exhausting memory.
+        if (path.size() > 128) {
+            return util::Error{6106, 0,
+                "ADI index corrupt: descent exceeded max depth", ""};
+        }
         if (auto r = read_adi_page_(cur, pg); !r) return r.error();
         std::uint16_t lv  = page_level(pg.data());
         std::uint16_t cnt = page_count(pg.data());
