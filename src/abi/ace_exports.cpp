@@ -3426,8 +3426,20 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         return fail(openads::AE_INTERNAL_ERROR, "record too long");
     }
 
+    // Detect a memo (M) field up front: it drives both the version byte and
+    // the companion memo file written below. OpenADS writes a FoxPro .fpt
+    // memo, so per the dBASE/FoxPro format spec a table WITH a memo must
+    // declare FoxPro 2.x (0xF5) in the version byte. Writing 0x03 (dBASE III
+    // "no memo") made conforming readers (DBFCDX/DBFNTX) look for a .dbt that
+    // does not exist and fail to open with subcode 1056; no-memo tables stay
+    // 0x03.
+    bool has_memo = false;
+    for (auto& f : fields) {
+        if (f.type == 'M' || f.type == 'm') { has_memo = true; break; }
+    }
+
     std::vector<std::uint8_t> hdr(32, 0);
-    hdr[0]  = 0x03;                                            // dBASE III
+    hdr[0]  = has_memo ? 0xF5 : 0x03;             // FoxPro 2.x (FPT) / dBASE III
     stamp_dbf_header_today(hdr.data());                        // last-update
     hdr[4]  = 0; hdr[5] = 0; hdr[6] = 0; hdr[7] = 0;           // 0 records
     hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
@@ -3468,15 +3480,16 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
     // and without it any write to the M field fails "memo store not
     // attached" (e.g. X#'s ADSRDD on FieldPut to a memo column).
     {
-        bool has_memo = false;
-        for (auto& f : fields) {
-            if (f.type == 'M' || f.type == 'm') { has_memo = true; break; }
-        }
         if (has_memo) {
             fs::path fpt = full;
             fpt.replace_extension(".fpt");
             { std::error_code ec; fs::remove(fpt, ec); }
-            std::uint16_t bs = usMemoBlockSize != 0 ? usMemoBlockSize : 64;
+            // Default FPT block size 512 (the FoxPro 2.x default). The old
+            // 64-byte default is a Visual FoxPro value that stricter readers
+            // reject on open; a conforming reader honours the size from the
+            // header either way. The caller can still override via
+            // usMemoBlockSize.
+            std::uint16_t bs = usMemoBlockSize != 0 ? usMemoBlockSize : 512;
             auto mr = openads::drivers::fpt::FptMemo::create(fpt.string(), bs);
             if (!mr) return fail(mr.error());
         }
