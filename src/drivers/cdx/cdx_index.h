@@ -119,6 +119,17 @@ private:
     util::Result<Page*> get_page_(std::uint32_t offset);
     util::Result<void>  flush_page_(std::uint32_t offset);
 
+    // Page allocator with free-list reuse. Pops a page off the per-tag
+    // free list (free_ptr_ chain) when one is available, otherwise
+    // extends the file. Returns the page offset with a fresh zeroed page
+    // already in the cache, ready for the caller to encode.
+    std::uint32_t       alloc_page_();
+    // Reclaim every page of the (sub-)tree rooted at `off` onto the free
+    // list so a subsequent rebuild reuses them instead of leaking. Used
+    // by clear_data() — without it each CREATE INDEX / reindex grew the
+    // .cdx bag by a full tree, unbounded.
+    util::Result<void>  free_tree_(std::uint32_t off);
+
     util::Result<std::vector<std::pair<std::string, std::uint32_t>>>
         decode_leaf_(std::uint32_t page_off);
 

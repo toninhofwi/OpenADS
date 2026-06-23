@@ -1166,7 +1166,60 @@ util::Result<void> CdxIndex::set_options(bool unique, bool descend,
     return {};
 }
 
+std::uint32_t CdxIndex::alloc_page_() {
+    std::uint32_t off;
+    if (free_ptr_ != 0xFFFFFFFFu && free_ptr_ != 0) {
+        // Reuse a page from the free list. Its first 4 bytes hold the
+        // next free offset (written by free_tree_).
+        off = free_ptr_;
+        std::uint32_t next = 0xFFFFFFFFu;
+        if (auto pg = get_page_(off); pg) {
+            next = read_u32_le(pg.value()->data());
+        }
+        free_ptr_ = next;
+    } else {
+        off = static_cast<std::uint32_t>(
+            std::max<std::uint64_t>(file_size_, CDX_SUB_DATA_BASE));
+        file_size_ = static_cast<std::uint64_t>(off) + CDX_PAGE_LEN;
+    }
+    // Hand back a fresh zeroed page for the caller to encode into.
+    page_cache_[off] = Page{};
+    dirty_[off] = true;
+    return off;
+}
+
+util::Result<void> CdxIndex::free_tree_(std::uint32_t off) {
+    if (off == 0 || off == 0xFFFFFFFFu) return {};
+    // Read the page to learn whether it is a branch (recurse children
+    // first) or a leaf, before we overwrite it with the free-list link.
+    auto pg = get_page_(off);
+    if (!pg) return pg.error();
+    std::uint16_t attr = read_u16_le(pg.value()->data());
+    if (!(attr & CDX_NODE_LEAF)) {
+        auto entries = decode_branch_static(*pg.value(), key_size_);
+        if (!entries) return entries.error();
+        for (const auto& be : entries.value()) {
+            if (auto e = free_tree_(be.child); !e) return e.error();
+        }
+    }
+    // Push this page onto the free list: write the current head into its
+    // first 4 bytes (straight to disk so alloc_page_ can read it after the
+    // cache is cleared) and make it the new head.
+    Page link{};
+    write_u32_le(link.data(), free_ptr_);
+    if (auto w = file_.write_at(off, link.data(), link.size()); !w)
+        return w.error();
+    page_cache_.erase(off);
+    dirty_.erase(off);
+    free_ptr_ = off;
+    return {};
+}
+
 util::Result<void> CdxIndex::clear_data() {
+    // Reclaim the existing tree's pages onto the free list so the rebuild
+    // that follows reuses them; otherwise every CREATE INDEX / reindex
+    // leaked a full tree and the .cdx outgrew the table without bound.
+    if (auto e = free_tree_(root_page_); !e) return e.error();
     root_page_ = 0;
     page_cache_.clear();
     dirty_.clear();
