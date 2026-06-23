@@ -214,6 +214,15 @@ public:
         return pos_ < s_.size() && s_[pos_] == c;
     }
 
+    // Next non-ws char is a decimal digit. Used to spot a constant
+    // WHERE operand (`1 = 1`); xBase column names never start with a
+    // digit, so a digit-led LHS is unambiguously a literal.
+    bool peek_digit() {
+        skip_ws();
+        return pos_ < s_.size() &&
+               std::isdigit(static_cast<unsigned char>(s_[pos_]));
+    }
+
     // Advance past one raw character (no whitespace skip) and return
     // it. Used by the CREATE INDEX expression scanner that wants to
     // capture the source text verbatim until the matching ')'.
@@ -234,6 +243,43 @@ util::Result<std::unique_ptr<WhereExpr>>
 parse_cmp(Cursor& c, const std::string& sql) {
     auto node = std::make_unique<WhereExpr>();
     node->kind = WhereExpr::Kind::Cmp;
+
+    // ADS dialect — constant predicate `<num> <op> <num>` (e.g. the
+    // `WHERE 1 = 1` boilerplate SQL generators emit). xBase column names
+    // never start with a digit, so a digit-led LHS is a literal. Evaluate
+    // it at parse time and fold to an empty AND (always-true) / empty OR
+    // (always-false) node so the executor never looks up a "1" column.
+    if (c.peek_digit()) {
+        auto lhs = c.read_numeric_literal();
+        if (!lhs) return lhs.error();
+        WhereOp op;
+        if      (c.match_seq("<=")) op = WhereOp::Le;
+        else if (c.match_seq(">=")) op = WhereOp::Ge;
+        else if (c.match_seq("<>")) op = WhereOp::Ne;
+        else if (c.match_seq("!=")) op = WhereOp::Ne;
+        else if (c.match_char('=')) op = WhereOp::Eq;
+        else if (c.match_char('<')) op = WhereOp::Lt;
+        else if (c.match_char('>')) op = WhereOp::Gt;
+        else return util::Error{7200, 0,
+            "expected comparison operator after constant", sql};
+        auto rhs = c.read_numeric_literal();
+        if (!rhs) return rhs.error();
+        double a = lhs.value(), b = rhs.value();
+        bool truth = false;
+        switch (op) {
+            case WhereOp::Eq: truth = (a == b); break;
+            case WhereOp::Ne: truth = (a != b); break;
+            case WhereOp::Lt: truth = (a <  b); break;
+            case WhereOp::Gt: truth = (a >  b); break;
+            case WhereOp::Le: truth = (a <= b); break;
+            case WhereOp::Ge: truth = (a >= b); break;
+            default: break;
+        }
+        // Empty AND ⇒ always true; empty OR ⇒ always false (the executor's
+        // And/Or handlers fold zero children to true/false respectively).
+        node->kind = truth ? WhereExpr::Kind::And : WhereExpr::Kind::Or;
+        return node;
+    }
 
     if (c.match_keyword("CONTAINS")) {
         if (!c.match_char('(')) {

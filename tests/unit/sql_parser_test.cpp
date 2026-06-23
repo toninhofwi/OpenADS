@@ -227,10 +227,55 @@ TEST_CASE("ADS dialect: UPPER(col) LIKE pattern in WHERE") {
     CHECK(r.value().where->cmp.op == WhereOp::Like);
 }
 
+TEST_CASE("ADS dialect: constant predicate WHERE 1 = 1 folds to always-true") {
+    auto r = parse_select("SELECT * FROM x WHERE 1 = 1");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where != nullptr);
+    // Always-true is encoded as an AND node with no children.
+    CHECK(r.value().where->kind == WhereExpr::Kind::And);
+    CHECK(r.value().where->children.empty());
+}
+
+TEST_CASE("ADS dialect: constant predicate WHERE 1 = 2 folds to always-false") {
+    auto r = parse_select("SELECT * FROM x WHERE 1 = 2");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where != nullptr);
+    // Always-false is encoded as an OR node with no children.
+    CHECK(r.value().where->kind == WhereExpr::Kind::Or);
+    CHECK(r.value().where->children.empty());
+}
+
+TEST_CASE("ADS dialect: WHERE 1 = 1 AND <real predicate> keeps the predicate") {
+    auto r = parse_select("SELECT * FROM x WHERE 1 = 1 AND name = 'a'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::And);
+    REQUIRE(r.value().where->children.size() == 2);
+    CHECK(r.value().where->children[0]->kind == WhereExpr::Kind::And);  // folded 1=1
+    CHECK(r.value().where->children[0]->children.empty());
+    CHECK(r.value().where->children[1]->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->children[1]->cmp.column == "name");
+}
+
 TEST_CASE("ADS dialect: full legacy query (hint + bracket + alias)") {
     auto r = parse_select(
         "SELECT {static} * FROM [articulo.dat] AS a "
         "WHERE a.crefhabart <> 'N' AND a.cnombreart LIKE 'A%' "
+        "ORDER BY a.cnombreart");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "articulo.dat");
+    CHECK(r.value().table_alias == "a");
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().order_by.has_value());
+    CHECK(r.value().order_by.value().column == "cnombreart");
+}
+
+TEST_CASE("ADS dialect: complete legacy ERP search query parses") {
+    auto r = parse_select(
+        "SELECT {static} * FROM [articulo.dat] AS a "
+        "WHERE 1 = 1 "
+        "AND UPPER(a.creffacart) <> 'N' "
+        "AND UPPER(a.crefhabart) <> 'N' "
+        "AND UPPER(a.cnombreart) LIKE 'A%' "
         "ORDER BY a.cnombreart");
     REQUIRE(r.has_value());
     CHECK(r.value().table == "articulo.dat");

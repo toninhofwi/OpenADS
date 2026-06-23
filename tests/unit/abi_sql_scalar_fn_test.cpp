@@ -335,6 +335,55 @@ TEST_CASE("ADS dialect: UPPER/LOWER on the WHERE left-hand side") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("ADS dialect: WHERE 1=1 constant predicate + full search query") {
+    auto dir = fs::temp_directory_path() / "openads_ads_const_pred";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf_typed(dir / "data.dbf",
+        {{"REF", 'C', 4}, {"NAME", 'C', 8}},
+        {{"N", "alice"},
+         {"n", "Bob"},
+         {"S", "amy"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    auto run_count = [&](const char* q) -> UNSIGNED32 {
+        UNSIGNED8 sql[300];
+        std::memcpy(sql, q, std::strlen(q) + 1);
+        ADSHANDLE c = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &c) == 0);
+        UNSIGNED32 n = 0;
+        REQUIRE(AdsGetRecordCount(c, 0, &n) == 0);
+        return n;
+    };
+
+    // 1=1 folds to always-true (all rows); 1=2 to always-false (none).
+    CHECK(run_count("SELECT * FROM data.dbf WHERE 1 = 1") == 3);
+    CHECK(run_count("SELECT * FROM data.dbf WHERE 1 = 2") == 0);
+    // Mixed with a real predicate, the boilerplate is transparent.
+    CHECK(run_count("SELECT * FROM data.dbf WHERE 1 = 1 AND REF = 'S'") == 1);
+    // The full legacy-ERP search shape (hint + bracket + alias + 1=1 +
+    // UPPER folds + LIKE + ORDER BY) executes and filters correctly.
+    CHECK(run_count(
+        "SELECT {static} * FROM [data.dbf] AS a "
+        "WHERE 1 = 1 "
+        "AND UPPER(a.REF) <> 'N' "
+        "AND UPPER(a.NAME) LIKE 'A%' "
+        "ORDER BY a.NAME") == 1);   // only the 'S'/'amy' row
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("ADS dialect: UPPER() in WHERE drives UPDATE / DELETE row scope") {
     auto dir = fs::temp_directory_path() / "openads_ads_where_fn_dml";
     std::error_code ec;
