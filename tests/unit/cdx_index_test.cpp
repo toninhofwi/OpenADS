@@ -157,11 +157,18 @@ TEST_CASE("CdxIndex compound layout: file header + struct-tag leaf + sub-tag hea
         CHECK(rd32(hdr + 0) == 1024u);                 // struct-tag root
         CHECK(rd16(hdr + 12) == 10u);                  // struct-tag key_size = 10
         CHECK(static_cast<int>(hdr[14] & 0x40) != 0);  // CDX_TYPE_COMPOUND bit
+        // Native-interop conformance: the structure ("tag of tags") header
+        // MUST carry CDX_TYPE_STRUCTURE (0x80); without it a native reader
+        // tries to compile the tag-name "key expression" and reports the
+        // index corrupt.
+        CHECK(static_cast<int>(hdr[14] & 0x80) != 0);  // CDX_TYPE_STRUCTURE
 
         f.seekg(1024);
         std::uint8_t leaf[512]{};
         f.read(reinterpret_cast<char*>(leaf), 512);
-        CHECK(rd16(leaf + 0) == 2u);                   // CDX_NODE_LEAF
+        // Root-that-is-a-leaf must be ROOT|LEAF (0x03); a native FoxPro /
+        // Harbour reader rejects a root node missing the ROOT bit.
+        CHECK(rd16(leaf + 0) == 3u);                   // CDX_NODE_ROOT | CDX_NODE_LEAF
         CHECK(rd16(leaf + 2) == 1u);                   // one entry
 
         f.seekg(1536);
