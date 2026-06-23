@@ -1498,6 +1498,11 @@ CdxIndex::add_tag(const std::string& path,
                                           0xFFFFFFFFu, 0xFFFFFFFFu,
                                           /*req_byte=*/5);
     if (!enc) return enc.error();
+    // The structure-tag root leaf must stay ROOT|LEAF (0x03); re-encoding it
+    // here would otherwise drop the ROOT bit and make a native reader reject
+    // the whole index.
+    write_u16_le(new_leaf.data() + 0,
+                 read_u16_le(new_leaf.data() + 0) | CDX_NODE_ROOT);
     auto wrote = file.write_at(struct_root, new_leaf.data(), new_leaf.size());
     if (!wrote) return wrote.error();
 
