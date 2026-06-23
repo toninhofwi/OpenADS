@@ -63,6 +63,18 @@ public:
         return false;
     }
 
+    // SAP ADS cursor/optimizer hint: `{static}`, `{ index ... }` etc.
+    // appearing right after SELECT. Consumed and discarded — OpenADS
+    // picks its own access path. Hints do not nest; stop at the first '}'.
+    void skip_optimizer_hint() {
+        skip_ws();
+        if (pos_ < s_.size() && s_[pos_] == '{') {
+            ++pos_;  // consume '{'
+            while (pos_ < s_.size() && s_[pos_] != '}') ++pos_;
+            if (pos_ < s_.size()) ++pos_;  // consume '}'
+        }
+    }
+
     bool match_seq(const char* seq) {
         skip_ws();
         std::size_t len = 0;
@@ -78,6 +90,16 @@ public:
     std::string read_identifier_or_filename() {
         skip_ws();
         std::string out;
+        // SAP ADS bracket-quoted name: [articulo.dat] / [name with spaces].
+        // Mirrors read_identifier()'s bracket handling so FROM can name a
+        // free table/file the legacy ADS way.
+        if (pos_ < s_.size() && s_[pos_] == '[') {
+            ++pos_;  // consume '['
+            while (pos_ < s_.size() && s_[pos_] != ']')
+                out.push_back(s_[pos_++]);
+            if (pos_ < s_.size()) ++pos_;  // consume ']'
+            return out;
+        }
         while (pos_ < s_.size()) {
             char c = s_[pos_];
             if (std::isalnum(static_cast<unsigned char>(c)) ||
@@ -671,6 +693,8 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected SELECT", sql};
     }
     SelectStmt stmt;
+    // ADS dialect — optional `{static}` / `{...}` cursor hint after SELECT.
+    c.skip_optimizer_hint();
     // M10.31 — optional DISTINCT immediately after SELECT.
     if (c.match_keyword("DISTINCT")) stmt.distinct = true;
     // TOP N — Transact-SQL/xBase synonym for LIMIT N. Consume before
@@ -1188,6 +1212,22 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         }
     } else {
         stmt.table = c.read_identifier_or_filename();
+        // ADS dialect — optional table alias: `FROM <table> AS <alias>` or
+        // the bare `FROM <table> <alias>` form. Qualified column refs
+        // `<alias>.<col>` already drop the alias at read time, so the alias
+        // is recorded but not required to resolve columns. Guard the bare
+        // form so a following clause keyword is not eaten as an alias.
+        if (c.match_keyword("AS")) {
+            stmt.table_alias = c.read_identifier();
+        } else if (!c.peek_keyword("WHERE")  && !c.peek_keyword("GROUP")  &&
+                   !c.peek_keyword("ORDER")  && !c.peek_keyword("HAVING") &&
+                   !c.peek_keyword("LIMIT")  && !c.peek_keyword("OFFSET") &&
+                   !c.peek_keyword("INNER")  && !c.peek_keyword("LEFT")   &&
+                   !c.peek_keyword("RIGHT")  && !c.peek_keyword("FULL")   &&
+                   !c.peek_keyword("JOIN")   && !c.peek_keyword("ON")) {
+            std::string maybe_alias = c.read_identifier();
+            if (!maybe_alias.empty()) stmt.table_alias = std::move(maybe_alias);
+        }
     }
     bool is_left_join  = false;
     bool is_right_join = false;

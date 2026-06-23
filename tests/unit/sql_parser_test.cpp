@@ -152,3 +152,55 @@ TEST_CASE("M10.3 parse_select WHERE accepts numeric literals") {
     CHECK(r.value().where->cmp.number == doctest::Approx(18));
     CHECK(r.value().where->cmp.op == WhereOp::Ge);
 }
+
+// --- ADS dialect compatibility (feat/sql-ads-dialect) ---------------------
+// SAP ADS lets apps write SQL with constructs the strict-SQL parser used to
+// reject. These three keep that legacy syntax parsing without forcing a
+// rewrite. All three appear together in real ADS queries like:
+//   SELECT {static} * FROM [articulo.dat] AS a WHERE ... ORDER BY a.col
+
+TEST_CASE("ADS dialect: {static} cursor hint after SELECT is ignored") {
+    auto r = parse_select("SELECT {static} * FROM articulo");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "articulo");
+    CHECK(r.value().projection.empty());   // `*` => no explicit projection
+}
+
+TEST_CASE("ADS dialect: {static} hint with a projection list") {
+    auto r = parse_select("SELECT {static} name, age FROM x");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().projection.size() == 2);
+    CHECK(r.value().projection[0] == "name");
+    CHECK(r.value().projection[1] == "age");
+}
+
+TEST_CASE("ADS dialect: bracketed table/file name in FROM") {
+    auto r = parse_select("SELECT * FROM [articulo.dat]");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "articulo.dat");
+}
+
+TEST_CASE("ADS dialect: FROM <table> AS <alias>") {
+    auto r = parse_select("SELECT * FROM articulo AS a WHERE a.cnombre <> 'N'");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "articulo");
+    CHECK(r.value().table_alias == "a");
+    // The WHERE survives the alias and resolves the qualified column.
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.column == "cnombre");
+    CHECK(r.value().where->cmp.op == WhereOp::Ne);
+}
+
+TEST_CASE("ADS dialect: full legacy query (hint + bracket + alias)") {
+    auto r = parse_select(
+        "SELECT {static} * FROM [articulo.dat] AS a "
+        "WHERE a.crefhabart <> 'N' AND a.cnombreart LIKE 'A%' "
+        "ORDER BY a.cnombreart");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "articulo.dat");
+    CHECK(r.value().table_alias == "a");
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().order_by.has_value());
+    CHECK(r.value().order_by.value().column == "cnombreart");
+}

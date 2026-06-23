@@ -197,6 +197,11 @@ struct JoinClause {
 
 struct SelectStmt {
     std::string                table;
+    // ADS dialect — optional table alias from `FROM <table> AS <alias>`
+    // (or the bare `FROM <table> <alias>` form). Qualified column refs
+    // `<alias>.<col>` are resolved by column name, so this is recorded
+    // for completeness rather than required for execution.
+    std::string                table_alias;
     // M10.46 — derived table: `FROM (SELECT ...) [AS alias]`. When
     // set, `table` is empty and the executor materialises the inner
     // SELECT to a cursor before applying the outer clauses.
