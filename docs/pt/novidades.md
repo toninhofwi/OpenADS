@@ -29,6 +29,27 @@ alternativa. Novos arquivos fonte:
 - `src/sql_backend/sqlite_table.h`
 - `src/sql_backend/sqlite_index.h`
 
+### Backends SQL — PostgreSQL / MariaDB / ODBC (OpenADS Plus)
+
+O OpenADS agora pode abrir tabelas em **PostgreSQL**, **MariaDB /
+MySQL** e qualquer motor acessível por **ODBC** atrás da ABI ACE,
+escolhido pela URI de conexão (`postgresql://` / `mariadb://` /
+`odbc://`), igual ao backend SQLite. Do ponto de vista da
+aplicação a tabela se comporta como qualquer área de trabalho —
+navegação, leitura de campos e SEEK por coluna funcionam.
+
+Esses quatro backends SQL ficam atrás de um único **registro
+plugável de backend-ops**: cada um registra uma struct
+`BackendTableOps` (17 ponteiros de função espelhando as ops de
+tabela), então as ~17 funções ABI de navegação / campos ficam
+agnósticas ao backend em vez de multiplicar um bloco `if` por
+backend. Adicionar outro backend (p. ex. Firebird, ou MSSQL /
+Oracle via ODBC) é uma struct de ops mais uma linha de registro.
+As rotas DBF / ADT local nativas e a remota `tcp://` ficam
+inalteradas. Os identificadores são validados para ASCII seguro e
+os valores de SEEK usam parâmetros preparados (sem concatenar
+strings). Veja `docs/OPENADS_PLUS.md`.
+
 ### Patches de Validação ADT (F1–F7, R1–R3)
 
 A validação de tabelas ADT agora inclui um conjunto completo de

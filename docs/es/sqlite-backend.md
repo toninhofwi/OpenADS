@@ -86,3 +86,26 @@ AdsConnect60( "sqlite:///path/db.sqlite?key=mipassword", ;
 - **Índices** se exponen como `SqliteIndex` con seek / next / prev
   básicos que mapean a consultas `ORDER BY`.
 - **Transacciones** se mapean a transacciones SQLite normales.
+
+## Otros backends SQL (OpenADS Plus)
+
+SQLite es uno de cuatro backends SQL elegidos de la misma forma —
+por la URI de conexión. **PostgreSQL**, **MariaDB / MySQL** y
+cualquier motor accesible por **ODBC** también están soportados
+detrás de la ABI ACE:
+
+| Backend | URI de conexión |
+|---------|-----------------|
+| SQLite | `sqlite:///ruta/db.sqlite[?key=…]` |
+| PostgreSQL | `postgresql://user:pass@host:5432/dbname` |
+| MariaDB / MySQL | `mariadb://user:pass@host:3306/dbname` |
+| ODBC (cualquiera) | `odbc://Driver={…};Server=…;Database=…;UID=…;PWD=…` |
+
+Los cuatro viven detrás de un único **registro enchufable de
+backend-ops** (una struct `BackendTableOps` + una línea de
+registro por backend), de modo que las funciones ABI de navegación
+/ campos quedan agnósticas al backend. Lectura + navegación + SEEK
+por columna funcionan hoy; la escritura es por backend. Los
+identificadores se restringen a ASCII seguro y los valores de SEEK
+usan parámetros preparados. Ver
+[`docs/OPENADS_PLUS.md`](https://github.com/FiveTechSoft/OpenADS/blob/main/docs/OPENADS_PLUS.md).
