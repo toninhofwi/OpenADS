@@ -121,3 +121,4 @@ rddtst_ads.log
 
 # Local environment config (server IPs, credentials)
 .env.local
+/third_party/sqlcipher/
