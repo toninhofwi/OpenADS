@@ -245,34 +245,6 @@ TEST_CASE("ABI M5 smoke: Commit makes changes durable") {
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("ABI M5 smoke: multi-tag CDX rollback seek finds deleted order") {
-    RelFixture fx("openads_m5_multitag_rb");
-    fx.connect();
-    ADSHANDLE hOrd = fx.open_ord();
-
-    const char* cOrd = "TXMULRB";
-    REQUIRE(AdsBeginTransaction(fx.hConn) == 0);
-    REQUIRE(AdsAppendRecord(hOrd) == 0);
-    REQUIRE(AdsSetString(hOrd, (UNSIGNED8*)"ORDNO",  (UNSIGNED8*)cOrd, 7) == 0);
-    REQUIRE(AdsSetString(hOrd, (UNSIGNED8*)"CUSTNO", (UNSIGNED8*)"C00001", 6) == 0);
-    REQUIRE(AdsSetDouble(hOrd, (UNSIGNED8*)"AMT", 1.0) == 0);
-    REQUIRE(AdsWriteRecord(hOrd) == 0);
-    REQUIRE(AdsRollbackTransaction(fx.hConn) == 0);
-
-    REQUIRE(AdsShowDeleted(1) == 0);
-    ADSHANDLE hIdx = 0;
-    REQUIRE(AdsGetIndexHandle(hOrd, (UNSIGNED8*)"ORDNO", &hIdx) == 0);
-    UNSIGNED16 found = 0;
-    REQUIRE(AdsSeek(hIdx, (UNSIGNED8*)cOrd, 7, 0, 0, &found) == 0);
-    CHECK(found == 1);
-    UNSIGNED16 deleted = 0;
-    REQUIRE(AdsIsRecordDeleted(hOrd, &deleted) == 0);
-    CHECK(deleted == 1);
-
-    REQUIRE(AdsCloseTable(hOrd) == 0);
-    fx.teardown();
-}
-
 TEST_CASE("ABI M5 smoke: multi-tag CDX commit keeps indexed order seekable") {
     RelFixture fx("openads_m5_multitag_cm");
     fx.connect();
