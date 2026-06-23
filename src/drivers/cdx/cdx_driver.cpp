@@ -107,10 +107,33 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     return {};
 }
 
+util::Result<void> CdxDriver::refresh_count_shared_() {
+    // A peer append holds the header EXCLUSIVE while it bumps the count,
+    // so take a SHARED lock (mirrors open()) to read a consistent value,
+    // then release at end of scope. Modest retry budget keeps the fetch
+    // responsive; if the lock can't be taken we still attempt an unlocked
+    // refresh so the common single-writer case is never made worse.
+    auto lk = acquire_with_retry_(file_, 0, 32,
+                                  platform::LockKind::Shared, 40);
+    (void)lk;  // hold the shared lock (if acquired) across the refresh
+    return refresh_record_count_();
+}
+
 util::Result<std::vector<std::uint8_t>>
 CdxDriver::read_record_raw(std::uint32_t recno) {
-    if (recno == 0 || recno > rec_count_) {
+    if (recno == 0) {
         return util::Error{5000, 0, "record number out of range", ""};
+    }
+    if (recno > rec_count_) {
+        // Cached count may lag a peer's append (multiuser). Re-read the
+        // on-disk count before failing — native ADSCDX tolerates this,
+        // and an index walk can legitimately reach a just-appended row
+        // mid-REPLACE/DBEVAL. Slow path only: a forward scan never reads
+        // past the count, so the common case pays nothing.
+        if (auto rh = refresh_count_shared_(); !rh) return rh.error();
+        if (recno > rec_count_) {
+            return util::Error{5000, 0, "record number out of range", ""};
+        }
     }
     std::vector<std::uint8_t> buf(rec_len_, 0);
     std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
@@ -133,8 +156,16 @@ CdxDriver::write_record_raw(std::uint32_t recno,
     if (mode_ == DriverOpenMode::ReadOnly) {
         return util::Error{5000, 0, "table opened read-only", ""};
     }
-    if (recno == 0 || recno > rec_count_) {
+    if (recno == 0) {
         return util::Error{5000, 0, "record number out of range", ""};
+    }
+    if (recno > rec_count_) {
+        // Same peer-append catch-up as read_record_raw: a REPLACE of a
+        // row a peer just appended must not fail with a stale-count 5000.
+        if (auto rh = refresh_count_shared_(); !rh) return rh.error();
+        if (recno > rec_count_) {
+            return util::Error{5000, 0, "record number out of range", ""};
+        }
     }
     if (n != rec_len_) {
         return util::Error{5000, 0, "record buffer length mismatch", ""};
