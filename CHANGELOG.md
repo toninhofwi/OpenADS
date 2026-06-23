@@ -5,6 +5,25 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.3 — 2026-06-23
+
+- **Round-trip-thrifty remote scan (PR #47).** A forward scan over
+  the `tcp://` wire no longer costs ~one TCP round-trip per record.
+  A sequential-prefetch path — negotiated via a Connect capability
+  flag — piggybacks a lookahead block onto forward-`Skip` acks; the
+  client serves them locally and folds the consumed count back into
+  the next wire step so the server cursor never desyncs. `AdsAtEOF` /
+  `AdsAtBOF` are answered from the cached current row and `AdsIsFound`
+  from a cached `Found()` flag. A 50k-record loopback scan is ~3.9×
+  faster (NAV-only) / ~3.3× (3-field read), `IsFound` round-trips
+  drop to zero. Additive and backward-compatible: clients that don't
+  advertise the capability keep the previous wire behaviour.
+- **Cookbook expansion (PR #46).** New `console/` examples (SQL via
+  `AdsExecuteSQLDirect`, native ADT with `ADSADT` + `.adi`, a
+  `tcp://` remote client), a FiveWin `xbrowse` CRUD sample, and an
+  all-back-ends ORM benchmark (`orm/complete/`) with a cross-back-end
+  content checksum and a seek-vs-scan headline.
+
 ## 1.0.2 — 2026-06-23
 
 - **Responsive Studio web console.** The Studio SPA
