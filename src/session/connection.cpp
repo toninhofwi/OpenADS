@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -234,9 +235,13 @@ util::Result<void> Connection::commit_tx() {
         return {};
     }
     if (auto r = tx_log_.append_commit(tx_.id()); !r) return r.error();
+    std::unordered_set<Handle> touched;
+    for (const auto& op : tx_.ops()) {
+        touched.insert(static_cast<Handle>(op.table));
+    }
     for (auto& [h, holder] : tables_) {
-        (void)h;
         holder->detach_tx();
+        if (touched.count(h) == 0) continue;
         (void)holder->flush();
     }
     tx_.clear();
@@ -249,14 +254,25 @@ util::Result<void> Connection::rollback_tx() {
     if (!tx_.active()) {
         return util::Error{5000, 0, "no active transaction", ""};
     }
+    std::unordered_set<Handle> touched;
+    tx_.for_each_before_image(
+        [&](const engine::Tx::RecordKey& k,
+            const std::vector<std::uint8_t>&) {
+            touched.insert(static_cast<Handle>(k.table));
+        });
+    tx_.for_each_append([&](const engine::Tx::RecordKey& k) {
+        touched.insert(static_cast<Handle>(k.table));
+    });
+    std::optional<util::Error> rollback_err;
     tx_.for_each_before_image(
         [&](const engine::Tx::RecordKey& k,
             const std::vector<std::uint8_t>& bytes) {
+            if (rollback_err) return;
             auto it = tables_.find(static_cast<Handle>(k.table));
             if (it == tables_.end()) return;
-            auto* drv = it->second->driver();
-            if (drv) {
-                (void)drv->write_record_raw(k.recno, bytes.data(), bytes.size());
+            if (auto r = it->second->apply_tx_rollback(k.recno, bytes.data(),
+                                                       bytes.size()); !r) {
+                rollback_err = r.error();
             }
         });
     // Undo appends: physically pop the trailing rows (de-indexing them)
@@ -274,8 +290,9 @@ util::Result<void> Connection::rollback_tx() {
     }
     if (auto r = tx_log_.append_abort(tx_.id()); !r) return r.error();
     for (auto& [h, holder] : tables_) {
-        (void)h;
         holder->detach_tx();
+        if (touched.count(h) == 0) continue;
+        (void)holder->refresh_record_buffer();
         (void)holder->flush();
     }
     tx_.clear();
@@ -344,6 +361,14 @@ Connection::rollback_to_savepoint(const std::string& name) {
                                     op.before.data(), op.before.size());
     }
     tx_.truncate_ops_to(idx);
+    std::unordered_set<Handle> touched;
+    for (const auto& op : tx_.ops()) {
+        touched.insert(static_cast<Handle>(op.table));
+    }
+    for (auto& [h, holder] : tables_) {
+        if (touched.count(h) == 0) continue;
+        (void)holder->refresh_record_buffer();
+    }
     return {};
 }
 
@@ -474,6 +499,17 @@ util::Result<void> Connection::recover_orphan_tx_() {
 void Connection::close_table(Handle h) {
     tables_.erase(h);
     table_paths_.erase(h);
+}
+
+void Connection::close_table_ptr(const engine::Table* t) {
+    for (auto it = tables_.begin(); it != tables_.end(); ++it) {
+        if (it->second.get() == t) {
+            it->second->detach_tx();
+            table_paths_.erase(it->first);
+            tables_.erase(it);
+            return;
+        }
+    }
 }
 
 engine::Table* Connection::lookup_table(Handle h) {
