@@ -195,3 +195,29 @@ TEST_CASE("index_expr: SUBSTR slices a string field") {
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("fox_numeric_key is 8 bytes and order-preserving (FoxPro DBL2ORD)") {
+    using openads::engine::fox_numeric_key;
+    // Ascending values spanning negatives, zero, fractions and large
+    // magnitudes. The 8-byte keys must compare byte-for-byte (unsigned,
+    // i.e. std::string ordering) in the same ascending order — that is
+    // what lets the CDX B+tree treat them as opaque bytes.
+    const double vals[] = {
+        -1e9, -1000.5, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0,
+        20.0, 100.25, 1000.5, 1e9
+    };
+    std::string prev;
+    bool first = true;
+    for (double v : vals) {
+        std::string key = fox_numeric_key(v);
+        CHECK(key.size() == 8);
+        if (!first) {
+            // strict ascending byte order
+            CHECK(prev < key);
+        }
+        prev = key;
+        first = false;
+    }
+    // -0.0 must encode identically to +0.0.
+    CHECK(fox_numeric_key(-0.0) == fox_numeric_key(0.0));
+}

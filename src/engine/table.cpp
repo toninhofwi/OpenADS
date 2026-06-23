@@ -139,8 +139,19 @@ util::Result<void> Table::load_record_(std::uint32_t recno) {
     return {};
 }
 
-std::string Table::compute_index_key_(const std::string& expr,
-                                      std::uint16_t       key_len) const {
+std::string Table::compute_index_key_(const drivers::IIndex* idx) const {
+    const std::string& expr    = idx->expression();
+    const std::uint16_t key_len = idx->key_length();
+    // FoxPro/Harbour numeric & date CDX keys are an 8-byte order-preserving
+    // binary encoding, not text. Build those bytes here so both the write
+    // path (sync_all_indexes_) and the engine's own seek-after-write stay
+    // consistent. Everything else (character keys, NTX/ADI) keeps the
+    // legacy text path so existing files round-trip byte-exact.
+    if (idx->key_encoding() == drivers::KeyEncoding::FoxNumeric) {
+        double d = 0.0;
+        evaluate_index_expr_number(const_cast<Table&>(*this), expr, d);
+        return fox_numeric_key(d);
+    }
     // Compound expressions (UPPER(NAME), STR(AGE,3), concatenation,
     // SUBSTR, ...) handled by engine/index_expr.cpp. Bare field-name
     // expressions short-circuit there to the legacy raw-bytes path so
@@ -160,7 +171,7 @@ Table::snapshot_index_keys_() {
     auto push = [&](drivers::IIndex* idx) {
         if (idx == nullptr) return;
         out.emplace_back(idx,
-            compute_index_key_(idx->expression(), idx->key_length()));
+            compute_index_key_(idx));
     };
     if (order_ && order_->index()) push(order_->index());
     for (auto* x : extra_index_views_) push(x);
@@ -176,8 +187,7 @@ util::Result<void> Table::sync_active_index_(const std::string& /*unused*/) {
 util::Result<void> Table::sync_all_indexes_(
     const std::vector<std::pair<drivers::IIndex*, std::string>>& snap) {
     for (auto& [idx, prev_key] : snap) {
-        std::string new_key = compute_index_key_(idx->expression(),
-                                                 idx->key_length());
+        std::string new_key = compute_index_key_(idx);
         if (prev_key == new_key) continue;
         // Erase prior (recno, prev_key); ignore failure — the index
         // may not have a prior entry (fresh APPEND case).
@@ -412,8 +422,7 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
     if (order_ && order_->index()) {
         auto* idx = order_->index();
         idx->invalidate_cursor();
-        std::string key = compute_index_key_(idx->expression(),
-                                             idx->key_length());
+        std::string key = compute_index_key_(idx);
         auto sk = idx->seek_key(key, /*soft=*/false);
         if (sk && sk.value().positioned) {
             std::uint32_t guard = 0;
@@ -941,8 +950,7 @@ util::Result<void> Table::rollback_appends(std::vector<std::uint32_t> recnos) {
             loaded      = true;
             auto erase_idx = [&](drivers::IIndex* idx) {
                 if (idx == nullptr) return;
-                std::string key = compute_index_key_(idx->expression(),
-                                                     idx->key_length());
+                std::string key = compute_index_key_(idx);
                 (void)idx->erase(r, key);
             };
             if (order_ && order_->index()) erase_idx(order_->index());

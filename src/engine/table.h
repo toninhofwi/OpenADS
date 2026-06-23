@@ -337,11 +337,10 @@ private:
     util::Result<void> sync_all_indexes_(
         const std::vector<std::pair<drivers::IIndex*, std::string>>& snap);
 
-    // Compute the index key bytes for the current `record_buf_`
-    // given an index expression. Currently supports bare field names
-    // only (e.g., "NAME"); compound expressions land later.
-    std::string compute_index_key_(const std::string& expr,
-                                   std::uint16_t       key_len) const;
+    // Compute the index key bytes for the current `record_buf_` for the
+    // given index. Honours the index's key encoding (text vs FoxPro 8-byte
+    // numeric/date) so the bytes match what a native reader expects.
+    std::string compute_index_key_(const drivers::IIndex* idx) const;
 
     bool key_in_top_scope_   (const std::string& key) const;
     bool key_in_bottom_scope_(const std::string& key) const;

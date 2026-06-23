@@ -673,4 +673,41 @@ bool evaluate_index_expr_truthy(Table& t, const std::string& expr) {
     return eval_or(lx, t);
 }
 
+bool evaluate_index_expr_number(Table& t, const std::string& expr,
+                                double& out) {
+    const std::string e = strip_alias_qualifiers(expr);
+    if (e.empty()) return false;
+    auto toks = tokenize(e);
+    Parser p(toks, t);
+    Value v = p.parse_expr();
+    if (!v.is_number) return false;
+    out = v.n;
+    return true;
+}
+
+std::string fox_numeric_key(double value) {
+    // HB_DBL2ORD, little-endian host (hbdefs.h): big-endian byte order of
+    // the IEEE-754 double, with the sign handled so unsigned byte compare
+    // matches numeric order — non-negative flips the top bit, negative
+    // inverts every byte.
+    if (value == 0.0) value = 0.0;   // normalise -0.0 to +0.0
+    const unsigned char* d = reinterpret_cast<const unsigned char*>(&value);
+    unsigned char o[8];
+    if (value >= 0.0) {
+        o[0] = static_cast<unsigned char>(d[7] ^ 0x80);
+        o[1] = d[6]; o[2] = d[5]; o[3] = d[4];
+        o[4] = d[3]; o[5] = d[2]; o[6] = d[1]; o[7] = d[0];
+    } else {
+        o[0] = static_cast<unsigned char>(d[7] ^ 0xFF);
+        o[1] = static_cast<unsigned char>(d[6] ^ 0xFF);
+        o[2] = static_cast<unsigned char>(d[5] ^ 0xFF);
+        o[3] = static_cast<unsigned char>(d[4] ^ 0xFF);
+        o[4] = static_cast<unsigned char>(d[3] ^ 0xFF);
+        o[5] = static_cast<unsigned char>(d[2] ^ 0xFF);
+        o[6] = static_cast<unsigned char>(d[1] ^ 0xFF);
+        o[7] = static_cast<unsigned char>(d[0] ^ 0xFF);
+    }
+    return std::string(reinterpret_cast<char*>(o), 8);
+}
+
 } // namespace openads::engine

@@ -6005,6 +6005,24 @@ Table* table_for_index(ADSHANDLE hIndex) {
     return it->second.table;
 }
 
+// Mark a freshly opened CDX index FoxNumeric when its key is a bare
+// numeric field, so seek/append on a reopened numeric index builds the
+// same 8-byte order-preserving key the file was written with. No-op for
+// character keys / non-CDX drivers.
+void mark_cdx_key_encoding(Table* t, openads::drivers::IIndex* idx) {
+    if (t == nullptr || idx == nullptr) return;
+    const std::string bare =
+        openads::engine::strip_alias_qualifiers(idx->expression());
+    std::int32_t fi = t->field_index(bare);
+    if (fi < 0) return;
+    using FT = openads::drivers::DbfFieldType;
+    FT ft = t->field_descriptor(static_cast<std::uint16_t>(fi)).type;
+    if (ft == FT::Numeric || ft == FT::Float || ft == FT::Integer ||
+        ft == FT::Double  || ft == FT::Currency || ft == FT::AdtMoney) {
+        idx->set_key_encoding(openads::drivers::KeyEncoding::FoxNumeric);
+    }
+}
+
 bool path_ends_with_ci(const std::string& s, const char* suffix) {
     auto n = std::strlen(suffix);
     if (s.size() < n) return false;
@@ -6236,6 +6254,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                               name); !r) {
                 return fail(r.error());
             }
+            mark_cdx_key_encoding(t, idx.get());
             sub = std::move(idx);
         }
         ADSHANDLE h = next_index_handle();
@@ -6516,10 +6535,29 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         }
     }
 
+    // CDX numeric keys: FoxPro/Harbour store a bare numeric field as an
+    // 8-byte order-preserving binary key (keySize 8), not text. Detect a
+    // bare numeric field so the index is created with keySize=8 and marked
+    // FoxNumeric; the engine then emits the binary key at write time.
+    // STR()/character expressions stay text. (Date deferred — DTOS-style
+    // text indexes already interop.)
+    bool cdx_numeric_key = false;
+    if (is_cdx) {
+        const std::string bare = openads::engine::strip_alias_qualifiers(expr);
+        std::int32_t fi = t->field_index(bare);
+        if (fi >= 0) {
+            using FT = openads::drivers::DbfFieldType;
+            FT ft = t->field_descriptor(static_cast<std::uint16_t>(fi)).type;
+            cdx_numeric_key =
+                ft == FT::Numeric || ft == FT::Float   || ft == FT::Integer ||
+                ft == FT::Double  || ft == FT::Currency || ft == FT::AdtMoney;
+        }
+    }
+
     // Determine key length by evaluating the expression against the
     // first live record. Empty tables get a 32-char default.
-    std::uint16_t klen = 32;
-    if (t->record_count() > 0) {
+    std::uint16_t klen = cdx_numeric_key ? 8 : 32;
+    if (!cdx_numeric_key && t->record_count() > 0) {
         if (auto g = t->goto_record(1); g) {
             auto k = openads::engine::evaluate_index_expr(*t, expr, 254);
             if (k) {
@@ -6657,6 +6695,12 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         idx_owner = std::make_unique<openads::drivers::ntx::NtxIndex>(
             std::move(created).value());
     }
+    // Mark a numeric CDX index FoxNumeric so every key-build path (this
+    // create loop, the engine's sync_all_indexes_, seek) emits the 8-byte
+    // binary key a native reader expects.
+    if (cdx_numeric_key && idx_owner) {
+        idx_owner->set_key_encoding(openads::drivers::KeyEncoding::FoxNumeric);
+    }
     auto rec_count = t->record_count();
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto g = t->goto_record(r); !g) return fail(g.error());
@@ -6668,9 +6712,17 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             if (!openads::engine::evaluate_index_expr_truthy(*t, for_expr))
                 continue;
         }
-        auto k = openads::engine::evaluate_index_expr(*t, expr, klen);
-        if (!k) return fail(k.error());
-        if (auto ins = idx_owner->insert(r, k.value()); !ins) {
+        std::string kbytes;
+        if (cdx_numeric_key) {
+            double dv = 0.0;
+            openads::engine::evaluate_index_expr_number(*t, expr, dv);
+            kbytes = openads::engine::fox_numeric_key(dv);
+        } else {
+            auto k = openads::engine::evaluate_index_expr(*t, expr, klen);
+            if (!k) return fail(k.error());
+            kbytes = std::move(k).value();
+        }
+        if (auto ins = idx_owner->insert(r, kbytes); !ins) {
             return fail(ins.error());
         }
     }
@@ -6718,14 +6770,26 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                         openads::drivers::IndexOpenMode::Shared,
                         sib); !r0) continue;
                 if (auto cl = sub->clear_data(); !cl) continue;
+                mark_cdx_key_encoding(t, sub.get());
                 std::string sib_expr = sub->expression();
                 std::uint16_t sib_klen = sub->key_length();
+                const bool sib_fox = sub->key_encoding() ==
+                    openads::drivers::KeyEncoding::FoxNumeric;
                 for (std::uint32_t r2 = 1; r2 <= rec_count; ++r2) {
                     if (auto g = t->goto_record(r2); !g) continue;
-                    auto k2 = openads::engine::evaluate_index_expr(
-                        *t, sib_expr, sib_klen);
-                    if (!k2) continue;
-                    (void)sub->insert(r2, k2.value());
+                    std::string k2b;
+                    if (sib_fox) {
+                        double dv = 0.0;
+                        openads::engine::evaluate_index_expr_number(
+                            *t, sib_expr, dv);
+                        k2b = openads::engine::fox_numeric_key(dv);
+                    } else {
+                        auto k2 = openads::engine::evaluate_index_expr(
+                            *t, sib_expr, sib_klen);
+                        if (!k2) continue;
+                        k2b = std::move(k2).value();
+                    }
+                    (void)sub->insert(r2, k2b);
                 }
                 (void)sub->flush();
                 // Park as extra binding (persists across rddads
@@ -6902,9 +6966,17 @@ UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
 
     std::uint16_t klen = idx->key_length();
     if (klen == 0) klen = 32;
-    auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
-    if (!k) return fail(k.error());
-    auto r = idx->insert(t->recno(), k.value());
+    std::string kb;
+    if (idx->key_encoding() == openads::drivers::KeyEncoding::FoxNumeric) {
+        double dv = 0.0;
+        openads::engine::evaluate_index_expr_number(*t, idx->expression(), dv);
+        kb = openads::engine::fox_numeric_key(dv);
+    } else {
+        auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
+        if (!k) return fail(k.error());
+        kb = std::move(k).value();
+    }
+    auto r = idx->insert(t->recno(), kb);
     if (!r) return fail(r.error());
     return ok();
 }
@@ -6924,9 +6996,17 @@ UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex) {
 
     std::uint16_t klen = idx->key_length();
     if (klen == 0) klen = 32;
-    auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
-    if (!k) return fail(k.error());
-    auto r = idx->erase(t->recno(), k.value());
+    std::string kb;
+    if (idx->key_encoding() == openads::drivers::KeyEncoding::FoxNumeric) {
+        double dv = 0.0;
+        openads::engine::evaluate_index_expr_number(*t, idx->expression(), dv);
+        kb = openads::engine::fox_numeric_key(dv);
+    } else {
+        auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
+        if (!k) return fail(k.error());
+        kb = std::move(k).value();
+    }
+    auto r = idx->erase(t->recno(), kb);
     if (!r) return fail(r.error());
     return ok();
 }
@@ -8637,6 +8717,7 @@ extern "C++" std::vector<ADSHANDLE> ordered_index_handles_for(Table* t) {
                     if (auto r = sub->open_named(bag_path,
                             openads::drivers::IndexOpenMode::Shared,
                             tag); !r) continue;
+                    mark_cdx_key_encoding(t, sub.get());
                     ADSHANDLE nh = next_index_handle();
                     openads::drivers::IIndex* raw = sub.get();
                     m[nh] = IndexBinding{t, tag, std::move(sub), bag_path};
@@ -8901,7 +8982,17 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
         dk_numeric = (dkt == openads::drivers::DbfFieldType::Numeric ||
                       dkt == openads::drivers::DbfFieldType::Float);
     }
-    if (dk_idx != nullptr && dk_numeric && u16KeyLen == sizeof(double)) {
+    const bool dk_foxnum =
+        dk_idx != nullptr &&
+        dk_idx->key_encoding() == openads::drivers::KeyEncoding::FoxNumeric &&
+        u16KeyLen == sizeof(double);
+    if (dk_foxnum) {
+        // Numeric CDX key: encode the seek value the same 8-byte
+        // order-preserving way the stored keys were written.
+        double dv = 0;
+        std::memcpy(&dv, pucKey, sizeof(double));
+        key = openads::engine::fox_numeric_key(dv);
+    } else if (dk_idx != nullptr && dk_numeric && u16KeyLen == sizeof(double)) {
         double dv = 0;
         std::memcpy(&dv, pucKey, sizeof(double));
         std::uint16_t klen = dk_idx->key_length();
@@ -9124,6 +9215,15 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
         std::uint16_t klen = idx->key_length();
         std::uint16_t fmt_w = klen;
         std::uint16_t dec = 0;
+        if (idx->key_encoding() ==
+            openads::drivers::KeyEncoding::FoxNumeric) {
+            // Numeric CDX scope key: same 8-byte order-preserving encoding
+            // as the stored keys, not ASCII.
+            key = openads::engine::fox_numeric_key(dv);
+            auto rsc = t->set_scope(usScope == ADS_TOP, key);
+            if (!rsc) return fail(rsc.error());
+            return ok();
+        }
         // Strip the `ALIAS->` qualifier the way the write side does
         // (evaluate_index_expr -> strip_alias_qualifiers); otherwise a
         // tag built from `FIELD->ID` never resolves the field, fmt_w
