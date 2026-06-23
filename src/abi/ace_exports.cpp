@@ -2214,6 +2214,12 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
 UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        // M12.21 option C — a valid cached current row (including one
+        // served locally from the prefetch queue) means the cursor is
+        // on a record, so it cannot be at EOF: answer with no round
+        // trip. This is what lets a prefetched scan loop, which polls
+        // Eof() every iteration, actually shed its per-step round trips.
+        if (rt->row_valid) { *pbAtEnd = 0; return ok(); }
         auto r = rt->conn->at_eof(rt->id);
         if (!r) return fail(r.error());
         *pbAtEnd = r.value() ? 1 : 0;
@@ -2240,6 +2246,10 @@ UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
 UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
     if (pbAtBegin == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
+        // M12.21 option C — a valid cached current row means the cursor
+        // is on a record, so it cannot be at BOF: answer with no round
+        // trip (see AdsAtEOF).
+        if (rt->row_valid) { *pbAtBegin = 0; return ok(); }
         auto r = rt->conn->at_bof(rt->id);
         if (!r) return fail(r.error());
         *pbAtBegin = r.value() ? 1 : 0;
