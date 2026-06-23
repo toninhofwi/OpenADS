@@ -119,8 +119,52 @@ util::Result<void> read_all_rows(
     return util::Result<void>{};
 }
 
+// ---------------------------------------------------------------------------
+// BoundParam: a typed parameter for parameterised SQL queries.
+// sql_type / col_size / decimals carry the ODBC column metadata so the
+// driver can coerce the value correctly (e.g. SQL_INTEGER vs SQL_VARCHAR).
+// is_null=true emits SQL_NULL_DATA regardless of value.
+// ---------------------------------------------------------------------------
+struct BoundParam {
+    std::string value;
+    bool        is_null  = false;
+    SQLSMALLINT sql_type = SQL_VARCHAR;
+    SQLULEN     col_size = 0;
+    SQLSMALLINT decimals = 0;
+};
+
+// True for ADS column types whose empty-string value is meaningful (a blank
+// string is NOT NULL). Non-textual types (numeric, date, …) that arrive
+// empty from xBase must be sent as SQL NULL — the NULL-on-write rule.
+bool is_textual(std::uint16_t ads_type) {
+    return ads_type == ADS_STRING;
+}
+
+// Build a BoundParam for `value` in `column` of `tbl`, applying the
+// NULL-on-write rule. Tasks 3 and 4 reuse this helper.
+BoundParam param_for(const OdbcTable& tbl, const std::string& column,
+                     const std::string& value) {
+    BoundParam p;
+    const std::size_t idx = field_index_ci(tbl, column);
+    if (idx != static_cast<std::size_t>(-1)) {
+        const auto& f = tbl.fields[idx];
+        if (f.sql_type != 0) p.sql_type = static_cast<SQLSMALLINT>(f.sql_type);
+        p.col_size = f.column_size;
+        p.decimals = static_cast<SQLSMALLINT>(f.decimals);
+        if (value.empty() && !is_textual(f.type)) p.is_null = true;
+    }
+    p.value = value;
+    return p;
+}
+
+// ---------------------------------------------------------------------------
+// run_query — parameterised overload (read/navigation path).
+// Binds params via SQLBindParameter (SQL_C_CHAR); the indicator array keeps
+// alive for the duration of the call since it is a local variable.
+// ---------------------------------------------------------------------------
 util::Result<void> run_query(
     SQLHDBC dbc, const std::string& sql,
+    const std::vector<BoundParam>& params,
     std::vector<std::vector<std::string>>& rows,
     std::vector<std::vector<bool>>& nulls,
     SQLULEN max_rows = 0) {
@@ -132,6 +176,25 @@ util::Result<void> run_query(
         SQLSetStmtAttr(st, SQL_ATTR_MAX_ROWS,
                        reinterpret_cast<SQLPOINTER>(max_rows), 0);
     }
+    std::vector<SQLLEN> ind(params.size());
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        const BoundParam& p = params[i];
+        ind[i] = p.is_null ? SQL_NULL_DATA
+                           : static_cast<SQLLEN>(p.value.size());
+        SQLRETURN br = SQLBindParameter(
+            st, static_cast<SQLUSMALLINT>(i + 1), SQL_PARAM_INPUT,
+            SQL_C_CHAR, p.sql_type,
+            p.col_size > 0 ? p.col_size : (p.value.empty() ? 1 : p.value.size()),
+            p.decimals,
+            const_cast<char*>(p.value.c_str()),
+            static_cast<SQLLEN>(p.value.size()), &ind[i]);
+        if (!SQL_SUCCEEDED(br)) {
+            auto e = odbc_error("odbc bind param",
+                                odbc_diag(SQL_HANDLE_STMT, st));
+            SQLFreeHandle(SQL_HANDLE_STMT, st);
+            return e;
+        }
+    }
     SQLRETURN r = SQLExecDirect(st, sqlstr(sql), SQL_NTS);
     if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
         auto e = odbc_error("odbc exec", odbc_diag(SQL_HANDLE_STMT, st));
@@ -141,6 +204,17 @@ util::Result<void> run_query(
     auto rr = read_all_rows(st, rows, nulls);
     SQLFreeHandle(SQL_HANDLE_STMT, st);
     return rr;
+}
+
+// No-parameter convenience — for metadata/snapshot reads with no values to
+// bind (load_pk_snapshot, seek_index, flush/delete via the write path).
+util::Result<void> run_query(
+    SQLHDBC dbc, const std::string& sql,
+    std::vector<std::vector<std::string>>& rows,
+    std::vector<std::vector<bool>>& nulls,
+    SQLULEN max_rows = 0) {
+    static const std::vector<BoundParam> kNoParams;
+    return run_query(dbc, sql, kNoParams, rows, nulls, max_rows);
 }
 
 std::string quote_ident(const std::string& q, const std::string& name) {
@@ -200,6 +274,9 @@ std::string pk_select_list(const std::string& q, const OdbcTable& tbl) {
     return out;
 }
 
+// Literal-based WHERE clause — used by the WRITE path (UPDATE/DELETE) in
+// Tasks 1-2. Tasks 3 and 4 convert those callers to bound params; until
+// then this overload keeps them compiling and correct.
 std::string pk_where_clause(const std::string& q, const OdbcTable& tbl,
                             const OdbcTable::PkRow& pk) {
     std::string out;
@@ -209,6 +286,21 @@ std::string pk_where_clause(const std::string& q, const OdbcTable& tbl,
                format_literal(tbl, tbl.pk_columns[i], pk.values[i]);
     }
     return out;
+}
+
+// Parameterised WHERE clause — used by the READ/navigation path (Task 2).
+// Emits `col = ? AND ...` and appends one BoundParam per PK column to `out`.
+// Tasks 3 and 4 will migrate UPDATE/DELETE callers to this overload too.
+std::string pk_where_clause(const std::string& q, const OdbcTable& tbl,
+                            const OdbcTable::PkRow& pk,
+                            std::vector<BoundParam>& out) {
+    std::string s;
+    for (std::size_t i = 0; i < tbl.pk_columns.size(); ++i) {
+        if (i > 0) s += " AND ";
+        s += quote_ident(q, tbl.pk_columns[i]) + " = ?";
+        out.push_back(param_for(tbl, tbl.pk_columns[i], pk.values[i]));
+    }
+    return s;
 }
 
 std::vector<std::string> order_keyed(std::vector<std::pair<int, std::string>> k) {
@@ -394,12 +486,13 @@ util::Result<void> load_current_row(SQLHDBC dbc, const std::string& q,
         tbl->row_valid  = false;
         return util::Result<void>{};
     }
+    std::vector<BoundParam> params;
     const std::string sql =
         "SELECT * FROM " + quote_ident(q, tbl->sql_table) + " WHERE " +
-        pk_where_clause(q, *tbl, tbl->pk_snapshot[idx]);
+        pk_where_clause(q, *tbl, tbl->pk_snapshot[idx], params);
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
-    auto r = run_query(dbc, sql, rows, nulls, /*max_rows=*/1);
+    auto r = run_query(dbc, sql, params, rows, nulls, /*max_rows=*/1);
     if (!r) return r.error();
     if (rows.empty()) {
         tbl->positioned = false;
