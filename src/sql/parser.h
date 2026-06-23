@@ -24,6 +24,12 @@ enum class WhereOp {
     IsNull, IsNotNull        // M10.44
 };
 
+// ADS dialect — optional case-folding function wrapping the WHERE
+// left-hand side: `UPPER(<col>) <op> <lit>` / `LOWER(<col>) <op> <lit>`.
+// Applied to the cell value (right-trimmed Character text) before the
+// comparison; the literal is taken verbatim, matching ADS semantics.
+enum class WhereFn { None, Upper, Lower };
+
 // Forward declaration so WhereCmp + InClause + WhereExpr can hold
 // optional sub-SelectStmts without seeing the full struct yet.
 struct SelectStmt;
@@ -31,6 +37,7 @@ struct SelectStmt;
 struct WhereCmp {
     std::string column;
     WhereOp     op = WhereOp::Eq;
+    WhereFn     lhs_fn = WhereFn::None;   // ADS UPPER()/LOWER() on the LHS
     std::string literal;       // raw string content, unquoted
     bool        is_numeric = false;
     double      number     = 0.0;

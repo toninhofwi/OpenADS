@@ -2671,6 +2671,21 @@ static inline bool sql_like_match(const std::string& s,
     return pi == pat.size();
 }
 
+// ADS dialect — apply the optional UPPER()/LOWER() case-fold from a
+// WHERE left-hand side to a cell value before it is compared. A no-op
+// for WhereFn::None, so callers can apply it unconditionally.
+static inline std::string apply_where_fn(std::string s,
+                                         openads::sql::WhereFn fn) {
+    if (fn == openads::sql::WhereFn::Upper) {
+        for (char& ch : s)
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    } else if (fn == openads::sql::WhereFn::Lower) {
+        for (char& ch : s)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return s;
+}
+
 // Map an rddads type name (Character, Numeric, Date, ...) to the
 // DBF field-descriptor type byte plus a default length / decimals
 // when those aren't explicit in the field-def string.
@@ -11558,7 +11573,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::string lit = w.literal;
                 bool is_num     = w.is_numeric;
                 double num      = w.number;
-                return Pred{[fi, op, lit, is_num, num]
+                openads::sql::WhereFn lhs_fn = w.lhs_fn;
+                return Pred{[fi, op, lit, is_num, num, lhs_fn]
                             (openads::engine::Table& t) {
                     auto v = t.read_field(fi);
                     if (!v) return false;
@@ -11568,7 +11584,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         if      (d < num) cmp = -1;
                         else if (d > num) cmp =  1;
                     } else {
-                        cmp = v.value().as_string.compare(lit);
+                        cmp = apply_where_fn(v.value().as_string, lhs_fn)
+                                  .compare(lit);
                     }
                     switch (op) {
                         case openads::sql::WhereOp::Eq: return cmp == 0;
@@ -11687,7 +11704,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::string lit = w.literal;
                 bool is_num     = w.is_numeric;
                 double num      = w.number;
-                return Pred{[fi, op, lit, is_num, num]
+                openads::sql::WhereFn lhs_fn = w.lhs_fn;
+                return Pred{[fi, op, lit, is_num, num, lhs_fn]
                             (openads::engine::Table& t) {
                     auto v = t.read_field(fi);
                     if (!v) return false;
@@ -11697,7 +11715,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         if      (d < num) cmp = -1;
                         else if (d > num) cmp =  1;
                     } else {
-                        cmp = v.value().as_string.compare(lit);
+                        cmp = apply_where_fn(v.value().as_string, lhs_fn)
+                                  .compare(lit);
                     }
                     switch (op) {
                         case openads::sql::WhereOp::Eq: return cmp == 0;
@@ -12536,7 +12555,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     }
                     std::string lit2 = w.literal2;
                     double num2 = w.number2;
-                    return Pred{[f, op, lit, lit2, is_num, num, num2, contains_hits]
+                    openads::sql::WhereFn lhs_fn = w.lhs_fn;
+                    return Pred{[f, op, lit, lit2, is_num, num, num2,
+                                 contains_hits, lhs_fn]
                                 (openads::engine::Table& t) {
                         if (op == openads::sql::WhereOp::Contains) {
                             if (!contains_hits) return false;
@@ -12561,11 +12582,11 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                 double d = v.value().as_double;
                                 return d >= num && d <= num2;
                             }
-                            auto& sv = v.value().as_string;
+                            auto sv = apply_where_fn(v.value().as_string, lhs_fn);
                             return sv.compare(lit) >= 0 && sv.compare(lit2) <= 0;
                         }
                         if (op == openads::sql::WhereOp::Like) {
-                            auto sv = v.value().as_string;
+                            auto sv = apply_where_fn(v.value().as_string, lhs_fn);
                             while (!sv.empty() && sv.back() == ' ') sv.pop_back();
                             return sql_like_match(sv, lit);
                         }
@@ -12575,7 +12596,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             if      (d < num) cmp = -1;
                             else if (d > num) cmp =  1;
                         } else {
-                            cmp = v.value().as_string.compare(lit);
+                            cmp = apply_where_fn(v.value().as_string, lhs_fn)
+                                      .compare(lit);
                         }
                         switch (op) {
                             case openads::sql::WhereOp::Eq: return cmp == 0;
@@ -13267,7 +13289,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::string lit = w.literal;
                 bool is_num     = w.is_numeric;
                 double num      = w.number;
-                return Pred{[fi, op, lit, is_num, num]
+                openads::sql::WhereFn lhs_fn = w.lhs_fn;
+                return Pred{[fi, op, lit, is_num, num, lhs_fn]
                             (openads::engine::Table& t) {
                     auto v = t.read_field(fi);
                     if (!v) return false;
@@ -13277,7 +13300,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         if      (d < num) cmp = -1;
                         else if (d > num) cmp =  1;
                     } else {
-                        cmp = v.value().as_string.compare(lit);
+                        cmp = apply_where_fn(v.value().as_string, lhs_fn)
+                                  .compare(lit);
                     }
                     switch (op) {
                         case openads::sql::WhereOp::Eq: return cmp == 0;
@@ -13693,7 +13717,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                 hits.begin(), hits.end());
                     }
                 }
-                return AggPred{[f, op, lit, lit2, is_num, num, num2, contains_hits]
+                openads::sql::WhereFn lhs_fn = w.lhs_fn;
+                return AggPred{[f, op, lit, lit2, is_num, num, num2,
+                                contains_hits, lhs_fn]
                                (openads::engine::Table& t) {
                     if (op == openads::sql::WhereOp::Contains) {
                         if (!contains_hits) return false;
@@ -13718,11 +13744,11 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             double d = v.value().as_double;
                             return d >= num && d <= num2;
                         }
-                        auto& sv = v.value().as_string;
+                        auto sv = apply_where_fn(v.value().as_string, lhs_fn);
                         return sv.compare(lit) >= 0 && sv.compare(lit2) <= 0;
                     }
                     if (op == openads::sql::WhereOp::Like) {
-                        auto sv = v.value().as_string;
+                        auto sv = apply_where_fn(v.value().as_string, lhs_fn);
                         while (!sv.empty() && sv.back() == ' ') sv.pop_back();
                         return sql_like_match(sv, lit);
                     }
@@ -13732,7 +13758,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         if      (d < num) cmp = -1;
                         else if (d > num) cmp =  1;
                     } else {
-                        cmp = v.value().as_string.compare(lit);
+                        cmp = apply_where_fn(v.value().as_string, lhs_fn)
+                                  .compare(lit);
                     }
                     switch (op) {
                         case openads::sql::WhereOp::Eq: return cmp == 0;
@@ -13898,6 +13925,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             double                              number2 = 0.0;
             // M11.7 — case-insensitive ASCII compare when set.
             bool                                nocase = false;
+            // ADS dialect — UPPER()/LOWER() wrapping the LHS column.
+            openads::sql::WhereFn               lhs_fn =
+                openads::sql::WhereFn::None;
         };
         bool conn_nocase =
             (c->collation() == Connection::Collation::NoCase);
@@ -14245,6 +14275,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             term.number      = w.number;
             term.literal2    = w.literal2;
             term.number2     = w.number2;
+            term.lhs_fn      = w.lhs_fn;
             // M11.7 — stamp collation onto the term when the
             // connection is in nocase mode and the cmp involves
             // string operands.
@@ -14611,6 +14642,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 auto v = t.read_field(term.field_index);
                 if (!v) return false;
                 auto maybe_lower = [&](std::string sl) {
+                    // ADS UPPER()/LOWER() folds the cell first; literal is
+                    // verbatim. nocase then lowercases both sides.
+                    sl = apply_where_fn(std::move(sl), term.lhs_fn);
                     if (!term.nocase) return sl;
                     for (auto& ch : sl) {
                         if (ch >= 'A' && ch <= 'Z')
@@ -15067,7 +15101,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             hits.begin(), hits.end());
                 }
             }
-            return CondPred{[f, op, lit, lit2, is_num, num, num2, contains_hits]
+            openads::sql::WhereFn lhs_fn = w.lhs_fn;
+            return CondPred{[f, op, lit, lit2, is_num, num, num2,
+                             contains_hits, lhs_fn]
                             (openads::engine::Table& t) {
                 if (op == openads::sql::WhereOp::Contains) {
                     if (!contains_hits) return false;
@@ -15091,12 +15127,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         double d = v.value().as_double;
                         return d >= num && d <= num2;
                     }
-                    auto& sv = v.value().as_string;
+                    auto sv = apply_where_fn(v.value().as_string, lhs_fn);
                     return sv.compare(lit)  >= 0 &&
                            sv.compare(lit2) <= 0;
                 }
                 if (op == openads::sql::WhereOp::Like) {
-                    auto sv = v.value().as_string;
+                    auto sv = apply_where_fn(v.value().as_string, lhs_fn);
                     while (!sv.empty() && sv.back() == ' ') sv.pop_back();
                     return sql_like_match(sv, lit);
                 }
@@ -15106,7 +15142,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     if      (d < num) cmp = -1;
                     else if (d > num) cmp =  1;
                 } else {
-                    cmp = v.value().as_string.compare(lit);
+                    cmp = apply_where_fn(v.value().as_string, lhs_fn)
+                              .compare(lit);
                 }
                 switch (op) {
                     case openads::sql::WhereOp::Eq: return cmp == 0;

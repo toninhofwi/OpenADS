@@ -258,7 +258,34 @@ parse_cmp(Cursor& c, const std::string& sql) {
         return node;
     }
 
-    node->cmp.column = c.read_identifier();
+    // ADS dialect — optional case-folding wrapper on the LHS:
+    // `UPPER(<col>) <op> <lit>` / `LOWER(<col>) <op> <lit>`. The function
+    // name is only treated as such when an opening paren follows; a column
+    // literally named UPPER/LOWER (no paren) still reads as a column.
+    {
+        std::string head = c.read_identifier();
+        std::string upper;
+        upper.reserve(head.size());
+        for (char ch : head) {
+            upper.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(ch))));
+        }
+        if ((upper == "UPPER" || upper == "LOWER") && c.match_char('(')) {
+            node->cmp.lhs_fn =
+                (upper == "UPPER") ? WhereFn::Upper : WhereFn::Lower;
+            node->cmp.column = c.read_identifier();   // drops <alias>. prefix
+            if (node->cmp.column.empty()) {
+                return util::Error{7200, 0,
+                    "expected column inside UPPER()/LOWER()", sql};
+            }
+            if (!c.match_char(')')) {
+                return util::Error{7200, 0,
+                    "expected ')' after UPPER()/LOWER() column", sql};
+            }
+        } else {
+            node->cmp.column = std::move(head);
+        }
+    }
     if (node->cmp.column.empty()) {
         return util::Error{7200, 0,
             "expected column name in WHERE clause", sql};

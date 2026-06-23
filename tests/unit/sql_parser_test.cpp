@@ -192,6 +192,41 @@ TEST_CASE("ADS dialect: FROM <table> AS <alias>") {
     CHECK(r.value().where->cmp.op == WhereOp::Ne);
 }
 
+TEST_CASE("ADS dialect: UPPER(col) on the WHERE left-hand side") {
+    auto r = parse_select("SELECT * FROM x WHERE UPPER(name) <> 'N'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.column == "name");
+    CHECK(r.value().where->cmp.op == WhereOp::Ne);
+    CHECK(r.value().where->cmp.lhs_fn == openads::sql::WhereFn::Upper);
+    CHECK(r.value().where->cmp.literal == "N");
+}
+
+TEST_CASE("ADS dialect: LOWER(col) on the WHERE left-hand side") {
+    auto r = parse_select("SELECT * FROM x WHERE LOWER(a.tag) = 'n'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.column == "tag");   // alias dropped
+    CHECK(r.value().where->cmp.lhs_fn == openads::sql::WhereFn::Lower);
+    CHECK(r.value().where->cmp.op == WhereOp::Eq);
+}
+
+TEST_CASE("ADS dialect: bare column LHS keeps lhs_fn None") {
+    auto r = parse_select("SELECT * FROM x WHERE tag = 'a'");
+    REQUIRE(r.has_value());
+    CHECK(r.value().where->cmp.lhs_fn == openads::sql::WhereFn::None);
+}
+
+TEST_CASE("ADS dialect: UPPER(col) LIKE pattern in WHERE") {
+    auto r = parse_select("SELECT * FROM x WHERE UPPER(name) LIKE 'A%'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.column == "name");
+    CHECK(r.value().where->cmp.lhs_fn == openads::sql::WhereFn::Upper);
+    CHECK(r.value().where->cmp.op == WhereOp::Like);
+}
+
 TEST_CASE("ADS dialect: full legacy query (hint + bracket + alias)") {
     auto r = parse_select(
         "SELECT {static} * FROM [articulo.dat] AS a "
