@@ -5,6 +5,20 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.4 — 2026-06-23
+
+- **CDX stale record-count refresh on the fetch path (PR #50).** A
+  `CdxDriver` caches the DBF record count at `open()`. In a
+  multiuser deployment a peer connection can append rows afterward,
+  leaving that cache lagging; an index walk that reached a
+  just-appended recno (e.g. mid-`REPLACE … FOR` / DBEVAL) then
+  failed hard with a spurious ADSCDX error 5000. `read_record_raw` /
+  `write_record_raw` now re-read the on-disk count under a shared
+  header lock before declaring a recno out of range, with an
+  unlocked-refresh fallback. Slow path only — a normal forward scan
+  never reads past the count, so the single-writer case pays
+  nothing.
+
 ## 1.0.3 — 2026-06-23
 
 - **Round-trip-thrifty remote scan (PR #47).** A forward scan over
