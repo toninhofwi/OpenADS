@@ -266,6 +266,19 @@ openads::network::RemoteTable* get_remote_table(ADSHANDLE h) {
         h, HandleKind::RemoteTable);
 }
 
+// M12.21 option C — settle the sequential-prefetch lag before any op
+// that reads or mutates the server's CURRENT record. Rows served
+// locally from the lookahead queue left the server cursor behind by
+// prefetch_consumed; a Skip(0) (which the client sends as
+// Skip(prefetch_consumed)) walks the server cursor up to the client's
+// logical row and the ack resets the counter. A no-op when nothing was
+// prefetched (the common cold-cache write path pays nothing).
+void remote_settle_cursor(openads::network::RemoteTable* rt) {
+    if (rt != nullptr && rt->conn != nullptr && rt->prefetch_consumed > 0) {
+        (void)rt->conn->skip(rt, 0);
+    }
+}
+
 #if defined(OPENADS_WITH_SQLITE)
 std::unordered_map<Handle,
     std::unique_ptr<openads::sql_backend::SqliteConnection>>&
@@ -1957,6 +1970,7 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
 
 UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->refresh_record(rt->id);
         if (!r) return fail(r.error());
@@ -1986,6 +2000,7 @@ UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->found_cached = true; rt->current_found = false;  // M12.21: GoTo clears Found()
         auto r = rt->conn->goto_record(rt, ulRecord);
         if (!r) return fail(r.error());
         return ok();
@@ -2108,6 +2123,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
         // M12.18 — rt-aware overload parses the row trailer in the
         // same RTT, so AdsGetField immediately after GoTop hits
         // the cache.
+        rt->found_cached = true; rt->current_found = false;  // M12.21: GoTop clears Found()
         auto r = rt->conn->goto_top(rt);
         if (!r) return fail(r.error());
         return ok();
@@ -2132,6 +2148,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->found_cached = true; rt->current_found = false;  // M12.21: GoBottom clears Found()
         auto r = rt->conn->goto_bottom(rt);
         if (!r) return fail(r.error());
         return ok();
@@ -2157,6 +2174,7 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
 UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* rt = get_remote_table(hTable)) {
+        rt->found_cached = true; rt->current_found = false;  // M12.21: Skip clears Found()
         // M12.21 — sequential prefetch: Skip(1) drains the queue
         // populated by the previous Skip's lookahead block. Zero
         // RTT for every cached step.
@@ -2167,6 +2185,10 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
             rt->current_deleted = pr.deleted;
             rt->current_row     = std::move(pr.fields);
             rt->row_valid       = true;
+            // M12.21 option C — the server cursor did not move; remember
+            // we are one logical row further ahead so the next wire op
+            // resyncs by (step + prefetch_consumed).
+            ++rt->prefetch_consumed;
             return ok();
         }
         // Any non-sequential nav drops the queue (handled inside
@@ -2196,6 +2218,12 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
 UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        // M12.21 option C — a valid cached current row (including one
+        // served locally from the prefetch queue) means the cursor is
+        // on a record, so it cannot be at EOF: answer with no round
+        // trip. This is what lets a prefetched scan loop, which polls
+        // Eof() every iteration, actually shed its per-step round trips.
+        if (rt->row_valid) { *pbAtEnd = 0; return ok(); }
         auto r = rt->conn->at_eof(rt->id);
         if (!r) return fail(r.error());
         *pbAtEnd = r.value() ? 1 : 0;
@@ -2222,6 +2250,10 @@ UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
 UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
     if (pbAtBegin == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
+        // M12.21 option C — a valid cached current row means the cursor
+        // is on a record, so it cannot be at BOF: answer with no round
+        // trip (see AdsAtEOF).
+        if (rt->row_valid) { *pbAtBegin = 0; return ok(); }
         auto r = rt->conn->at_bof(rt->id);
         if (!r) return fail(r.error());
         *pbAtBegin = r.value() ? 1 : 0;
@@ -3436,6 +3468,7 @@ bool fire_triggers_(Handle hConn, Connection* conn,
 
 UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
         rt->rec_count_cached = false;               // M12.19
         auto r = rt->conn->append_blank(rt->id);
@@ -3512,6 +3545,7 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
         rt->rec_count_cached = false;               // M12.19 (Pack drops the row)
         auto r = rt->conn->delete_record(rt->id);
@@ -3557,6 +3591,7 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
         rt->rec_count_cached = false;               // M12.19
         auto r = rt->conn->recall_record(rt->id);
@@ -3622,6 +3657,7 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (pucValue != nullptr && ulLen > 0) {
             val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
         }
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->set_field(rt->id, fname, val);
         if (!r) return fail(r.error());
@@ -3652,6 +3688,7 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
         std::string fname(reinterpret_cast<const char*>(pucField));
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, bValue ? "1" : "0");
         if (!r) return fail(r.error());
@@ -3688,6 +3725,7 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
         std::string fname(reinterpret_cast<const char*>(pucField));
         char nbuf[64];
         std::snprintf(nbuf, sizeof(nbuf), "%.17g", dValue);
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, std::string(nbuf));
         if (!r) return fail(r.error());
@@ -6848,6 +6886,10 @@ UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     }
 #endif
     if (auto* rt = get_remote_table(hTable)) {
+        // M12.21 option C — serve Found() locally when a nav/seek op set
+        // it (the common scan case: Skip clears it), saving a round-trip
+        // on every step. Fall back to the server only when uncached.
+        if (rt->found_cached) { *pbFound = rt->current_found ? 1 : 0; return ok(); }
         auto r = rt->conn->is_found(rt->id);
         if (!r) return fail(r.error());
         *pbFound = r.value() ? 1 : 0;
@@ -6892,6 +6934,10 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
             /*last=*/0);
         if (!r) return fail(r.error());
         if (pbFound) *pbFound = r.value().hit;
+        if (ri->parent) {                            // M12.21 option C
+            ri->parent->found_cached  = true;
+            ri->parent->current_found = (r.value().hit != 0);
+        }
         (void)u16KeyType;
         return ok();
     }
@@ -7024,6 +7070,10 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
             /*last=*/1);
         if (!r) return fail(r.error());
         if (pbFound) *pbFound = r.value().hit;
+        if (ri->parent) {                            // M12.21 option C
+            ri->parent->found_cached  = true;
+            ri->parent->current_found = (r.value().hit != 0);
+        }
         (void)u16KeyType;
         return ok();
     }
@@ -7456,6 +7506,7 @@ UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (!rd) return fail(rd.error());
     }
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         std::string fname = openads::abi::to_internal(pucField, 0);
         auto r = rt->conn->set_field(rt->id, fname, payload);
         if (!r) return fail(r.error());
