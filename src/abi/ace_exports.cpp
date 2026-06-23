@@ -3375,9 +3375,16 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
             fd[132] = static_cast<std::uint8_t>((fld_off >> 8) & 0xFFu);
             fd[135] = static_cast<std::uint8_t>(sp.adt_length & 0xFFu);
             fd[136] = static_cast<std::uint8_t>((sp.adt_length >> 8) & 0xFFu);
-            fd[137] = sp.adt_dec;
-            if (sp.adt_type == 10u)
-                fd[139] = sp.adt_dec ? sp.adt_dec : 2;
+            // DOUBLE (type 10) is an IEEE 8-byte binary value: the real ADS
+            // engine stores NO decimal count in its field descriptor (fd[137]
+            // and fd[139] stay 0). Stamping the Harbour decimals there made the
+            // engine reject the whole table as corrupt (error 7016). The value
+            // is full-precision binary, so dropping the descriptor "decimals"
+            // is loss-free and matches the ADT on-disk layout a conforming
+            // reader expects. fd[139] is the AUTOINC counter slot anyway,
+            // never a DOUBLE field.
+            if (sp.adt_type != 10u)
+                fd[137] = sp.adt_dec;
             // AUTOINC tail (bytes 139-143) stays zero on disk; counter is
             // seeded from existing data when the table is opened.
             fld_off = static_cast<std::uint16_t>(fld_off + sp.adt_length);

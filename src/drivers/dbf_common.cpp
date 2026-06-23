@@ -313,10 +313,20 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
                 break;
             }
             v.as_double = read_f64_le(p);
+            // A DOUBLE is a binary IEEE value. When the descriptor carries a
+            // decimal count (VFP "B" fields) honour it for the display string.
+            // When it is 0 -- which is what a conforming ADT DOUBLE descriptor
+            // carries -- render at full round-trip precision (the SQLite
+            // convention) instead of truncating to zero decimals; otherwise
+            // the wire path, which ships this string and re-parses it, would
+            // silently lose all the fractional digits.
             char tmp[64];
-            std::snprintf(tmp, sizeof(tmp), "%.*f",
-                          static_cast<int>(field.decimals),
-                          v.as_double);
+            if (field.decimals > 0) {
+                std::snprintf(tmp, sizeof(tmp), "%.*f",
+                              static_cast<int>(field.decimals), v.as_double);
+            } else {
+                std::snprintf(tmp, sizeof(tmp), "%.15g", v.as_double);
+            }
             v.as_string = tmp;
             break;
         }
