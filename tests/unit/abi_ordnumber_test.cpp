@@ -207,6 +207,14 @@ TEST_CASE("CDX reindex cycle does not leak pages (bag size stabilises)") {
     for (int cycle = 0; cycle < 6; ++cycle) reindex();
     std::uintmax_t after_many = fs::file_size(bag_path, ec);
 
+    // Make the leak/no-leak visible in the test log (always printed, not
+    // only on failure): before the free-list fix this went e.g.
+    // 7680 -> 44544 bytes and kept climbing every reindex; after it the
+    // bag size is flat.
+    MESSAGE("leak.cdx size after 1 reindex = " << after_first
+            << " bytes; after 7 reindex cycles = " << after_many
+            << " bytes (delta = " << (static_cast<long long>(after_many)
+               - static_cast<long long>(after_first)) << ")");
     INFO("after_first=" << after_first << " after_many=" << after_many);
     // The bag must not balloon with every reindex. Allow modest slack for
     // page-alignment, but nothing like the per-cycle full-tree leak.
