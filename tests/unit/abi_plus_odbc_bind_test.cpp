@@ -114,4 +114,31 @@ TEST_CASE("ABI: odbc seek key with embedded quote binds safely") {
     REQUIRE(AdsDisconnect(hConn) == 0);
 }
 
+TEST_CASE("ABI: odbc write binds NULL and unicode correctly") {
+    const char* cs = odbc_connstr();
+    if (!cs) { MESSAGE("OPENADS_TEST_ODBC_CONNSTR not set; skipping"); return; }
+    ADSHANDLE hConn = connect_odbc(cs);
+    ADSHANDLE h = open_clientes(hConn);
+
+    // Append id=8 with a unicode name and an EMPTY saldo (numeric) -> NULL.
+    REQUIRE(AdsAppendRecord(h) == 0);
+    set_str(h, "id", "8");
+    set_str(h, "nome", "Jo\xC3\xA3o");   // "João" UTF-8
+    set_str(h, "saldo", "");              // empty numeric -> SQL NULL
+    REQUIRE(AdsWriteRecord(h) == 0);
+
+    // Re-find it and verify: nome round-trips, saldo reads back NULL (empty).
+    UNSIGNED8 key[8]  = "8";
+    UNSIGNED16 found = 0;
+    REQUIRE(AdsSeek(h, key, 1, ADS_SEEKEQ, &found) == 0);
+    CHECK(found == 1);
+    CHECK(read_str(h, "nome").find("Jo\xC3\xA3o") != std::string::npos);
+    CHECK(read_str(h, "saldo").empty());   // NULL reads as empty string
+
+    REQUIRE(AdsDeleteRecord(h) == 0);
+    CHECK(count_rows(h) == 3);
+    REQUIRE(AdsCloseTable(h) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+}
+
 #endif // OPENADS_WITH_ODBC

@@ -222,42 +222,6 @@ std::string quote_ident(const std::string& q, const std::string& name) {
     return q + name + q;
 }
 
-std::string escape_literal(const std::string& value) {
-    std::string out = "'";
-    for (char c : value) {
-        if (c == '\'') out += "''";
-        else           out += c;
-    }
-    out += '\'';
-    return out;
-}
-
-// Injection-safe numeric-literal check: only [0-9 . + - e E], at least
-// one digit. The xBase key/PK values arrive as strings; numeric columns
-// must NOT be quoted (Jet/Access and others reject 'text' = int_column),
-// so a validated number is emitted bare.
-bool is_numeric_literal(const std::string& s) {
-    if (s.empty()) return false;
-    bool any_digit = false;
-    for (char c : s) {
-        if (c >= '0' && c <= '9') { any_digit = true; continue; }
-        if (c == '+' || c == '-' || c == '.' || c == 'e' || c == 'E') continue;
-        return false;
-    }
-    return any_digit;
-}
-
-// Emit a SQL literal for `value` against `column`: bare for numeric
-// columns (when the value is a clean number), single-quoted otherwise.
-std::string format_literal(const OdbcTable& tbl, const std::string& column,
-                           const std::string& value) {
-    const std::size_t idx = field_index_ci(tbl, column);
-    const bool numeric = idx != static_cast<std::size_t>(-1) &&
-        (tbl.fields[idx].type == ADS_INTEGER ||
-         tbl.fields[idx].type == ADS_DOUBLE);
-    if (numeric && is_numeric_literal(value)) return value;
-    return escape_literal(value);
-}
 
 std::string index_column_sql(const std::string& q, const std::string& column,
                              IndexExprKind kind) {
@@ -274,21 +238,7 @@ std::string pk_select_list(const std::string& q, const OdbcTable& tbl) {
     return out;
 }
 
-// Literal-based WHERE clause — used by the WRITE path (UPDATE/DELETE) in
-// Tasks 1-2. Tasks 3 and 4 convert those callers to bound params; until
-// then this overload keeps them compiling and correct.
-std::string pk_where_clause(const std::string& q, const OdbcTable& tbl,
-                            const OdbcTable::PkRow& pk) {
-    std::string out;
-    for (std::size_t i = 0; i < tbl.pk_columns.size(); ++i) {
-        if (i > 0) out += " AND ";
-        out += quote_ident(q, tbl.pk_columns[i]) + " = " +
-               format_literal(tbl, tbl.pk_columns[i], pk.values[i]);
-    }
-    return out;
-}
-
-// Parameterised WHERE clause — used by the READ/navigation path (Task 2).
+// Parameterised WHERE clause — used by the READ/navigation and WRITE paths.
 // Emits `col = ? AND ...` and appends one BoundParam per PK column to `out`.
 // Tasks 3 and 4 will migrate UPDATE/DELETE callers to this overload too.
 std::string pk_where_clause(const std::string& q, const OdbcTable& tbl,
@@ -912,19 +862,21 @@ util::Result<void> OdbcConnection::flush_table(OdbcTable* tbl) {
             return util::Error{5001, 0, "append with no fields set",
                                tbl->name};
         }
-        std::string cols, vals;
+        std::string cols, marks;
+        std::vector<BoundParam> params;
         for (std::size_t i = 0; i < tbl->staged.size(); ++i) {
-            if (i) { cols += ", "; vals += ", "; }
-            cols += quote_ident(q, tbl->staged[i].first);
-            vals += format_literal(*tbl, tbl->staged[i].first,
-                                   tbl->staged[i].second);
+            if (i) { cols += ", "; marks += ", "; }
+            cols  += quote_ident(q, tbl->staged[i].first);
+            marks += "?";
+            params.push_back(param_for(*tbl, tbl->staged[i].first,
+                                       tbl->staged[i].second));
         }
         const std::string sql =
             "INSERT INTO " + quote_ident(q, tbl->sql_table) +
-            " (" + cols + ") VALUES (" + vals + ")";
+            " (" + cols + ") VALUES (" + marks + ")";
         std::vector<std::vector<std::string>> rows;
         std::vector<std::vector<bool>>        nulls;
-        if (auto r = run_query(impl_->dbc, sql, rows, nulls); !r) {
+        if (auto r = run_query(impl_->dbc, sql, params, rows, nulls); !r) {
             return r.error();
         }
     } else {
@@ -933,18 +885,21 @@ util::Result<void> OdbcConnection::flush_table(OdbcTable* tbl) {
             return util::Error{5026, 0, "no current record to update", ""};
         }
         std::string sets;
+        std::vector<BoundParam> params;
         for (std::size_t i = 0; i < tbl->staged.size(); ++i) {
             if (i) sets += ", ";
-            sets += quote_ident(q, tbl->staged[i].first) + " = " +
-                    format_literal(*tbl, tbl->staged[i].first,
-                                   tbl->staged[i].second);
+            sets += quote_ident(q, tbl->staged[i].first) + " = ?";
+            params.push_back(param_for(*tbl, tbl->staged[i].first,
+                                       tbl->staged[i].second));
         }
+        const std::string where =
+            pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos], params);
         const std::string sql =
             "UPDATE " + quote_ident(q, tbl->sql_table) + " SET " + sets +
-            " WHERE " + pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos]);
+            " WHERE " + where;
         std::vector<std::vector<std::string>> rows;
         std::vector<std::vector<bool>>        nulls;
-        if (auto r = run_query(impl_->dbc, sql, rows, nulls); !r) {
+        if (auto r = run_query(impl_->dbc, sql, params, rows, nulls); !r) {
             return r.error();
         }
     }
@@ -979,12 +934,14 @@ util::Result<void> OdbcConnection::delete_record(OdbcTable* tbl) {
         return util::Error{5026, 0, "no current record to delete", ""};
     }
     const std::string& q = impl_->quote;
+    std::vector<BoundParam> params;
+    const std::string where =
+        pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos], params);
     const std::string sql =
-        "DELETE FROM " + quote_ident(q, tbl->sql_table) + " WHERE " +
-        pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos]);
+        "DELETE FROM " + quote_ident(q, tbl->sql_table) + " WHERE " + where;
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
-    if (auto r = run_query(impl_->dbc, sql, rows, nulls); !r) {
+    if (auto r = run_query(impl_->dbc, sql, params, rows, nulls); !r) {
         return r.error();
     }
 
