@@ -9,20 +9,9 @@
 
 namespace openads::sql_backend {
 
-bool is_safe_identifier(const std::string& name) {
-    if (name.empty()) return false;
-    // Locale-independent ASCII check: std::isalnum depends on the active
-    // C locale, which could admit unexpected bytes into an identifier we
-    // splice into SQL. Keep it strict regardless of locale.
-    for (char c : name) {
-        const bool ok = (c >= 'a' && c <= 'z') ||
-                        (c >= 'A' && c <= 'Z') ||
-                        (c >= '0' && c <= '9') ||
-                        c == '_';
-        if (!ok) return false;
-    }
-    return true;
-}
+// is_safe_identifier lives in sql_common.cpp (shared by every SQL backend) so
+// that an integration build with SQLite + another SQL backend does not get a
+// duplicate-symbol clash. Declared in sqlite_backend.h / sql_common.h.
 
 SqliteTable::FieldDesc map_sqlite_column(const char* name,
                                          const char* declared_type,
@@ -101,6 +90,7 @@ util::Error sqlite_error(sqlite3* db, const char* context) {
                        ""};
 }
 
+#if defined(OPENADS_WITH_SQLCIPHER)
 namespace {
 
 [[maybe_unused]] util::Result<void> exec_pragma(sqlite3* db, const std::string& sql) {
@@ -125,6 +115,7 @@ namespace {
 }
 
 } // namespace
+#endif  // OPENADS_WITH_SQLCIPHER
 
 util::Result<void> apply_cipher_key(sqlite3* db, const std::string& key) {
     if (key.empty()) return util::Result<void>{};

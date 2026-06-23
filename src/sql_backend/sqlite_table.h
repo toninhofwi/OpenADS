@@ -41,6 +41,13 @@ struct SqliteTable {
     std::vector<bool>         current_nulls;
 
     bool last_seek_found = false;
+
+    // Result-set cursor mode (AdsExecuteSQLDirect SELECT passthrough): rows are
+    // materialized in memory instead of fetched per-rowid from a base table, so
+    // navigation serves `current_row` straight from `result_rows[pos]`.
+    bool                                  is_result = false;
+    std::vector<std::vector<std::string>> result_rows;
+    std::vector<std::vector<bool>>        result_nulls;
 };
 
 } // namespace openads::sql_backend

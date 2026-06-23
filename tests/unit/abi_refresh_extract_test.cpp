@@ -3,6 +3,7 @@
 
 #include "drivers/cdx/cdx_index.h"
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>

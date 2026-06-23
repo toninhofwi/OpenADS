@@ -24,6 +24,7 @@ add_library(openads_core STATIC
     abi/ace_stubs.cpp
     abi/last_error.cpp
     abi/charset.cpp
+    abi/backend_registry.cpp
     session/handle_registry.cpp
     session/connection.cpp
     engine/table.cpp
@@ -57,9 +58,34 @@ add_library(openads_core STATIC
     mgmt/mg_collector.cpp
     network/mg_wire.cpp
     sql_backend/uri.cpp
+    sql_backend/sql_common.cpp
     sql_backend/sqlite_connection.cpp
     sql_backend/sqlite_backend.cpp
 )
+
+if(OPENADS_WITH_POSTGRESQL)
+    target_sources(openads_core PRIVATE
+        sql_backend/postgres_uri.cpp
+        sql_backend/postgres_backend.cpp
+        sql_backend/postgres_connection.cpp
+    )
+endif()
+
+if(OPENADS_WITH_MARIADB)
+    target_sources(openads_core PRIVATE
+        sql_backend/maria_uri.cpp
+        sql_backend/maria_backend.cpp
+        sql_backend/maria_connection.cpp
+    )
+endif()
+
+if(OPENADS_WITH_ODBC)
+    target_sources(openads_core PRIVATE
+        sql_backend/odbc_uri.cpp
+        sql_backend/odbc_backend.cpp
+        sql_backend/odbc_connection.cpp
+    )
+endif()
 
 if(WIN32)
     target_sources(openads_core PRIVATE
@@ -104,6 +130,25 @@ endif()
 if(OPENADS_WITH_SQLITE)
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_SQLITE=1)
     target_link_libraries(openads_core PRIVATE openads_sqlite3)
+endif()
+
+if(OPENADS_WITH_POSTGRESQL)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_POSTGRESQL=1)
+    target_link_libraries(openads_core PUBLIC openads_libpq)
+endif()
+
+if(OPENADS_WITH_MARIADB)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_MARIADB=1)
+    target_link_libraries(openads_core PUBLIC openads_libmariadb)
+endif()
+
+if(OPENADS_WITH_ODBC)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_ODBC=1)
+    if(WIN32)
+        target_link_libraries(openads_core PUBLIC odbc32)
+    else()
+        target_link_libraries(openads_core PUBLIC odbc)
+    endif()
 endif()
 
 # ----------------------------------------------------------------------

@@ -24,7 +24,19 @@ enum class HandleKind {
     // OpenADS Plus — external SQL backend (sqlite:// …).
     SqliteConnection = 9,
     SqliteTable      = 10,
-    SqliteIndex      = 11
+    SqliteIndex      = 11,
+    // OpenADS Plus — PostgreSQL backend (postgresql:// …).
+    PostgresConnection = 12,
+    PostgresTable      = 13,
+    PostgresIndex      = 14,
+    // OpenADS Plus — MariaDB/MySQL backend (mariadb:// …).
+    MariaConnection = 15,
+    MariaTable      = 16,
+    MariaIndex      = 17,
+    // OpenADS Plus — generic ODBC backend (odbc:// …).
+    OdbcConnection = 18,
+    OdbcTable      = 19,
+    OdbcIndex      = 20
 };
 
 using Handle = std::uint64_t;
@@ -49,6 +61,12 @@ public:
         for (auto& [h, slot] : slots_) {
             f(h, slot.kind, slot.ptr);
         }
+    }
+
+    HandleKind kind_of(Handle h) const {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = slots_.find(h);
+        return it == slots_.end() ? HandleKind::None : it->second.kind;
     }
 
 private:

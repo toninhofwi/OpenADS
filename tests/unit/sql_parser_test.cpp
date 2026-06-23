@@ -1,6 +1,8 @@
 #include "doctest.h"
 #include "sql/parser.h"
 
+#include <vector>
+
 using openads::sql::parse_select;
 using openads::sql::WhereExpr;
 using openads::sql::WhereOp;

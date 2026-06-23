@@ -37,6 +37,8 @@ add_executable(openads_unit_tests
     unit/engine_table_write_test.cpp
     unit/engine_cursor_test.cpp
     unit/session_handle_registry_test.cpp
+    unit/handle_registry_kind_of_test.cpp
+    unit/backend_registry_test.cpp
     unit/session_connection_test.cpp
     unit/abi_smoke_test.cpp
     unit/abi_write_smoke_test.cpp
@@ -64,6 +66,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_smoke_test.cpp
     unit/abi_plus_sqlite_read_test.cpp
     unit/abi_plus_sqlite_seek_test.cpp
+    unit/abi_plus_sqlite_passthrough_test.cpp
     unit/lsn_map_test.cpp
     unit/index_expr_test.cpp
     unit/abi_m92_real_test.cpp
@@ -160,6 +163,18 @@ add_executable(openads_unit_tests
     unit/abi_sql_dd_sql_test.cpp
     unit/abi_no_current_record_test.cpp
 )
+
+if(OPENADS_WITH_POSTGRESQL)
+    target_sources(openads_unit_tests PRIVATE
+        unit/abi_plus_postgres_read_test.cpp
+    unit/abi_plus_mariadb_read_test.cpp
+    unit/abi_plus_odbc_read_test.cpp
+    unit/abi_plus_odbc_seek_test.cpp
+    unit/odbc_uri_test.cpp
+        unit/abi_plus_postgres_seek_test.cpp
+    unit/abi_plus_mariadb_seek_test.cpp
+    )
+endif()
 
 # M11.4 — side DLL with stored procedures used by abi_aep_test.
 add_library(openads_test_aep_proc SHARED

@@ -3,6 +3,8 @@
 
 #include <atomic>
 
+#include "abi/backend_table_ops.h"
+#include "abi/backend_registry.h"
 #include "abi/charset.h"
 #include "abi/last_error.h"
 
@@ -28,6 +30,21 @@
 #include "sql_backend/sqlite_connection.h"
 #include "sql_backend/sqlite_index.h"
 #include "sql_backend/uri.h"
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+#include "sql_backend/postgres_connection.h"
+#include "sql_backend/postgres_index.h"
+#include "sql_backend/postgres_uri.h"
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+#include "sql_backend/maria_connection.h"
+#include "sql_backend/maria_index.h"
+#include "sql_backend/maria_uri.h"
+#endif
+#if defined(OPENADS_WITH_ODBC)
+#include "sql_backend/odbc_connection.h"
+#include "sql_backend/odbc_index.h"
+#include "sql_backend/odbc_uri.h"
 #endif
 #include "drivers/dbf_common.h"
 #include "drivers/index_trait.h"
@@ -337,6 +354,9 @@ std::size_t sqlite_field_index(openads::sql_backend::SqliteTable* st,
             return std::numeric_limits<std::size_t>::max();
         }
     }
+    if (pucField == nullptr) {
+        return std::numeric_limits<std::size_t>::max();
+    }
     std::string want = openads::abi::to_internal(pucField, 0);
     for (auto& c : want) {
         c = static_cast<char>(
@@ -353,6 +373,228 @@ std::size_t sqlite_field_index(openads::sql_backend::SqliteTable* st,
     return std::numeric_limits<std::size_t>::max();
 }
 #endif // OPENADS_WITH_SQLITE
+
+#if defined(OPENADS_WITH_ODBC)
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::OdbcConnection>>&
+odbc_conns_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::OdbcConnection>> m;
+    return m;
+}
+
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::OdbcTable>>&
+odbc_tables_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::OdbcTable>> m;
+    return m;
+}
+
+openads::sql_backend::OdbcTable* get_odbc_table(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::OdbcTable>(
+        h, HandleKind::OdbcTable);
+}
+
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::OdbcIndex>>&
+odbc_indexes_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::OdbcIndex>> m;
+    return m;
+}
+
+openads::sql_backend::OdbcIndex* get_odbc_index(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::OdbcIndex>(
+        h, HandleKind::OdbcIndex);
+}
+
+std::size_t odbc_field_index(openads::sql_backend::OdbcTable* st,
+                             UNSIGNED8* pucField) {
+    if (!st->fields_cached) {
+        if (st->conn == nullptr) {
+            return std::numeric_limits<std::size_t>::max();
+        }
+        auto r = st->conn->describe_table(st);
+        if (!r) return std::numeric_limits<std::size_t>::max();
+    }
+    {
+        auto p = reinterpret_cast<std::uintptr_t>(pucField);
+        if (p != 0 && p < 0x10000u) {
+            std::size_t one_based = static_cast<std::size_t>(p);
+            if (one_based >= 1 && one_based <= st->fields.size()) {
+                return one_based - 1;
+            }
+            return std::numeric_limits<std::size_t>::max();
+        }
+    }
+    std::string want = openads::abi::to_internal(pucField, 0);
+    for (auto& c : want) {
+        c = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c)));
+    }
+    for (std::size_t i = 0; i < st->fields.size(); ++i) {
+        std::string have = st->fields[i].name;
+        for (auto& c : have) {
+            c = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(c)));
+        }
+        if (have == want) return i;
+    }
+    return std::numeric_limits<std::size_t>::max();
+}
+#endif // OPENADS_WITH_ODBC
+
+#if defined(OPENADS_WITH_MARIADB)
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::MariaConnection>>&
+maria_conns_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::MariaConnection>> m;
+    return m;
+}
+
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::MariaTable>>&
+maria_tables_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::MariaTable>> m;
+    return m;
+}
+
+openads::sql_backend::MariaTable* get_maria_table(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::MariaTable>(
+        h, HandleKind::MariaTable);
+}
+
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::MariaIndex>>&
+maria_indexes_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::MariaIndex>> m;
+    return m;
+}
+
+openads::sql_backend::MariaIndex* get_maria_index(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::MariaIndex>(
+        h, HandleKind::MariaIndex);
+}
+
+std::size_t maria_field_index(openads::sql_backend::MariaTable* st,
+                              UNSIGNED8* pucField) {
+    if (!st->fields_cached) {
+        if (st->conn == nullptr) {
+            return std::numeric_limits<std::size_t>::max();
+        }
+        auto r = st->conn->describe_table(st);
+        if (!r) return std::numeric_limits<std::size_t>::max();
+    }
+    {
+        auto p = reinterpret_cast<std::uintptr_t>(pucField);
+        if (p != 0 && p < 0x10000u) {
+            std::size_t one_based = static_cast<std::size_t>(p);
+            if (one_based >= 1 && one_based <= st->fields.size()) {
+                return one_based - 1;
+            }
+            return std::numeric_limits<std::size_t>::max();
+        }
+    }
+    if (pucField == nullptr) {
+        return std::numeric_limits<std::size_t>::max();
+    }
+    std::string want = openads::abi::to_internal(pucField, 0);
+    for (auto& c : want) {
+        c = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c)));
+    }
+    for (std::size_t i = 0; i < st->fields.size(); ++i) {
+        std::string have = st->fields[i].name;
+        for (auto& c : have) {
+            c = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(c)));
+        }
+        if (have == want) return i;
+    }
+    return std::numeric_limits<std::size_t>::max();
+}
+#endif // OPENADS_WITH_MARIADB
+
+#if defined(OPENADS_WITH_POSTGRESQL)
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::PostgresConnection>>&
+postgres_conns_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::PostgresConnection>> m;
+    return m;
+}
+
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::PostgresTable>>&
+postgres_tables_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::PostgresTable>> m;
+    return m;
+}
+
+openads::sql_backend::PostgresTable* get_postgres_table(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::PostgresTable>(
+        h, HandleKind::PostgresTable);
+}
+
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::PostgresIndex>>&
+postgres_indexes_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::PostgresIndex>> m;
+    return m;
+}
+
+openads::sql_backend::PostgresIndex* get_postgres_index(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::PostgresIndex>(
+        h, HandleKind::PostgresIndex);
+}
+
+std::size_t postgres_field_index(openads::sql_backend::PostgresTable* st,
+                               UNSIGNED8* pucField) {
+    if (!st->fields_cached) {
+        if (st->conn == nullptr) {
+            return std::numeric_limits<std::size_t>::max();
+        }
+        auto r = st->conn->describe_table(st);
+        if (!r) return std::numeric_limits<std::size_t>::max();
+    }
+    {
+        auto p = reinterpret_cast<std::uintptr_t>(pucField);
+        if (p != 0 && p < 0x10000u) {
+            std::size_t one_based = static_cast<std::size_t>(p);
+            if (one_based >= 1 && one_based <= st->fields.size()) {
+                return one_based - 1;
+            }
+            return std::numeric_limits<std::size_t>::max();
+        }
+    }
+    std::string want = openads::abi::to_internal(pucField, 0);
+    for (auto& c : want) {
+        c = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c)));
+    }
+    for (std::size_t i = 0; i < st->fields.size(); ++i) {
+        std::string have = st->fields[i].name;
+        for (auto& c : have) {
+            c = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(c)));
+        }
+        if (have == want) return i;
+    }
+    return std::numeric_limits<std::size_t>::max();
+}
+#endif // OPENADS_WITH_POSTGRESQL
 
 // M12.16 — same dispatch helper for remote-index handles. Returns
 // nullptr when `h` is a local IIndex / Connection / unknown.
@@ -423,6 +665,957 @@ std::string pad_char_field(std::string s, std::size_t width) {
         s.append(width - s.size(), ' ');
     return s;
 }
+
+// ---------------------------------------------------------------------------
+// Task 3: Lifted SQLite table ops + accessor
+// Placed after pad_char_field (sqlite_get_field uses it).
+// ---------------------------------------------------------------------------
+#if defined(OPENADS_WITH_SQLITE)
+
+UNSIGNED32 sqlite_close_table(ADSHANDLE hTable) {
+    auto* st = get_sqlite_table(hTable);
+    (void)st;
+    auto& s2 = state();
+    std::lock_guard<std::recursive_mutex> lk2(s2.mu);
+    sqlite_tables_map().erase(hTable);
+    s2.registry.release(hTable);
+    return ok();
+}
+
+UNSIGNED32 sqlite_goto_top(ADSHANDLE hTable) {
+    auto* st = get_sqlite_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_top(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 sqlite_goto_bottom(ADSHANDLE hTable) {
+    auto* st = get_sqlite_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_bottom(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 sqlite_skip(ADSHANDLE hTable, SIGNED32 lRows) {
+    auto* st = get_sqlite_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->skip(st, lRows);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 sqlite_at_eof(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
+    auto* st = get_sqlite_table(hTable);
+    if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_eof(st);
+    if (!r) return fail(r.error());
+    *pbAtEnd = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 sqlite_at_bof(ADSHANDLE hTable, UNSIGNED16* pbAtBof) {
+    auto* st = get_sqlite_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_bof(st);
+    if (!r) return fail(r.error());
+    *pbAtBof = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 sqlite_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
+    auto* st = get_sqlite_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    return ok();
+}
+
+UNSIGNED32 sqlite_field_name(ADSHANDLE hTable, UNSIGNED16 n,
+                             UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    auto* st = get_sqlite_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    if (n == 0 || n > st->fields.size()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    openads::abi::copy_to_caller(pucBuf, pusLen, st->fields[n - 1].name);
+    return ok();
+}
+
+UNSIGNED32 sqlite_field_type(ADSHANDLE hTable, UNSIGNED8* pucField,
+                             UNSIGNED16* pusType) {
+    auto* st = get_sqlite_table(hTable);
+    auto i = sqlite_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusType = st->fields[i].type;
+    return ok();
+}
+
+UNSIGNED32 sqlite_field_length(ADSHANDLE hTable, UNSIGNED8* pucField,
+                               UNSIGNED32* pulLen) {
+    auto* st = get_sqlite_table(hTable);
+    auto i = sqlite_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pulLen = st->fields[i].length;
+    return ok();
+}
+
+UNSIGNED32 sqlite_field_decimals(ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED16* pusDec) {
+    auto* st = get_sqlite_table(hTable);
+    auto i = sqlite_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusDec = st->fields[i].decimals;
+    return ok();
+}
+
+UNSIGNED32 sqlite_record_num(ADSHANDLE hTable, UNSIGNED32* pulRec) {
+    auto* st = get_sqlite_table(hTable);
+    if (!st->positioned || !st->row_valid) {
+        return fail(5026, "no current record");
+    }
+    *pulRec = static_cast<UNSIGNED32>(st->current_rowid);
+    return ok();
+}
+
+UNSIGNED32 sqlite_record_count(ADSHANDLE hTable, UNSIGNED32* pulCount,
+                               UNSIGNED16 /*usFilterOption*/) {
+    auto* st = get_sqlite_table(hTable);
+    if (pulCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (st->rec_count_cached) {
+        *pulCount = st->cached_rec_count;
+        return ok();
+    }
+    auto r = st->conn->record_count(st);
+    if (!r) return fail(r.error());
+    st->cached_rec_count = r.value();
+    st->rec_count_cached = true;
+    *pulCount = st->cached_rec_count;
+    return ok();
+}
+
+UNSIGNED32 sqlite_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
+                            UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
+                            UNSIGNED16 /*usOption*/) {
+    auto* st = get_sqlite_table(hTable);
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto fname = openads::abi::to_internal(pucField, 0);
+    bool is_null = false;
+    std::string val;
+    auto r = st->conn->read_field(st, fname, val, is_null);
+    if (!r) return fail(r.error());
+    if (is_null) val.clear();
+    auto fi = sqlite_field_index(st, pucField);
+    if (fi != std::numeric_limits<std::size_t>::max() &&
+        st->fields[fi].type == ADS_STRING) {
+        val = pad_char_field(std::move(val), st->fields[fi].length);
+    }
+    openads::abi::copy_to_caller(pucBuf, pulLen, val);
+    return ok();
+}
+
+UNSIGNED32 sqlite_is_record_deleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
+    auto* st = get_sqlite_table(hTable);
+    *pbDeleted = st->current_deleted ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 sqlite_open_index(ADSHANDLE hTable, UNSIGNED8* pucName,
+                             ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
+    auto* st = get_sqlite_table(hTable);
+    if (pu16ArrayLen != nullptr && *pu16ArrayLen < 1) {
+        return fail(openads::AE_INTERNAL_ERROR, "index array too small");
+    }
+    std::string tag = openads::abi::to_internal(pucName, 0);
+    if (tag.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "empty index tag");
+    }
+    const auto dot = tag.find_last_of("./\\");
+    if (dot != std::string::npos) {
+        tag = tag.substr(dot + 1);
+    }
+    const auto dot2 = tag.find('.');
+    if (dot2 != std::string::npos) {
+        tag = tag.substr(0, dot2);
+    }
+    auto si = std::make_unique<openads::sql_backend::SqliteIndex>();
+    si->parent = st;
+    si->column = tag;
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Handle gh = s.registry.register_object(
+        HandleKind::SqliteIndex, si.get());
+    ahIndex[0] = gh;
+    if (pu16ArrayLen != nullptr) {
+        *pu16ArrayLen = 1;
+    }
+    sqlite_indexes_map().emplace(gh, std::move(si));
+    return ok();
+}
+
+UNSIGNED32 sqlite_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+    auto* st = get_sqlite_table(hTable);
+    *pbFound = st->last_seek_found ? 1 : 0;
+    return ok();
+}
+
+const openads::abi::BackendTableOps* sqlite_table_ops() {
+    static const openads::abi::BackendTableOps ops = [] {
+        openads::abi::BackendTableOps o{};
+        o.close_table       = &sqlite_close_table;
+        o.goto_top          = &sqlite_goto_top;
+        o.goto_bottom       = &sqlite_goto_bottom;
+        o.skip              = &sqlite_skip;
+        o.at_eof            = &sqlite_at_eof;
+        o.at_bof            = &sqlite_at_bof;
+        o.num_fields        = &sqlite_num_fields;
+        o.field_name        = &sqlite_field_name;
+        o.field_type        = &sqlite_field_type;
+        o.field_length      = &sqlite_field_length;
+        o.field_decimals    = &sqlite_field_decimals;
+        o.record_num        = &sqlite_record_num;
+        o.record_count      = &sqlite_record_count;
+        o.get_field         = &sqlite_get_field;
+        o.is_record_deleted = &sqlite_is_record_deleted;
+        o.open_index        = &sqlite_open_index;
+        o.is_found          = &sqlite_is_found;
+        return o;
+    }();
+    return &ops;
+}
+
+#endif // OPENADS_WITH_SQLITE (lifted ops)
+
+// ---------------------------------------------------------------------------
+// Lifted ODBC table ops + accessor (mirrors the SQLite lift; bodies are
+// the per-function inline ODBC dispatch moved verbatim behind the
+// registry so the 17 ABI functions stay backend-agnostic).
+// ---------------------------------------------------------------------------
+#if defined(OPENADS_WITH_ODBC)
+
+UNSIGNED32 odbc_close_table(ADSHANDLE hTable) {
+    auto* st = get_odbc_table(hTable);
+    (void)st;
+    auto& s2 = state();
+    std::lock_guard<std::recursive_mutex> lk2(s2.mu);
+    odbc_tables_map().erase(hTable);
+    s2.registry.release(hTable);
+    return ok();
+}
+
+UNSIGNED32 odbc_goto_top(ADSHANDLE hTable) {
+    auto* st = get_odbc_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_top(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 odbc_goto_bottom(ADSHANDLE hTable) {
+    auto* st = get_odbc_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_bottom(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 odbc_skip(ADSHANDLE hTable, SIGNED32 lRows) {
+    auto* st = get_odbc_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->skip(st, lRows);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 odbc_at_eof(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
+    auto* st = get_odbc_table(hTable);
+    if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_eof(st);
+    if (!r) return fail(r.error());
+    *pbAtEnd = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 odbc_at_bof(ADSHANDLE hTable, UNSIGNED16* pbAtBof) {
+    auto* st = get_odbc_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_bof(st);
+    if (!r) return fail(r.error());
+    *pbAtBof = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 odbc_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
+    auto* st = get_odbc_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    return ok();
+}
+
+UNSIGNED32 odbc_field_name(ADSHANDLE hTable, UNSIGNED16 n,
+                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    auto* st = get_odbc_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    if (n == 0 || n > st->fields.size()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    openads::abi::copy_to_caller(pucBuf, pusLen, st->fields[n - 1].name);
+    return ok();
+}
+
+UNSIGNED32 odbc_field_type(ADSHANDLE hTable, UNSIGNED8* pucField,
+                               UNSIGNED16* pusType) {
+    auto* st = get_odbc_table(hTable);
+    auto i = odbc_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusType = st->fields[i].type;
+    return ok();
+}
+
+UNSIGNED32 odbc_field_length(ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED32* pulLen) {
+    auto* st = get_odbc_table(hTable);
+    auto i = odbc_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pulLen = st->fields[i].length;
+    return ok();
+}
+
+UNSIGNED32 odbc_field_decimals(ADSHANDLE hTable, UNSIGNED8* pucField,
+                                   UNSIGNED16* pusDec) {
+    auto* st = get_odbc_table(hTable);
+    auto i = odbc_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusDec = st->fields[i].decimals;
+    return ok();
+}
+
+UNSIGNED32 odbc_record_num(ADSHANDLE hTable, UNSIGNED32* pulRec) {
+    auto* st = get_odbc_table(hTable);
+    if (!st->positioned || !st->row_valid) {
+        return fail(5026, "no current record");
+    }
+    *pulRec = static_cast<UNSIGNED32>(st->current_recno);
+    return ok();
+}
+
+UNSIGNED32 odbc_record_count(ADSHANDLE hTable, UNSIGNED32* pulCount,
+                                 UNSIGNED16 /*usFilterOption*/) {
+    auto* st = get_odbc_table(hTable);
+    if (pulCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (st->rec_count_cached) {
+        *pulCount = st->cached_rec_count;
+        return ok();
+    }
+    auto r = st->conn->record_count(st);
+    if (!r) return fail(r.error());
+    st->cached_rec_count = r.value();
+    st->rec_count_cached = true;
+    *pulCount = st->cached_rec_count;
+    return ok();
+}
+
+UNSIGNED32 odbc_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
+                              UNSIGNED16 /*usOption*/) {
+    auto* st = get_odbc_table(hTable);
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto fname = openads::abi::to_internal(pucField, 0);
+    bool is_null = false;
+    std::string val;
+    auto r = st->conn->read_field(st, fname, val, is_null);
+    if (!r) return fail(r.error());
+    if (is_null) val.clear();
+    auto fi = odbc_field_index(st, pucField);
+    if (fi != std::numeric_limits<std::size_t>::max() &&
+        st->fields[fi].type == ADS_STRING) {
+        val = pad_char_field(std::move(val), st->fields[fi].length);
+    }
+    openads::abi::copy_to_caller(pucBuf, pulLen, val);
+    return ok();
+}
+
+UNSIGNED32 odbc_is_record_deleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
+    auto* st = get_odbc_table(hTable);
+    *pbDeleted = st->current_deleted ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 odbc_open_index(ADSHANDLE hTable, UNSIGNED8* pucName,
+                               ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
+    auto* st = get_odbc_table(hTable);
+    if (pu16ArrayLen != nullptr && *pu16ArrayLen < 1) {
+        return fail(openads::AE_INTERNAL_ERROR, "index array too small");
+    }
+    std::string tag = openads::abi::to_internal(pucName, 0);
+    if (tag.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "empty index tag");
+    }
+    const auto dot = tag.find_last_of("./\\");
+    if (dot != std::string::npos) {
+        tag = tag.substr(dot + 1);
+    }
+    const auto dot2 = tag.find('.');
+    if (dot2 != std::string::npos) {
+        tag = tag.substr(0, dot2);
+    }
+    auto si = std::make_unique<openads::sql_backend::OdbcIndex>();
+    si->parent = st;
+    si->column = tag;
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Handle gh = s.registry.register_object(
+        HandleKind::OdbcIndex, si.get());
+    ahIndex[0] = gh;
+    if (pu16ArrayLen != nullptr) {
+        *pu16ArrayLen = 1;
+    }
+    odbc_indexes_map().emplace(gh, std::move(si));
+    return ok();
+}
+
+UNSIGNED32 odbc_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+    auto* st = get_odbc_table(hTable);
+    *pbFound = st->last_seek_found ? 1 : 0;
+    return ok();
+}
+
+const openads::abi::BackendTableOps* odbc_table_ops() {
+    static const openads::abi::BackendTableOps ops = [] {
+        openads::abi::BackendTableOps o{};
+        o.close_table       = &odbc_close_table;
+        o.goto_top          = &odbc_goto_top;
+        o.goto_bottom       = &odbc_goto_bottom;
+        o.skip              = &odbc_skip;
+        o.at_eof            = &odbc_at_eof;
+        o.at_bof            = &odbc_at_bof;
+        o.num_fields        = &odbc_num_fields;
+        o.field_name        = &odbc_field_name;
+        o.field_type        = &odbc_field_type;
+        o.field_length      = &odbc_field_length;
+        o.field_decimals    = &odbc_field_decimals;
+        o.record_num        = &odbc_record_num;
+        o.record_count      = &odbc_record_count;
+        o.get_field         = &odbc_get_field;
+        o.is_record_deleted = &odbc_is_record_deleted;
+        o.open_index        = &odbc_open_index;
+        o.is_found          = &odbc_is_found;
+        return o;
+    }();
+    return &ops;
+}
+
+#endif // OPENADS_WITH_ODBC (lifted ops)
+
+// ---------------------------------------------------------------------------
+// Lifted MariaDB table ops + accessor (mirrors the SQLite lift; bodies are
+// the per-function inline MariaDB dispatch moved verbatim behind the
+// registry so the 17 ABI functions stay backend-agnostic).
+// ---------------------------------------------------------------------------
+#if defined(OPENADS_WITH_MARIADB)
+
+UNSIGNED32 maria_close_table(ADSHANDLE hTable) {
+    auto* st = get_maria_table(hTable);
+    (void)st;
+    auto& s2 = state();
+    std::lock_guard<std::recursive_mutex> lk2(s2.mu);
+    maria_tables_map().erase(hTable);
+    s2.registry.release(hTable);
+    return ok();
+}
+
+UNSIGNED32 maria_goto_top(ADSHANDLE hTable) {
+    auto* st = get_maria_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_top(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 maria_goto_bottom(ADSHANDLE hTable) {
+    auto* st = get_maria_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_bottom(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 maria_skip(ADSHANDLE hTable, SIGNED32 lRows) {
+    auto* st = get_maria_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->skip(st, lRows);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 maria_at_eof(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
+    auto* st = get_maria_table(hTable);
+    if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_eof(st);
+    if (!r) return fail(r.error());
+    *pbAtEnd = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 maria_at_bof(ADSHANDLE hTable, UNSIGNED16* pbAtBof) {
+    auto* st = get_maria_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_bof(st);
+    if (!r) return fail(r.error());
+    *pbAtBof = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 maria_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
+    auto* st = get_maria_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    return ok();
+}
+
+UNSIGNED32 maria_field_name(ADSHANDLE hTable, UNSIGNED16 n,
+                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    auto* st = get_maria_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    if (n == 0 || n > st->fields.size()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    openads::abi::copy_to_caller(pucBuf, pusLen, st->fields[n - 1].name);
+    return ok();
+}
+
+UNSIGNED32 maria_field_type(ADSHANDLE hTable, UNSIGNED8* pucField,
+                               UNSIGNED16* pusType) {
+    auto* st = get_maria_table(hTable);
+    auto i = maria_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusType = st->fields[i].type;
+    return ok();
+}
+
+UNSIGNED32 maria_field_length(ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED32* pulLen) {
+    auto* st = get_maria_table(hTable);
+    auto i = maria_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pulLen = st->fields[i].length;
+    return ok();
+}
+
+UNSIGNED32 maria_field_decimals(ADSHANDLE hTable, UNSIGNED8* pucField,
+                                   UNSIGNED16* pusDec) {
+    auto* st = get_maria_table(hTable);
+    auto i = maria_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusDec = st->fields[i].decimals;
+    return ok();
+}
+
+UNSIGNED32 maria_record_num(ADSHANDLE hTable, UNSIGNED32* pulRec) {
+    auto* st = get_maria_table(hTable);
+    if (!st->positioned || !st->row_valid) {
+        return fail(5026, "no current record");
+    }
+    *pulRec = static_cast<UNSIGNED32>(st->current_recno);
+    return ok();
+}
+
+UNSIGNED32 maria_record_count(ADSHANDLE hTable, UNSIGNED32* pulCount,
+                                 UNSIGNED16 /*usFilterOption*/) {
+    auto* st = get_maria_table(hTable);
+    if (pulCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (st->rec_count_cached) {
+        *pulCount = st->cached_rec_count;
+        return ok();
+    }
+    auto r = st->conn->record_count(st);
+    if (!r) return fail(r.error());
+    st->cached_rec_count = r.value();
+    st->rec_count_cached = true;
+    *pulCount = st->cached_rec_count;
+    return ok();
+}
+
+UNSIGNED32 maria_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
+                              UNSIGNED16 /*usOption*/) {
+    auto* st = get_maria_table(hTable);
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto fname = openads::abi::to_internal(pucField, 0);
+    bool is_null = false;
+    std::string val;
+    auto r = st->conn->read_field(st, fname, val, is_null);
+    if (!r) return fail(r.error());
+    if (is_null) val.clear();
+    auto fi = maria_field_index(st, pucField);
+    if (fi != std::numeric_limits<std::size_t>::max() &&
+        st->fields[fi].type == ADS_STRING) {
+        val = pad_char_field(std::move(val), st->fields[fi].length);
+    }
+    openads::abi::copy_to_caller(pucBuf, pulLen, val);
+    return ok();
+}
+
+UNSIGNED32 maria_is_record_deleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
+    auto* st = get_maria_table(hTable);
+    *pbDeleted = st->current_deleted ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 maria_open_index(ADSHANDLE hTable, UNSIGNED8* pucName,
+                               ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
+    auto* st = get_maria_table(hTable);
+    if (pu16ArrayLen != nullptr && *pu16ArrayLen < 1) {
+        return fail(openads::AE_INTERNAL_ERROR, "index array too small");
+    }
+    std::string tag = openads::abi::to_internal(pucName, 0);
+    if (tag.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "empty index tag");
+    }
+    const auto dot = tag.find_last_of("./\\");
+    if (dot != std::string::npos) {
+        tag = tag.substr(dot + 1);
+    }
+    const auto dot2 = tag.find('.');
+    if (dot2 != std::string::npos) {
+        tag = tag.substr(0, dot2);
+    }
+    auto si = std::make_unique<openads::sql_backend::MariaIndex>();
+    si->parent = st;
+    si->column = tag;
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Handle gh = s.registry.register_object(
+        HandleKind::MariaIndex, si.get());
+    ahIndex[0] = gh;
+    if (pu16ArrayLen != nullptr) {
+        *pu16ArrayLen = 1;
+    }
+    maria_indexes_map().emplace(gh, std::move(si));
+    return ok();
+}
+
+UNSIGNED32 maria_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+    auto* st = get_maria_table(hTable);
+    *pbFound = st->last_seek_found ? 1 : 0;
+    return ok();
+}
+
+const openads::abi::BackendTableOps* maria_table_ops() {
+    static const openads::abi::BackendTableOps ops = [] {
+        openads::abi::BackendTableOps o{};
+        o.close_table       = &maria_close_table;
+        o.goto_top          = &maria_goto_top;
+        o.goto_bottom       = &maria_goto_bottom;
+        o.skip              = &maria_skip;
+        o.at_eof            = &maria_at_eof;
+        o.at_bof            = &maria_at_bof;
+        o.num_fields        = &maria_num_fields;
+        o.field_name        = &maria_field_name;
+        o.field_type        = &maria_field_type;
+        o.field_length      = &maria_field_length;
+        o.field_decimals    = &maria_field_decimals;
+        o.record_num        = &maria_record_num;
+        o.record_count      = &maria_record_count;
+        o.get_field         = &maria_get_field;
+        o.is_record_deleted = &maria_is_record_deleted;
+        o.open_index        = &maria_open_index;
+        o.is_found          = &maria_is_found;
+        return o;
+    }();
+    return &ops;
+}
+
+#endif // OPENADS_WITH_MARIADB (lifted ops)
+
+// ---------------------------------------------------------------------------
+// Lifted PostgreSQL table ops + accessor (mirrors the SQLite lift; bodies are
+// the per-function inline PostgreSQL dispatch moved verbatim behind the
+// registry so the 17 ABI functions stay backend-agnostic).
+// ---------------------------------------------------------------------------
+#if defined(OPENADS_WITH_POSTGRESQL)
+
+UNSIGNED32 postgres_close_table(ADSHANDLE hTable) {
+    auto* st = get_postgres_table(hTable);
+    (void)st;
+    auto& s2 = state();
+    std::lock_guard<std::recursive_mutex> lk2(s2.mu);
+    postgres_tables_map().erase(hTable);
+    s2.registry.release(hTable);
+    return ok();
+}
+
+UNSIGNED32 postgres_goto_top(ADSHANDLE hTable) {
+    auto* st = get_postgres_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_top(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 postgres_goto_bottom(ADSHANDLE hTable) {
+    auto* st = get_postgres_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->goto_bottom(st);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 postgres_skip(ADSHANDLE hTable, SIGNED32 lRows) {
+    auto* st = get_postgres_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->skip(st, lRows);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 postgres_at_eof(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
+    auto* st = get_postgres_table(hTable);
+    if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_eof(st);
+    if (!r) return fail(r.error());
+    *pbAtEnd = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 postgres_at_bof(ADSHANDLE hTable, UNSIGNED16* pbAtBof) {
+    auto* st = get_postgres_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = st->conn->at_bof(st);
+    if (!r) return fail(r.error());
+    *pbAtBof = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 postgres_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
+    auto* st = get_postgres_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    return ok();
+}
+
+UNSIGNED32 postgres_field_name(ADSHANDLE hTable, UNSIGNED16 n,
+                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    auto* st = get_postgres_table(hTable);
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (!st->fields_cached) {
+        auto r = st->conn->describe_table(st);
+        if (!r) return fail(r.error());
+    }
+    if (n == 0 || n > st->fields.size()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    openads::abi::copy_to_caller(pucBuf, pusLen, st->fields[n - 1].name);
+    return ok();
+}
+
+UNSIGNED32 postgres_field_type(ADSHANDLE hTable, UNSIGNED8* pucField,
+                               UNSIGNED16* pusType) {
+    auto* st = get_postgres_table(hTable);
+    auto i = postgres_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusType = st->fields[i].type;
+    return ok();
+}
+
+UNSIGNED32 postgres_field_length(ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED32* pulLen) {
+    auto* st = get_postgres_table(hTable);
+    auto i = postgres_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pulLen = st->fields[i].length;
+    return ok();
+}
+
+UNSIGNED32 postgres_field_decimals(ADSHANDLE hTable, UNSIGNED8* pucField,
+                                   UNSIGNED16* pusDec) {
+    auto* st = get_postgres_table(hTable);
+    auto i = postgres_field_index(st, pucField);
+    if (i == std::numeric_limits<std::size_t>::max()) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusDec = st->fields[i].decimals;
+    return ok();
+}
+
+UNSIGNED32 postgres_record_num(ADSHANDLE hTable, UNSIGNED32* pulRec) {
+    auto* st = get_postgres_table(hTable);
+    if (!st->positioned || !st->row_valid) {
+        return fail(5026, "no current record");
+    }
+    *pulRec = static_cast<UNSIGNED32>(st->current_recno);
+    return ok();
+}
+
+UNSIGNED32 postgres_record_count(ADSHANDLE hTable, UNSIGNED32* pulCount,
+                                 UNSIGNED16 /*usFilterOption*/) {
+    auto* st = get_postgres_table(hTable);
+    if (pulCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (st->rec_count_cached) {
+        *pulCount = st->cached_rec_count;
+        return ok();
+    }
+    auto r = st->conn->record_count(st);
+    if (!r) return fail(r.error());
+    st->cached_rec_count = r.value();
+    st->rec_count_cached = true;
+    *pulCount = st->cached_rec_count;
+    return ok();
+}
+
+UNSIGNED32 postgres_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
+                              UNSIGNED16 /*usOption*/) {
+    auto* st = get_postgres_table(hTable);
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto fname = openads::abi::to_internal(pucField, 0);
+    bool is_null = false;
+    std::string val;
+    auto r = st->conn->read_field(st, fname, val, is_null);
+    if (!r) return fail(r.error());
+    if (is_null) val.clear();
+    auto fi = postgres_field_index(st, pucField);
+    if (fi != std::numeric_limits<std::size_t>::max() &&
+        st->fields[fi].type == ADS_STRING) {
+        val = pad_char_field(std::move(val), st->fields[fi].length);
+    }
+    openads::abi::copy_to_caller(pucBuf, pulLen, val);
+    return ok();
+}
+
+UNSIGNED32 postgres_is_record_deleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
+    auto* st = get_postgres_table(hTable);
+    *pbDeleted = st->current_deleted ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 postgres_open_index(ADSHANDLE hTable, UNSIGNED8* pucName,
+                               ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
+    auto* st = get_postgres_table(hTable);
+    if (pu16ArrayLen != nullptr && *pu16ArrayLen < 1) {
+        return fail(openads::AE_INTERNAL_ERROR, "index array too small");
+    }
+    std::string tag = openads::abi::to_internal(pucName, 0);
+    if (tag.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "empty index tag");
+    }
+    const auto dot = tag.find_last_of("./\\");
+    if (dot != std::string::npos) {
+        tag = tag.substr(dot + 1);
+    }
+    const auto dot2 = tag.find('.');
+    if (dot2 != std::string::npos) {
+        tag = tag.substr(0, dot2);
+    }
+    auto si = std::make_unique<openads::sql_backend::PostgresIndex>();
+    si->parent = st;
+    si->column = tag;
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Handle gh = s.registry.register_object(
+        HandleKind::PostgresIndex, si.get());
+    ahIndex[0] = gh;
+    if (pu16ArrayLen != nullptr) {
+        *pu16ArrayLen = 1;
+    }
+    postgres_indexes_map().emplace(gh, std::move(si));
+    return ok();
+}
+
+UNSIGNED32 postgres_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+    auto* st = get_postgres_table(hTable);
+    *pbFound = st->last_seek_found ? 1 : 0;
+    return ok();
+}
+
+const openads::abi::BackendTableOps* postgres_table_ops() {
+    static const openads::abi::BackendTableOps ops = [] {
+        openads::abi::BackendTableOps o{};
+        o.close_table       = &postgres_close_table;
+        o.goto_top          = &postgres_goto_top;
+        o.goto_bottom       = &postgres_goto_bottom;
+        o.skip              = &postgres_skip;
+        o.at_eof            = &postgres_at_eof;
+        o.at_bof            = &postgres_at_bof;
+        o.num_fields        = &postgres_num_fields;
+        o.field_name        = &postgres_field_name;
+        o.field_type        = &postgres_field_type;
+        o.field_length      = &postgres_field_length;
+        o.field_decimals    = &postgres_field_decimals;
+        o.record_num        = &postgres_record_num;
+        o.record_count      = &postgres_record_count;
+        o.get_field         = &postgres_get_field;
+        o.is_record_deleted = &postgres_is_record_deleted;
+        o.open_index        = &postgres_open_index;
+        o.is_found          = &postgres_is_found;
+        return o;
+    }();
+    return &ops;
+}
+
+#endif // OPENADS_WITH_POSTGRESQL (lifted ops)
 
 // ---------------------------------------------------------------------------
 // Referential Integrity enforcement
@@ -815,6 +2008,40 @@ bool set_stmt_param(ADSHANDLE h, const char* pname, std::string literal);
 // disconnect paths above can call it before the definition arrives.
 void purge_pending_binaries_for_table(openads::engine::Table* t);
 
+// ---------------------------------------------------------------------------
+// Task 3: register_builtin_backends + backend_table_ops_for
+// Defined here (same TU as state() and sqlite_table_ops()) so both symbols
+// are reachable without exposing new globals or changing the headers.
+// ---------------------------------------------------------------------------
+namespace openads::abi {
+
+void register_builtin_backends() {
+#if defined(OPENADS_WITH_SQLITE)
+    register_backend_table_ops(openads::session::HandleKind::SqliteTable,
+                               sqlite_table_ops());
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    register_backend_table_ops(openads::session::HandleKind::OdbcTable,
+                               odbc_table_ops());
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    register_backend_table_ops(openads::session::HandleKind::MariaTable,
+                               maria_table_ops());
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    register_backend_table_ops(openads::session::HandleKind::PostgresTable,
+                               postgres_table_ops());
+#endif
+}
+
+const BackendTableOps* backend_table_ops_for(ADSHANDLE h) {
+    static const bool _ = (register_builtin_backends(), true);
+    (void)_;
+    return ops_for_kind(state().registry.kind_of(h));
+}
+
+}  // namespace openads::abi
+
 extern "C" {
 
 UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
@@ -918,6 +2145,105 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
         }
     }
 #endif
+#if defined(OPENADS_WITH_ODBC)
+    {
+        openads::sql_backend::OdbcUri ouri;
+        if (openads::sql_backend::parse_odbc_uri(path, ouri)) {
+            auto opened = openads::sql_backend::OdbcConnection::open(ouri);
+            if (!opened) return fail(opened.error());
+            auto holder =
+                std::make_unique<openads::sql_backend::OdbcConnection>(
+                    std::move(opened).value());
+            openads::sql_backend::OdbcConnection* raw = holder.get();
+            auto& s = state();
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
+            Handle h = s.registry.register_object(
+                HandleKind::OdbcConnection, raw);
+            odbc_conns_map().emplace(h, std::move(holder));
+            *phConnect = h;
+            return ok();
+        }
+    }
+#else
+    {
+        static constexpr const char* kOdbcPrefixes[] = {
+            "odbc://", "odbc:",
+        };
+        for (const char* prefix : kOdbcPrefixes) {
+            const auto plen = std::char_traits<char>::length(prefix);
+            if (path.size() >= plen && path.compare(0, plen, prefix) == 0) {
+                return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                            "odbc URI requires OPENADS_WITH_ODBC=ON");
+            }
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    {
+        openads::sql_backend::MariaUri muri;
+        if (openads::sql_backend::parse_maria_uri(path, muri)) {
+            auto opened = openads::sql_backend::MariaConnection::open(muri);
+            if (!opened) return fail(opened.error());
+            auto holder = std::make_unique<openads::sql_backend::MariaConnection>(
+                std::move(opened).value());
+            openads::sql_backend::MariaConnection* raw = holder.get();
+            auto& s = state();
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
+            Handle h = s.registry.register_object(
+                HandleKind::MariaConnection, raw);
+            maria_conns_map().emplace(h, std::move(holder));
+            *phConnect = h;
+            return ok();
+        }
+    }
+#else
+    {
+        static constexpr const char* kMariaPrefixes[] = {
+            "mariadb://", "mysql://",
+        };
+        for (const char* prefix : kMariaPrefixes) {
+            const auto plen = std::char_traits<char>::length(prefix);
+            if (path.size() >= plen && path.compare(0, plen, prefix) == 0) {
+                return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                            "mariadb URI requires "
+                            "OPENADS_WITH_MARIADB=ON");
+            }
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    {
+        openads::sql_backend::PostgresUri suri;
+        if (openads::sql_backend::parse_postgres_uri(path, suri)) {
+            auto opened = openads::sql_backend::PostgresConnection::open(suri);
+            if (!opened) return fail(opened.error());
+            auto holder = std::make_unique<openads::sql_backend::PostgresConnection>(
+                std::move(opened).value());
+            openads::sql_backend::PostgresConnection* raw = holder.get();
+            auto& s = state();
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
+            Handle h = s.registry.register_object(
+                HandleKind::PostgresConnection, raw);
+            postgres_conns_map().emplace(h, std::move(holder));
+            *phConnect = h;
+            return ok();
+        }
+    }
+#else
+    {
+        static constexpr const char* kPgPrefixes[] = {
+            "postgresql://", "postgres://", "pgsql://",
+        };
+        for (const char* prefix : kPgPrefixes) {
+            const auto plen = std::char_traits<char>::length(prefix);
+            if (path.size() >= plen && path.compare(0, plen, prefix) == 0) {
+                return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                            "postgresql URI requires "
+                            "OPENADS_WITH_POSTGRESQL=ON");
+            }
+        }
+    }
+#endif
     auto opened = Connection::open(path);
     if (!opened) return fail(opened.error());
     auto holder = std::make_unique<Connection>(std::move(opened).value());
@@ -973,6 +2299,49 @@ UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
             }
             sc->disconnect();
             sqlite_conns_map().erase(hConnect);
+            s_local.registry.release(hConnect);
+            return ok();
+        }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+        if (auto* sc = s_local.registry.lookup<
+                openads::sql_backend::OdbcConnection>(
+                hConnect, HandleKind::OdbcConnection)) {
+            for (auto& kv : odbc_tables_map()) {
+                if (kv.second && kv.second->conn == sc) {
+                    kv.second->conn = nullptr;
+                }
+            }
+            sc->disconnect();
+            odbc_conns_map().erase(hConnect);
+            s_local.registry.release(hConnect);
+            return ok();
+        }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+        if (auto* sc = s_local.registry.lookup<openads::sql_backend::MariaConnection>(
+                hConnect, HandleKind::MariaConnection)) {
+            for (auto& kv : maria_tables_map()) {
+                if (kv.second && kv.second->conn == sc) {
+                    kv.second->conn = nullptr;
+                }
+            }
+            sc->disconnect();
+            maria_conns_map().erase(hConnect);
+            s_local.registry.release(hConnect);
+            return ok();
+        }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+        if (auto* sc = s_local.registry.lookup<openads::sql_backend::PostgresConnection>(
+                hConnect, HandleKind::PostgresConnection)) {
+            for (auto& kv : postgres_tables_map()) {
+                if (kv.second && kv.second->conn == sc) {
+                    kv.second->conn = nullptr;
+                }
+            }
+            sc->disconnect();
+            postgres_conns_map().erase(hConnect);
             s_local.registry.release(hConnect);
             return ok();
         }
@@ -1074,6 +2443,51 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
         Handle gh = s.registry.register_object(
             HandleKind::SqliteTable, st.get());
         sqlite_tables_map().emplace(gh, std::move(st));
+        *phTable = gh;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* sc = s.registry.lookup<openads::sql_backend::OdbcConnection>(
+            hConnect, HandleKind::OdbcConnection)) {
+        auto name = openads::abi::to_internal(pucName, 0);
+        auto tbl = sc->open_table(name);
+        if (!tbl) return fail(tbl.error());
+        auto st = std::move(tbl).value();
+        st->conn = sc;
+        Handle gh = s.registry.register_object(
+            HandleKind::OdbcTable, st.get());
+        odbc_tables_map().emplace(gh, std::move(st));
+        *phTable = gh;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* sc = s.registry.lookup<openads::sql_backend::MariaConnection>(
+            hConnect, HandleKind::MariaConnection)) {
+        auto name = openads::abi::to_internal(pucName, 0);
+        auto tbl = sc->open_table(name);
+        if (!tbl) return fail(tbl.error());
+        auto st = std::move(tbl).value();
+        st->conn = sc;
+        Handle gh = s.registry.register_object(
+            HandleKind::MariaTable, st.get());
+        maria_tables_map().emplace(gh, std::move(st));
+        *phTable = gh;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* sc = s.registry.lookup<openads::sql_backend::PostgresConnection>(
+            hConnect, HandleKind::PostgresConnection)) {
+        auto name = openads::abi::to_internal(pucName, 0);
+        auto tbl = sc->open_table(name);
+        if (!tbl) return fail(tbl.error());
+        auto st = std::move(tbl).value();
+        st->conn = sc;
+        Handle gh = s.registry.register_object(
+            HandleKind::PostgresTable, st.get());
+        postgres_tables_map().emplace(gh, std::move(st));
         *phTable = gh;
         return ok();
     }
@@ -2075,16 +3489,6 @@ UNSIGNED32 AdsCloseAllTables(void) {
 
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     {
-#if defined(OPENADS_WITH_SQLITE)
-        if (auto* st = get_sqlite_table(hTable)) {
-            (void)st;
-            auto& s2 = state();
-            std::lock_guard<std::recursive_mutex> lk2(s2.mu);
-            sqlite_tables_map().erase(hTable);
-            s2.registry.release(hTable);
-            return ok();
-        }
-#endif
         if (auto* rt = get_remote_table(hTable)) {
             // conn is nulled out by AdsDisconnect before the RemoteConnection
             // is freed; skip the wire close op if the connection is already gone.
@@ -2096,6 +3500,8 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
             remote_sql_cursors_map().erase(hTable);
             return ok();
         }
+        if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+            if (ops->close_table) return ops->close_table(hTable);
     }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -2128,16 +3534,8 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->goto_top(st);
-        if (!r) return fail(r.error());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->goto_top) return ops->goto_top(hTable);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_top();
@@ -2153,16 +3551,8 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->goto_bottom(st);
-        if (!r) return fail(r.error());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->goto_bottom) return ops->goto_bottom(hTable);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_bottom();
@@ -2197,16 +3587,8 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
         if (!r) return fail(r.error());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->skip(st, lRows);
-        if (!r) return fail(r.error());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->skip) return ops->skip(hTable, lRows);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->skip(lRows);
@@ -2229,18 +3611,8 @@ UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
         *pbAtEnd = r.value() ? 1 : 0;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->at_eof(st);
-        if (!r) return fail(r.error());
-        *pbAtEnd = r.value() ? 1 : 0;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->at_eof) return ops->at_eof(hTable, pbAtEnd);
     Table* t = get_table(hTable);
     if (!t || pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbAtEnd = t->eof() ? 1 : 0;
@@ -2259,17 +3631,8 @@ UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
         *pbAtBegin = r.value() ? 1 : 0;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto r = st->conn->at_bof(st);
-        if (!r) return fail(r.error());
-        *pbAtBegin = r.value() ? 1 : 0;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->at_bof) return ops->at_bof(hTable, pbAtBegin);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbAtBegin = t->bof() ? 1 : 0;
@@ -2288,19 +3651,8 @@ UNSIGNED32 AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
         *pusFields = static_cast<UNSIGNED16>(rt->fields.size());
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        if (!st->fields_cached) {
-            auto r = st->conn->describe_table(st);
-            if (!r) return fail(r.error());
-        }
-        *pusFields = static_cast<UNSIGNED16>(st->fields.size());
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->num_fields) return ops->num_fields(hTable, pusFields);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* p = projection_for(hTable); p != nullptr) {
@@ -2327,23 +3679,8 @@ UNSIGNED32 AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
             rt->fields[usFieldNum - 1].name);
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        if (!st->fields_cached) {
-            auto r = st->conn->describe_table(st);
-            if (!r) return fail(r.error());
-        }
-        if (usFieldNum == 0 || usFieldNum > st->fields.size()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        openads::abi::copy_to_caller(pucBuf, pusLen,
-            st->fields[usFieldNum - 1].name);
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_name) return ops->field_name(hTable, usFieldNum, pucBuf, pusLen);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto* p = projection_for(hTable);
@@ -2392,6 +3729,9 @@ std::size_t remote_field_index(openads::network::RemoteTable* rt,
             return std::numeric_limits<std::size_t>::max();
         }
     }
+    if (pucField == nullptr) {
+        return std::numeric_limits<std::size_t>::max();
+    }
     std::string want = openads::abi::to_internal(pucField, 0);
     for (auto& c : want) {
         c = static_cast<char>(
@@ -2421,16 +3761,8 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
         *pusType = rt->fields[i].type;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        auto i = sqlite_field_index(st, pucField);
-        if (i == std::numeric_limits<std::size_t>::max()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        *pusType = st->fields[i].type;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_type) return ops->field_type(hTable, pucField, pusType);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -2460,16 +3792,8 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
         *pulLen = rt->fields[i].length;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        auto i = sqlite_field_index(st, pucField);
-        if (i == std::numeric_limits<std::size_t>::max()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        *pulLen = st->fields[i].length;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_length) return ops->field_length(hTable, pucField, pulLen);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -2512,16 +3836,8 @@ UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
         *pusDec = rt->fields[i].decimals;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        auto i = sqlite_field_index(st, pucField);
-        if (i == std::numeric_limits<std::size_t>::max()) {
-            return fail(openads::AE_COLUMN_NOT_FOUND, "");
-        }
-        *pusDec = st->fields[i].decimals;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->field_decimals) return ops->field_decimals(hTable, pucField, pusDec);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -2679,15 +3995,8 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
         *pulRecordNum = r.value();
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (!st->positioned || !st->row_valid) {
-            return fail(5026, "no current record");
-        }
-        *pulRecordNum = static_cast<UNSIGNED32>(st->current_rowid);
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->record_num) return ops->record_num(hTable, pulRecordNum);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulRecordNum = t->recno();
@@ -2714,24 +4023,8 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
         *pulRecordCount = rt->cached_rec_count;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        if (st->rec_count_cached) {
-            *pulRecordCount = st->cached_rec_count;
-            return ok();
-        }
-        auto r = st->conn->record_count(st);
-        if (!r) return fail(r.error());
-        st->cached_rec_count = r.value();
-        st->rec_count_cached = true;
-        *pulRecordCount = st->cached_rec_count;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->record_count) return ops->record_count(hTable, pulRecordCount, 0);
     Table* t = get_table(hTable);
     if (!t || pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // M10.31 / M10.32 — when SQL has materialised a traversal sequence
@@ -2816,27 +4109,8 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         openads::abi::copy_to_caller(pucBuf, pulLen, val);
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        if (st->conn == nullptr) {
-            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-        }
-        auto fname = openads::abi::to_internal(pucField, 0);
-        bool is_null = false;
-        std::string val;
-        auto r = st->conn->read_field(st, fname, val, is_null);
-        if (!r) return fail(r.error());
-        if (is_null) val.clear();
-        auto fi = sqlite_field_index(st, pucField);
-        if (fi != std::numeric_limits<std::size_t>::max() &&
-            st->fields[fi].type == ADS_STRING) {
-            val = pad_char_field(std::move(val), st->fields[fi].length);
-        }
-        openads::abi::copy_to_caller(pucBuf, pulLen, val);
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->get_field) return ops->get_field(hTable, pucField, pucBuf, pulLen, 0);
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -3618,12 +4892,8 @@ UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
         *pbDeleted = r.value() ? 1 : 0;
         return ok();
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        *pbDeleted = st->current_deleted ? 1 : 0;
-        return ok();
-    }
-#endif
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->is_record_deleted) return ops->is_record_deleted(hTable, pbDeleted);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbDeleted = t->is_deleted() ? 1 : 0;
@@ -4345,38 +5615,6 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     if (ahIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "null out");
     }
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        if (pu16ArrayLen != nullptr && *pu16ArrayLen < 1) {
-            return fail(openads::AE_INTERNAL_ERROR, "index array too small");
-        }
-        std::string tag = openads::abi::to_internal(pucName, 0);
-        if (tag.empty()) {
-            return fail(openads::AE_INTERNAL_ERROR, "empty index tag");
-        }
-        const auto dot = tag.find_last_of("./\\");
-        if (dot != std::string::npos) {
-            tag = tag.substr(dot + 1);
-        }
-        const auto dot2 = tag.find('.');
-        if (dot2 != std::string::npos) {
-            tag = tag.substr(0, dot2);
-        }
-        auto si = std::make_unique<openads::sql_backend::SqliteIndex>();
-        si->parent = st;
-        si->column = tag;
-        auto& s = state();
-        std::lock_guard<std::recursive_mutex> lk(s.mu);
-        Handle gh = s.registry.register_object(
-            HandleKind::SqliteIndex, si.get());
-        ahIndex[0] = gh;
-        if (pu16ArrayLen != nullptr) {
-            *pu16ArrayLen = 1;
-        }
-        sqlite_indexes_map().emplace(gh, std::move(si));
-        return ok();
-    }
-#endif
     if (auto* rt = get_remote_table(hTable)) {
         std::string path = openads::abi::to_internal(pucName, 0);
         auto r = rt->conn->open_index(rt->id, path);
@@ -4406,6 +5644,8 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         if (pu16ArrayLen != nullptr) *pu16ArrayLen = out_n;
         return ok();
     }
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->open_index) return ops->open_index(hTable, pucName, ahIndex, pu16ArrayLen);
     Table* t = get_table(hTable);
     if (!t) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -4560,6 +5800,36 @@ UNSIGNED32 AdsCloseIndex(ADSHANDLE hIndex) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* si = get_odbc_index(hIndex)) {
+        (void)si;
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        odbc_indexes_map().erase(hIndex);
+        s.registry.release(hIndex);
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* si = get_maria_index(hIndex)) {
+        (void)si;
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        maria_indexes_map().erase(hIndex);
+        s.registry.release(hIndex);
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* si = get_postgres_index(hIndex)) {
+        (void)si;
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        postgres_indexes_map().erase(hIndex);
+        s.registry.release(hIndex);
+        return ok();
+    }
+#endif
     if (auto* ri = get_remote_index(hIndex)) {
         auto r = ri->conn->close_index(ri->id);
         if (!r) return fail(r.error());
@@ -4622,6 +5892,31 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         pucIndexName == nullptr || pucExpr == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "null arg");
     }
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* st = get_odbc_table(hTable)) {
+        auto expr = openads::abi::to_internal(pucExpr, 0);
+        auto parsed = openads::sql_backend::parse_index_expr(expr);
+        if (!parsed) return fail(parsed.error());
+        const auto& px = parsed.value();
+        auto si = std::make_unique<openads::sql_backend::OdbcIndex>();
+        si->parent    = st;
+        si->column    = px.column;
+        si->expr_kind = px.kind;
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        Handle gh = s.registry.register_object(
+            HandleKind::OdbcIndex, si.get());
+        *phIndex = gh;
+        odbc_indexes_map().emplace(gh, std::move(si));
+        (void)pucFileName;
+        (void)pucIndexName;
+        (void)pucCondition;
+        (void)pucKeyFilter;
+        (void)ulOptions;
+        (void)usPageSize;
+        return ok();
+    }
+#endif
     if (auto* rt = get_remote_table(hTable)) {
         std::string path = openads::abi::to_internal(pucFileName, 0);
         std::string tag  = openads::abi::to_internal(pucIndexName, 0);
@@ -6879,12 +8174,6 @@ UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
 // engine set inside seek_key.
 UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     if (pbFound == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-#if defined(OPENADS_WITH_SQLITE)
-    if (auto* st = get_sqlite_table(hTable)) {
-        *pbFound = st->last_seek_found ? 1 : 0;
-        return ok();
-    }
-#endif
     if (auto* rt = get_remote_table(hTable)) {
         // M12.21 option C — serve Found() locally when a nav/seek op set
         // it (the common scan case: Skip clears it), saving a round-trip
@@ -6895,6 +8184,8 @@ UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
         *pbFound = r.value() ? 1 : 0;
         return ok();
     }
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+        if (ops->is_found) return ops->is_found(hTable, pbFound);
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     if (pbFound != nullptr) *pbFound = t->last_seek_found() ? 1 : 0;
@@ -6911,6 +8202,61 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     if (auto* si = get_sqlite_index(hIndex)) {
         if (si->parent == nullptr || si->parent->conn == nullptr) {
             return fail(openads::AE_INTERNAL_ERROR, "sqlite index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        const bool soft = (u16SeekType & 1u) != 0;
+        si->parent->row_valid = false;
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, key, soft, /*last=*/false);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        si->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* si = get_odbc_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "odbc index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        const bool soft = (u16SeekType & 1u) != 0;
+        si->parent->row_valid = false;
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, si->expr_kind, key, soft,
+            /*last=*/false);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        si->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* si = get_maria_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "mariadb index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        const bool soft = (u16SeekType & 1u) != 0;
+        si->parent->row_valid = false;
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, key, soft, /*last=*/false);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        si->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* si = get_postgres_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "postgres index orphan");
         }
         std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
         const bool soft = (u16SeekType & 1u) != 0;
@@ -7048,6 +8394,58 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
     if (auto* si = get_sqlite_index(hIndex)) {
         if (si->parent == nullptr || si->parent->conn == nullptr) {
             return fail(openads::AE_INTERNAL_ERROR, "sqlite index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        si->parent->row_valid = false;
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, key, /*soft=*/false, /*last=*/true);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        si->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* si = get_odbc_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "odbc index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        si->parent->row_valid = false;
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, si->expr_kind, key,
+            /*soft=*/false, /*last=*/true);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        si->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* si = get_maria_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "mariadb index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        si->parent->row_valid = false;
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, key, /*soft=*/false, /*last=*/true);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        si->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* si = get_postgres_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "postgres index orphan");
         }
         std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
         si->parent->row_valid = false;
@@ -8147,6 +9545,7 @@ namespace {
 struct SqlStatement {
     Connection*                            conn   = nullptr;
     openads::network::RemoteConnection*    remote = nullptr;
+    openads::sql_backend::SqliteConnection* sqlite = nullptr;
     std::string                            sql;
     // RCB 2026-05-22 17:03 — The original struct stored only the raw SQL string.
     // AdsSet* functions never had a place to write named parameter values because
@@ -8228,6 +9627,17 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
         *phStatement = h;
         return ok();
     }
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* sc = s.registry.lookup<openads::sql_backend::SqliteConnection>(
+            hConnect, HandleKind::SqliteConnection)) {
+        auto stmt = std::make_unique<SqlStatement>();
+        stmt->sqlite = sc;
+        ADSHANDLE h = next_stmt_handle();
+        stmt_map()[h] = std::move(stmt);
+        *phStatement = h;
+        return ok();
+    }
+#endif
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto stmt = std::make_unique<SqlStatement>();
@@ -9566,6 +10976,25 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         *phCursor = h;
         return ok();
     }
+#if defined(OPENADS_WITH_SQLITE)
+    if (it->second->sqlite != nullptr) {
+        auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        // Let SQLite classify the statement (it knows the column count): run_sql
+        // returns a navigable cursor for a result-producing statement, or a null
+        // pointer for an executed INSERT/UPDATE/DELETE/DDL — no SQL parsing here.
+        auto r = it->second->sqlite->run_sql(sqlstr);
+        if (!r) return fail(r.error());
+        auto cursor = std::move(r).value();
+        if (!cursor) { *phCursor = 0; return ok(); }
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        openads::sql_backend::SqliteTable* raw = cursor.get();
+        Handle h = s.registry.register_object(HandleKind::SqliteTable, raw);
+        sqlite_tables_map().emplace(h, std::move(cursor));
+        *phCursor = h;
+        return ok();
+    }
+#endif
     Connection* c = it->second->conn;
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);
@@ -14566,6 +15995,31 @@ UNSIGNED32 AdsGetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32* p)
 UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0.0;
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* st = get_odbc_table(h)) {
+        if (st->conn == nullptr) {
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        }
+        std::uint32_t rc = 0;
+        if (st->rec_count_cached) {
+            rc = st->cached_rec_count;
+        } else {
+            auto rcr = st->conn->record_count(st);
+            if (!rcr) return fail(rcr.error());
+            rc = rcr.value();
+            st->cached_rec_count = rc;
+            st->rec_count_cached = true;
+        }
+        std::uint32_t rn = 0;
+        if (st->row_valid && st->positioned) {
+            rn = st->current_recno;
+        }
+        if (rc <= 1 || rn == 0) { *p = 0.0; return ok(); }
+        if (rn > rc) rn = rc;
+        *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
+        return ok();
+    }
+#endif
     if (auto* rt = get_remote_table(h)) {
         // M12.19 — scrollbar callers (xbrowse) hit this every paint.
         // current_recno arrives with the row trailer (M12.18) and
