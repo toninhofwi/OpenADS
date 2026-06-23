@@ -26,6 +26,12 @@ constexpr int kSqlLongVarbinary = -4;
 constexpr int kSqlBigint        = -5;
 constexpr int kSqlTinyint       = -6;
 constexpr int kSqlBit           = -7;
+constexpr int kSqlDate          = 9;
+constexpr int kSqlTime          = 10;
+constexpr int kSqlTimestamp     = 11;
+constexpr int kSqlTypeDate      = 91;
+constexpr int kSqlTypeTime      = 92;
+constexpr int kSqlTypeTimestamp = 93;
 
 } // namespace
 
@@ -35,8 +41,11 @@ OdbcTable::FieldDesc map_odbc_column(const std::string& name,
                                      int column_size,
                                      int decimal_digits) {
     OdbcTable::FieldDesc fd;
-    fd.name     = name;
-    fd.nullable = nullable;
+    fd.name        = name;
+    fd.nullable    = nullable;
+    fd.sql_type    = sql_type;
+    fd.column_size = column_size > 0
+                         ? static_cast<std::uint32_t>(column_size) : 0;
 
     switch (sql_type) {
         case kSqlInteger:
@@ -68,6 +77,16 @@ OdbcTable::FieldDesc map_odbc_column(const std::string& name,
         case kSqlLongVarbinary:
             fd.type     = ADS_BINARY;
             fd.length   = 10;
+            fd.decimals = 0;
+            break;
+        case kSqlDate:
+        case kSqlTime:
+        case kSqlTimestamp:
+        case kSqlTypeDate:
+        case kSqlTypeTime:
+        case kSqlTypeTimestamp:
+            fd.type     = ADS_DATE;
+            fd.length   = 8;
             fd.decimals = 0;
             break;
         case kSqlChar:

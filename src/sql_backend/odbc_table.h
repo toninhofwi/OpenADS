@@ -23,10 +23,12 @@ struct OdbcTable {
 
     struct FieldDesc {
         std::string   name;
-        std::uint16_t type     = 0;
-        std::uint32_t length   = 0;
-        std::uint16_t decimals = 0;
-        bool          nullable = true;
+        std::uint16_t type        = 0;
+        std::uint32_t length      = 0;
+        std::uint16_t decimals    = 0;
+        bool          nullable    = true;
+        int           sql_type    = 0;   // raw ODBC SQL_* type code
+        std::uint32_t column_size = 0;   // raw COLUMN_SIZE
     };
 
     std::vector<FieldDesc> fields;

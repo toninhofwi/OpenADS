@@ -145,6 +145,7 @@ add_executable(openads_unit_tests
 if(OPENADS_WITH_ODBC)
     target_sources(openads_unit_tests PRIVATE
         unit/odbc_uri_test.cpp
+        unit/odbc_map_column_test.cpp
         unit/abi_plus_odbc_read_test.cpp
         unit/abi_plus_odbc_seek_test.cpp
         unit/abi_plus_odbc_write_test.cpp
