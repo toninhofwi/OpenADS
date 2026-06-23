@@ -121,6 +121,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_or_test.cpp
     unit/abi_index_direction_test.cpp
     unit/abi_sql_insert_test.cpp
+    unit/abi_sql_named_param_test.cpp
     unit/abi_sql_orderby_test.cpp
     unit/abi_sql_dml_test.cpp
     unit/abi_sql_projection_test.cpp

@@ -9693,29 +9693,48 @@ UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
     if (it->second->sql.empty()) {
         return fail(openads::AE_PARSE_ERROR, "no prepared SQL");
     }
-    // RCB 2026-05-22 17:03 — The original code copied the raw prepared SQL
-    // directly into the buffer and executed it, so :name placeholders were
-    // passed to the parser verbatim and caused a parse error.  Now that
-    // AdsSet* stores literal values in SqlStatement::params we do a simple
-    // token replacement here before the SQL reaches the parser.  Each key in
-    // params is the bare name without the colon; we search for ":name" in the
-    // SQL and replace every occurrence with the stored literal.  We use a
-    // std::string for the working copy so we are not constrained by a fixed
-    // buffer size, then copy the result into buf for AdsExecuteSQLDirect.
-    std::string sql = it->second->sql;
-    for (auto& kv : it->second->params) {
-        std::string placeholder = ":" + kv.first;
-        std::size_t pos = 0;
-        while ((pos = sql.find(placeholder, pos)) != std::string::npos) {
-            sql.replace(pos, placeholder.size(), kv.second);
-            pos += kv.second.size();
+    // AdsSet* stores literal values in SqlStatement::params keyed by the bare
+    // name (no colon); here we substitute every :name placeholder with its
+    // stored literal before the SQL reaches the parser.
+    //
+    // The substitution is a single left-to-right pass that, at each ':',
+    // consumes the WHOLE identifier (same boundary rule as AdsGetNumParams)
+    // and replaces it by exact-name lookup.  A naive per-key find/replace was
+    // wrong on two counts: (1) ":p1" matched as a prefix of ":p10"/":p11"/...,
+    // so with >= 10 named params the double-digit placeholders were corrupted;
+    // and (2) a substituted literal could itself contain ":name" text and get
+    // re-scanned by a later key.  A single pass that never re-scans emitted
+    // text and matches whole identifiers fixes both.  The output is built in a
+    // std::string (no fixed size cap) and handed to AdsExecuteSQLDirect via a
+    // buffer sized to the result, so large multi-row INSERTs are not truncated.
+    const std::string& src = it->second->sql;
+    const auto& params = it->second->params;
+    std::string sql;
+    sql.reserve(src.size() + 64);
+    for (std::size_t i = 0; i < src.size(); ) {
+        if (src[i] == ':' && i + 1 < src.size() &&
+            (std::isalpha((unsigned char)src[i + 1]) || src[i + 1] == '_')) {
+            std::size_t j = i + 1;
+            while (j < src.size() &&
+                   (std::isalnum((unsigned char)src[j]) || src[j] == '_'))
+                ++j;
+            std::string name = src.substr(i + 1, j - (i + 1));
+            auto pit = params.find(name);
+            if (pit != params.end()) {
+                sql += pit->second;          // bound literal
+            } else {
+                sql.append(src, i, j - i);   // unknown :name — leave verbatim
+            }
+            i = j;
+        } else {
+            sql += src[i];
+            ++i;
         }
     }
-    UNSIGNED8 buf[4096];
-    std::size_t n = std::min<std::size_t>(sql.size(), sizeof(buf) - 1);
-    std::memcpy(buf, sql.data(), n);
-    buf[n] = '\0';
-    return AdsExecuteSQLDirect(hStatement, buf, phCursor);
+    std::vector<UNSIGNED8> buf(sql.size() + 1);
+    std::memcpy(buf.data(), sql.data(), sql.size());
+    buf[sql.size()] = '\0';
+    return AdsExecuteSQLDirect(hStatement, buf.data(), phCursor);
 }
 
 // Build a read-only temp DBF in c->data_dir() that materialises one of
