@@ -119,6 +119,12 @@ private:
     util::Result<Page*> get_page_(std::uint32_t offset);
     util::Result<void>  flush_page_(std::uint32_t offset);
 
+    // Reclaim every page of the (sub-)tree rooted at `off` onto the free
+    // list so a subsequent rebuild reuses them instead of leaking. Used
+    // by clear_data() — without it each CREATE INDEX / reindex grew the
+    // .cdx bag by a full tree, unbounded.
+    util::Result<void>  free_tree_(std::uint32_t off);
+
     util::Result<std::vector<std::pair<std::string, std::uint32_t>>>
         decode_leaf_(std::uint32_t page_off);
 

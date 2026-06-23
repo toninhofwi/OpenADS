@@ -1166,7 +1166,45 @@ util::Result<void> CdxIndex::set_options(bool unique, bool descend,
     return {};
 }
 
+util::Result<void> CdxIndex::free_tree_(std::uint32_t off) {
+    if (off == 0 || off == 0xFFFFFFFFu) return {};
+    // Read the page to learn whether it is a branch (recurse children
+    // first) or a leaf, before we overwrite it with the free-list link.
+    auto pg = get_page_(off);
+    if (!pg) return pg.error();
+    std::uint16_t attr = read_u16_le(pg.value()->data());
+    if (!(attr & CDX_NODE_LEAF)) {
+        auto entries = decode_branch_static(*pg.value(), key_size_);
+        if (!entries) return entries.error();
+        for (const auto& be : entries.value()) {
+            if (auto e = free_tree_(be.child); !e) return e.error();
+        }
+    }
+    // Push this page onto the free list: write the current head into its
+    // first 4 bytes (straight to disk so allocate_page_ can read it after
+    // the cache is cleared) and make it the new head.
+    Page link{};
+    write_u32_le(link.data(), free_ptr_);
+    auto w = file_.write_at(off, link.data(), link.size());
+    if (!w) return w.error();
+    if (w.value() < link.size()) {
+        // A short write would leave a dangling free-list head pointing at a
+        // page whose next-free link was never fully stored — fail loud
+        // rather than silently corrupt the chain.
+        return util::Error{6106, 0,
+            "CDX free-list link short write", ""};
+    }
+    page_cache_.erase(off);
+    dirty_.erase(off);
+    free_ptr_ = off;
+    return {};
+}
+
 util::Result<void> CdxIndex::clear_data() {
+    // Reclaim the existing tree's pages onto the free list so the rebuild
+    // that follows reuses them; otherwise every CREATE INDEX / reindex
+    // leaked a full tree and the .cdx outgrew the table without bound.
+    if (auto e = free_tree_(root_page_); !e) return e.error();
     root_page_ = 0;
     page_cache_.clear();
     dirty_.clear();
@@ -1178,6 +1216,24 @@ util::Result<void> CdxIndex::clear_data() {
 }
 
 std::uint32_t CdxIndex::allocate_page_() {
+    // Reuse a page from the per-tag free list first (free_tree_ chains
+    // reclaimed pages onto free_ptr_), so CREATE INDEX / reindex does not
+    // grow the .cdx without bound. The page's first 4 bytes hold the next
+    // free offset.
+    if (free_ptr_ != 0xFFFFFFFFu && free_ptr_ != 0) {
+        std::uint32_t off = free_ptr_;
+        std::uint32_t next = 0xFFFFFFFFu;
+        if (auto pg = get_page_(off); pg) {
+            next = read_u32_le(pg.value()->data());
+        }
+        free_ptr_ = next;
+        page_cache_[off] = Page{};
+        dirty_[off] = true;
+        return off;
+    }
+    // Otherwise extend the file. The global tail map (keyed by path) keeps
+    // concurrent tags on the same .cdx from handing out the same offset —
+    // the multi-tag allocator invariant.
     std::lock_guard<std::mutex> lk(g_cdx_alloc_mu);
     auto& tail = g_cdx_alloc_tail[path_];
     if (auto sz = file_.size()) {
@@ -1189,6 +1245,7 @@ std::uint32_t CdxIndex::allocate_page_() {
     tail += CDX_PAGE_LEN;
     file_size_ = tail;
     page_cache_.emplace(off, Page{});
+    dirty_[off] = true;
     return off;
 }
 

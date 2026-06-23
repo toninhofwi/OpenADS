@@ -6673,6 +6673,25 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         if (sibs) {
             for (const auto& sib : sibs.value()) {
                 if (sib == tag) continue;
+                // Skip siblings that still hold a live binding: they are
+                // already tracked by sync_all_indexes_ (so their B+tree is
+                // current) and re-parking them here would (a) duplicate the
+                // binding — AdsGetNumIndexes / ordinal lookups would then
+                // double-count the tag — and (b) pay an O(records) rebuild
+                // on every CREATE INDEX, turning N tags into O(N*records*N)
+                // work. Worse, the duplicate parked view double-writes every
+                // dbAppend into the same on-disk tag, so the index outgrows
+                // the table and keeps growing. Only tags that LOST their
+                // binding across an rddads ORDLSTCLEAR cycle need the
+                // rebuild-and-re-park below.
+                bool already_bound = false;
+                for (auto& [h0, b0] : m_pre) {
+                    if (b0.table == t && b0.tag_name == sib) {
+                        already_bound = true;
+                        break;
+                    }
+                }
+                if (already_bound) continue;
                 auto sub = std::make_unique<
                     openads::drivers::cdx::CdxIndex>();
                 if (auto r0 = sub->open_named(p.string(),
@@ -8547,20 +8566,22 @@ UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
 }
 
 
-UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
-                                    ADSHANDLE* phIndex) {
-    Table* t = get_table(hTable);
-    if (!t || phIndex == nullptr) {
-        return fail(openads::AE_INTERNAL_ERROR, "");
-    }
-    // Harbour rddads' INDEX command (with the default fAll && !fAdditive
-    // condition) calls ORDLSTCLEAR before each AdsCreateIndex61. That
-    // wipes every binding we held for the table — but the on-disk CDX
-    // bag still has all the prior tags. ORDSETFOCUS(N) is supposed to
-    // address the N-th tag *in the file* (creation order), so re-bind
-    // any tag in the active CDX that lost its binding and use the
-    // file's struct-tag insertion order — not handle IDs — as the
-    // authoritative ordinal sequence.
+// Authoritative ordinal sequence of index-binding handles for table `t`.
+// For a CDX bag this is the file's struct-tag (creation) order — what
+// ADS / rddads expose through ORDSETFOCUS(N) and OrdNumber(); for NTX it
+// is handle-id order. AdsGetIndexHandleByOrder and
+// AdsGetIndexOrderByHandle MUST share this so they stay exact inverses.
+//
+// Harbour rddads' INDEX command (default fAll && !fAdditive) calls
+// ORDLSTCLEAR before each AdsCreateIndex61, wiping every binding we held
+// for the table even though the on-disk CDX bag still lists all prior
+// tags. So any tag in the active CDX that lost its binding is lazily
+// re-bound here.
+//
+// extern "C++": this file's ACE exports live in an extern "C" block, but
+// this internal helper returns a C++ UDT (std::vector) — give it C++
+// linkage so MSVC doesn't warn C4190.
+extern "C++" std::vector<ADSHANDLE> ordered_index_handles_for(Table* t) {
     auto& m   = index_bindings();
     auto& act = active_binding_for();
     std::string bag_path;
@@ -8568,6 +8589,16 @@ UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
     if (act_it != act.end()) {
         auto bit = m.find(act_it->second);
         if (bit != m.end()) bag_path = bit->second.path;
+    }
+    // No active binding (e.g. every tag parked after an ORDLSTCLEAR): fall
+    // back to any CDX binding's bag so we can still recover file order.
+    if (bag_path.empty()) {
+        for (auto& [h, b] : m) {
+            if (b.table == t && path_ends_with_ci(b.path, ".cdx")) {
+                bag_path = b.path;
+                break;
+            }
+        }
     }
     std::vector<ADSHANDLE> ordered;
     if (!bag_path.empty()
@@ -8603,6 +8634,16 @@ UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
         }
         std::sort(ordered.begin(), ordered.end());
     }
+    return ordered;
+}
+
+UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
+                                    ADSHANDLE* phIndex) {
+    Table* t = get_table(hTable);
+    if (!t || phIndex == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    std::vector<ADSHANDLE> ordered = ordered_index_handles_for(t);
     if (ordered.empty()) {
         return fail(openads::AE_INTERNAL_ERROR, "no active index");
     }
@@ -16500,8 +16541,37 @@ UNSIGNED32 AdsGetIndexCondition(ADSHANDLE, UNSIGNED8* p, UNSIGNED16* l)
     { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetIndexFilename(ADSHANDLE, UNSIGNED16, UNSIGNED8* p, UNSIGNED16* l)
     { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
-UNSIGNED32 AdsGetIndexOrderByHandle(ADSHANDLE, UNSIGNED16* p)
-    { if (p) *p = 0; return openads::AE_SUCCESS; }
+// 1-based position of the order `hIndex` within its table's ordinal
+// sequence — the exact inverse of AdsGetIndexHandleByOrder. Harbour
+// rddads' OrdNumber() / DBOI_NUMBER calls this after resolving a tag
+// name to a handle (contrib/rddads/ads1.c, adsOrderInfo); a stubbed 0
+// made OrdNumber() report 0 for every tag. Returns 0 (natural order)
+// for an unknown handle.
+UNSIGNED32 AdsGetIndexOrderByHandle(ADSHANDLE hIndex, UNSIGNED16* p) {
+    if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *p = 0;
+    auto& m = index_bindings();
+    Table* t = nullptr;
+    std::string tag;
+    {
+        auto it = m.find(hIndex);
+        if (it == m.end()) return ok();   // unknown handle → natural order
+        t   = it->second.table;
+        tag = it->second.tag_name;        // copy before the helper rehashes m
+    }
+    if (t == nullptr) return ok();
+    // Match by tag name (not handle identity) so the result is stable even
+    // if more than one binding transiently exists for the same tag.
+    std::vector<ADSHANDLE> ordered = ordered_index_handles_for(t);
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        auto bit = m.find(ordered[i]);
+        if (bit != m.end() && bit->second.tag_name == tag) {
+            *p = static_cast<UNSIGNED16>(i + 1);
+            break;
+        }
+    }
+    return ok();
+}
 // AdsGetJulian already defined elsewhere in this file.
 UNSIGNED32 AdsGetKeyLength(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
