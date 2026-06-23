@@ -672,6 +672,9 @@ parse_or_expr(Cursor& c, const std::string& sql) {
 } // namespace
 
 util::Result<SelectStmt> parse_select(const std::string& sql) {
+    // ADS dialect — second table of a two-table comma-join, captured in the
+    // FROM clause and lowered into stmt.inner_join after the WHERE is parsed.
+    std::string comma_join_table;
     // M10.48 — Common Table Expression: `WITH name AS (SELECT ...)
     // SELECT ... FROM name`. Inline-substitute by replacing the CTE
     // name in the body with `(<inner SQL>)` so the body parses as a
@@ -1301,6 +1304,36 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
             std::string maybe_alias = c.read_identifier();
             if (!maybe_alias.empty()) stmt.table_alias = std::move(maybe_alias);
         }
+        // ADS dialect — SQL-89 comma-join: `FROM a, b WHERE a.x = b.y`.
+        // Legacy ADS apps write the join as a comma list with the equality
+        // predicate in the WHERE. We support the two-table case by recording
+        // the second table here and lowering it into the single inner_join
+        // AST once the WHERE is parsed (the equality is lifted out below).
+        if (c.match_char(',')) {
+            comma_join_table = c.read_identifier_or_filename();
+            if (comma_join_table.empty()) {
+                return util::Error{7200, 0,
+                    "expected table name after ',' in FROM", sql};
+            }
+            // Optional alias on the second table (AS <a> or bare form).
+            if (c.match_keyword("AS")) {
+                c.read_identifier();    // alias is informational; discard
+            } else if (!c.peek_keyword("WHERE")  && !c.peek_keyword("GROUP") &&
+                       !c.peek_keyword("ORDER")  && !c.peek_keyword("HAVING")&&
+                       !c.peek_keyword("LIMIT")  && !c.peek_keyword("OFFSET")&&
+                       !c.peek_keyword("INNER")  && !c.peek_keyword("LEFT")  &&
+                       !c.peek_keyword("RIGHT")  && !c.peek_keyword("FULL")  &&
+                       !c.peek_keyword("JOIN")   && !c.peek_keyword("ON")) {
+                c.read_identifier();    // bare alias; discard
+            }
+            // Only the two-table case maps onto the single JoinClause; a
+            // third comma table needs a multi-way join the engine lacks.
+            if (c.match_char(',')) {
+                return util::Error{7200, 0,
+                    "comma-join supports exactly two tables; "
+                    "use INNER JOIN ... ON for more", sql};
+            }
+        }
     }
     bool is_left_join  = false;
     bool is_right_join = false;
@@ -1335,6 +1368,10 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     } else if (c.match_keyword("JOIN")) {
         // Bare JOIN — treated as INNER per SQL convention.
         saw_join_keyword = true;
+    }
+    if (saw_join_keyword && !comma_join_table.empty()) {
+        return util::Error{7200, 0,
+            "cannot mix comma-join with an explicit JOIN clause", sql};
     }
     if (saw_join_keyword) {
         JoinClause j;
@@ -1378,6 +1415,51 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         auto root = parse_or_expr(c, sql);
         if (!root) return root.error();
         stmt.where = std::move(root).value();
+    }
+
+    // ADS dialect — lower the two-table comma-join into stmt.inner_join.
+    // The join key lives in the WHERE as a `col = col` equality, which the
+    // comparison parser records as `op == Eq && is_outer_ref` (column RHS).
+    // Lift the single such predicate into the JoinClause and blank that node
+    // to an always-true empty-AND so the rest of the WHERE stays a row
+    // filter. Zero candidates is a cartesian product (unsupported); more
+    // than one is a composite key the single-equality JoinClause can't hold.
+    if (!comma_join_table.empty()) {
+        std::vector<WhereExpr*> keys;
+        std::function<void(WhereExpr*)> collect = [&](WhereExpr* n) {
+            if (n == nullptr) return;
+            if (n->kind == WhereExpr::Kind::Cmp) {
+                if (n->cmp.op == WhereOp::Eq && n->cmp.is_outer_ref) {
+                    keys.push_back(n);
+                }
+                return;   // do not descend into subqueries of a Cmp leaf
+            }
+            for (auto& ch : n->children) collect(ch.get());
+            collect(n->child.get());
+            // In/Exists carry their own nested SELECT context — skip.
+        };
+        collect(stmt.where.get());
+        if (keys.empty()) {
+            return util::Error{7200, 0,
+                "comma-join requires an equality join predicate "
+                "(cartesian products are not supported)", sql};
+        }
+        if (keys.size() > 1) {
+            return util::Error{7200, 0,
+                "comma-join supports a single equality join key; "
+                "use INNER JOIN ... ON for composite keys", sql};
+        }
+        WhereExpr* k = keys.front();
+        JoinClause j;
+        j.table        = comma_join_table;
+        j.left_column  = k->cmp.column;
+        j.right_column = k->cmp.outer_column;
+        stmt.inner_join = std::move(j);
+        // Blank the lifted predicate to an always-true empty-AND node.
+        k->cmp      = WhereCmp{};
+        k->kind     = WhereExpr::Kind::And;
+        k->children.clear();
+        k->child.reset();
     }
 
     // M10.25 — GROUP BY <col>[, <col>...] [HAVING <agg> <op> <num>].

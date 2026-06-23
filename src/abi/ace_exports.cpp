@@ -12271,6 +12271,21 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 
         std::int32_t lcol = ltbl->field_index(j.left_column);
         std::int32_t rcol = rtbl->field_index(j.right_column);
+        // Orientation fallback: a comma-join (`FROM a, b WHERE a.x = b.y`)
+        // lowers the join key from the WHERE, where the alias qualifiers are
+        // dropped — so `left_column`/`right_column` may name the columns in
+        // the opposite order to base/joined. If the straight assignment does
+        // not resolve but the swapped one does, use the swap. Purely
+        // additive: it only fires on inputs the strict path already rejects,
+        // and also makes explicit `JOIN ON b.y = a.x` lenient like ADS.
+        if ((lcol < 0 || rcol < 0)) {
+            std::int32_t lcol_sw = ltbl->field_index(j.right_column);
+            std::int32_t rcol_sw = rtbl->field_index(j.left_column);
+            if (lcol_sw >= 0 && rcol_sw >= 0) {
+                lcol = lcol_sw;
+                rcol = rcol_sw;
+            }
+        }
         if (lcol < 0) {
             c->close_table(lh.value()); c->close_table(rh.value());
             return fail(openads::AE_COLUMN_NOT_FOUND,

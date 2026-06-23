@@ -2,6 +2,7 @@
 #include "sql/parser.h"
 
 #include <vector>
+#include <functional>
 
 using openads::sql::parse_select;
 using openads::sql::WhereExpr;
@@ -283,4 +284,97 @@ TEST_CASE("ADS dialect: complete legacy ERP search query parses") {
     REQUIRE(r.value().where != nullptr);
     REQUIRE(r.value().order_by.has_value());
     CHECK(r.value().order_by.value().column == "cnombreart");
+}
+
+// --- ADS dialect: comma-join (feat/sql-comma-join, #6) ---------------------
+// SAP ADS apps write the classic SQL-89 comma-join `FROM a, b WHERE a.x = b.y`
+// instead of `INNER JOIN ... ON`. The equality in the WHERE *is* the join
+// predicate. We lower a two-table comma-join into the existing single
+// inner_join AST: lift the one `col = col` equality into the JoinClause and
+// blank that node so the rest of the WHERE stays as a row filter.
+
+TEST_CASE("comma-join: FROM a, b WHERE a.x = b.y lowers to inner_join") {
+    auto r = parse_select(
+        "SELECT * FROM ord, cus WHERE ord.cust = cus.cust");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "ord");
+    REQUIRE(r.value().inner_join.has_value());
+    CHECK(r.value().inner_join->table == "cus");
+    CHECK(r.value().inner_join->left_column  == "cust");
+    CHECK(r.value().inner_join->right_column == "cust");
+    CHECK(r.value().inner_join->is_left  == false);
+    CHECK(r.value().inner_join->is_right == false);
+    CHECK(r.value().inner_join->is_full  == false);
+}
+
+TEST_CASE("comma-join: lifted join predicate leaves an always-true WHERE") {
+    // Only the join key in the WHERE => after lifting, nothing is left to
+    // filter on. An empty-AND node (always true) is the canonical encoding.
+    auto r = parse_select(
+        "SELECT * FROM ord, cus WHERE ord.cust = cus.cust");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where != nullptr);
+    CHECK(r.value().where->kind == WhereExpr::Kind::And);
+    CHECK(r.value().where->children.empty());   // always-true
+}
+
+TEST_CASE("comma-join: extra filters survive next to the join predicate") {
+    auto r = parse_select(
+        "SELECT * FROM ord o, cus c "
+        "WHERE o.cust = c.cust AND c.name = 'Alice'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().inner_join.has_value());
+    CHECK(r.value().inner_join->table == "cus");
+    // The residual filter `c.name = 'Alice'` must remain in the WHERE tree.
+    REQUIRE(r.value().where != nullptr);
+    bool found_name_filter = false;
+    std::function<void(const WhereExpr*)> walk = [&](const WhereExpr* n) {
+        if (n == nullptr) return;
+        if (n->kind == WhereExpr::Kind::Cmp &&
+            n->cmp.column == "name" && n->cmp.literal == "Alice") {
+            found_name_filter = true;
+        }
+        for (auto& ch : n->children) walk(ch.get());
+        walk(n->child.get());
+    };
+    walk(r.value().where.get());
+    CHECK(found_name_filter);
+}
+
+TEST_CASE("comma-join: predicate write order is preserved for the executor") {
+    // `FROM ord, cus WHERE cus.cust = ord.cust` — base table is `ord`, but
+    // the predicate names the joined table first. The parser keeps the LHS
+    // column as left_column; the executor resolves orientation against the
+    // real schemas, so the parser just records what was written.
+    auto r = parse_select(
+        "SELECT * FROM ord, cus WHERE cus.code = ord.cust");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().inner_join.has_value());
+    CHECK(r.value().inner_join->table == "cus");
+    CHECK(r.value().inner_join->left_column  == "code");
+    CHECK(r.value().inner_join->right_column == "cust");
+}
+
+TEST_CASE("comma-join: missing equi-join predicate is a cartesian error") {
+    auto r = parse_select(
+        "SELECT * FROM ord, cus WHERE ord.cust = 'C001'");
+    CHECK_FALSE(r.has_value());   // cartesian products are not supported
+}
+
+TEST_CASE("comma-join: three comma tables are rejected") {
+    auto r = parse_select(
+        "SELECT * FROM a, b, c WHERE a.x = b.y AND b.z = c.w");
+    CHECK_FALSE(r.has_value());   // only two-table comma-join is supported
+}
+
+TEST_CASE("comma-join: composite (multiple) join keys are rejected") {
+    auto r = parse_select(
+        "SELECT * FROM a, b WHERE a.x = b.y AND a.z = b.w");
+    CHECK_FALSE(r.has_value());   // single-key join only
+}
+
+TEST_CASE("comma-join: mixing comma with explicit JOIN is rejected") {
+    auto r = parse_select(
+        "SELECT * FROM a, b JOIN c ON a.x = c.y WHERE a.p = b.q");
+    CHECK_FALSE(r.has_value());
 }

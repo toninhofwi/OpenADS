@@ -466,3 +466,153 @@ TEST_CASE("M10.14 INNER JOIN drops rows without a match") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+// --- ADS dialect comma-join (feat/sql-comma-join, #6) ----------------------
+// `FROM a, b WHERE a.x = b.y` is the SQL-89 comma-join legacy ADS apps write
+// instead of `INNER JOIN ... ON`. The parser lowers it onto the same single
+// inner_join AST, so it must produce byte-identical results to the explicit
+// INNER JOIN form.
+
+TEST_CASE("comma-join: FROM a, b WHERE a.x = b.y == explicit INNER JOIN") {
+    auto dir = fs::temp_directory_path() / "openads_comma_join_basic";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"O01", "C001"},
+         {"O02", "C002"},
+         {"O03", "C001"}});
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[200] =
+        "SELECT * FROM ord.dbf, cus.dbf WHERE ord.cust = cus.cust";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 3);
+
+    UNSIGNED16 nf = 0;
+    REQUIRE(AdsGetNumFields(hCur, &nf) == 0);
+    CHECK(nf == 4);   // ID, CUST, R_CUST, R_NAME
+
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    UNSIGNED8 rname[16] = "R_NAME";
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hCur, rname, buf, &cap, 0) == 0);
+    auto v = std::string(reinterpret_cast<const char*>(buf), cap);
+    while (!v.empty() && v.back() == ' ') v.pop_back();
+    CHECK(v == "Alice");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("comma-join: join key written joined-table-first still resolves") {
+    // The base table is `ord` but the predicate names the joined table
+    // first (`cus.code = ord.cust`) and the join columns have different
+    // names. Alias stripping loses the table binding, so the executor must
+    // resolve the orientation against the real schemas rather than assume
+    // the left predicate column belongs to the base table.
+    auto dir = fs::temp_directory_path() / "openads_comma_join_revorient";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"O01", "C001"},
+         {"O02", "C002"},
+         {"O03", "C001"}});
+    write_dbf(dir / "cus.dbf",
+        {{"CODE", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[200] =
+        "SELECT * FROM ord.dbf, cus.dbf WHERE cus.code = ord.cust";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 3);
+
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    UNSIGNED8 rname[16] = "R_NAME";
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hCur, rname, buf, &cap, 0) == 0);
+    auto v = std::string(reinterpret_cast<const char*>(buf), cap);
+    while (!v.empty() && v.back() == ' ') v.pop_back();
+    CHECK(v == "Alice");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("comma-join: residual WHERE filter applies after the join key") {
+    auto dir = fs::temp_directory_path() / "openads_comma_join_filter";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"O01", "C001"},
+         {"O02", "C002"},
+         {"O03", "C001"}});
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Residual filter on a base-table column survives the join-key lift
+    // (keeps only ord row O02, which joins to C002/Bob).
+    UNSIGNED8 sql[220] =
+        "SELECT * FROM ord.dbf, cus.dbf "
+        "WHERE ord.cust = cus.cust AND ord.id = 'O02'";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 1);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
