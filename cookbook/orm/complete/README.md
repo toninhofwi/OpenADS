@@ -46,12 +46,25 @@ something you can trust:
 ## Reading the benchmark — "seek vs scan"
 
 The headline is the **`find/op(ms)`** column. The *same*
-`Model:Find( id )` call takes two different routes:
+`Model:Find( id )` call takes two different routes — and which route
+depends on how the companion ORM **routes** the back-end, not on the
+database product alone:
 
 | Path | Back-ends | How a primary-key lookup runs | Cost vs table size |
 |------|-----------|-------------------------------|--------------------|
-| **seek** | SQLite / PostgreSQL / MariaDB / ODBC | the engine resolves the key with an **index** | roughly flat |
-| **scan** | DBF (navigational) | the ORM **walks** the records, honouring the deletion flag row by row | grows with `N` |
+| **seek** | SQLite (the only SQL-routed back-end) | the ORM emits a parametric `SELECT` and the engine resolves the key with an **index** | roughly flat |
+| **scan** | DBF and the remote `tcp://` server | the ORM **walks** the cursor, honouring the deletion flag row by row | grows with `N` |
+
+> **Important — do not misread the numbers.** The stable companion ORM
+> takes the SQL path **only** for the local SQLite back-end. Every other
+> back-end is driven through the navigational cursor ABI, so it **scans**.
+> In this stack the PostgreSQL / MariaDB / ODBC back-ends are exposed as
+> **read-only navigational bridges** over a live SQL table: the ORM can
+> OPEN and READ a server table by cursor, but it does not CREATE / write
+> through them, so this bench's write+SQL cycle runs end to end only on
+> SQLite, DBF and the `tcp://` server. Point a `DEMO_*_URI` at a
+> pre-seeded server table and the read path works while the schema/write
+> steps report `SKIP`.
 
 A representative local run (`N=500`, `K=100`):
 
@@ -59,16 +72,17 @@ A representative local run (`N=500`, `K=100`):
 backend     path    find/op(ms)   del ok
 sqlite      seek          0.040      yes
 dbf         scan          3.660      yes
+remote-tcp  scan         21.370      yes
 ```
 
-Same call, ~90× difference — and the gap widens as the table grows,
+Same call, large difference — and the gap widens as the table grows,
 because a scan is `O(n)` while an indexed seek is `O(log n)`. Raise
-`BENCH_N` and watch the `dbf` number climb while `sqlite` stays put.
+`BENCH_N` and watch the navigational numbers climb while `sqlite` stays put.
 
 > The navigational scan is **on purpose**: it guarantees correct
 > deletion semantics without a SQL server. The engine itself now also
 > supports an `O(log n)` indexed seek on navigational tables; a future
-> ORM revision can adopt it for keyed lookups.
+> ORM revision can adopt it for the navigational path.
 
 ## CSV columns
 
