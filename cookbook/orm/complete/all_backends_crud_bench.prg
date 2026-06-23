@@ -20,17 +20,31 @@
  *      can paste them into a spreadsheet and re-run to confirm.
  *
  * THE HEADLINE -- "seek vs scan":
- *   The very same `Model:Find( id )` call takes two different paths:
- *     * SQL back-ends (SQLite/PostgreSQL/MariaDB/ODBC): the engine
- *       resolves the primary key with an INDEXED lookup -- the cost
- *       barely moves as the table grows.
- *     * Navigational back-end (DBF): there is no SQL server, so the ORM
- *       WALKS the records (it honours the deletion flag row by row).
- *       That is a full SCAN: the cost grows with the table size.
- *   This benchmark makes that difference visible and measurable. (The
- *   engine itself now supports an O(log n) indexed seek on navigational
- *   tables too; a future ORM revision can adopt it. The stable ORM used
- *   here scans on purpose, to guarantee correct deletion semantics.)
+ *   The very same `Model:Find( id )` call can take two different paths,
+ *   and WHICH path depends on how the companion ORM routes the back-end,
+ *   not just on the database product:
+ *     * SQL path (the local SQLite back-end): the ORM emits a parametric
+ *       SELECT and the engine resolves the primary key with an INDEXED
+ *       lookup -- the cost barely moves as the table grows.
+ *     * Navigational path (DBF and the remote tcp:// server): the ORM
+ *       opens the table as a cursor and WALKS the records, honouring the
+ *       deletion flag row by row. That is a full SCAN: the cost grows
+ *       with the table size.
+ *   This benchmark makes that difference visible and measurable.
+ *
+ *   IMPORTANT (so the numbers are not misread): the stable companion ORM
+ *   takes the SQL path ONLY for the local SQLite back-end. Every other
+ *   back-end -- including PostgreSQL, MariaDB and ODBC -- is driven
+ *   through the navigational cursor ABI, so it SCANS, it does not seek.
+ *   Moreover, in this stack the PostgreSQL/MariaDB/ODBC back-ends are
+ *   exposed as READ-ONLY navigational bridges over a live SQL table:
+ *   they let Harbour code OPEN and READ a server table by cursor, but
+ *   the ORM does not CREATE/INSERT/UPDATE through them. So this bench's
+ *   write+SQL cycle runs end to end only on SQLite, DBF and the tcp://
+ *   server; point a DEMO_*_URI at a pre-seeded server table and the
+ *   read path works, while the schema/write steps report SKIP. (The
+ *   engine also supports an O(log n) indexed seek on navigational tables;
+ *   a future ORM revision can adopt it for the navigational path.)
  *
  * Data is invented (Ana / Bruno / Carla ...). No real records.
  *
@@ -102,6 +116,7 @@ STATIC FUNCTION RunBackend( hB )
 
    LOCAL oCn, nN := BenchN(), nK := BenchK()
    LOCAL nT0, hRes, aRows, nFound, aKeys, i, oP, nSel
+   LOCAL cBool := BoolType( hB )    // portable boolean column type per back-end
 
    ? "---- " + hB[ "label" ] + "  (" + hB[ "uri" ] + ")"
 
@@ -119,9 +134,14 @@ STATIC FUNCTION RunBackend( hB )
    ENDIF
    TORMConnection_Default( oCn )        // models use this connection
 
-   /* fresh schema (DROP may fail if absent -- that is fine) */
+   /* fresh schema (DROP may fail if absent -- that is fine).
+    * Portability: "Logical" is a native navigational/DBF type and SQLite
+    * accepts it via type affinity, but strict SQL engines reject it
+    * (PostgreSQL/MariaDB: `type "logical" does not exist`) and MS Access
+    * over ODBC wants BIT. BoolType() picks a portable boolean per
+    * back-end so the SAME schema string is valid everywhere. */
    oCn:Execute( "DROP TABLE people" )
-   IF ! oCn:Execute( "CREATE TABLE people ( id INTEGER, name VARCHAR(40), uf CHAR(2), active Logical )" )
+   IF ! oCn:Execute( "CREATE TABLE people ( id INTEGER, name VARCHAR(40), uf CHAR(2), active " + cBool + " )" )
       ? "   SKIP -- cannot create table:", hbo_LastErr()
       oCn:Close()
       RETURN NIL
@@ -231,7 +251,11 @@ STATIC FUNCTION BackendList()
    AAdd( a, { "label" => "dbf", "kind" => "dbf", ;
               "uri" => DefEnv( "BENCH_DBF_DIR", "./_bench_dbf" ) } )
 
-   /* opt-in SQL servers -- only if you give them a URI */
+   /* opt-in servers -- only if you give them a URI. NOTE: with the stable
+    * companion ORM the PostgreSQL/MariaDB/ODBC back-ends are READ-ONLY
+    * navigational bridges (open + cursor read over a live SQL table); the
+    * write+SQL steps below will report SKIP for them. Pre-seed the `people`
+    * table on the server to exercise the read path. */
    c := GetEnv( "DEMO_PG_URI" )
    IF ! Empty( c ) ; AAdd( a, { "label" => "postgresql", "kind" => "sql", "uri" => c } ) ; ENDIF
    c := GetEnv( "DEMO_MARIA_URI" )
@@ -286,9 +310,11 @@ STATIC PROCEDURE EmitSummary( aResults )
    ? iif( ChecksumsAgree( aResults ), "   -> all checksums AGREE (auditable: correct)", ;
                                        "   -> MISMATCH: a back-end returned different data <<<" )
    ?
-   ? "seek vs scan: compare the find/op column. SQL back-ends (path=seek)"
-   ? "stay roughly flat as rows grow; the DBF back-end (path=scan) rises"
-   ? "with the row count -- that is the cost the headline talks about."
+   ? "seek vs scan: compare the find/op column. The SQL path (SQLite here,"
+   ? "path=seek) stays roughly flat as rows grow; the navigational path"
+   ? "(DBF and the tcp:// server, path=scan) rises with the row count --"
+   ? "that is the cost the headline talks about. Only SQLite seeks in this"
+   ? "stack; every other back-end is driven navigationally and scans."
    IF ! lAllOk
       ? "WARNING: a delete check failed (see 'del ok' = NO above)."
    ENDIF
@@ -363,6 +389,14 @@ STATIC FUNCTION HGet( h, cKey, xDef )
    IF hb_HHasKey( h, Upper( cKey ) ) ; RETURN h[ Upper( cKey ) ] ; ENDIF
    IF hb_HHasKey( h, Lower( cKey ) ) ; RETURN h[ Lower( cKey ) ] ; ENDIF
    RETURN xDef
+
+/* portable boolean column type per back-end (see RunBackend schema note) */
+STATIC FUNCTION BoolType( hB )
+   DO CASE
+   CASE hB[ "kind" ] == "dbf"        ; RETURN "Logical"   // native nav/DBF + remote tcp
+   CASE hB[ "label" ] == "odbc"      ; RETURN "BIT"       // MS Access via ODBC
+   ENDCASE
+   RETURN "BOOLEAN"                                       // SQLite / PostgreSQL / MariaDB
 
 STATIC FUNCTION BenchN() ; RETURN Max( 1, Val( DefEnv( "BENCH_N", "500" ) ) )
 STATIC FUNCTION BenchK() ; RETURN Max( 1, Val( DefEnv( "BENCH_K", "100" ) ) )
