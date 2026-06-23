@@ -266,6 +266,19 @@ openads::network::RemoteTable* get_remote_table(ADSHANDLE h) {
         h, HandleKind::RemoteTable);
 }
 
+// M12.21 option C — settle the sequential-prefetch lag before any op
+// that reads or mutates the server's CURRENT record. Rows served
+// locally from the lookahead queue left the server cursor behind by
+// prefetch_consumed; a Skip(0) (which the client sends as
+// Skip(prefetch_consumed)) walks the server cursor up to the client's
+// logical row and the ack resets the counter. A no-op when nothing was
+// prefetched (the common cold-cache write path pays nothing).
+void remote_settle_cursor(openads::network::RemoteTable* rt) {
+    if (rt != nullptr && rt->conn != nullptr && rt->prefetch_consumed > 0) {
+        (void)rt->conn->skip(rt, 0);
+    }
+}
+
 #if defined(OPENADS_WITH_SQLITE)
 std::unordered_map<Handle,
     std::unique_ptr<openads::sql_backend::SqliteConnection>>&
@@ -1957,6 +1970,7 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
 
 UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->refresh_record(rt->id);
         if (!r) return fail(r.error());
@@ -2167,6 +2181,10 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
             rt->current_deleted = pr.deleted;
             rt->current_row     = std::move(pr.fields);
             rt->row_valid       = true;
+            // M12.21 option C — the server cursor did not move; remember
+            // we are one logical row further ahead so the next wire op
+            // resyncs by (step + prefetch_consumed).
+            ++rt->prefetch_consumed;
             return ok();
         }
         // Any non-sequential nav drops the queue (handled inside
@@ -3436,6 +3454,7 @@ bool fire_triggers_(Handle hConn, Connection* conn,
 
 UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
         rt->rec_count_cached = false;               // M12.19
         auto r = rt->conn->append_blank(rt->id);
@@ -3512,6 +3531,7 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
         rt->rec_count_cached = false;               // M12.19 (Pack drops the row)
         auto r = rt->conn->delete_record(rt->id);
@@ -3557,6 +3577,7 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
         rt->rec_count_cached = false;               // M12.19
         auto r = rt->conn->recall_record(rt->id);
@@ -3622,6 +3643,7 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (pucValue != nullptr && ulLen > 0) {
             val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
         }
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->set_field(rt->id, fname, val);
         if (!r) return fail(r.error());
@@ -3652,6 +3674,7 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
         std::string fname(reinterpret_cast<const char*>(pucField));
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, bValue ? "1" : "0");
         if (!r) return fail(r.error());
@@ -3688,6 +3711,7 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
         std::string fname(reinterpret_cast<const char*>(pucField));
         char nbuf[64];
         std::snprintf(nbuf, sizeof(nbuf), "%.17g", dValue);
+        remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, std::string(nbuf));
         if (!r) return fail(r.error());
@@ -7456,6 +7480,7 @@ UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (!rd) return fail(rd.error());
     }
     if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);                   // M12.21 option C
         std::string fname = openads::abi::to_internal(pucField, 0);
         auto r = rt->conn->set_field(rt->id, fname, payload);
         if (!r) return fail(r.error());

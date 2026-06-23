@@ -211,6 +211,11 @@ struct RemoteTable {
         std::vector<std::string> fields;
     };
     std::deque<PrefetchedRow> prefetch_queue;
+    // M12.21 option C — rows popped from prefetch_queue locally since the
+    // last server round-trip. The server cursor lags the client's logical
+    // position by exactly this count, so the next wire Skip sends
+    // (step + prefetch_consumed) to resync. Reset on every nav ack.
+    std::uint32_t prefetch_consumed = 0;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag
