@@ -36,7 +36,11 @@ enum class HandleKind {
     // OpenADS Plus — generic ODBC backend (odbc:// …).
     OdbcConnection = 18,
     OdbcTable      = 19,
-    OdbcIndex      = 20
+    OdbcIndex      = 20,
+    // OpenADS Plus — native Firebird backend (firebird:// / fb:// …).
+    FirebirdConnection = 21,
+    FirebirdTable      = 22,
+    FirebirdIndex      = 23
 };
 
 using Handle = std::uint64_t;

@@ -181,6 +181,14 @@ if(OPENADS_WITH_POSTGRESQL)
     )
 endif()
 
+if(OPENADS_WITH_FIREBIRD)
+    target_sources(openads_unit_tests PRIVATE
+        unit/firebird_uri_test.cpp
+        unit/firebird_connection_test.cpp
+        unit/abi_plus_firebird_read_test.cpp
+    )
+endif()
+
 # M11.4 — side DLL with stored procedures used by abi_aep_test.
 add_library(openads_test_aep_proc SHARED
     fixtures/test_aep_proc.cpp

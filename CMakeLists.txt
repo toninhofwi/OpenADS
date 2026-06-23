@@ -85,6 +85,10 @@ option(OPENADS_WITH_SQLCIPHER "Build the SQL backend with SQLCipher-compatible e
 if(OPENADS_WITH_SQLCIPHER)
     set(OPENADS_WITH_SQLITE ON CACHE BOOL "" FORCE)
 endif()
+# Optional native Firebird table driver (libfbclient; embedded .fdb in-process
+# or TCP server). OFF by default. Requires the Firebird client SDK
+# (fbclient + ibase.h) discoverable via FIREBIRD_ROOT.
+option(OPENADS_WITH_FIREBIRD "Enable the native Firebird-backed table driver (libfbclient)" OFF)
 
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each
