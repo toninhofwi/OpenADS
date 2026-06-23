@@ -6,7 +6,7 @@ nav_order: 0
 permalink: /en/whatsnew/
 ---
 
-# What's New (v1.0.0-rc29 → rc31)
+# What's New (v1.0.0-rc29 → v1.0.3)
 
 This page summarises the most notable changes since the
 v1.0.0-rc29 release. For the full commit-by-commit history see

@@ -6,7 +6,7 @@ nav_order: 0
 permalink: /pt/novidades/
 ---
 
-# Novidades (v1.0.0-rc29 → rc31)
+# Novidades (v1.0.0-rc29 → v1.0.3)
 
 Esta página resume as mudanças mais notáveis desde a versão
 v1.0.0-rc29. Para o histórico completo de commits, consulte o
