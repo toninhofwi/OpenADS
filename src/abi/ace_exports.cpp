@@ -2000,6 +2000,7 @@ UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->found_cached = true; rt->current_found = false;  // M12.21: GoTo clears Found()
         auto r = rt->conn->goto_record(rt, ulRecord);
         if (!r) return fail(r.error());
         return ok();
@@ -2122,6 +2123,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
         // M12.18 — rt-aware overload parses the row trailer in the
         // same RTT, so AdsGetField immediately after GoTop hits
         // the cache.
+        rt->found_cached = true; rt->current_found = false;  // M12.21: GoTop clears Found()
         auto r = rt->conn->goto_top(rt);
         if (!r) return fail(r.error());
         return ok();
@@ -2146,6 +2148,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->found_cached = true; rt->current_found = false;  // M12.21: GoBottom clears Found()
         auto r = rt->conn->goto_bottom(rt);
         if (!r) return fail(r.error());
         return ok();
@@ -2171,6 +2174,7 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
 UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* rt = get_remote_table(hTable)) {
+        rt->found_cached = true; rt->current_found = false;  // M12.21: Skip clears Found()
         // M12.21 — sequential prefetch: Skip(1) drains the queue
         // populated by the previous Skip's lookahead block. Zero
         // RTT for every cached step.
@@ -6882,6 +6886,10 @@ UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     }
 #endif
     if (auto* rt = get_remote_table(hTable)) {
+        // M12.21 option C — serve Found() locally when a nav/seek op set
+        // it (the common scan case: Skip clears it), saving a round-trip
+        // on every step. Fall back to the server only when uncached.
+        if (rt->found_cached) { *pbFound = rt->current_found ? 1 : 0; return ok(); }
         auto r = rt->conn->is_found(rt->id);
         if (!r) return fail(r.error());
         *pbFound = r.value() ? 1 : 0;
@@ -6926,6 +6934,10 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
             /*last=*/0);
         if (!r) return fail(r.error());
         if (pbFound) *pbFound = r.value().hit;
+        if (ri->parent) {                            // M12.21 option C
+            ri->parent->found_cached  = true;
+            ri->parent->current_found = (r.value().hit != 0);
+        }
         (void)u16KeyType;
         return ok();
     }
@@ -7058,6 +7070,10 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
             /*last=*/1);
         if (!r) return fail(r.error());
         if (pbFound) *pbFound = r.value().hit;
+        if (ri->parent) {                            // M12.21 option C
+            ri->parent->found_cached  = true;
+            ri->parent->current_found = (r.value().hit != 0);
+        }
         (void)u16KeyType;
         return ok();
     }

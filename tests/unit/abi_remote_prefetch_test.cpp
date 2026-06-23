@@ -212,3 +212,55 @@ TEST_CASE("remote prefetch: a write mid-scan hits the logical record, not the la
     fs::remove_all(dir, ec);
     srv.stop();
 }
+
+TEST_CASE("remote prefetch: an Eof()/IsFound()-polling scan loop sheds its round-trips") {
+    using openads::network::Server;
+    const int N = 300;
+    auto dir = fs::temp_directory_path() / "openads_prefetch_loop";
+    make_dbf(dir, "pf", N);
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(dir, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[16] = "pf.dbf";
+    UNSIGNED8 alias[8]  = "pf";
+    REQUIRE(AdsOpenTable(hConn, tname, alias, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    auto& stats = openads::mgmt::process_mg_stats();
+    const std::uint64_t base = stats.packets_in.load();
+
+    // The rddads scan shape: poll Eof() and IsFound() every step. With
+    // the caches both answer locally, so the loop's only server traffic
+    // is the periodic lookahead refill.
+    int seen = 0;
+    bool ordered = true, found_clear = true;
+    UNSIGNED16 eof = 0;
+    REQUIRE(AdsAtEOF(hTable, &eof) == 0);
+    while (!eof) {
+        UNSIGNED32 rn = 0;
+        REQUIRE(AdsGetRecordNum(hTable, 0, &rn) == 0);
+        ++seen;
+        if (rn != static_cast<UNSIGNED32>(seen)) ordered = false;
+        UNSIGNED16 fnd = 9;
+        REQUIRE(AdsIsFound(hTable, &fnd) == 0);
+        if (fnd != 0) found_clear = false;          // a plain scan never "finds"
+        REQUIRE(AdsSkip(hTable, 1) == 0);
+        REQUIRE(AdsAtEOF(hTable, &eof) == 0);
+    }
+    const std::uint64_t reqs = stats.packets_in.load() - base;
+
+    CHECK(seen == N);              // visited every record
+    CHECK(ordered);                // in order
+    CHECK(found_clear);            // Found() stayed false through the scan
+    CHECK(reqs <= 30u);            // Eof()/IsFound()/Skip served locally
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    srv.stop();
+}

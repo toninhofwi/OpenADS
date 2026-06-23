@@ -216,6 +216,13 @@ struct RemoteTable {
     // position by exactly this count, so the next wire Skip sends
     // (step + prefetch_consumed) to resync. Reset on every nav ack.
     std::uint32_t prefetch_consumed = 0;
+    // M12.21 option C — cached Found() state. xBase clears Found() on any
+    // non-seek move (Skip/Goto) and sets it from the seek outcome, so the
+    // ops that know the value set it here and AdsIsFound serves it with no
+    // round-trip (rddads polls IsFound after every DbSkip). found_cached
+    // gates the fast path: when false, AdsIsFound asks the server.
+    bool found_cached  = false;
+    bool current_found = false;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag
