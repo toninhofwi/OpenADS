@@ -290,3 +290,161 @@ TEST_CASE("M10.40 arithmetic in projection") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("ADS dialect: UPPER/LOWER on the WHERE left-hand side") {
+    auto dir = fs::temp_directory_path() / "openads_ads_where_fn";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // REF mixes case so UPPER/LOWER folding is observable; NAME drives LIKE.
+    write_dbf_typed(dir / "data.dbf",
+        {{"REF", 'C', 4}, {"NAME", 'C', 8}},
+        {{"N", "alice"},
+         {"n", "Bob"},
+         {"S", "amy"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    auto run_count = [&](const char* q) -> UNSIGNED32 {
+        UNSIGNED8 sql[256];
+        std::memcpy(sql, q, std::strlen(q) + 1);
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+        UNSIGNED32 count = 0;
+        REQUIRE(AdsGetRecordCount(hCur, 0, &count) == 0);
+        return count;
+    };
+
+    // UPPER folds 'N' and 'n' together; <> 'N' leaves only the 'S' row.
+    CHECK(run_count("SELECT * FROM data.dbf WHERE UPPER(REF) <> 'N'") == 1);
+    CHECK(run_count("SELECT * FROM data.dbf WHERE UPPER(REF) = 'N'")  == 2);
+    // LOWER mirror: = 'n' also matches both the 'N' and 'n' rows.
+    CHECK(run_count("SELECT * FROM data.dbf WHERE LOWER(REF) = 'n'")  == 2);
+    // UPPER on the LIKE path: ALICE and AMY match 'A%', BOB does not.
+    CHECK(run_count("SELECT * FROM data.dbf WHERE UPPER(NAME) LIKE 'A%'") == 2);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ADS dialect: WHERE 1=1 constant predicate + full search query") {
+    auto dir = fs::temp_directory_path() / "openads_ads_const_pred";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf_typed(dir / "data.dbf",
+        {{"REF", 'C', 4}, {"NAME", 'C', 8}},
+        {{"N", "alice"},
+         {"n", "Bob"},
+         {"S", "amy"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    auto run_count = [&](const char* q) -> UNSIGNED32 {
+        UNSIGNED8 sql[300];
+        std::memcpy(sql, q, std::strlen(q) + 1);
+        ADSHANDLE c = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &c) == 0);
+        UNSIGNED32 n = 0;
+        REQUIRE(AdsGetRecordCount(c, 0, &n) == 0);
+        return n;
+    };
+
+    // 1=1 folds to always-true (all rows); 1=2 to always-false (none).
+    CHECK(run_count("SELECT * FROM data.dbf WHERE 1 = 1") == 3);
+    CHECK(run_count("SELECT * FROM data.dbf WHERE 1 = 2") == 0);
+    // Mixed with a real predicate, the boilerplate is transparent.
+    CHECK(run_count("SELECT * FROM data.dbf WHERE 1 = 1 AND REF = 'S'") == 1);
+    // The full legacy-ERP search shape (hint + bracket + alias + 1=1 +
+    // UPPER folds + LIKE + ORDER BY) executes and filters correctly.
+    CHECK(run_count(
+        "SELECT {static} * FROM [data.dbf] AS a "
+        "WHERE 1 = 1 "
+        "AND UPPER(a.REF) <> 'N' "
+        "AND UPPER(a.NAME) LIKE 'A%' "
+        "ORDER BY a.NAME") == 1);   // only the 'S'/'amy' row
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ADS dialect: UPPER() in WHERE drives UPDATE / DELETE row scope") {
+    auto dir = fs::temp_directory_path() / "openads_ads_where_fn_dml";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf_typed(dir / "data.dbf",
+        {{"REF", 'C', 4}, {"TAG", 'C', 4}},
+        {{"N", "a"},
+         {"n", "b"},
+         {"S", "c"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // UPDATE folds REF: both the 'N' and 'n' rows get TAG='X'; 'S' untouched.
+    UNSIGNED8 upd[200] =
+        "UPDATE data.dbf SET TAG = 'X' WHERE UPPER(REF) = 'N'";
+    ADSHANDLE hCur = 0xDEADBEEF;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, upd, &hCur) == 0);
+
+    auto run_count = [&](const char* q) -> UNSIGNED32 {
+        UNSIGNED8 sql[200];
+        std::memcpy(sql, q, std::strlen(q) + 1);
+        ADSHANDLE c = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &c) == 0);
+        UNSIGNED32 n = 0;
+        REQUIRE(AdsGetRecordCount(c, 0, &n) == 0);
+        return n;
+    };
+    CHECK(run_count("SELECT * FROM data.dbf WHERE TAG = 'X'") == 2);
+
+    // DELETE folds REF too: removing UPPER(REF)='N' tombstones the 'N' and
+    // 'n' rows (records 1 and 2) and leaves the 'S' row (record 3).
+    UNSIGNED8 del[200] =
+        "DELETE FROM data.dbf WHERE UPPER(REF) = 'N'";
+    hCur = 0xDEADBEEF;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, del, &hCur) == 0);
+
+    UNSIGNED8 leaf[16] = "data";
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    UNSIGNED16 deleted = 0;
+    REQUIRE(AdsGotoRecord(hTable, 1) == 0);
+    REQUIRE(AdsIsRecordDeleted(hTable, &deleted) == 0);
+    CHECK(deleted != 0);                       // 'N' row gone
+    REQUIRE(AdsGotoRecord(hTable, 2) == 0);
+    REQUIRE(AdsIsRecordDeleted(hTable, &deleted) == 0);
+    CHECK(deleted != 0);                       // 'n' row gone (UPPER folded)
+    REQUIRE(AdsGotoRecord(hTable, 3) == 0);
+    REQUIRE(AdsIsRecordDeleted(hTable, &deleted) == 0);
+    CHECK(deleted == 0);                       // 'S' row survives
+    REQUIRE(AdsCloseTable(hTable) == 0);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
