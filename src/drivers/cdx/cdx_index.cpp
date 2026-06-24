@@ -655,6 +655,16 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
     if (padded.size() < key_size_) padded.append(key_size_ - padded.size(), ' ');
     if (padded.size() > key_size_) padded.resize(key_size_);
 
+    // Clipper / DBFCDX partial-seek: a search key SHORTER than the index
+    // key matches on the PREFIX (finds the first stored key beginning
+    // with it). Compare only over the original search-key length, not the
+    // space-padded full width — otherwise SEEK "ART-00024800" against a
+    // stored "ART-00024800 desc ..." key misses (the search's trailing
+    // spaces sort below the stored "desc"). A full-length key gives
+    // cmp_len == key_size_, so exact seeks are unchanged.
+    const std::size_t cmp_len =
+        std::min<std::size_t>(key.size(), key_size_);
+
     auto first = seek_first();
     if (!first) return first.error();
     if (!first.value().positioned) {
@@ -664,7 +674,7 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
     while (true) {
         for (std::size_t i = 0; i < cur_decoded_.size(); ++i) {
             int cmp = std::memcmp(padded.data(), cur_decoded_[i].first.data(),
-                                  key_size_);
+                                  cmp_len);
             if (cmp == 0) {
                 cur_index_ = static_cast<std::int32_t>(i);
                 cur_state_ = CurState::Positioned;
