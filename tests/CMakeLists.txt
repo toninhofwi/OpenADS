@@ -173,6 +173,10 @@ add_executable(openads_unit_tests
     unit/adm_memo_test.cpp
     unit/sqlite_uri_test.cpp
     unit/proc_test.cpp
+    unit/sql_common_test.cpp
+    unit/legacy_crt_shims_test.cpp
+    unit/dll_test.cpp
+    unit/network_client_test.cpp
 )
 
 if(OPENADS_WITH_POSTGRESQL)
@@ -182,10 +186,15 @@ if(OPENADS_WITH_POSTGRESQL)
     unit/abi_plus_odbc_read_test.cpp
     unit/abi_plus_odbc_seek_test.cpp
     unit/odbc_uri_test.cpp
-    unit/postgres_uri_test.cpp
-    unit/maria_uri_test.cpp
         unit/abi_plus_postgres_seek_test.cpp
     unit/abi_plus_mariadb_seek_test.cpp
+    unit/postgres_uri_test.cpp
+    )
+endif()
+
+if(OPENADS_WITH_MARIADB)
+    target_sources(openads_unit_tests PRIVATE
+        unit/maria_uri_test.cpp
     )
 endif()
 
