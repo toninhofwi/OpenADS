@@ -142,6 +142,13 @@ private:
         std::uint32_t& leaf,
         std::vector<std::pair<std::string, std::uint32_t>>& out);
 
+    // Mirror of skip_empty_leaves_right_ for backward walks: follow the
+    // LEFT-sibling chain over empty leaves so prev() retreats onto the
+    // previous live key instead of stopping at the first hole.
+    util::Result<void> skip_empty_leaves_left_(
+        std::uint32_t& leaf,
+        std::vector<std::pair<std::string, std::uint32_t>>& out);
+
     util::Result<void>
         encode_leaf_(std::uint32_t page_off,
                      const std::vector<std::pair<std::string, std::uint32_t>>& keys,
