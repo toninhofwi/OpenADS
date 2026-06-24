@@ -54,6 +54,7 @@ add_library(openads_core STATIC
     drivers/fpt/fpt_memo.cpp
     network/wire.cpp
     network/server.cpp
+    network/session.cpp
     network/client.cpp
     mgmt/mg_collector.cpp
     network/mg_wire.cpp

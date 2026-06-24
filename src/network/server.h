@@ -30,6 +30,12 @@ namespace openads::network {
 // this dispatcher in M12.4.
 
 class Server {
+    // SLICE 3a — Session reaches the shared session registry helpers
+    // (register_session, install/erase_session_socket, unregister,
+    // set_session_user, add_session_table, build_mg_snapshot,
+    // kill_session_by_conn_no), creds_, data_dir_, require_auth().
+    friend class Session;
+
 public:
     Server() = default;
     Server(const Server&) = delete;
