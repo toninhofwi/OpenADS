@@ -5,6 +5,23 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.2.1 — 2026-06-24
+
+- **NTX numeric key format fix (PR #67).** Numeric fields indexed
+  into an NTX bag now store keys in the native DBFNTX form
+  (zero-padded magnitude + complemented negatives) instead of
+  space-padded `STR()` text at a probed width. A native xBase
+  reader's `dbSeek(<number>)` now matches the on-disk key for
+  positive, decimal, and negative values. Reopened index bags retain
+  the numeric encoding. `abi_ntx_numeric_key_test` asserts the
+  native byte layout; full unit suite 720/720, 0 regression.
+- Added unit tests: adm_memo, codepage, maria_uri, postgres_uri,
+  proc, sqlite_uri (710 new lines, 706/706 tests pass).
+- Remote benchmark docs: iMac WiFi (784K rec/s) and charleskwon.com
+  SSH tunnel (676K rec/s) with 500K-record results.
+- Removed IMAC_CONNECTION.md from tracking (contains credentials).
+- ORM examples synced to v1.1.0-alpha.
+
 ## 1.2.0 — 2026-06-24
 
 - **Deferred-flush bulk-insert mode (528× speedup).** A new
@@ -15,7 +32,9 @@ the real ACE SDK.
   called explicitly (or on table close). 500K records + CDX index
   build completes in ~26 seconds (19s bulk insert at 26,381 rec/s +
   7.2s CDX build + 36ms final flush) vs. ~2.7 hours before
-  (50 rec/s). 649/649 unit tests pass; backward-compatible —
+  (50 rec/s). Remote benchmark (Windows client → iMac server over
+  WiFi tcp://): 500K records in 0.69s at 784K rec/s — 36× faster
+  than local mode. 649/649 unit tests pass; backward-compatible —
   default behaviour is unchanged (flush on every write).
 
 - **MSSQL native TDS 7.4 backend (PR #53 integration).** Native

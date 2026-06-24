@@ -36,6 +36,16 @@ CREATE CLASS TORMBrowseSource
    METHOD Contar()    INLINE ::Count()
    METHOD Valor( cCol ) INLINE ::Value( cCol )
    METHOD Colunas()   INLINE ::Columns()
+   /* aliases ES */
+   METHOD DesdeArray( aItems, aCols )   INLINE ::FromArray( aItems, aCols )
+   METHOD DesdeCursor( oCursor, aCols ) INLINE ::FromCursor( oCursor, aCols )
+   METHOD IrInicio()  INLINE ::GoTop()
+   METHOD IrFinal()   INLINE ::GoBottom()
+   METHOD Saltar( n ) INLINE ::Skip( n )
+   METHOD Inicio()    INLINE ::Bof()
+   METHOD Final()     INLINE ::Eof()
+   METHOD RegActual() INLINE ::RecNo()
+   METHOD Columnas()  INLINE ::Columns()
 END CLASS
 
 METHOD New() CLASS TORMBrowseSource

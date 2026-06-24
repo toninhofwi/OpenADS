@@ -100,6 +100,7 @@ add_executable(openads_unit_tests
     unit/abi_find_table_test.cpp
     unit/abi_binary_memo_test.cpp
     unit/abi_ntx_multitag_test.cpp
+    unit/abi_ntx_numeric_key_test.cpp
     unit/abi_ordnumber_test.cpp
     unit/abi_server_info_test.cpp
     unit/abi_unicode_test.cpp
@@ -171,6 +172,14 @@ add_executable(openads_unit_tests
     unit/abi_sql_system_tables_test.cpp
     unit/abi_sql_dd_sql_test.cpp
     unit/abi_no_current_record_test.cpp
+    unit/codepage_test.cpp
+    unit/adm_memo_test.cpp
+    unit/sqlite_uri_test.cpp
+    unit/proc_test.cpp
+    unit/sql_common_test.cpp
+    unit/legacy_crt_shims_test.cpp
+    unit/dll_test.cpp
+    unit/network_client_test.cpp
 )
 
 if(OPENADS_WITH_POSTGRESQL)
@@ -182,6 +191,13 @@ if(OPENADS_WITH_POSTGRESQL)
     unit/odbc_uri_test.cpp
         unit/abi_plus_postgres_seek_test.cpp
     unit/abi_plus_mariadb_seek_test.cpp
+    unit/postgres_uri_test.cpp
+    )
+endif()
+
+if(OPENADS_WITH_MARIADB)
+    target_sources(openads_unit_tests PRIVATE
+        unit/maria_uri_test.cpp
     )
 endif()
 
@@ -251,3 +267,12 @@ target_link_libraries(probe_cdx2 PRIVATE openads_core)
 add_executable(dbf_cdx_bench bench/dbf_cdx_bench.cpp)
 target_include_directories(dbf_cdx_bench PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(dbf_cdx_bench PRIVATE openads_ace)
+
+# Remote benchmark: tcp:// to iMac server
+add_executable(remote_bench bench/remote_bench.cpp)
+target_include_directories(remote_bench PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(remote_bench PRIVATE openads_ace)
+
+add_executable(remote_test bench/remote_test.cpp)
+target_include_directories(remote_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(remote_test PRIVATE openads_ace)

@@ -7,11 +7,13 @@ CREATE CLASS TORMGrammar
    METHOD Compile( hAst )
    METHOD QuoteIdent( cName )
    METHOD CompileWheres( aWheres, aParams )   // -> "" ou " WHERE ..."
+   METHOD CompileScopedWheres( aWheres, hSoft, aParams )
    METHOD BuildPredicates( aList, aParams )
    METHOD CompileSimple( hItem, aParams )
    METHOD CompileSimpleArr( aItem, aParams )
    METHOD CompileIn( hItem, aParams )
    METHOD CompileRaw( hItem, aParams )
+   METHOD CompileNull( hItem )
    METHOD QuoteQualified( cName )
    METHOD CompileJoins( aJoins )
    METHOD CompileGroups( aGroups )
@@ -57,6 +59,29 @@ METHOD CompileWheres( aWheres, aParams ) CLASS TORMGrammar
    LOCAL c := ::BuildPredicates( aWheres, aParams )
    RETURN iif( Empty( c ), "", " WHERE " + c )
 
+METHOD CompileScopedWheres( aWheres, hSoft, aParams ) CLASS TORMGrammar
+   LOCAL cUser := ::BuildPredicates( aWheres, aParams )
+   LOCAL cSoft := iif( hSoft == NIL, "", ;
+                       RenderSoftAlive( Self, hSoft[ "col" ], hb_HGetDef( hSoft, "negate", .F. ) ) )
+   DO CASE
+   CASE ! Empty( cUser ) .AND. ! Empty( cSoft ) ; RETURN " WHERE (" + cUser + ") AND " + cSoft
+   CASE ! Empty( cUser )                        ; RETURN " WHERE " + cUser
+   CASE ! Empty( cSoft )                        ; RETURN " WHERE " + cSoft
+   ENDCASE
+   RETURN ""
+
+/* Escopo soft-delete: "vivo = sem timestamp". No passthrough ACE hbo_BindNull
+   grava '' (nao NULL real) -> um registro restaurado (bind-NIL) fica '' e um vivo
+   nunca-escrito fica NULL; os dois contam como vivos. Por isso a forma combinada
+   (distinta da primitiva geral RenderIsNull, que e estrita IS NULL). Literal '' e
+   constante (sem input de usuario) -> sem injecao. */
+STATIC FUNCTION RenderSoftAlive( oG, cCol, lNeg )
+   LOCAL cQ := oG:QuoteQualified( cCol )
+   IF lNeg
+      RETURN "( " + cQ + " IS NOT NULL AND " + cQ + " <> '' )"
+   ENDIF
+   RETURN "( " + cQ + " IS NULL OR " + cQ + " = '' )"
+
 METHOD BuildPredicates( aList, aParams ) CLASS TORMGrammar
    LOCAL c := "", a, lFirst := .T., cBool, cKind
    IF aList == NIL .OR. Len( aList ) == 0
@@ -70,6 +95,7 @@ METHOD BuildPredicates( aList, aParams ) CLASS TORMGrammar
          CASE cKind == "simple" ; c += cBool + ::CompileSimple( a, aParams )
          CASE cKind == "in"     ; c += cBool + ::CompileIn( a, aParams )
          CASE cKind == "raw"    ; c += cBool + ::CompileRaw( a, aParams )
+         CASE cKind == "null"   ; c += cBool + ::CompileNull( a )
          OTHERWISE
             OrmRaise( 1003, "BuildPredicates", "kind invalido: " + hb_CStr( cKind ) )
          ENDCASE
@@ -107,6 +133,12 @@ METHOD CompileIn( hItem, aParams ) CLASS TORMGrammar
 
 METHOD CompileRaw( hItem, aParams ) CLASS TORMGrammar
    RETURN RenumberRaw( hItem[ "frag" ], hb_HGetDef( hItem, "params", {} ), aParams )
+
+METHOD CompileNull( hItem ) CLASS TORMGrammar
+   RETURN RenderIsNull( Self, hItem[ "col" ], hb_HGetDef( hItem, "negate", .F. ) )
+
+STATIC FUNCTION RenderIsNull( oG, cCol, lNeg )
+   RETURN oG:QuoteQualified( cCol ) + " IS " + iif( lNeg, "NOT ", "" ) + "NULL"
 
 STATIC FUNCTION RenumberRaw( cFrag, aVals, aParams )
    LOCAL i, c := cFrag, nCount := Len( aVals ), cPh, nFound := 0
@@ -222,28 +254,36 @@ METHOD Compile( hAst ) CLASS TORMGrammar
       c := "DROP TABLE " + iif( hb_HGetDef( hAst, "ifExists", .F. ), "IF EXISTS ", "" ) + cTable
 
    CASE cType == "select"
-      hAgg := hb_HGetDef( hAst, "aggregate", NIL )
-      IF hAgg != NIL
-         cSel := ::CompileAggregate( hAgg )
+      IF hb_HGetDef( hAst, "countBy", NIL ) != NIL
+         /* contagem agrupada (withCount): SELECT col, COUNT(*) AS aggregate_count ... GROUP BY col */
+         cSel := ::QuoteQualified( hAst[ "countBy" ] )
+         c := "SELECT " + cSel + ", COUNT(*) AS aggregate_count FROM " + cTable
+         c += ::CompileScopedWheres( hb_HGetDef( hAst, "wheres", NIL ), hb_HGetDef( hAst, "softDelete", NIL ), aParams )
+         c += " GROUP BY " + cSel
       ELSE
-         cSel := iif( hAst[ "columns" ] == NIL .OR. Len( hAst[ "columns" ] ) == 0, "*", ;
-                      JoinIdent( Self, hAst[ "columns" ] ) )
-      ENDIF
-      c := "SELECT " + cSel + " FROM " + cTable
-      c += ::CompileJoins( hb_HGetDef( hAst, "joins", NIL ) )
-      c += ::CompileWheres( hb_HGetDef( hAst, "wheres", NIL ), aParams )
-      c += ::CompileGroups( hb_HGetDef( hAst, "groups", NIL ) )
-      c += ::CompileHaving( hb_HGetDef( hAst, "havings", NIL ), aParams )
-      IF hAgg == NIL
-         IF hb_HGetDef( hAst, "orders", NIL ) != NIL .AND. Len( hAst[ "orders" ] ) > 0
-            cCols := ""
-            FOR EACH a IN hAst[ "orders" ]
-               cCols += iif( Empty( cCols ), "", ", " ) + ::QuoteQualified( a[ 1 ] ) + " " + ;
-                        iif( Upper( a[ 2 ] ) == "DESC", "DESC", "ASC" )
-            NEXT
-            c += " ORDER BY " + cCols
+         hAgg := hb_HGetDef( hAst, "aggregate", NIL )
+         IF hAgg != NIL
+            cSel := ::CompileAggregate( hAgg )
+         ELSE
+            cSel := iif( hAst[ "columns" ] == NIL .OR. Len( hAst[ "columns" ] ) == 0, "*", ;
+                         JoinIdent( Self, hAst[ "columns" ] ) )
          ENDIF
-         c += CompileLimitOffset( hb_HGetDef( hAst, "limit", NIL ), hb_HGetDef( hAst, "offset", NIL ) )
+         c := "SELECT " + cSel + " FROM " + cTable
+         c += ::CompileJoins( hb_HGetDef( hAst, "joins", NIL ) )
+         c += ::CompileScopedWheres( hb_HGetDef( hAst, "wheres", NIL ), hb_HGetDef( hAst, "softDelete", NIL ), aParams )
+         c += ::CompileGroups( hb_HGetDef( hAst, "groups", NIL ) )
+         c += ::CompileHaving( hb_HGetDef( hAst, "havings", NIL ), aParams )
+         IF hAgg == NIL
+            IF hb_HGetDef( hAst, "orders", NIL ) != NIL .AND. Len( hAst[ "orders" ] ) > 0
+               cCols := ""
+               FOR EACH a IN hAst[ "orders" ]
+                  cCols += iif( Empty( cCols ), "", ", " ) + ::QuoteQualified( a[ 1 ] ) + " " + ;
+                           iif( Upper( a[ 2 ] ) == "DESC", "DESC", "ASC" )
+               NEXT
+               c += " ORDER BY " + cCols
+            ENDIF
+            c += CompileLimitOffset( hb_HGetDef( hAst, "limit", NIL ), hb_HGetDef( hAst, "offset", NIL ) )
+         ENDIF
       ENDIF
 
    CASE cType == "update"

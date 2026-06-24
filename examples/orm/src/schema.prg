@@ -12,6 +12,10 @@ CREATE CLASS TORMSchema
    METHOD CriarTabela( cNome, bBlk )        INLINE ::CreateTable( cNome, bBlk )
    METHOD RemoverTabela( cNome, lIfExists ) INLINE ::DropTable( cNome, lIfExists )
    METHOD TemTabela( cNome )                INLINE ::HasTable( cNome )
+   /* aliases ES */
+   METHOD CrearTabla( cNome, bBlk )         INLINE ::CreateTable( cNome, bBlk )
+   METHOD EliminarTabla( cNome, lIfExists ) INLINE ::DropTable( cNome, lIfExists )
+   METHOD TieneTabla( cNome )               INLINE ::HasTable( cNome )
 END CLASS
 
 METHOD New( oConn ) CLASS TORMSchema

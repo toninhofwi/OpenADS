@@ -182,6 +182,12 @@ records, completing the ARIES-lite recovery model.
 
 ### Engine
 
+- **NTX numeric key format** — numeric fields indexed into an NTX
+  bag now store keys in the native DBFNTX form (zero-padded
+  magnitude + complemented negatives) instead of space-padded
+  `STR()` text. A native xBase reader's `dbSeek(<number>)` now
+  matches the on-disk key. Reopened index bags retain the numeric
+  encoding. (PR #67)
 - **Numeric `dbSeek`** — rddads sends `ADS_STRING` key type for
   numeric seeks; the engine now handles this correctly.
 - **`ALIAS->FIELD` in numeric seek** — strip `ALIAS->` prefix so

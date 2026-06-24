@@ -2,6 +2,7 @@
    Persistencia rastreada por ::lExists (nao "PK vazia"): linha criada com PK
    explicita ainda e um INSERT. CRUD 100% parametrizado via Grammar+Connection. */
 #include "hborm.ch"
+#include "error.ch"
 
 CREATE CLASS TORMModel
    DATA oConn
@@ -10,6 +11,8 @@ CREATE CLASS TORMModel
    DATA hRelDefs INIT NIL
    DATA hRelCache
    DATA aEager   INIT {}
+   DATA aWithCount INIT {}
+   DATA nTrashMode INIT 0
    METHOD New( oConn ) CONSTRUCTOR
    METHOD TableName() VIRTUAL
    METHOD PrimaryKey() INLINE "id"
@@ -22,6 +25,7 @@ CREATE CLASS TORMModel
    METHOD FindBy( cCol, xVal )
    METHOD BuscarPor( cCol, xVal )    INLINE ::FindBy( cCol, xVal )
    METHOD Save()
+   METHOD PersistRow()
    METHOD Delete()
    METHOD All()
    METHOD Onde( cCol, xOpOrVal, xVal )
@@ -31,6 +35,7 @@ CREATE CLASS TORMModel
    METHOD Apagar()            INLINE ::Delete()
    METHOD Criar( hAttrs )     INLINE ::Create( hAttrs )
    METHOD FromRow( hRow )
+   METHOD FireEvent( cEvent, lCancelable )
    METHOD Relations()                INLINE {=>}
    METHOD RelDefs()
    METHOD DefineRelation( cName, hDef )
@@ -39,10 +44,45 @@ CREATE CLASS TORMModel
    METHOD SetRelation( cName, xVal ) INLINE ( ::hRelCache[ cName ] := xVal, Self )
    METHOD Com( xNames )
    METHOD With( xNames )             INLINE ::Com( xNames )
+   METHOD WithCount( xNames )
+   METHOD ComContagem( xNames )      INLINE ::WithCount( xNames )
+   METHOD ConConteo( xNames )        INLINE ::WithCount( xNames )
    METHOD InsertMany( aRows )
    METHOD InserirVarios( aRows )     INLINE ::InsertMany( aRows )
    METHOD Upsert( aRows, aConflict, aUpdate )
    METHOD InserirOuAtualizar( aRows, aConflict, aUpdate ) INLINE ::Upsert( aRows, aConflict, aUpdate )
+   /* aliases ES (espanhol) -- casca fina, mesmo metodo real */
+   METHOD Guardar()                  INLINE ::Save()
+   METHOD Eliminar()                 INLINE ::Delete()
+   METHOD Crear( hAttrs )            INLINE ::Create( hAttrs )
+   METHOD Relacion( cName )          INLINE ::Rel( cName )
+   METHOD Con( xNames )              INLINE ::Com( xNames )
+   METHOD InsertarVarios( aRows )    INLINE ::InsertMany( aRows )
+   METHOD InsertarOActualizar( aRows, aConflict, aUpdate ) INLINE ::Upsert( aRows, aConflict, aUpdate )
+   METHOD Donde( cCol, xOpOrVal, xVal )   // alias ES de Onde (real: PCount nao confiavel em INLINE)
+   /* auto-timestamps opt-in */
+   METHOD Timestamps()      INLINE .F.
+   /* soft-delete opt-in */
+   METHOD SoftDeletes()     INLINE .F.
+   METHOD DeletedAtColumn() INLINE "deleted_at"
+   METHOD HardDelete()
+   METHOD RemoveRow()
+   METHOD ForceDelete()
+   METHOD Restore()
+   METHOD Trashed()
+   METHOD WithTrashed()
+   METHOD OnlyTrashed()
+   /* PT */
+   METHOD ApagarDeVez()  INLINE ::ForceDelete()
+   METHOD Restaurar()    INLINE ::Restore()
+   METHOD Apagado()      INLINE ::Trashed()
+   METHOD ComApagados()  INLINE ::WithTrashed()
+   METHOD SoApagados()   INLINE ::OnlyTrashed()
+   /* ES */
+   METHOD EliminarDefinitivo() INLINE ::ForceDelete()
+   METHOD ConEliminados()      INLINE ::WithTrashed()
+   METHOD SoloEliminados()     INLINE ::OnlyTrashed()
+   METHOD Eliminado()          INLINE ::Trashed()
 END CLASS
 
 METHOD New( oConn ) CLASS TORMModel
@@ -52,7 +92,11 @@ METHOD New( oConn ) CLASS TORMModel
    RETURN Self
 
 METHOD Query() CLASS TORMModel
-   RETURN TORMQuery():New( ::oConn, ::TableName() ):BindModel( Self )
+   LOCAL oQ := TORMQuery():New( ::oConn, ::TableName() ):BindModel( Self )
+   IF ::SoftDeletes()
+      oQ:SoftScope( ::DeletedAtColumn(), ::nTrashMode )
+   ENDIF
+   RETURN oQ
 
 METHOD FromRow( hRow ) CLASS TORMModel
    LOCAL hCast := ::Casts(), cK
@@ -66,7 +110,44 @@ METHOD FromRow( hRow ) CLASS TORMModel
    ENDIF
    ::hRelCache := hb_Hash()
    ::lExists   := .T.
+   ::FireEvent( "retrieved", .F. )
    RETURN Self
+
+METHOD FireEvent( cEvent, lCancelable ) CLASS TORMModel
+   LOCAL cName, xRet
+   FOR EACH cName IN EventHookNames( cEvent )
+      IF __objHasMsg( Self, cName )
+         xRet := __objSendMsg( Self, cName )
+         IF lCancelable == .T. .AND. ValType( xRet ) == "L" .AND. xRet == .F.
+            RETURN .F.
+         ENDIF
+      ENDIF
+   NEXT
+   RETURN .T.
+
+/* Mapa evento canonico (EN) -> nomes de metodo {EN, PT[, ES]}.
+   restoring: PT==ES (AntesDeRestaurar) -> 2 entradas, evita dispatch duplo.
+   restored:  PT (DepoisDeRestaurar) != ES (DespuesDeRestaurar) -> 3 entradas.
+   Evento desconhecido -> {} (FireEvent no-op). */
+STATIC FUNCTION EventHookNames( cEvent )
+   STATIC s_hMap
+   IF s_hMap == NIL
+      s_hMap := { ;
+         "saving"        => { "BeforeSave",        "AntesDeSalvar",      "AntesDeGuardar" }, ;
+         "saved"         => { "AfterSave",         "DepoisDeSalvar",     "DespuesDeGuardar" }, ;
+         "creating"      => { "BeforeCreate",      "AntesDeCriar",       "AntesDeCrear" }, ;
+         "created"       => { "AfterCreate",       "DepoisDeCriar",      "DespuesDeCrear" }, ;
+         "updating"      => { "BeforeUpdate",      "AntesDeAtualizar",   "AntesDeActualizar" }, ;
+         "updated"       => { "AfterUpdate",       "DepoisDeAtualizar",  "DespuesDeActualizar" }, ;
+         "deleting"      => { "BeforeDelete",      "AntesDeApagar",      "AntesDeEliminar" }, ;
+         "deleted"       => { "AfterDelete",       "DepoisDeApagar",     "DespuesDeEliminar" }, ;
+         "restoring"     => { "BeforeRestore",     "AntesDeRestaurar" }, ;
+         "restored"      => { "AfterRestore",      "DepoisDeRestaurar",  "DespuesDeRestaurar" }, ;
+         "forceDeleting" => { "BeforeForceDelete", "AntesDeApagarDeVez", "AntesDeEliminarDefinitivo" }, ;
+         "forceDeleted"  => { "AfterForceDelete",  "DepoisDeApagarDeVez","DespuesDeEliminarDefinitivo" }, ;
+         "retrieved"     => { "AfterRetrieve",     "DepoisDeRecuperar",  "DespuesDeRecuperar" } }
+   ENDIF
+   RETURN hb_HGetDef( s_hMap, cEvent, {} )
 
 METHOD Create( hAttrs ) CLASS TORMModel
    LOCAL cK
@@ -86,6 +167,9 @@ METHOD Find( xId ) CLASS TORMModel
    IF Len( ::aEager ) > 0
       ORM_ApplyEager( { Self }, ::aEager, ::RelDefs(), ::oConn )
    ENDIF
+   IF Len( ::aWithCount ) > 0
+      ORM_ApplyWithCount( { Self }, ::aWithCount, ::RelDefs(), ::oConn )
+   ENDIF
    RETURN Self
 
 METHOD FindBy( cCol, xVal ) CLASS TORMModel
@@ -97,10 +181,34 @@ METHOD FindBy( cCol, xVal ) CLASS TORMModel
    IF Len( ::aEager ) > 0
       ORM_ApplyEager( { Self }, ::aEager, ::RelDefs(), ::oConn )
    ENDIF
+   IF Len( ::aWithCount ) > 0
+      ORM_ApplyWithCount( { Self }, ::aWithCount, ::RelDefs(), ::oConn )
+   ENDIF
    RETURN Self
 
 METHOD Save() CLASS TORMModel
+   LOCAL lNovo := ! ::lExists
+   IF ! ::FireEvent( "saving", .T. )
+      RETURN .F.
+   ENDIF
+   IF ! ::FireEvent( iif( lNovo, "creating", "updating" ), .T. )
+      RETURN .F.
+   ENDIF
+   IF ! ::PersistRow()
+      RETURN .F.
+   ENDIF
+   ::FireEvent( iif( lNovo, "created", "updated" ), .F. )
+   ::FireEvent( "saved", .F. )
+   RETURN .T.
+
+METHOD PersistRow() CLASS TORMModel
    LOCAL oG, hAst, r, lOk, xPk
+   IF ::Timestamps()
+      IF ! ::lExists
+         ::Set( "created_at", OrmNow() )
+      ENDIF
+      ::Set( "updated_at", OrmNow() )
+   ENDIF
    IF ::oConn:IsNavigational()
       IF ::lExists
          RETURN NavUpdate( ::oConn, ::TableName(), ::PrimaryKey(), ;
@@ -128,6 +236,40 @@ METHOD Save() CLASS TORMModel
    RETURN lOk
 
 METHOD Delete() CLASS TORMModel
+   IF ::SoftDeletes()
+      IF ! ::FireEvent( "deleting", .T. )
+         RETURN .F.
+      ENDIF
+      ::Set( ::DeletedAtColumn(), SoftStamp() )
+      IF ! ::PersistRow()
+         RETURN .F.
+      ENDIF
+      ::FireEvent( "deleted", .F. )
+      RETURN .T.
+   ENDIF
+   RETURN ::HardDelete()
+
+METHOD HardDelete() CLASS TORMModel
+   IF ! ::FireEvent( "deleting", .T. )
+      RETURN .F.
+   ENDIF
+   IF ! ::RemoveRow()
+      RETURN .F.
+   ENDIF
+   ::FireEvent( "deleted", .F. )
+   RETURN .T.
+
+METHOD ForceDelete() CLASS TORMModel
+   IF ! ::FireEvent( "forceDeleting", .T. )
+      RETURN .F.
+   ENDIF
+   IF ! ::RemoveRow()
+      RETURN .F.
+   ENDIF
+   ::FireEvent( "forceDeleted", .F. )
+   RETURN .T.
+
+METHOD RemoveRow() CLASS TORMModel
    LOCAL oG, xId := ::Get( ::PrimaryKey() ), r, lOk
    IF Empty( xId )
       RETURN .F.
@@ -146,6 +288,31 @@ METHOD Delete() CLASS TORMModel
    ENDIF
    RETURN lOk
 
+METHOD Restore() CLASS TORMModel
+   IF ! ::SoftDeletes()
+      ModelRaise( "Restore", "Restore requer SoftDeletes() habilitado" )
+   ENDIF
+   IF ! ::FireEvent( "restoring", .T. )
+      RETURN .F.
+   ENDIF
+   ::Set( ::DeletedAtColumn(), iif( ::oConn:IsNavigational(), "", NIL ) )
+   IF ! ::PersistRow()
+      RETURN .F.
+   ENDIF
+   ::FireEvent( "restored", .F. )
+   RETURN .T.
+
+METHOD Trashed() CLASS TORMModel
+   RETURN ::SoftDeletes() .AND. ! Empty( ::Get( ::DeletedAtColumn() ) )
+
+METHOD WithTrashed() CLASS TORMModel
+   ::nTrashMode := 1
+   RETURN Self
+
+METHOD OnlyTrashed() CLASS TORMModel
+   ::nTrashMode := 2
+   RETURN Self
+
 /* All records as models of the SAME class (clones Self, preserving oConn and
    the dynamic model's introspected schema, then hydrates each row). */
 METHOD All() CLASS TORMModel
@@ -154,6 +321,7 @@ METHOD All() CLASS TORMModel
       AAdd( aOut, __objClone( Self ):FromRow( hRow ) )
    NEXT
    ORM_ApplyEager( aOut, ::aEager, ::RelDefs(), ::oConn )
+   ORM_ApplyWithCount( aOut, ::aWithCount, ::RelDefs(), ::oConn )
    RETURN aOut
 
 /* Bridge to the fluent query builder (Porta B); accepts Onde(col,val) or Onde(col,op,val). */
@@ -162,6 +330,13 @@ METHOD Onde( cCol, xOpOrVal, xVal ) CLASS TORMModel
       RETURN ::Query():Where( cCol, xOpOrVal )
    ENDIF
    RETURN ::Query():Where( cCol, xOpOrVal, xVal )
+
+/* alias ES de Onde (metodo real -- PCount nao e confiavel em INLINE) */
+METHOD Donde( cCol, xOpOrVal, xVal ) CLASS TORMModel
+   IF PCount() == 2
+      RETURN ::Onde( cCol, xOpOrVal )
+   ENDIF
+   RETURN ::Onde( cCol, xOpOrVal, xVal )
 
 METHOD RelDefs() CLASS TORMModel
    IF ::hRelDefs == NIL
@@ -186,6 +361,10 @@ METHOD Rel( cName ) CLASS TORMModel
 
 METHOD Com( xNames ) CLASS TORMModel
    ORM_AddEager( ::aEager, xNames )
+   RETURN Self
+
+METHOD WithCount( xNames ) CLASS TORMModel
+   ORM_AddEager( ::aWithCount, xNames )
    RETURN Self
 
 /* 🔬 ACHADO DE ENGINE: o passthrough sqlite mal-mapeia os params nomeados de um
@@ -243,3 +422,22 @@ METHOD Upsert( aRows, aConflict, aUpdate ) CLASS TORMModel
       lOk := ::oConn:Execute( r[ "sql" ], r[ "params" ] ) .AND. lOk
    NEXT
    RETURN lOk
+
+/* stamp ISO compacto (14 chars, <= C,19 do nav, nao-vazio): marca a linha como apagada */
+STATIC FUNCTION SoftStamp()
+   RETURN DToS( Date() ) + StrTran( Time(), ":", "" )
+
+/* agora em string ISO "YYYY-MM-DD HH:MM:SS" -- round-trip com o cast datetime (ToStamp) */
+STATIC FUNCTION OrmNow()
+   RETURN hb_TToC( hb_DateTime(), "YYYY-MM-DD", "HH:MM:SS" )
+
+STATIC PROCEDURE ModelRaise( cOp, cDesc )
+   LOCAL oErr := ErrorNew()
+   oErr:Subsystem( "hb_orm" )
+   oErr:SubCode( 1200 )
+   oErr:Severity( ES_ERROR )
+   oErr:Description( cDesc )
+   oErr:Operation( cOp )
+   oErr:CanRetry( .F. )
+   Eval( ErrorBlock(), oErr )
+   RETURN

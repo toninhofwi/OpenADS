@@ -197,6 +197,13 @@ ARIES-lite.
 
 ### Motor
 
+- **Formato de clave numérica NTX** — los campos numéricos
+  indexados en un bolsillo NTX ahora almacenan claves en el formato
+  nativo DBFNTX (magnitud rellenada con ceros + negativos
+  complementados) en lugar de texto `STR()` rellenado con espacios.
+  La búsqueda nativa `dbSeek(<number>)` de un lector xBase ahora
+  coincide con la clave en disco. Los bolsillos de índice
+  reabiertos conservan la codificación numérica. (PR #67)
 - **`dbSeek` numérico** — rddads envía tipo de clave
   `ADS_STRING` para búsquedas numéricas; el motor ahora lo
   maneja correctamente.
