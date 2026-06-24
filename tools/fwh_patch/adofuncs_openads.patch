@@ -1,0 +1,27 @@
+--- a/source/function/adofuncs.prg
++++ b/source/function/adofuncs.prg
+@@ -114,6 +114,12 @@
+ 
+ function Fw_OpenAdoConnection( cConnStr, lShowError, oErr, nTimeOut )
+ 
+    local oCn
++   // OpenADS ADO bridge (tools/fwh_patch/openads_ado_bridge.prg)
++   if ( oCn := OpenAds_AdoTryBridge( cConnStr, lShowError, @oErr ) ) != nil
++      soCn   := oCn
++      scSpec := iif( ValType( cConnStr ) == "A", FW_ArrayAsList( cConnStr ), cConnStr )
++      return oCn
++   endif
+    local nDb   := 0
+    local n, cSpec, cStr, nLen, aProvider, nStr := 0
+    local lRetError   := ( PCount() >= 3 )
+@@ -616,6 +622,11 @@
+ function FW_OpenRecordSet( oCn, cSql, nLockType, nCursorType, nMaxRecords, nOpt )
+ 
+    local oRs, lOpen := .t.
++
++   if HB_ISOBJECT( oCn ) .and. HB_ISMETHOD( oCn, "IsOpenAds" ) .and. oCn:IsOpenAds()
++      return OpenAds_OpenRecordSet( oCn, cSql )
++   endif
+ 
+    if ValType( PValue( PCount() ) ) == 'L'
+       lOpen    := PValue( PCount() )

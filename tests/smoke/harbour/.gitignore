@@ -1,0 +1,12 @@
+# build + run artifacts
+*.exe
+*.dll
+*.hbp
+*.obj
+*.log
+*.db
+*.db-journal
+smoke_out.txt
+smoke_err.txt
+build_log.txt
+
