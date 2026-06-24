@@ -82,6 +82,7 @@ struct LeafLayout {
 };
 
 LeafLayout compute_layout(std::uint16_t key_len,
+                          std::uint32_t max_rec,
                           std::uint8_t  req_byte_override = 0) {
     LeafLayout out{};
     std::uint16_t v = key_len;
@@ -89,9 +90,34 @@ LeafLayout compute_layout(std::uint16_t key_len,
     while (v) { ++b_bits; v >>= 1; }
     out.dc_bits  = b_bits;
     out.tc_bits  = b_bits;
-    out.req_byte = req_byte_override
-        ? req_byte_override
-        : ((b_bits > 12) ? 5 : (b_bits > 8 ? 4 : 3));
+    if (req_byte_override) {
+        out.req_byte = req_byte_override;
+    } else {
+        // The packed entry must hold the record number ALONGSIDE the
+        // dup+trail count bits. Sizing req_byte from key_len ALONE
+        // (the old behaviour) starved the record-number field: a
+        // 40-byte key gave b_bits=6 -> req_byte=3 -> only 12 recno
+        // bits, so every recno >= 4096 was truncated mod 4096 (silent
+        // corruption: seek returns the wrong recno, ordered walks hit
+        // ADSCDX/5000 once the wrong recno lands out of range). Grow
+        // req_byte until rn_bits covers the largest recno on this page.
+        // FoxPro CDX leaves are self-describing (rec_bits/rec_mask/
+        // key_bytes live in each page header, read back in
+        // decode_compact_leaf_static), so per-page widths are legal and
+        // native-readable.
+        std::uint8_t min_rb = (b_bits > 12) ? 5 : (b_bits > 8 ? 4 : 3);
+        std::uint8_t rn_need = bits_for(max_rec);
+        std::uint8_t rb = static_cast<std::uint8_t>(
+            (rn_need + (b_bits << 1) + 7) >> 3);
+        if (rb < min_rb) rb = min_rb;
+        // The record number is carried in a u32 and the entry packing
+        // (and the struct-tag path) is proven up to 5 bytes; 5 bytes
+        // already yields >=16 recno bits for any key and ~268M recnos
+        // for a 40-byte key, beyond any practical DBF. Cap there so we
+        // never enter an untested 6-byte packing layout.
+        if (rb > 5) rb = 5;
+        out.req_byte = rb;
+    }
     out.rn_bits  = static_cast<std::uint8_t>(
         (out.req_byte << 3) - (b_bits << 1));
     out.dc_mask  = (b_bits >= 32) ? 0xFFFFFFFFu : ((1u << b_bits) - 1);
@@ -113,7 +139,11 @@ encode_compact_leaf_static(
     std::uint32_t   right_sib,
     std::uint8_t    req_byte_override = 0)
 {
-    LeafLayout L = compute_layout(key_size, req_byte_override);
+    std::uint32_t max_rec = 0;
+    for (const auto& kv : keys) {
+        if (kv.second > max_rec) max_rec = kv.second;
+    }
+    LeafLayout L = compute_layout(key_size, max_rec, req_byte_override);
     const std::uint32_t rec_mask = L.rn_mask;
     const std::uint8_t  rec_bits = L.rn_bits;
     const std::uint8_t  dup_bits = L.dc_bits;
