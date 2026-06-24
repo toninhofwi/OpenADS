@@ -212,6 +212,7 @@ if(OPENADS_WITH_MSSQL)
         unit/abi_plus_mssql_connect_test.cpp
         unit/abi_plus_mssql_read_test.cpp
         unit/tds_protocol_test.cpp
+        unit/mssql_table_skip_test.cpp
         unit/mssql_uri_test.cpp
     )
 endif()
