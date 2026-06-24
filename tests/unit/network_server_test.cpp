@@ -1154,3 +1154,86 @@ TEST_CASE("Enterprise pool: AOF server-side filter over the pooled path") {
     srv.stop();
     fs::remove_all(dir, ec);
 }
+
+// ADS-unique: the legacy ERP connects through a DATA DICTIONARY (.add) — tables
+// resolved by DD name, not raw file path. This proves a DD connection +
+// DD-resolved SQL works over the POOLED wire (the per-session abi_conn inherits
+// the DD path on its worker).
+//
+// SCOPE/HONESTY: the .add here is OpenADS's OWN dictionary format (text header
+// "# OpenADS Data Dictionary v1", filled via CREATE TABLE through OpenADS's
+// engine) — a round-trip of our own format. It does NOT prove OpenADS can read
+// the legacy's REAL Advantage/SAP .add (proprietary DD format); that is a
+// separate, unverified engine-track question for the migration.
+TEST_CASE("Enterprise pool: Data Dictionary connection + DD-resolved SQL over the pooled wire") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_pool_dd";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    auto add_path = (dir / "app.add").string();
+
+    auto sql_exec = [](ADSHANDLE c, const char* s) -> UNSIGNED32 {
+        ADSHANDLE st = 0, cur = 0;
+        if (AdsCreateSQLStatement(c, &st) != 0) return 9999;
+        std::vector<std::uint8_t> b(std::strlen(s) + 1);
+        std::memcpy(b.data(), s, b.size());
+        UNSIGNED32 rc = AdsExecuteSQLDirect(st, b.data(), &cur);
+        if (cur != 0) AdsCloseTable(cur);
+        AdsCloseSQLStatement(st);
+        return rc;
+    };
+    auto sql_count = [](ADSHANDLE c, const char* s) -> UNSIGNED32 {
+        ADSHANDLE st = 0, cur = 0;
+        if (AdsCreateSQLStatement(c, &st) != 0) return 0xFFFFFFFFu;
+        std::vector<std::uint8_t> b(std::strlen(s) + 1);
+        std::memcpy(b.data(), s, b.size());
+        if (AdsExecuteSQLDirect(st, b.data(), &cur) != 0 || cur == 0) {
+            AdsCloseSQLStatement(st);
+            return 0xFFFFFFFFu;
+        }
+        UNSIGNED32 n = 0;
+        AdsGetRecordCount(cur, ADS_IGNOREFILTERS, &n);
+        AdsCloseTable(cur);
+        AdsCloseSQLStatement(st);
+        return n;
+    };
+
+    // 1. Build a DD with a table + 2 rows via a LOCAL connection.
+    { std::ofstream f(add_path); f << "# OpenADS Data Dictionary v1\n"; }
+    UNSIGNED8 lpath[256];
+    std::memcpy(lpath, add_path.c_str(), add_path.size() + 1);
+    ADSHANDLE hLocal = 0;
+    REQUIRE(AdsConnect60(lpath, ADS_LOCAL_SERVER, nullptr, nullptr,
+                         ADS_DEFAULT, &hLocal) == 0);
+    REQUIRE(sql_exec(hLocal,
+        "CREATE TABLE clients (ID INTEGER, NAME CHAR(20))") == 0);
+    REQUIRE(sql_exec(hLocal,
+        "INSERT INTO clients (ID, NAME) VALUES (1, 'Alice')") == 0);
+    REQUIRE(sql_exec(hLocal,
+        "INSERT INTO clients (ID, NAME) VALUES (2, 'Bob')") == 0);
+    REQUIRE(AdsDisconnect(hLocal) == 0);
+
+    // 2. Open the SAME DD through the POOLED wire and query by DD name.
+    srv_set_pool_env("1");
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    srv_set_pool_env("");
+
+    char uri[300];
+    std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()), add_path.c_str());
+    UNSIGNED8 rpath[300];
+    std::memcpy(rpath, uri, std::strlen(uri) + 1);
+    ADSHANDLE hRemote = 0;
+    REQUIRE(AdsConnect60(rpath, ADS_REMOTE_SERVER, nullptr, nullptr,
+                         ADS_DEFAULT, &hRemote) == 0);
+
+    // DD-resolved SQL over the pooled wire: the table is named, not a path.
+    CHECK(sql_count(hRemote, "SELECT * FROM clients") == 2u);
+
+    REQUIRE(AdsDisconnect(hRemote) == 0);
+    CHECK(srv.active_session_threads() == 0u);   // served by the pool
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
