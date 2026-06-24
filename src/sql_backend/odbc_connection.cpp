@@ -22,6 +22,7 @@ namespace openads::sql_backend {}
 #include <sqlext.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 
 namespace openads::sql_backend {
@@ -63,6 +64,10 @@ util::Result<void> read_all_rows(
     if (!SQL_SUCCEEDED(SQLNumResultCols(st, &cols))) {
         return odbc_error("odbc num cols", odbc_diag(SQL_HANDLE_STMT, st));
     }
+    // INSERT / UPDATE / DELETE produce no result set; there is nothing to
+    // fetch and SQLFetch on a cursorless statement would error. Return the
+    // empty row set so the write path can reuse run_query for DML.
+    if (cols == 0) return util::Result<void>{};
     while (true) {
         SQLRETURN r = SQLFetch(st);
         if (r == SQL_NO_DATA) break;
@@ -114,8 +119,52 @@ util::Result<void> read_all_rows(
     return util::Result<void>{};
 }
 
+// ---------------------------------------------------------------------------
+// BoundParam: a typed parameter for parameterised SQL queries.
+// sql_type / col_size / decimals carry the ODBC column metadata so the
+// driver can coerce the value correctly (e.g. SQL_INTEGER vs SQL_VARCHAR).
+// is_null=true emits SQL_NULL_DATA regardless of value.
+// ---------------------------------------------------------------------------
+struct BoundParam {
+    std::string value;
+    bool        is_null  = false;
+    SQLSMALLINT sql_type = SQL_VARCHAR;
+    SQLULEN     col_size = 0;
+    SQLSMALLINT decimals = 0;
+};
+
+// True for ADS column types whose empty-string value is meaningful (a blank
+// string is NOT NULL). Non-textual types (numeric, date, …) that arrive
+// empty from xBase must be sent as SQL NULL — the NULL-on-write rule.
+bool is_textual(std::uint16_t ads_type) {
+    return ads_type == ADS_STRING;
+}
+
+// Build a BoundParam for `value` in `column` of `tbl`, applying the
+// NULL-on-write rule. Tasks 3 and 4 reuse this helper.
+BoundParam param_for(const OdbcTable& tbl, const std::string& column,
+                     const std::string& value) {
+    BoundParam p;
+    const std::size_t idx = field_index_ci(tbl, column);
+    if (idx != static_cast<std::size_t>(-1)) {
+        const auto& f = tbl.fields[idx];
+        if (f.sql_type != 0) p.sql_type = static_cast<SQLSMALLINT>(f.sql_type);
+        p.col_size = f.column_size;
+        p.decimals = static_cast<SQLSMALLINT>(f.decimals);
+        if (value.empty() && !is_textual(f.type)) p.is_null = true;
+    }
+    p.value = value;
+    return p;
+}
+
+// ---------------------------------------------------------------------------
+// run_query — parameterised overload (read/navigation path).
+// Binds params via SQLBindParameter (SQL_C_CHAR); the indicator array keeps
+// alive for the duration of the call since it is a local variable.
+// ---------------------------------------------------------------------------
 util::Result<void> run_query(
     SQLHDBC dbc, const std::string& sql,
+    const std::vector<BoundParam>& params,
     std::vector<std::vector<std::string>>& rows,
     std::vector<std::vector<bool>>& nulls,
     SQLULEN max_rows = 0) {
@@ -126,6 +175,25 @@ util::Result<void> run_query(
     if (max_rows > 0) {
         SQLSetStmtAttr(st, SQL_ATTR_MAX_ROWS,
                        reinterpret_cast<SQLPOINTER>(max_rows), 0);
+    }
+    std::vector<SQLLEN> ind(params.size());
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        const BoundParam& p = params[i];
+        ind[i] = p.is_null ? SQL_NULL_DATA
+                           : static_cast<SQLLEN>(p.value.size());
+        SQLRETURN br = SQLBindParameter(
+            st, static_cast<SQLUSMALLINT>(i + 1), SQL_PARAM_INPUT,
+            SQL_C_CHAR, p.sql_type,
+            p.col_size > 0 ? p.col_size : (p.value.empty() ? 1 : p.value.size()),
+            p.decimals,
+            const_cast<char*>(p.value.c_str()),
+            static_cast<SQLLEN>(p.value.size()), &ind[i]);
+        if (!SQL_SUCCEEDED(br)) {
+            auto e = odbc_error("odbc bind param",
+                                odbc_diag(SQL_HANDLE_STMT, st));
+            SQLFreeHandle(SQL_HANDLE_STMT, st);
+            return e;
+        }
     }
     SQLRETURN r = SQLExecDirect(st, sqlstr(sql), SQL_NTS);
     if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
@@ -138,47 +206,22 @@ util::Result<void> run_query(
     return rr;
 }
 
+// No-parameter convenience — for metadata/snapshot reads with no values to
+// bind (load_pk_snapshot, seek_index, flush/delete via the write path).
+util::Result<void> run_query(
+    SQLHDBC dbc, const std::string& sql,
+    std::vector<std::vector<std::string>>& rows,
+    std::vector<std::vector<bool>>& nulls,
+    SQLULEN max_rows = 0) {
+    static const std::vector<BoundParam> kNoParams;
+    return run_query(dbc, sql, kNoParams, rows, nulls, max_rows);
+}
+
 std::string quote_ident(const std::string& q, const std::string& name) {
     if (q.empty()) return name;
     return q + name + q;
 }
 
-std::string escape_literal(const std::string& value) {
-    std::string out = "'";
-    for (char c : value) {
-        if (c == '\'') out += "''";
-        else           out += c;
-    }
-    out += '\'';
-    return out;
-}
-
-// Injection-safe numeric-literal check: only [0-9 . + - e E], at least
-// one digit. The xBase key/PK values arrive as strings; numeric columns
-// must NOT be quoted (Jet/Access and others reject 'text' = int_column),
-// so a validated number is emitted bare.
-bool is_numeric_literal(const std::string& s) {
-    if (s.empty()) return false;
-    bool any_digit = false;
-    for (char c : s) {
-        if (c >= '0' && c <= '9') { any_digit = true; continue; }
-        if (c == '+' || c == '-' || c == '.' || c == 'e' || c == 'E') continue;
-        return false;
-    }
-    return any_digit;
-}
-
-// Emit a SQL literal for `value` against `column`: bare for numeric
-// columns (when the value is a clean number), single-quoted otherwise.
-std::string format_literal(const OdbcTable& tbl, const std::string& column,
-                           const std::string& value) {
-    const std::size_t idx = field_index_ci(tbl, column);
-    const bool numeric = idx != static_cast<std::size_t>(-1) &&
-        (tbl.fields[idx].type == ADS_INTEGER ||
-         tbl.fields[idx].type == ADS_DOUBLE);
-    if (numeric && is_numeric_literal(value)) return value;
-    return escape_literal(value);
-}
 
 std::string index_column_sql(const std::string& q, const std::string& column,
                              IndexExprKind kind) {
@@ -195,15 +238,19 @@ std::string pk_select_list(const std::string& q, const OdbcTable& tbl) {
     return out;
 }
 
+// Parameterised WHERE clause — used by the READ/navigation and WRITE paths.
+// Emits `col = ? AND ...` and appends one BoundParam per PK column to `out`.
+// Tasks 3 and 4 will migrate UPDATE/DELETE callers to this overload too.
 std::string pk_where_clause(const std::string& q, const OdbcTable& tbl,
-                            const OdbcTable::PkRow& pk) {
-    std::string out;
+                            const OdbcTable::PkRow& pk,
+                            std::vector<BoundParam>& out) {
+    std::string s;
     for (std::size_t i = 0; i < tbl.pk_columns.size(); ++i) {
-        if (i > 0) out += " AND ";
-        out += quote_ident(q, tbl.pk_columns[i]) + " = " +
-               format_literal(tbl, tbl.pk_columns[i], pk.values[i]);
+        if (i > 0) s += " AND ";
+        s += quote_ident(q, tbl.pk_columns[i]) + " = ?";
+        out.push_back(param_for(tbl, tbl.pk_columns[i], pk.values[i]));
     }
-    return out;
+    return s;
 }
 
 std::vector<std::string> order_keyed(std::vector<std::pair<int, std::string>> k) {
@@ -389,12 +436,13 @@ util::Result<void> load_current_row(SQLHDBC dbc, const std::string& q,
         tbl->row_valid  = false;
         return util::Result<void>{};
     }
+    std::vector<BoundParam> params;
     const std::string sql =
         "SELECT * FROM " + quote_ident(q, tbl->sql_table) + " WHERE " +
-        pk_where_clause(q, *tbl, tbl->pk_snapshot[idx]);
+        pk_where_clause(q, *tbl, tbl->pk_snapshot[idx], params);
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
-    auto r = run_query(dbc, sql, rows, nulls, /*max_rows=*/1);
+    auto r = run_query(dbc, sql, params, rows, nulls, /*max_rows=*/1);
     if (!r) return r.error();
     if (rows.empty()) {
         tbl->positioned = false;
@@ -676,29 +724,34 @@ util::Result<bool> OdbcConnection::seek_index(
 
     const std::string& q      = impl_->quote;
     const std::string  pkcols = pk_select_list(q, *tbl);
-    const std::string  esc    = (kind == IndexExprKind::UpperColumn)
-                                    ? escape_literal(key)
-                                    : format_literal(*tbl, sql_col, key);
     const std::string  qexpr  = index_column_sql(q, sql_col, kind);
     const std::string  from   = " FROM " + quote_ident(q, tbl->sql_table);
+
+    std::vector<BoundParam> params;
+    if (kind == IndexExprKind::UpperColumn) {
+        BoundParam p; p.sql_type = SQL_VARCHAR; p.value = key;
+        params.push_back(p);
+    } else {
+        params.push_back(param_for(*tbl, sql_col, key));
+    }
 
     std::string sql;
     if (last_key) {
         sql = soft
-            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " <= " + esc +
+            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " <= ?"
               " ORDER BY " + qexpr + " DESC"
-            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = " + esc +
+            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = ?"
               " ORDER BY " + qexpr + " DESC";
     } else {
         sql = soft
-            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " >= " + esc +
+            ? "SELECT " + pkcols + from + " WHERE " + qexpr + " >= ?"
               " ORDER BY " + qexpr + " ASC"
-            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = " + esc;
+            : "SELECT " + pkcols + from + " WHERE " + qexpr + " = ?";
     }
 
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
-    auto r = run_query(impl_->dbc, sql, rows, nulls, /*max_rows=*/1);
+    auto r = run_query(impl_->dbc, sql, params, rows, nulls, /*max_rows=*/1);
     if (!r) return r.error();
 
     bool found = false;
@@ -729,6 +782,175 @@ util::Result<bool> OdbcConnection::seek_index(
     }
     tbl->last_seek_found = found;
     return found;
+}
+
+namespace {
+
+bool ci_equal(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Build the PK tuple of the row just written, so flush_table can reposition
+// the cursor on it after reloading the snapshot. For an append the PK comes
+// from the staged values; for an edit it is the current PK with any staged
+// PK-column override applied.
+OdbcTable::PkRow target_pk(const OdbcTable& tbl, bool appending) {
+    OdbcTable::PkRow pk;
+    pk.values.reserve(tbl.pk_columns.size());
+    for (std::size_t c = 0; c < tbl.pk_columns.size(); ++c) {
+        std::string v = (!appending && tbl.pos < tbl.pk_snapshot.size())
+                            ? tbl.pk_snapshot[tbl.pos].values[c]
+                            : std::string();
+        for (const auto& kv : tbl.staged) {
+            if (ci_equal(kv.first, tbl.pk_columns[c])) { v = kv.second; break; }
+        }
+        pk.values.push_back(v);
+    }
+    return pk;
+}
+
+} // namespace
+
+util::Result<void> OdbcConnection::append_blank(OdbcTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc append", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_columns(impl_->dbc, tbl); !d) return d.error();
+    }
+    tbl->staged.clear();
+    tbl->appending = true;
+    return util::Result<void>{};
+}
+
+util::Result<void> OdbcConnection::set_field(OdbcTable* tbl,
+                                             const std::string& name,
+                                             const std::string& value) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc set_field", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_columns(impl_->dbc, tbl); !d) return d.error();
+    }
+    const std::size_t idx = field_index_ci(*tbl, name);
+    if (idx == static_cast<std::size_t>(-1)) {
+        return util::Error{5063, 0, "column not found", name};
+    }
+    const std::string& sqlname = tbl->fields[idx].name;  // driver casing
+    for (auto& kv : tbl->staged) {
+        if (ci_equal(kv.first, sqlname)) { kv.second = value; return {}; }
+    }
+    tbl->staged.emplace_back(sqlname, value);
+    return util::Result<void>{};
+}
+
+util::Result<void> OdbcConnection::flush_table(OdbcTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc flush", ""};
+    }
+    const std::string& q = impl_->quote;
+
+    if (tbl->appending) {
+        if (tbl->staged.empty()) {
+            return util::Error{5001, 0, "append with no fields set",
+                               tbl->name};
+        }
+        std::string cols, marks;
+        std::vector<BoundParam> params;
+        for (std::size_t i = 0; i < tbl->staged.size(); ++i) {
+            if (i) { cols += ", "; marks += ", "; }
+            cols  += quote_ident(q, tbl->staged[i].first);
+            marks += "?";
+            params.push_back(param_for(*tbl, tbl->staged[i].first,
+                                       tbl->staged[i].second));
+        }
+        const std::string sql =
+            "INSERT INTO " + quote_ident(q, tbl->sql_table) +
+            " (" + cols + ") VALUES (" + marks + ")";
+        std::vector<std::vector<std::string>> rows;
+        std::vector<std::vector<bool>>        nulls;
+        if (auto r = run_query(impl_->dbc, sql, params, rows, nulls); !r) {
+            return r.error();
+        }
+    } else {
+        if (tbl->staged.empty()) return util::Result<void>{};  // no-op edit
+        if (!tbl->positioned || tbl->pos >= tbl->pk_snapshot.size()) {
+            return util::Error{5026, 0, "no current record to update", ""};
+        }
+        std::string sets;
+        std::vector<BoundParam> params;
+        for (std::size_t i = 0; i < tbl->staged.size(); ++i) {
+            if (i) sets += ", ";
+            sets += quote_ident(q, tbl->staged[i].first) + " = ?";
+            params.push_back(param_for(*tbl, tbl->staged[i].first,
+                                       tbl->staged[i].second));
+        }
+        const std::string where =
+            pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos], params);
+        const std::string sql =
+            "UPDATE " + quote_ident(q, tbl->sql_table) + " SET " + sets +
+            " WHERE " + where;
+        std::vector<std::vector<std::string>> rows;
+        std::vector<std::vector<bool>>        nulls;
+        if (auto r = run_query(impl_->dbc, sql, params, rows, nulls); !r) {
+            return r.error();
+        }
+    }
+
+    const OdbcTable::PkRow want = target_pk(*tbl, tbl->appending);
+    tbl->staged.clear();
+    tbl->appending = false;
+
+    if (auto s = load_pk_snapshot(impl_->dbc, q, tbl); !s) return s.error();
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
+    tbl->rec_count_cached = true;
+
+    std::size_t pos = static_cast<std::size_t>(-1);
+    for (std::size_t i = 0; i < tbl->pk_snapshot.size(); ++i) {
+        if (tbl->pk_snapshot[i] == want) { pos = i; break; }
+    }
+    if (pos != static_cast<std::size_t>(-1)) {
+        return load_current_row(impl_->dbc, q, tbl, pos);
+    }
+    tbl->positioned = false;
+    tbl->row_valid  = false;
+    return util::Result<void>{};
+}
+
+util::Result<void> OdbcConnection::delete_record(OdbcTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc delete", ""};
+    }
+    tbl->staged.clear();
+    tbl->appending = false;
+    if (!tbl->positioned || tbl->pos >= tbl->pk_snapshot.size()) {
+        return util::Error{5026, 0, "no current record to delete", ""};
+    }
+    const std::string& q = impl_->quote;
+    std::vector<BoundParam> params;
+    const std::string where =
+        pk_where_clause(q, *tbl, tbl->pk_snapshot[tbl->pos], params);
+    const std::string sql =
+        "DELETE FROM " + quote_ident(q, tbl->sql_table) + " WHERE " + where;
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::vector<bool>>        nulls;
+    if (auto r = run_query(impl_->dbc, sql, params, rows, nulls); !r) {
+        return r.error();
+    }
+
+    if (auto s = load_pk_snapshot(impl_->dbc, q, tbl); !s) return s.error();
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
+    tbl->rec_count_cached = true;
+    tbl->positioned = false;
+    tbl->row_valid  = false;
+    return util::Result<void>{};
 }
 
 } // namespace openads::sql_backend
