@@ -83,6 +83,8 @@ add_executable(openads_unit_tests
     unit/cdx_multilevel_test.cpp
     unit/cdx_multitag_2nd_test.cpp
     unit/cdx_prefix_seek_test.cpp
+    unit/cdx_reindex_char_test.cpp
+    unit/cdx_prev_empty_leaf_test.cpp
     unit/abi_memo_large_test.cpp
     unit/abi_ordsetfocus_test.cpp
     unit/abi_seek_empty_test.cpp
@@ -214,6 +216,7 @@ if(OPENADS_WITH_MSSQL)
         unit/abi_plus_mssql_connect_test.cpp
         unit/abi_plus_mssql_read_test.cpp
         unit/tds_protocol_test.cpp
+        unit/mssql_table_skip_test.cpp
         unit/mssql_uri_test.cpp
     )
 endif()

@@ -4619,6 +4619,22 @@ UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
         catch (...) { *plVal = 0; }
         return ok();
     }
+    // SQL backend (e.g. postgresql): read text via the per-backend ops
+    // vtable then parse. Mirrors the AdsGetDouble fix — without it a PG
+    // handle fell through to the native get_table() path and errored.
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->get_field) {
+            UNSIGNED8 buf[64] = {0};
+            UNSIGNED32 cap = sizeof(buf);
+            UNSIGNED32 rc = ops->get_field(hTable, pucField, buf, &cap, 0);
+            if (rc != 0) return rc;
+            std::string vstr(reinterpret_cast<const char*>(buf),
+                             std::min<UNSIGNED32>(cap, sizeof(buf)));
+            try { *plVal = static_cast<SIGNED32>(std::stol(vstr)); }
+            catch (...) { *plVal = 0; }
+            return ok();
+        }
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -4654,6 +4670,23 @@ UNSIGNED32 AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
         try { *pdVal = std::stod(vstr); }
         catch (...) { *pdVal = 0.0; }
         return ok();
+    }
+    // SQL backend (e.g. postgresql): read the field as text through the
+    // per-backend ops vtable, then parse the numeric. Without this branch a
+    // PG handle fell through to the native get_table() path below, which
+    // returns null for a non-native table -> AdsGetDouble yielded an error.
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->get_field) {
+            UNSIGNED8 buf[64] = {0};
+            UNSIGNED32 cap = sizeof(buf);
+            UNSIGNED32 rc = ops->get_field(hTable, pucField, buf, &cap, 0);
+            if (rc != 0) return rc;
+            std::string vstr(reinterpret_cast<const char*>(buf),
+                             std::min<UNSIGNED32>(cap, sizeof(buf)));
+            try { *pdVal = std::stod(vstr); }
+            catch (...) { *pdVal = 0.0; }
+            return ok();
+        }
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -5860,8 +5893,18 @@ UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
                         UNSIGNED16 usOption) {
-    // Remote cursor: delegate through AdsGetField which reads from the row cache.
-    if (get_remote_table(hTable) != nullptr) {
+    // Remote cursor OR a SQL backend (e.g. postgresql) that exposes a
+    // get_field op: delegate through AdsGetField (which already routes the
+    // remote row cache and the per-backend ops vtable) then apply the
+    // ADS_TRIM trailing-space behaviour AdsGetString promises. Without this
+    // a backend handle fell through to the native get_table path below and
+    // AdsGetString returned an error / empty string for SQL backends.
+    bool delegate = (get_remote_table(hTable) != nullptr);
+    if (!delegate) {
+        if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+            delegate = (ops->get_field != nullptr);
+    }
+    if (delegate) {
         UNSIGNED32 raw_len = (pulLen && *pulLen > 0) ? *pulLen : 65536;
         std::vector<UNSIGNED8> tmp(raw_len + 1, 0);
         if (AdsGetField(hTable, pucField, tmp.data(), &raw_len, usOption) != 0)
@@ -7482,8 +7525,27 @@ extern "C" {
 
 UNSIGNED32 AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
                           std::int64_t* pllValue) {
+    if (pllValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    // SQL backend (e.g. postgresql): read text via the per-backend ops
+    // vtable then parse, instead of falling through to the native path.
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->get_field) {
+            UNSIGNED8 buf[64] = {0};
+            UNSIGNED32 cap = sizeof(buf);
+            UNSIGNED32 rc = ops->get_field(hTable, pucField, buf, &cap, 0);
+            if (rc != 0) return rc;
+            std::string s(reinterpret_cast<const char*>(buf),
+                          std::min<UNSIGNED32>(cap, sizeof(buf)));
+            std::size_t j = 0;
+            while (j < s.size() &&
+                   std::isspace(static_cast<unsigned char>(s[j]))) ++j;
+            *pllValue = static_cast<std::int64_t>(
+                std::strtoll(s.c_str() + j, nullptr, 10));
+            return ok();
+        }
+    }
     Table* t = get_table(hTable);
-    if (!t || pllValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -9053,8 +9115,7 @@ UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
 
 UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
                              ADSHANDLE* phIndex) {
-    Table* t = get_table(hTable);
-    if (!t || phIndex == nullptr) {
+    if (phIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
     auto name = openads::abi::to_internal(pucName, 0);
@@ -9062,6 +9123,32 @@ UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
     // up to ADS_MAX_TAG_NAME before passing them to us).
     while (!name.empty() && (name.back() == ' ' || name.back() == '\0')) {
         name.pop_back();
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    // SQL backend (postgresql): resolve an already-open PG index by its
+    // tag/column name. AdsOpenIndex creates the PostgresIndex handle; this
+    // is the by-name lookup path the ORM uses after opening. A PG handle has
+    // no native Table*, so without this branch the function fell through to
+    // get_table() below and errored for every PG table. Match the tag the
+    // way postgres_open_index derives it (strip path + extension).
+    if (auto* st = get_postgres_table(hTable)) {
+        std::string tag = name;
+        const auto dot = tag.find_last_of("./\\");
+        if (dot != std::string::npos) tag = tag.substr(dot + 1);
+        const auto dot2 = tag.find('.');
+        if (dot2 != std::string::npos) tag = tag.substr(0, dot2);
+        for (auto& [h, si] : postgres_indexes_map()) {
+            if (si && si->parent == st && si->column == tag) {
+                *phIndex = h;
+                return ok();
+            }
+        }
+        return fail(openads::AE_INTERNAL_ERROR, "index name not found");
+    }
+#endif
+    Table* t = get_table(hTable);
+    if (!t) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
     }
     for (auto& [h, b] : index_bindings()) {
         if (b.table == t && b.tag_name == name) { *phIndex = h; return ok(); }

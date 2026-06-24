@@ -590,6 +590,38 @@ CdxIndex::encode_leaf_(std::uint32_t page_off,
     return {};
 }
 
+util::Result<void> CdxIndex::skip_empty_leaves_right_(
+    std::uint32_t& leaf,
+    std::vector<std::pair<std::string, std::uint32_t>>& out) {
+    while (true) {
+        auto dec = decode_leaf_(leaf);
+        if (!dec) return dec.error();
+        out = std::move(dec).value();
+        if (!out.empty()) return {};
+        auto pg = get_page_(leaf);
+        if (!pg) return pg.error();
+        std::uint32_t right = read_u32_le(pg.value()->data() + 8);
+        if (right == 0xFFFFFFFFu || right == 0) { out.clear(); return {}; }
+        leaf = right;
+    }
+}
+
+util::Result<void> CdxIndex::skip_empty_leaves_left_(
+    std::uint32_t& leaf,
+    std::vector<std::pair<std::string, std::uint32_t>>& out) {
+    while (true) {
+        auto dec = decode_leaf_(leaf);
+        if (!dec) return dec.error();
+        out = std::move(dec).value();
+        if (!out.empty()) return {};
+        auto pg = get_page_(leaf);
+        if (!pg) return pg.error();
+        std::uint32_t left = read_u32_le(pg.value()->data() + 4);
+        if (left == 0xFFFFFFFFu || left == 0) { out.clear(); return {}; }
+        leaf = left;
+    }
+}
+
 util::Result<SeekOutcome> CdxIndex::seek_first() {
     cur_leaf_   = 0;
     cur_index_  = -1;
@@ -620,9 +652,10 @@ util::Result<SeekOutcome> CdxIndex::seek_first() {
         }
     }
 
-    auto dec = decode_leaf_(cur_leaf_);
-    if (!dec) return dec.error();
-    cur_decoded_ = std::move(dec).value();
+    // Leftmost leaf may be empty (erase leaves holes); advance to the
+    // first non-empty leaf before positioning.
+    if (auto sk = skip_empty_leaves_right_(cur_leaf_, cur_decoded_); !sk)
+        return sk.error();
     if (cur_decoded_.empty()) {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
@@ -645,11 +678,14 @@ util::Result<SeekOutcome> CdxIndex::seek_last() {
         if (!pg) return pg.error();
         std::uint32_t right = read_u32_le(pg.value()->data() + 8);
         if (right == 0xFFFFFFFFu || right == 0) break;
-        cur_leaf_ = right;
-        auto dec = decode_leaf_(cur_leaf_);
-        if (!dec) return dec.error();
-        cur_decoded_ = std::move(dec).value();
-        if (cur_decoded_.empty()) break;
+        // Probe forward over any empty leaves; only move if a non-empty
+        // leaf remains, so holes don't cut the walk short of the true last.
+        std::uint32_t probe = right;
+        std::vector<std::pair<std::string, std::uint32_t>> nxt;
+        if (auto sk = skip_empty_leaves_right_(probe, nxt); !sk) return sk.error();
+        if (nxt.empty()) break;
+        cur_leaf_ = probe;
+        cur_decoded_ = std::move(nxt);
     }
     if (cur_decoded_.empty()) {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
@@ -721,9 +757,10 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
         std::uint32_t right = read_u32_le(pg.value()->data() + 8);
         if (right == 0xFFFFFFFFu || right == 0) break;
         cur_leaf_ = right;
-        auto dec = decode_leaf_(cur_leaf_);
-        if (!dec) return dec.error();
-        cur_decoded_ = std::move(dec).value();
+        // Skip over empty leaves (erase leaves holes) so the scan keeps
+        // finding live keys instead of stopping at the first hole.
+        if (auto sk = skip_empty_leaves_right_(cur_leaf_, cur_decoded_); !sk)
+            return sk.error();
         if (cur_decoded_.empty()) break;
     }
     // Search key was strictly greater than every key in the tree.
@@ -791,9 +828,10 @@ util::Result<SeekOutcome> CdxIndex::next() {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
     cur_leaf_ = right;
-    auto dec = decode_leaf_(cur_leaf_);
-    if (!dec) return dec.error();
-    cur_decoded_ = std::move(dec).value();
+    // Skip empty leaves (erase leaves holes) so SKIP(+1) lands on the
+    // next live key rather than falsely reporting end-of-index.
+    if (auto sk = skip_empty_leaves_right_(cur_leaf_, cur_decoded_); !sk)
+        return sk.error();
     if (cur_decoded_.empty()) {
         cur_index_ = -1;
         cur_state_ = CurState::AfterEnd;
@@ -846,9 +884,10 @@ util::Result<SeekOutcome> CdxIndex::prev() {
         return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     }
     cur_leaf_ = left;
-    auto dec = decode_leaf_(cur_leaf_);
-    if (!dec) return dec.error();
-    cur_decoded_ = std::move(dec).value();
+    // Skip over empty leaves (erase leaves holes) so SKIP(-1) lands on the
+    // previous live key rather than falsely reporting begin-of-index.
+    if (auto sk = skip_empty_leaves_left_(cur_leaf_, cur_decoded_); !sk)
+        return sk.error();
     if (cur_decoded_.empty()) {
         cur_index_ = -1;
         cur_state_ = CurState::BeforeBegin;
