@@ -152,6 +152,14 @@ std::string Table::compute_index_key_(const drivers::IIndex* idx) const {
         evaluate_index_expr_number(const_cast<Table&>(*this), expr, d);
         return fox_numeric_key(d);
     }
+    // Numeric NTX keys are native zero-padded fixed-width text (negatives
+    // byte-complemented). Build them here so the write path and the engine's
+    // own seek-after-write stay byte-identical to what a native reader expects.
+    if (idx->key_encoding() == drivers::KeyEncoding::NtxNumeric) {
+        double d = 0.0;
+        evaluate_index_expr_number(const_cast<Table&>(*this), expr, d);
+        return ntx_numeric_key(d, idx->key_length(), idx->key_decimals());
+    }
     // Compound expressions (UPPER(NAME), STR(AGE,3), concatenation,
     // SUBSTR, ...) handled by engine/index_expr.cpp. Bare field-name
     // expressions short-circuit there to the legacy raw-bytes path so

@@ -710,4 +710,33 @@ std::string fox_numeric_key(double value) {
     return std::string(reinterpret_cast<char*>(o), 8);
 }
 
+std::string ntx_numeric_key(double value, std::uint16_t width,
+                            std::uint16_t dec) {
+    if (value == 0.0) value = 0.0;          // normalise -0.0 to +0.0
+    const bool neg = value < 0.0;
+    // Zero-padded fixed-width magnitude, e.g. N(8,0) 42 -> "00000042",
+    // N(12,2) 13.50 -> "000000013.50". printf is length-bounded; the
+    // buffer covers the widest xBase numeric field (255) + sign + point + NUL.
+    char buf[280];
+    int n = std::snprintf(buf, sizeof(buf), "%0*.*f",
+                          static_cast<int>(width), static_cast<int>(dec),
+                          neg ? -value : value);
+    std::string out;
+    if (n < 0) {
+        out.assign(width, '0');
+    } else {
+        out.assign(buf, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                              sizeof(buf) - 1));
+    }
+    // A magnitude wider than the field overflows the slot; keep the low
+    // `width` bytes so the key stays the field width (native truncation).
+    if (out.size() > width) out = out.substr(out.size() - width);
+    if (neg) {
+        for (char& c : out)
+            c = static_cast<char>(0x5c -
+                static_cast<unsigned char>(c));
+    }
+    return out;
+}
+
 } // namespace openads::engine
