@@ -1,0 +1,8 @@
+build_env.local.bat
+*.exe
+openace64.dll
+ace64.dll
+data_dbf/
+data_adt/
+data_stress/
+*.log

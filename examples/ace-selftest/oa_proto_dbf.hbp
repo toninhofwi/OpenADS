@@ -1,0 +1,27 @@
+# oa_proto_dbf.hbp - DBF/CDX/FPT + OpenADS ACE (standalone, sem RDD)
+# Build: build_dbf.bat
+
+-w3
+-gtstd
+
+oa_ace.prg
+oa_proto_common.prg
+oa_proto_dbf.prg
+
+-i"${OPENADS_INCLUDE}"
+-ldflag=${OPENADS_LIB64}
+
+-lws2_32
+-lwsock32
+-ladvapi32
+-luser32
+-lkernel32
+
+-ldflag=/NODEFAULTLIB:msvcrt
+-ldflag=/NODEFAULTLIB:libucrt
+-ldflag=/NODEFAULTLIB:libvcruntime.lib
+-ldflag=/FORCE:MULTIPLE
+-L"${MSVC_UCRT_X64}"
+-lucrt
+-lvcruntime
+-llegacy_stdio_definitions

@@ -1,0 +1,27 @@
+# oa_stress_cdx.hbp - stress CDX inchamento (ACE direto)
+# Build: build_stress_cdx.bat
+
+-w3
+-gtstd
+
+oa_ace.prg
+oa_proto_common.prg
+oa_stress_cdx.prg
+
+-i"${OPENADS_INCLUDE}"
+-ldflag=${OPENADS_LIB64}
+
+-lws2_32
+-lwsock32
+-ladvapi32
+-luser32
+-lkernel32
+
+-ldflag=/NODEFAULTLIB:msvcrt
+-ldflag=/NODEFAULTLIB:libucrt
+-ldflag=/NODEFAULTLIB:libvcruntime.lib
+-ldflag=/FORCE:MULTIPLE
+-L"${MSVC_UCRT_X64}"
+-lucrt
+-lvcruntime
+-llegacy_stdio_definitions
