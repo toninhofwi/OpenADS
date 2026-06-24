@@ -34,12 +34,12 @@ set "HBP=grid_orm.hbp"
 >>"%HBP%" echo -w3
 >>"%HBP%" echo grid_orm.prg
 rem  every .prg from the ORM src (works with the full hb_orm2)
-for %%P in ("%OADS_ORM_SRC%\*.prg") do >>"%HBP%" echo %%~fP
->>"%HBP%" echo -I%OADS_ORM_SRC%\..\include
->>"%HBP%" echo -I%OPENADS_INCDIR%
+for %%P in ("%OADS_ORM_SRC%\*.prg") do >>"%HBP%" echo "%%~fP"
+>>"%HBP%" echo "-I%OADS_ORM_SRC%\..\include"
+>>"%HBP%" echo "-I%OPENADS_INCDIR%"
 rem --- FiveWin ---
->>"%HBP%" echo -i%FWDIR64%\include
->>"%HBP%" echo -L%FWDIR64%\lib
+>>"%HBP%" echo "-i%FWDIR64%\include"
+>>"%HBP%" echo "-L%FWDIR64%\lib"
 >>"%HBP%" echo -lFiveH64
 >>"%HBP%" echo -lFiveHC64
 >>"%HBP%" echo xhb.hbc
@@ -71,7 +71,7 @@ rem --- Windows system libraries FWH needs ---
 >>"%HBP%" echo -lshlwapi
 rem --- the engine + sqlite3 (hb_orm2's direct driver) ---
 >>"%HBP%" echo -lrddads
->>"%HBP%" echo -L%OPENADS_LIB%
+>>"%HBP%" echo "-L%OPENADS_LIB%"
 >>"%HBP%" echo -l%OPENADS_ACELIB%
 >>"%HBP%" echo -lsqlite3
 rem --- CRT compat ---
