@@ -7,6 +7,14 @@ the real ACE SDK.
 
 ## 1.2.1 — 2026-06-24
 
+- **NTX numeric key format fix (PR #67).** Numeric fields indexed
+  into an NTX bag now store keys in the native DBFNTX form
+  (zero-padded magnitude + complemented negatives) instead of
+  space-padded `STR()` text at a probed width. A native xBase
+  reader's `dbSeek(<number>)` now matches the on-disk key for
+  positive, decimal, and negative values. Reopened index bags retain
+  the numeric encoding. `abi_ntx_numeric_key_test` asserts the
+  native byte layout; full unit suite 720/720, 0 regression.
 - Added unit tests: adm_memo, codepage, maria_uri, postgres_uri,
   proc, sqlite_uri (710 new lines, 706/706 tests pass).
 - Remote benchmark docs: iMac WiFi (784K rec/s) and charleskwon.com

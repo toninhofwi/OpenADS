@@ -195,6 +195,13 @@ ARIES-lite.
 
 ### Motor
 
+- **Formato de chave numérica NTX** — campos numéricos indexados
+  em um bolso NTX agora armazenam chaves no formato nativo DBFNTX
+  (magnitudo preenchida com zeros + negativos complementados) em
+  vez de texto `STR()` preenchido com espaços. A busca nativa
+  `dbSeek(<number>)` de um lector xBase agora corresponde à chave
+  em disco. Bolsos de índice reabertos retêm a codificação
+  numérica. (PR #67)
 - **`dbSeek` numérico** — rddads envia tipo de chave
   `ADS_STRING` para buscas numéricas; o motor agora lida com
   isso corretamente.
