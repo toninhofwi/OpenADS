@@ -41,6 +41,18 @@ util::Result<std::string>
 // — the FOR clause then degrades to "include all").
 bool evaluate_index_expr_truthy(Table& t, const std::string& expr);
 
+// Evaluate `expr` against the current record and, if it yields a numeric
+// value, return true and set `out`. Used to build FoxPro/Harbour binary
+// numeric index keys (8-byte order-preserving) for CDX. Returns false for
+// string-valued expressions (e.g. STR(...), bare character fields).
+bool evaluate_index_expr_number(Table& t, const std::string& expr, double& out);
+
+// Encode a double as the 8-byte order-preserving key FoxPro / Harbour store
+// for numeric and date CDX keys (HB_DBL2ORD). The result compares correctly
+// byte-for-byte (unsigned) in ascending numeric order, so the CDX B+tree —
+// which compares keys as opaque bytes — needs no type awareness.
+std::string fox_numeric_key(double value);
+
 // Drop `ALIAS->` workarea qualifiers from a key/FOR expression so a
 // bare `FIELD->NAME` resolves to the plain field name `NAME`. Used by
 // the evaluator (write side) and by the ABI seek path so a numeric

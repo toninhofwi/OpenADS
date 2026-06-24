@@ -53,6 +53,9 @@ public:
     util::Result<SeekOutcome> prev()       override;
     std::string current_key() const override { return current_key_; }
 
+    KeyEncoding key_encoding() const override { return key_enc_; }
+    void set_key_encoding(KeyEncoding e) override { key_enc_ = e; }
+
     void invalidate_cursor() override {
         cur_state_ = CurState::Initial;
         cur_index_ = -1;
@@ -175,6 +178,7 @@ private:
     std::uint8_t                            index_sig_ = 0x01;
     bool                                    unique_    = false;
     bool                                    descend_   = false;
+    KeyEncoding                             key_enc_   = KeyEncoding::Text;
     std::string                             key_expr_;
     std::string                             tag_name_;
     std::uint64_t                           file_size_ = 0;
