@@ -4619,6 +4619,22 @@ UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
         catch (...) { *plVal = 0; }
         return ok();
     }
+    // SQL backend (e.g. postgresql): read text via the per-backend ops
+    // vtable then parse. Mirrors the AdsGetDouble fix — without it a PG
+    // handle fell through to the native get_table() path and errored.
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->get_field) {
+            UNSIGNED8 buf[64] = {0};
+            UNSIGNED32 cap = sizeof(buf);
+            UNSIGNED32 rc = ops->get_field(hTable, pucField, buf, &cap, 0);
+            if (rc != 0) return rc;
+            std::string vstr(reinterpret_cast<const char*>(buf),
+                             std::min<UNSIGNED32>(cap, sizeof(buf)));
+            try { *plVal = static_cast<SIGNED32>(std::stol(vstr)); }
+            catch (...) { *plVal = 0; }
+            return ok();
+        }
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
@@ -4654,6 +4670,23 @@ UNSIGNED32 AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
         try { *pdVal = std::stod(vstr); }
         catch (...) { *pdVal = 0.0; }
         return ok();
+    }
+    // SQL backend (e.g. postgresql): read the field as text through the
+    // per-backend ops vtable, then parse the numeric. Without this branch a
+    // PG handle fell through to the native get_table() path below, which
+    // returns null for a non-native table -> AdsGetDouble yielded an error.
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->get_field) {
+            UNSIGNED8 buf[64] = {0};
+            UNSIGNED32 cap = sizeof(buf);
+            UNSIGNED32 rc = ops->get_field(hTable, pucField, buf, &cap, 0);
+            if (rc != 0) return rc;
+            std::string vstr(reinterpret_cast<const char*>(buf),
+                             std::min<UNSIGNED32>(cap, sizeof(buf)));
+            try { *pdVal = std::stod(vstr); }
+            catch (...) { *pdVal = 0.0; }
+            return ok();
+        }
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -5860,8 +5893,18 @@ UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
                         UNSIGNED16 usOption) {
-    // Remote cursor: delegate through AdsGetField which reads from the row cache.
-    if (get_remote_table(hTable) != nullptr) {
+    // Remote cursor OR a SQL backend (e.g. postgresql) that exposes a
+    // get_field op: delegate through AdsGetField (which already routes the
+    // remote row cache and the per-backend ops vtable) then apply the
+    // ADS_TRIM trailing-space behaviour AdsGetString promises. Without this
+    // a backend handle fell through to the native get_table path below and
+    // AdsGetString returned an error / empty string for SQL backends.
+    bool delegate = (get_remote_table(hTable) != nullptr);
+    if (!delegate) {
+        if (auto* ops = openads::abi::backend_table_ops_for(hTable))
+            delegate = (ops->get_field != nullptr);
+    }
+    if (delegate) {
         UNSIGNED32 raw_len = (pulLen && *pulLen > 0) ? *pulLen : 65536;
         std::vector<UNSIGNED8> tmp(raw_len + 1, 0);
         if (AdsGetField(hTable, pucField, tmp.data(), &raw_len, usOption) != 0)
@@ -7395,8 +7438,27 @@ extern "C" {
 
 UNSIGNED32 AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
                           std::int64_t* pllValue) {
+    if (pllValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    // SQL backend (e.g. postgresql): read text via the per-backend ops
+    // vtable then parse, instead of falling through to the native path.
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->get_field) {
+            UNSIGNED8 buf[64] = {0};
+            UNSIGNED32 cap = sizeof(buf);
+            UNSIGNED32 rc = ops->get_field(hTable, pucField, buf, &cap, 0);
+            if (rc != 0) return rc;
+            std::string s(reinterpret_cast<const char*>(buf),
+                          std::min<UNSIGNED32>(cap, sizeof(buf)));
+            std::size_t j = 0;
+            while (j < s.size() &&
+                   std::isspace(static_cast<unsigned char>(s[j]))) ++j;
+            *pllValue = static_cast<std::int64_t>(
+                std::strtoll(s.c_str() + j, nullptr, 10));
+            return ok();
+        }
+    }
     Table* t = get_table(hTable);
-    if (!t || pllValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
