@@ -6331,6 +6331,23 @@ void mark_cdx_key_encoding(Table* t, openads::drivers::IIndex* idx) {
     }
 }
 
+// Re-mark a reopened NTX index NtxNumeric so a later append writes the native
+// zero-padded numeric key. The create path marks it via set_numeric_format; a
+// reopen through AdsOpenIndex must restore the flag (open() already reads the
+// width + decimal count back from the NTX header). No-op for character keys.
+void mark_ntx_key_encoding(Table* t, openads::drivers::IIndex* idx) {
+    if (t == nullptr || idx == nullptr) return;
+    const std::string bare =
+        openads::engine::strip_alias_qualifiers(idx->expression());
+    std::int32_t fi = t->field_index(bare);
+    if (fi < 0) return;
+    using FT = openads::drivers::DbfFieldType;
+    FT ft = t->field_descriptor(static_cast<std::uint16_t>(fi)).type;
+    if (ft == FT::Numeric || ft == FT::Float) {
+        idx->set_key_encoding(openads::drivers::KeyEncoding::NtxNumeric);
+    }
+}
+
 bool path_ends_with_ci(const std::string& s, const char* suffix) {
     auto n = std::strlen(suffix);
     if (s.size() < n) return false;
@@ -6522,6 +6539,8 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             return fail(r.error());
         }
         std::string tag_name = idx->name();
+        if (path_ends_with_ci(path, ".ntx"))
+            mark_ntx_key_encoding(t, idx.get());
         ADSHANDLE h = next_index_handle();
         if (!table_has_active) {
             t->set_order(std::move(idx));
@@ -6862,10 +6881,42 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         }
     }
 
+    // NTX numeric keys: a native xBase NTX stores a numeric field's key as
+    // fixed-width, right-justified ASCII = STR(value, fieldLen, fieldDec),
+    // and records the decimal count in the index header. The key stays
+    // TEXT (unlike the compound-index 8-byte binary form), but the width
+    // and decimals MUST come from the field descriptor, not from a probed
+    // key length (which is wrong/empty on an empty table). Detect a bare
+    // ASCII-stored numeric field (N / F) so the index width is pinned to
+    // the field length and the decimals land in the header. VFP binary
+    // numerics (I/B/Y) are not ASCII on disk — left for a follow-up.
+    bool          ntx_numeric_key  = false;
+    std::uint16_t ntx_num_width     = 0;
+    std::uint16_t ntx_num_dec       = 0;
+    if (!is_cdx && !is_adi) {
+        const std::string bare = openads::engine::strip_alias_qualifiers(expr);
+        std::int32_t fi = t->field_index(bare);
+        if (fi >= 0) {
+            using FT = openads::drivers::DbfFieldType;
+            const auto& fd =
+                t->field_descriptor(static_cast<std::uint16_t>(fi));
+            if ((fd.type == FT::Numeric || fd.type == FT::Float) &&
+                fd.length > 0) {
+                ntx_numeric_key = true;
+                ntx_num_width   = fd.length;
+                ntx_num_dec     = static_cast<std::uint16_t>(fd.decimals);
+            }
+        }
+    }
+
     // Determine key length by evaluating the expression against the
-    // first live record. Empty tables get a 32-char default.
-    std::uint16_t klen = cdx_numeric_key ? 8 : 32;
-    if (!cdx_numeric_key && t->record_count() > 0) {
+    // first live record. Empty tables get a 32-char default. Numeric
+    // CDX keys use the 8-byte binary width; numeric NTX keys use the
+    // field's own width so the on-disk key matches the native reader.
+    std::uint16_t klen = cdx_numeric_key ? 8
+                       : ntx_numeric_key ? ntx_num_width
+                       : 32;
+    if (!cdx_numeric_key && !ntx_numeric_key && t->record_count() > 0) {
         if (auto g = t->goto_record(1); g) {
             auto k = openads::engine::evaluate_index_expr(*t, expr, 254);
             if (k) {
@@ -7000,8 +7051,19 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         auto created = openads::drivers::ntx::NtxIndex::create(
             p.string(), tag, expr, klen, unique, descend);
         if (!created) return fail(created.error());
-        idx_owner = std::make_unique<openads::drivers::ntx::NtxIndex>(
+        auto ntx_owner = std::make_unique<openads::drivers::ntx::NtxIndex>(
             std::move(created).value());
+        // Pin the key geometry to the numeric field descriptor so the
+        // on-disk key is the native fixed-width STR(value,width,dec) form
+        // (and the header carries the decimal count) — independent of any
+        // probed key length, which is absent on an empty table.
+        if (ntx_numeric_key) {
+            if (auto sf = ntx_owner->set_numeric_format(
+                    ntx_num_width, ntx_num_dec); !sf) {
+                return fail(sf.error());
+            }
+        }
+        idx_owner = std::move(ntx_owner);
     }
     // Mark a numeric CDX index FoxNumeric so every key-build path (this
     // create loop, the engine's sync_all_indexes_, seek) emits the 8-byte
@@ -7027,6 +7089,13 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                 return fail(openads::AE_INTERNAL_ERROR,
                             "failed to evaluate numeric index expression");
             kbytes = openads::engine::fox_numeric_key(dv);
+        } else if (ntx_numeric_key) {
+            double dv = 0.0;
+            if (!openads::engine::evaluate_index_expr_number(*t, expr, dv))
+                return fail(openads::AE_INTERNAL_ERROR,
+                            "failed to evaluate numeric index expression");
+            kbytes = openads::engine::ntx_numeric_key(dv, ntx_num_width,
+                                                      ntx_num_dec);
         } else {
             auto k = openads::engine::evaluate_index_expr(*t, expr, klen);
             if (!k) return fail(k.error());
@@ -7285,6 +7354,15 @@ UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
             return fail(openads::AE_INTERNAL_ERROR,
                         "failed to evaluate numeric index expression");
         kb = openads::engine::fox_numeric_key(dv);
+    } else if (idx->key_encoding() ==
+               openads::drivers::KeyEncoding::NtxNumeric) {
+        double dv = 0.0;
+        if (!openads::engine::evaluate_index_expr_number(
+                *t, idx->expression(), dv))
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "failed to evaluate numeric index expression");
+        kb = openads::engine::ntx_numeric_key(dv, idx->key_length(),
+                                              idx->key_decimals());
     } else {
         auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
         if (!k) return fail(k.error());
@@ -7318,6 +7396,15 @@ UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex) {
             return fail(openads::AE_INTERNAL_ERROR,
                         "failed to evaluate numeric index expression");
         kb = openads::engine::fox_numeric_key(dv);
+    } else if (idx->key_encoding() ==
+               openads::drivers::KeyEncoding::NtxNumeric) {
+        double dv = 0.0;
+        if (!openads::engine::evaluate_index_expr_number(
+                *t, idx->expression(), dv))
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "failed to evaluate numeric index expression");
+        kb = openads::engine::ntx_numeric_key(dv, idx->key_length(),
+                                              idx->key_decimals());
     } else {
         auto k = openads::engine::evaluate_index_expr(*t, idx->expression(), klen);
         if (!k) return fail(k.error());
@@ -9303,12 +9390,23 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
         dk_idx != nullptr &&
         dk_idx->key_encoding() == openads::drivers::KeyEncoding::FoxNumeric &&
         u16KeyLen == sizeof(double);
+    const bool dk_ntxnum =
+        dk_idx != nullptr &&
+        dk_idx->key_encoding() == openads::drivers::KeyEncoding::NtxNumeric &&
+        u16KeyLen == sizeof(double);
     if (dk_foxnum) {
         // Numeric CDX key: encode the seek value the same 8-byte
         // order-preserving way the stored keys were written.
         double dv = 0;
         std::memcpy(&dv, pucKey, sizeof(double));
         key = openads::engine::fox_numeric_key(dv);
+    } else if (dk_ntxnum) {
+        // Numeric NTX key: encode the seek value the same native zero-padded
+        // (negatives byte-complemented) way the stored keys were written.
+        double dv = 0;
+        std::memcpy(&dv, pucKey, sizeof(double));
+        key = openads::engine::ntx_numeric_key(dv, dk_idx->key_length(),
+                                               dk_idx->key_decimals());
     } else if (dk_idx != nullptr && dk_numeric && u16KeyLen == sizeof(double)) {
         double dv = 0;
         std::memcpy(&dv, pucKey, sizeof(double));
