@@ -1,6 +1,7 @@
 #include "doctest.h"
 #include "openads/ace.h"
 #include "openads/error.h"
+#include "test_dd_make.h"
 
 #include <algorithm>
 #include <array>
@@ -66,10 +67,9 @@ void make_dbf1(const fs::path& p, const char* val) {
         static_cast<std::streamsize>(file.size()));
 }
 
-// Write a text-format DD file.
+// Create a DD file from a body of text-format lines.
 void write_dd(const fs::path& p, const std::string& body) {
-    std::ofstream f(p);
-    f << "# OpenADS Data Dictionary v1\n" << body;
+    openads_test::make_dd(p, body);
 }
 
 // Run a SELECT and return record count from the cursor.
