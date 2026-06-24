@@ -1,0 +1,23 @@
+# ads_engine_sap.hbp - SAP ADS engine bench (link ace64)
+-w3
+-iwlib_local
+ads_engine_bench.prg
+-lrddads
+-L"${ACE64_LIB_PATH}"
+-lace64
+-lws2_32
+-lwsock32
+-ladvapi32
+-luser32
+-lkernel32
+-lole32
+-loleaut32
+-luuid
+-ldflag=/NODEFAULTLIB:msvcrt
+-ldflag=/NODEFAULTLIB:libucrt
+-ldflag=/NODEFAULTLIB:libvcruntime.lib
+-ldflag=/FORCE:MULTIPLE
+-L"${MSVC_UCRT_X64}"
+-lucrt
+-lvcruntime
+-llegacy_stdio_definitions

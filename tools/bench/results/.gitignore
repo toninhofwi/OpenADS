@@ -1,0 +1,7 @@
+# Generated benchmark artifacts — produced by local runs, may embed absolute
+# machine paths. Never commit; regenerate from the harness instead.
+*.log
+*.json
+*.pdf
+# keep the directory tracked
+!.gitignore

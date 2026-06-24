@@ -1,0 +1,2 @@
+PROCEDURE N_Nil()
+RETURN

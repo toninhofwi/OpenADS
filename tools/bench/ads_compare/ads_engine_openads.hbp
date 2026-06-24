@@ -1,0 +1,22 @@
+# ads_engine_openads.hbp - OpenADS engine bench (link openace64)
+-w3
+-iwlib_local
+ads_engine_bench.prg
+-lrddads
+-ldflag=${OPENACE64_LIB}
+-lws2_32
+-lwsock32
+-ladvapi32
+-luser32
+-lkernel32
+-lole32
+-loleaut32
+-luuid
+-ldflag=/NODEFAULTLIB:msvcrt
+-ldflag=/NODEFAULTLIB:libucrt
+-ldflag=/NODEFAULTLIB:libvcruntime.lib
+-ldflag=/FORCE:MULTIPLE
+-L"${MSVC_UCRT_X64}"
+-lucrt
+-lvcruntime
+-llegacy_stdio_definitions

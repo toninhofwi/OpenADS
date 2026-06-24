@@ -1,0 +1,5 @@
+bin/
+*.exe
+engine_*.hbp
+build.log
+build_prep.log
