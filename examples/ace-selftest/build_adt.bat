@@ -51,6 +51,9 @@ echo [OK] oa_proto_adt.exe
 
 echo [SMOKE] ACE ADT...
 rd /s /q data_adt 2>nul
+if defined OPENADS_DLL64 if exist "%OPENADS_DLL64%" (
+    copy /y "%OPENADS_DLL64%" "%OA_PROTO_ROOT%\" >nul
+)
 oa_proto_adt.exe data_adt 2>&1 | findstr /c:"ACE API" >nul
 if errorlevel 1 (
     echo [ERRO] exe compilado nao e versao ACE - verifique fontes em disco

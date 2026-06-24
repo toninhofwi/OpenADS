@@ -35,7 +35,12 @@ static int oa_open_struct_bag( ADSHANDLE hTable )
    pDot  = strrchr( pBase, '.' );
    if( pDot != NULL )
       *pDot = '\0';
-   strcat( pBase, ".cdx" );
+   {
+      /* ADT tables keep their structural index in a .adi bag, DBF in .cdx. */
+      UNSIGNED16 usTableType = ADS_CDX;
+      AdsGetTableType( hTable, &usTableType );
+      strcat( pBase, usTableType == ADS_ADT ? ".adi" : ".cdx" );
+   }
    if( AdsOpenIndex( hTable, ( UNSIGNED8 * ) pBase, aHandles, &usLen ) != 0 )
       return 0;
    return ( int ) usLen;
@@ -195,13 +200,14 @@ HB_FUNC( OAA_WRITEREC )
 HB_FUNC( OAA_SETSTR )
 {
    const char * szField = hb_parc( 2 );
+   const char * szVal   = hb_parc( 3 );
    UNSIGNED32   ulRc    = 1;
 
    if( szField )
       ulRc = AdsSetString( ( ADSHANDLE ) hb_parnint( 1 ),
                            ( UNSIGNED8 * ) szField,
-                           ( UNSIGNED8 * ) hb_parc( 3 ),
-                           ( UNSIGNED32 ) hb_parclen( 3 ) );
+                           ( UNSIGNED8 * ) ( szVal ? szVal : "" ),
+                           ( UNSIGNED32 ) ( szVal ? hb_parclen( 3 ) : 0 ) );
    hb_retl( ulRc == 0 );
 }
 
@@ -218,11 +224,14 @@ HB_FUNC( OAA_SETNUM )
 
 HB_FUNC( OAA_GETSTR )
 {
-   ADSHANDLE  hTable = ( ADSHANDLE ) hb_parnint( 1 );
-   UNSIGNED32 ulLen  = 8192;
-   char *     pBuf   = ( char * ) hb_xgrab( ulLen + 1 );
-   UNSIGNED32 ulRc   = AdsGetField( hTable, ( UNSIGNED8 * ) hb_parc( 2 ),
-                                    ( UNSIGNED8 * ) pBuf, &ulLen, 0 );
+   ADSHANDLE    hTable  = ( ADSHANDLE ) hb_parnint( 1 );
+   const char * szField = hb_parc( 2 );
+   UNSIGNED32   ulLen   = 8192;
+   char *       pBuf    = ( char * ) hb_xgrab( ulLen + 1 );
+   UNSIGNED32   ulRc    = szField
+      ? AdsGetField( hTable, ( UNSIGNED8 * ) szField,
+                     ( UNSIGNED8 * ) pBuf, &ulLen, 0 )
+      : 1;
 
    if( ulRc == 0 )
    {
@@ -322,6 +331,16 @@ HB_FUNC( OAA_RECNO )
    UNSIGNED32 ulRec = 0;
    AdsGetRecordNum( ( ADSHANDLE ) hb_parnint( 1 ), 0, &ulRec );
    hb_retnl( ( long ) ulRec );
+}
+
+/* Make the given index the table's active order, so subsequent
+ * GotoTop / Skip walk in key order rather than physical record order.
+ * Args: (hTable, hIndex). */
+HB_FUNC( OAA_SETORDER )
+{
+   hb_retl( AdsSetIndexOrderByHandle(
+               ( ADSHANDLE ) hb_parnint( 1 ),
+               ( ADSHANDLE ) hb_parnint( 2 ) ) == 0 );
 }
 
 #pragma ENDDUMP

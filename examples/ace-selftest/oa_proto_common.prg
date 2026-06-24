@@ -147,7 +147,9 @@ FUNCTION OaLimparBanco( cTable, aExts, lRemote, cDataDir )
    NEXT
 
    IF ! lRemote .AND. ! Empty( cDataDir )
-      cOrfao := OaTablePath( cDataDir, ".cdx", .F. )
+      // ADT tables keep their structural index in .adi, DBF in .cdx.
+      cOrfao := OaTablePath( cDataDir, ;
+                  IIf( AScan( aExts, ".adi" ) > 0, ".adi", ".cdx" ), .F. )
       IF File( cOrfao )
          FErase( cOrfao )
       ENDIF
@@ -255,7 +257,7 @@ FUNCTION OaPopulate( nRows, cMemoTag )
          RETURN n - 1
       ENDIF
       OAA_SETNUM( s_hTable, "ID", n )
-      OAA_SETSTR( s_hTable, "NOME", aN[ n ] )
+      OAA_SETSTR( s_hTable, "NOME", aN[ 1 + ( ( n - 1 ) % Len( aN ) ) ] )
       OAA_SETSTR( s_hTable, "CIDADE", cCid )
       OAA_SETNUM( s_hTable, "VALOR", nVal )
       OAA_SETSTR( s_hTable, "OBS", cMemo )
@@ -323,21 +325,31 @@ RETURN OaFindByIdNome( nId, cNome )
 FUNCTION OaWalkIndex( cTag, nMax )
 
    LOCAL n := 0
-   LOCAL nRec, nLast := OAA_RECORDCOUNT( s_hTable )
+   LOCAL hIdx := OaIndexHandle( cTag )
 
    hb_Default( @nMax, 5 )
 
    ? ""
    ? "--- Walk indice " + cTag + " (primeiros " + LTrim( Str( nMax ) ) + ") ---"
 
-   FOR nRec := 1 TO nLast
-      IF n >= nMax
-         EXIT
-      ENDIF
-      OAA_GOTO( s_hTable, nRec )
-      n++
-      OaShowRec( LTrim( Str( n ) ) + ")" )
-   NEXT
+   // Activate this tag as the table's order so GotoTop/Skip traverse in
+   // KEY order (not physical record order). Falls back to a physical scan
+   // if the order can't be set.
+   IF hIdx > 0 .AND. OAA_SETORDER( s_hTable, hIdx )
+      OAA_GOTOP( s_hTable )
+      DO WHILE ! OAA_EOF( s_hTable ) .AND. n < nMax
+         n++
+         OaShowRec( LTrim( Str( n ) ) + ")" )
+         OAA_SKIP( s_hTable, 1 )
+      ENDDO
+   ELSE
+      ? "  (ordem indisponivel - scan fisico)"
+      DO WHILE n < OAA_RECORDCOUNT( s_hTable ) .AND. n < nMax
+         OAA_GOTO( s_hTable, n + 1 )
+         n++
+         OaShowRec( LTrim( Str( n ) ) + ")" )
+      ENDDO
+   ENDIF
 
 RETURN n
 
@@ -399,7 +411,8 @@ RETURN .F.
 FUNCTION OaUpdateFields( aPairs )
    LOCAL i, n := Len( aPairs )
 
-   FOR i := 1 TO n STEP 2
+   // Step in field/value pairs; n-1 guards against an odd-length array.
+   FOR i := 1 TO n - 1 STEP 2
       IF ValType( aPairs[ i + 1 ] ) == "N"
          OAA_SETNUM( s_hTable, aPairs[ i ], aPairs[ i + 1 ] )
       ELSE
