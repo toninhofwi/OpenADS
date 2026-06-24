@@ -6,7 +6,7 @@ nav_order: 0
 permalink: /es/novedades/
 ---
 
-# Novedades (v1.0.0-rc29 → v1.0.3)
+# Novedades (v1.0.0-rc29 → v1.2.2)
 
 Esta página resume los cambios más destacados desde la versión
 v1.0.0-rc29. Para el historial completo de commits, consulta el
@@ -197,6 +197,26 @@ ARIES-lite.
 
 ### Motor
 
+- **Caminado de hojas vacías CDX** — los caminados hacia adelante
+  y hacia atrás del índice ahora saltan hojas vacías dejadas por
+  `erase()`. Corrige `ADSCDX/5000` en REINDEX / borrado masivo.
+  (PR #63)
+- **Bits de recno en hoja CDX** — `compute_layout` dimensiona el
+  campo de número de registro desde `max_rec`, no solo la longitud
+  de clave, para que las tags con claves anchas (≥40 bytes) ya no
+  truncuen recnos ≥ 4096. (PR #62)
+- **Búsqueda parcial CDX** — `seek_key` compara solo la longitud
+  de la clave de búsqueda, para que búsquedas parciales como
+  `SEEK "ART-00024800"` coincidan con claves almacenadas
+  `"ART-00024800 desc ..."`. (PR #62)
+- **SKIP hacia atrás MSSQL** — error por uno: `abs_n == pos` ahora
+  llega a la fila 0 en lugar de reportar BOF. (PR #65)
+- **Getters tipados ABI para backends SQL** — `AdsGetDouble`/`Long`/
+  `LongLong`/`String` despachan a través del vtable de ops del
+  backend, para que PostgreSQL devuelva valores reales. (PR #66)
+- **`AdsGetIndexHandle` para backends SQL** — resuelve por nombre
+  para tablas PG para que la búsqueda por índice funcione
+  extremo a extremo. (PR #66)
 - **Formato de clave numérica NTX** — los campos numéricos
   indexados en un bolsillo NTX ahora almacenan claves en el formato
   nativo DBFNTX (magnitud rellenada con ceros + negativos

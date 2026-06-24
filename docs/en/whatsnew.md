@@ -6,7 +6,7 @@ nav_order: 0
 permalink: /en/whatsnew/
 ---
 
-# What's New (v1.0.0-rc29 → v1.0.3)
+# What's New (v1.0.0-rc29 → v1.2.2)
 
 This page summarises the most notable changes since the
 v1.0.0-rc29 release. For the full commit-by-commit history see
@@ -182,6 +182,22 @@ records, completing the ARIES-lite recovery model.
 
 ### Engine
 
+- **CDX empty-leaf walk** — forward and backward index walks now
+  skip empty leaves left behind by `erase()`. Fixes REINDEX /
+  bulk-delete `ADSCDX/5000`. (PR #63)
+- **CDX leaf recno bits** — `compute_layout` sizes the
+  record-number field from `max_rec`, not just key length, so
+  wide-key tags no longer truncate recnos ≥ 4096. (PR #62)
+- **CDX prefix seek** — `seek_key` compares only the search-key
+  length, so partial seeks like `SEEK "ART-00024800"` match stored
+  `"ART-00024800 desc ..."` keys. (PR #62)
+- **MSSQL backward SKIP** — off-by-one: `abs_n == pos` now reaches
+  row 0 instead of reporting BOF. (PR #65)
+- **ABI typed getters for SQL backends** — `AdsGetDouble`/`Long`/`
+  LongLong`/`String` dispatch through the backend ops vtable, so
+  PostgreSQL returns real values. (PR #66)
+- **`AdsGetIndexHandle` for SQL backends** — resolves by-name for
+  PG tables so indexed seek works end-to-end. (PR #66)
 - **NTX numeric key format** — numeric fields indexed into an NTX
   bag now store keys in the native DBFNTX form (zero-padded
   magnitude + complemented negatives) instead of space-padded
@@ -295,12 +311,13 @@ records, completing the ARIES-lite recovery model.
 
 ## Testing
 
-- **564 unit tests** passing across all platforms (48 127
+- **738 unit tests** passing across all platforms (349 231
   assertions).
-- New test files: `abi_adi_create_test.cpp` (ADI create,
-  multi-tag, populated skip/seek) and
-  `abi_adt_scope_validation_test.cpp` (create-from-zero, dual-tag
-  seek, memo round-trip, stress append, remote wire, serverd
-  subprocess).
-- Wilson NTX index smoke test added.
+- New test files: `abi_ntx_numeric_edge_test.cpp` (NTX numeric
+  edge cases: -0.0, clamping, complement, custom key),
+  `cdx_empty_tree_test.cpp` (empty tree, all-erased tree, exact
+  prefix, descending prefix), `abi_ntx_numeric_key_test.cpp`,
+  `cdx_reindex_char_test.cpp`, `cdx_prev_empty_leaf_test.cpp`,
+  `cdx_multitag_2nd_test.cpp`, `cdx_prefix_seek_test.cpp`,
+  `mssql_table_skip_test.cpp`.
 - Harbour demo in `examples/adt-native/` (by glokcode).

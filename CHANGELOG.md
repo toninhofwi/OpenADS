@@ -5,6 +5,44 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.2.2 — 2026-06-24
+
+- **CDX empty-leaf walk fix (PR #63).** Forward and backward
+  index walks now skip empty leaves left behind by `erase()`.
+  Previously, `seek_first`/`seek_key`/`next` stopped at the first
+  empty hole and `prev` followed the left-sibling pointer into it,
+  reporting end-of-index while live keys remained in later (or
+  earlier) leaves. A shared `skip_empty_leaves_right_` /
+  `skip_empty_leaves_left_` helper advances over holes. Fixes
+  REINDEX / bulk-delete `ADSCDX/5000` (record number out of range).
+- **CDX leaf recno bits + prefix seek (PR #62).** Two correctness
+  fixes: (1) `compute_layout` now sizes the record-number field
+  from `max_rec` (not just key length), so tags with wide keys
+  (≥40 bytes) no longer silently truncate recnos ≥ 4096; (2)
+  `seek_key` compares only the search-key length, so a partial
+  (prefix) seek like `SEEK "ART-00024800"` matches a stored
+  `"ART-00024800 desc ..."` key. A guard refuses encode when
+  `max_rec > rec_mask`, failing loudly at write time.
+- **MSSQL backward SKIP off-by-one (PR #65).** `MssqlTable::skip`
+  used `abs_n >= pos` for the backward branch, so a SKIP landing
+  exactly on row 0 reported BOF. Changed to `>` so `abs_n == pos`
+  reaches index 0 (a valid row).
+- **ABI typed getters + AdsGetIndexHandle for SQL backends
+  (PR #66).** `AdsGetDouble`/`AdsGetLong`/`AdsGetLongLong`/`
+  AdsGetString` now dispatch through the per-backend ops vtable,
+  so PostgreSQL (and other SQL backends) return real values instead
+  of error 5000. `AdsGetIndexHandle` resolves by-name for PG
+  tables so indexed seek works end-to-end.
+- **NTX numeric key edge-case tests.** `ntx_numeric_key()` pure
+  function now tested for -0.0 normalisation, width/dec clamping,
+  negative byte-complement, and large-value truncation. Custom-key
+  add/delete on numeric NTX index covered.
+- **CDX empty-tree + prefix-seek edge tests.** Empty tree
+  (seek_first/seek_last/seek_key return AfterEnd), all-erased tree
+  (forward walk crosses empty leaves), exact-length prefix match,
+  and descending prefix seek.
+- Full unit suite **738/738**, 0 regression (was 726).
+
 ## 1.2.1 — 2026-06-24
 
 - **NTX numeric key format fix (PR #67).** Numeric fields indexed
