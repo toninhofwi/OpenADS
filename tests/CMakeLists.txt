@@ -249,3 +249,12 @@ target_link_libraries(probe_cdx2 PRIVATE openads_core)
 add_executable(dbf_cdx_bench bench/dbf_cdx_bench.cpp)
 target_include_directories(dbf_cdx_bench PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(dbf_cdx_bench PRIVATE openads_ace)
+
+# Remote benchmark: tcp:// to iMac server
+add_executable(remote_bench bench/remote_bench.cpp)
+target_include_directories(remote_bench PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(remote_bench PRIVATE openads_ace)
+
+add_executable(remote_test bench/remote_test.cpp)
+target_include_directories(remote_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(remote_test PRIVATE openads_ace)

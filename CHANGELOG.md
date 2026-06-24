@@ -15,7 +15,9 @@ the real ACE SDK.
   called explicitly (or on table close). 500K records + CDX index
   build completes in ~26 seconds (19s bulk insert at 26,381 rec/s +
   7.2s CDX build + 36ms final flush) vs. ~2.7 hours before
-  (50 rec/s). 649/649 unit tests pass; backward-compatible —
+  (50 rec/s). Remote benchmark (Windows client → iMac server over
+  WiFi tcp://): 500K records in 0.69s at 784K rec/s — 36× faster
+  than local mode. 649/649 unit tests pass; backward-compatible —
   default behaviour is unchanged (flush on every write).
 
 - **MSSQL native TDS 7.4 backend (PR #53 integration).** Native
