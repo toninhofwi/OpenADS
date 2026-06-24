@@ -18,6 +18,7 @@ abstraction to wade through:
 | [`odbc/`](odbc/) | any ODBC engine | `odbc://Driver={...};...` | `OPENADS_WITH_ODBC` + a driver/DSN |
 | [`complete/`](complete/) | **all of the above** | each via its URI | opens every configured back-end |
 | [`advanced/`](advanced/) | SQLite | `sqlite://./demo_advanced.db` | the **next-revision** ORM sources |
+| [`fivewin/`](fivewin/) | DBF (grid) | a folder path | **FiveWin 64** (commercial) — the ORM cursor in an xBrowse |
 
 > **ADT tables?** The stable ORM's navigational open targets the DBF/CDX
 > table type, so an ADT (`.adt`) example lives in the **console track**
