@@ -816,6 +816,13 @@ NtxIndex::set_numeric_format(std::uint16_t width, std::uint16_t dec) {
             "set_numeric_format on non-empty NTX index", ""};
     }
     if (width == 0) return {};
+    // A 1024-byte NTX page must hold the forced minimum of 4 keys; an item is
+    // width+8 bytes plus a 2-byte offset slot, so 4*(width+10) must fit in
+    // NTX_PAGE_SIZE-2. Beyond width 245 that overflows the page on insert.
+    if (width > 245) {
+        return util::Error{5000, 0,
+            "NTX numeric key width exceeds the page limit (max 245)", ""};
+    }
 
     // Recompute geometry exactly as create() does, but from the field
     // width instead of the probed / default key size.

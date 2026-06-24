@@ -6900,7 +6900,8 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             using FT = openads::drivers::DbfFieldType;
             const auto& fd =
                 t->field_descriptor(static_cast<std::uint16_t>(fi));
-            if (fd.type == FT::Numeric || fd.type == FT::Float) {
+            if ((fd.type == FT::Numeric || fd.type == FT::Float) &&
+                fd.length > 0) {
                 ntx_numeric_key = true;
                 ntx_num_width   = fd.length;
                 ntx_num_dec     = static_cast<std::uint16_t>(fd.decimals);

@@ -714,10 +714,17 @@ std::string ntx_numeric_key(double value, std::uint16_t width,
                             std::uint16_t dec) {
     if (value == 0.0) value = 0.0;          // normalise -0.0 to +0.0
     const bool neg = value < 0.0;
+    // Clamp the format spec: an xBase numeric field is at most 255 wide, and
+    // a runaway `dec` (or one wider than the field) would make snprintf spin
+    // and overflow the buffer. The result is always normalised to exactly
+    // `width` bytes below, so a clamped seek key still compares correctly.
+    if (width > 255) width = 255;
+    if (dec > width) dec = width;
+    if (dec > 30)    dec = 30;
     // Zero-padded fixed-width magnitude, e.g. N(8,0) 42 -> "00000042",
-    // N(12,2) 13.50 -> "000000013.50". printf is length-bounded; the
-    // buffer covers the widest xBase numeric field (255) + sign + point + NUL.
-    char buf[280];
+    // N(12,2) 13.50 -> "000000013.50". The buffer covers width 255 plus a
+    // very large integer part (huge seek values), sign, point and NUL.
+    char buf[1024];
     int n = std::snprintf(buf, sizeof(buf), "%0*.*f",
                           static_cast<int>(width), static_cast<int>(dec),
                           neg ? -value : value);
@@ -728,9 +735,15 @@ std::string ntx_numeric_key(double value, std::uint16_t width,
         out.assign(buf, std::min<std::size_t>(static_cast<std::size_t>(n),
                                               sizeof(buf) - 1));
     }
-    // A magnitude wider than the field overflows the slot; keep the low
-    // `width` bytes so the key stays the field width (native truncation).
-    if (out.size() > width) out = out.substr(out.size() - width);
+    // Normalise to EXACTLY `width` bytes: pad short results (snprintf
+    // truncation) with leading zeros, and keep the low `width` bytes of an
+    // over-wide magnitude. The caller copies `width` bytes, so the key must
+    // never be shorter than that.
+    if (out.size() < width) {
+        out.insert(0, static_cast<std::size_t>(width) - out.size(), '0');
+    } else if (out.size() > width) {
+        out = out.substr(out.size() - width);
+    }
     if (neg) {
         for (char& c : out)
             c = static_cast<char>(0x5c -
