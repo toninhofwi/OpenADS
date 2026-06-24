@@ -1040,3 +1040,117 @@ TEST_CASE("Enterprise pool: OPENADS_SERVER_POOL=1 serves the full wire dispatch"
     srv.stop();
     fs::remove_all(dir, ec);
 }
+
+// ADS-unique: server-side SQL exec returns a CURSOR backed by a per-session
+// parallel ABI connection (AdsConnect60 + AdsCreateSQLStatement). Under the
+// reactor that abi_conn/abi_stmt is created and used on ONE worker thread, so
+// this proves the pool preserves the SQL statement/cursor affinity.
+TEST_CASE("Enterprise pool: server-side SQL SELECT cursor over the pooled path") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_pool_sql";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB", "CCCC"});
+
+    srv_set_pool_env("1");
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    srv_set_pool_env("");
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()), dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    SUBCASE("SELECT * returns a 3-row cursor and the first row reads back") {
+        UNSIGNED8 sql[64];
+        std::strcpy(reinterpret_cast<char*>(sql), "SELECT * FROM data.dbf");
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        UNSIGNED32 cnt = 0;
+        REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+        CHECK(cnt == 3);
+        REQUIRE(AdsGotoTop(hCur) == 0);
+        UNSIGNED8 buf[16] = {0};
+        UNSIGNED32 cap = sizeof(buf);
+        REQUIRE(AdsGetField(hCur, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
+        std::string s((char*)buf, cap);
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        CHECK(s == "AAAA");
+        REQUIRE(AdsCloseTable(hCur) == 0);
+    }
+    SUBCASE("SELECT COUNT(*) is a single-row aggregate cursor") {
+        UNSIGNED8 sql[64];
+        std::strcpy(reinterpret_cast<char*>(sql),
+                    "SELECT COUNT(*) FROM data.dbf");
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        UNSIGNED32 cnt = 0;
+        REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+        CHECK(cnt == 1);
+        REQUIRE(AdsCloseTable(hCur) == 0);
+    }
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    CHECK(srv.active_session_threads() == 0u);   // served by the pool
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+// ADS-unique: AOF (Advantage Optimized Filter) is a server-side filter held in
+// the session's engine table state. Through the pool that state must stay on
+// the connection's worker and not leak across connections.
+TEST_CASE("Enterprise pool: AOF server-side filter over the pooled path") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_pool_aof";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB", "CCCC"});
+
+    srv_set_pool_env("1");
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    srv_set_pool_env("");
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()), dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hT = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hT) == 0);
+
+    UNSIGNED8 cond[32] = "TAG = 'BBBB'";
+    REQUIRE(AdsSetAOF(hT, cond, 0) == 0);
+    REQUIRE(AdsGotoTop(hT) == 0);
+    UNSIGNED32 rn = 0;
+    REQUIRE(AdsGetRecordNum(hT, 0, &rn) == 0);
+    CHECK(rn == 2);                       // only the BBBB row passes the filter
+    REQUIRE(AdsClearAOF(hT) == 0);
+    REQUIRE(AdsGotoTop(hT) == 0);
+    REQUIRE(AdsGetRecordNum(hT, 0, &rn) == 0);
+    CHECK(rn == 1);                       // filter cleared → full table again
+
+    REQUIRE(AdsCloseTable(hT) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}

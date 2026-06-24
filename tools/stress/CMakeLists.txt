@@ -32,3 +32,14 @@ if(NOT WIN32)
     find_package(Threads REQUIRED)
     target_link_libraries(openads_remote_stress PRIVATE Threads::Threads)
 endif()
+
+# Randomized soak harness: per-client random mix of scan / SELECT / AOF /
+# batch / reconnect, for OFF-vs-ON correctness parity under churn.
+add_executable(openads_remote_random remote_random_main.cpp)
+target_link_libraries(openads_remote_random PRIVATE openads_core)
+target_include_directories(openads_remote_random PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+if(NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(openads_remote_random PRIVATE Threads::Threads)
+endif()
