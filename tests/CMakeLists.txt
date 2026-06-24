@@ -81,6 +81,8 @@ add_executable(openads_unit_tests
     unit/abi_reindex_test.cpp
     unit/ntx_multilevel_test.cpp
     unit/cdx_multilevel_test.cpp
+    unit/cdx_reindex_char_test.cpp
+    unit/cdx_prev_empty_leaf_test.cpp
     unit/abi_memo_large_test.cpp
     unit/abi_ordsetfocus_test.cpp
     unit/abi_seek_empty_test.cpp
