@@ -38,6 +38,17 @@ public:
     DispatchResult dispatch(const Frame& f);
     std::uint64_t  id() const noexcept { return sid_; }
 
+    // Read one frame off this connection, dispatch it, write any reply,
+    // and fold in the per-frame telemetry. Returns false when the
+    // connection should be torn down (peer closed, write failed, or the
+    // opcode asked to close). Drives both the legacy thread-per-connection
+    // loop and the reactor WorkerPool, so the per-frame contract lives in
+    // exactly one place.
+    bool handle_readable();
+
+    // Accessor for the reactor: the connection socket this Session owns.
+    Socket socket() const noexcept { return s_; }
+
 private:
     Server*       srv_;
     Socket        s_;

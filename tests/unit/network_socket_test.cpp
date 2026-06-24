@@ -21,6 +21,9 @@ using openads::network::Frame;
 using openads::network::Opcode;
 using openads::network::encode_frame;
 using openads::network::decode_frame;
+using openads::network::PollItem;
+using openads::network::PollEvent;
+using openads::network::socket_poll;
 
 TEST_CASE("M12.2 listen / connect / send / recv round-trip a frame") {
     ListenerOptions opts;
@@ -73,4 +76,46 @@ TEST_CASE("M12.2 listen / connect / send / recv round-trip a frame") {
     std::string got(dec.value().payload.begin(),
                     dec.value().payload.end());
     CHECK(got == hello);
+}
+
+TEST_CASE("socket_poll reports a readable socket and times out cleanly") {
+    auto l = listen_tcp({"127.0.0.1", 0, 16});
+    REQUIRE(l.has_value());
+    auto port = socket_local_port(l.value());
+    REQUIRE(port.has_value());
+    auto c = connect_tcp("127.0.0.1", port.value());
+    REQUIRE(c.has_value());
+    auto a = accept_one(l.value());
+    REQUIRE(a.has_value());
+    Socket cs = c.value();
+    Socket as = a.value();
+
+    // Nothing sent yet: poll on the accepted socket times out (0 ready).
+    {
+        std::vector<PollItem> items{
+            {as, static_cast<std::uint8_t>(PollEvent::Readable)}};
+        auto n = socket_poll(items, 100);
+        REQUIRE(n.has_value());
+        CHECK(n.value() == 0);
+        CHECK((items[0].events &
+               static_cast<std::uint8_t>(PollEvent::Readable)) == 0);
+    }
+
+    // Send a byte from the client; the accepted socket becomes readable.
+    const std::uint8_t msg[1] = {42};
+    auto sent = sock_send(cs, msg, 1);
+    REQUIRE(sent.has_value());
+    {
+        std::vector<PollItem> items{
+            {as, static_cast<std::uint8_t>(PollEvent::Readable)}};
+        auto n = socket_poll(items, 1000);
+        REQUIRE(n.has_value());
+        CHECK(n.value() == 1);
+        CHECK((items[0].events &
+               static_cast<std::uint8_t>(PollEvent::Readable)) != 0);
+    }
+
+    sock_close(cs);
+    sock_close(as);
+    sock_close(l.value());
 }

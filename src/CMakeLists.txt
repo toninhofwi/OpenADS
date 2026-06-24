@@ -55,6 +55,7 @@ add_library(openads_core STATIC
     network/wire.cpp
     network/server.cpp
     network/session.cpp
+    network/worker_pool.cpp
     network/client.cpp
     mgmt/mg_collector.cpp
     network/mg_wire.cpp

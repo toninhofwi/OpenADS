@@ -62,6 +62,9 @@ EnterpriseConfig load_from_env() {
     c.server_max_sessions   = env_u32("OPENADS_SERVER_MAX_SESSIONS", 500);
     c.server_listen_backlog = env_u32("OPENADS_SERVER_BACKLOG", 256);
 
+    c.server_pool_enabled = env_bool("OPENADS_SERVER_POOL", false);
+    c.server_pool_workers = env_u32("OPENADS_SERVER_POOL_WORKERS", 0);
+
     c.lock_retry_count    = env_u32("OPENADS_LOCK_RETRY_COUNT", 50);
     c.lock_retry_cycle_ms = env_u32("OPENADS_LOCK_RETRY_MS", 100);
     return c;
@@ -91,6 +94,14 @@ bool enterprise_pool_sqlite_enabled() noexcept {
 bool enterprise_pool_oledb_enabled() noexcept {
     if (!enterprise_pool_enabled()) return false;
     return env_bool("OPENADS_POOL_OLEDB_ENABLED", true);
+}
+
+bool enterprise_server_pool_enabled() noexcept {
+    return env_bool("OPENADS_SERVER_POOL", false);
+}
+
+std::uint32_t enterprise_server_pool_workers() noexcept {
+    return env_u32("OPENADS_SERVER_POOL_WORKERS", 0);
 }
 
 } // namespace openads::sql_backend

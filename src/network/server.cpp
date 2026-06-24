@@ -7,6 +7,7 @@
 #include "mgmt/mg_stats.h"
 #include "network/mg_wire.h"
 #include "network/session.h"
+#include "network/worker_pool.h"
 #include "platform/proc.h"
 #include "openads/ace.h"
 #include "openads/error.h"
@@ -121,6 +122,8 @@ util::Result<void> write_frame(ITransport& t, const Frame& f) {
     }
     return {};
 }
+
+Server::Server() = default;
 
 Server::~Server() { stop(); }
 
@@ -288,6 +291,15 @@ util::Result<void> Server::start(const std::string& host,
     openads::mgmt::process_mg_stats().start_time =
         std::chrono::system_clock::now();
     running_.store(true);
+    // Enterprise step 3 — if the sharded-reactor pool is enabled, stand it up
+    // before the accept loop so accept_loop hands sockets to it. Env-read (not
+    // the cached config singleton) so it is honored even when the singleton was
+    // already materialized earlier in the process.
+    if (openads::sql_backend::enterprise_server_pool_enabled()) {
+        pool_ = std::make_unique<WorkerPool>(
+            *this, openads::sql_backend::enterprise_server_pool_workers());
+        pool_->start();
+    }
     accept_thread_ = std::thread([this]() { this->accept_loop(); });
     return {};
 }
@@ -306,6 +318,12 @@ void Server::stop() noexcept {
     }
     sock_close(listener_);
     if (accept_thread_.joinable()) accept_thread_.join();
+    // Enterprise step 3 — tear the reactor pool down (joins its workers, which
+    // close + unregister every live session). No-op in the legacy path.
+    if (pool_) {
+        pool_->stop();
+        pool_.reset();
+    }
     // Wake any session thread blocked in recv() by closing its socket from the
     // outside (same mechanism kill_session uses). Without this, a client that
     // connected but never sent another frame leaves its session thread parked
@@ -351,6 +369,19 @@ void Server::accept_loop() {
             break;
         }
         Socket s = cli.value();
+        // Enterprise step 3 — sharded-reactor path: hand the socket to the
+        // least-loaded worker instead of spawning a per-connection thread.
+        // The cap counts live pooled connections rather than session threads.
+        if (pool_) {
+            if (max_sessions_ != 0 &&
+                pool_->live_connections() >= max_sessions_) {
+                rejected_sessions_.fetch_add(1);
+                sock_close(s);
+                continue;
+            }
+            pool_->submit(s);
+            continue;
+        }
         // Reap threads whose session_loop already returned so the live set
         // stays bounded on a long-running server.
         reap_finished_threads_();
@@ -407,26 +438,10 @@ std::uint32_t Server::active_session_threads() const {
 }
 
 void Server::session_loop(Socket s) {
+    // The per-frame contract (read → dispatch → reply → telemetry) lives in
+    // Session::handle_readable so the reactor WorkerPool shares it verbatim.
     Session sess(*this, s);
-    while (true) {
-        auto fr = read_frame(s);
-        if (!fr) break;
-        this->touch_session(sess.id(), true, false);
-        {
-            auto& mgst = openads::mgmt::process_mg_stats();
-            mgst.packets_in.fetch_add(1, std::memory_order_relaxed);
-            mgst.bytes_in.fetch_add(fr.value().payload.size() + 5,
-                                    std::memory_order_relaxed);
-        }
-        auto res = sess.dispatch(fr.value());
-        if (res.reply) {
-            if (auto wr = write_frame(s, *res.reply); !wr) break;
-            openads::mgmt::process_mg_stats()
-                .packets_out.fetch_add(1, std::memory_order_relaxed);
-            this->touch_session(sess.id(), false, true);
-        }
-        if (res.close_session) break;
-    }
+    while (sess.handle_readable()) {}
     sock_close(s);
 }
 

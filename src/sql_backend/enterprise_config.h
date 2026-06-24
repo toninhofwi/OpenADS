@@ -39,6 +39,13 @@ struct EnterpriseConfig {
     std::uint32_t server_max_sessions   = 500;
     std::uint32_t server_listen_backlog = 256;
 
+    // Enterprise step 3 — wire-server connection pool (sharded reactor).
+    // When enabled, the server multiplexes connections over a fixed pool of
+    // worker threads instead of one thread per connection. Default OFF (the
+    // thread-per-connection path is unchanged) until proven by stress.
+    bool          server_pool_enabled = false;   // OPENADS_SERVER_POOL
+    std::uint32_t server_pool_workers = 0;        // 0 = hardware_concurrency
+
     std::uint32_t lock_retry_count = 50;
     std::uint32_t lock_retry_cycle_ms = 100;
 
@@ -58,5 +65,12 @@ bool enterprise_pool_enabled() noexcept;
 bool enterprise_pool_odbc_enabled() noexcept;
 bool enterprise_pool_sqlite_enabled() noexcept;
 bool enterprise_pool_oledb_enabled() noexcept;
+
+// Wire-server pool toggles — also re-read env per call so tests can flip
+// them without rebuilding the cached singleton.
+//   OPENADS_SERVER_POOL          (default 0/off)
+//   OPENADS_SERVER_POOL_WORKERS  (default 0 = hardware_concurrency)
+bool          enterprise_server_pool_enabled() noexcept;
+std::uint32_t enterprise_server_pool_workers() noexcept;
 
 } // namespace openads::sql_backend

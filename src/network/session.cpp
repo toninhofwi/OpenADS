@@ -84,6 +84,28 @@ Session::~Session() {
     srv_->unregister_session(sid_);
 }
 
+bool Session::handle_readable() {
+    auto fr = read_frame(s_);
+    if (!fr) return false;                        // peer closed / read error
+    srv_->touch_session(sid_, true, false);
+    {
+        // M9.25 — inbound comm telemetry. +5 accounts for the 4-byte
+        // length prefix + 1-byte opcode of the wire framing.
+        auto& mgst = openads::mgmt::process_mg_stats();
+        mgst.packets_in.fetch_add(1, std::memory_order_relaxed);
+        mgst.bytes_in.fetch_add(fr.value().payload.size() + 5,
+                                std::memory_order_relaxed);
+    }
+    auto res = dispatch(fr.value());
+    if (res.reply) {
+        if (auto wr = write_frame(s_, *res.reply); !wr) return false;
+        openads::mgmt::process_mg_stats()
+            .packets_out.fetch_add(1, std::memory_order_relaxed);
+        srv_->touch_session(sid_, false, true);
+    }
+    return !res.close_session;
+}
+
 void Session::cleanup() {
     for (auto& [id, h] : cursor_tbls_) {
         (void)AdsCloseTable(h);

@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -945,4 +946,97 @@ TEST_CASE("Server::build_mg_snapshot counts live sessions") {
 
     srv.unregister_session(id);
     srv.stop();
+}
+
+namespace {
+void srv_set_pool_env(const char* v) {
+#ifdef _WIN32
+    _putenv_s("OPENADS_SERVER_POOL", v);
+#else
+    if (v[0] == '\0') ::unsetenv("OPENADS_SERVER_POOL");
+    else               ::setenv("OPENADS_SERVER_POOL", v, 1);
+#endif
+}
+std::uint32_t srv_rd_u32(const std::vector<std::uint8_t>& p) {
+    return  static_cast<std::uint32_t>(p[0])        |
+           (static_cast<std::uint32_t>(p[1]) <<  8) |
+           (static_cast<std::uint32_t>(p[2]) << 16) |
+           (static_cast<std::uint32_t>(p[3]) << 24);
+}
+}  // namespace
+
+TEST_CASE("Enterprise pool: OPENADS_SERVER_POOL=1 serves the full wire dispatch") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_pool_dispatch";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB", "CCCC"});
+
+    srv_set_pool_env("1");
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    srv_set_pool_env("");   // clear so only THIS server runs pooled
+
+    auto cli = connect_tcp("127.0.0.1", srv.port());
+    REQUIRE(cli.has_value());
+    Socket cs = cli.value();
+
+    auto pushlen = [](std::vector<std::uint8_t>& out, std::uint16_t n) {
+        out.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
+    };
+
+    // Hello -> HelloAck through the pooled path.
+    {
+        Frame req; req.opcode = Opcode::Hello;
+        REQUIRE(write_frame(cs, req).has_value());
+        auto r = read_frame(cs);
+        REQUIRE(r.has_value());
+        CHECK(r.value().opcode == Opcode::HelloAck);
+    }
+    // Connect -> ConnectAck (per-session Connection state lives in the pool).
+    {
+        Frame req; req.opcode = Opcode::Connect;
+        std::string ds = dir.string();
+        pushlen(req.payload, static_cast<std::uint16_t>(ds.size()));
+        req.payload.insert(req.payload.end(), ds.begin(), ds.end());
+        pushlen(req.payload, 0);
+        pushlen(req.payload, 0);
+        REQUIRE(write_frame(cs, req).has_value());
+        auto r = read_frame(cs);
+        REQUIRE(r.has_value());
+        CHECK(r.value().opcode == Opcode::ConnectAck);
+    }
+    // OpenTable + GetRecordCount — exercises per-session table state on a worker.
+    std::uint32_t tid = 0;
+    {
+        Frame req; req.opcode = Opcode::OpenTable;
+        std::string leaf = "data.dbf";
+        req.payload.assign(leaf.begin(), leaf.end());
+        REQUIRE(write_frame(cs, req).has_value());
+        auto r = read_frame(cs);
+        REQUIRE(r.has_value());
+        REQUIRE(r.value().opcode == Opcode::OpenTableAck);
+        tid = srv_rd_u32(r.value().payload);
+    }
+    {
+        Frame req; req.opcode = Opcode::GetRecordCount;
+        req.payload.push_back(static_cast<std::uint8_t>( tid        & 0xFFu));
+        req.payload.push_back(static_cast<std::uint8_t>((tid >>  8) & 0xFFu));
+        req.payload.push_back(static_cast<std::uint8_t>((tid >> 16) & 0xFFu));
+        req.payload.push_back(static_cast<std::uint8_t>((tid >> 24) & 0xFFu));
+        REQUIRE(write_frame(cs, req).has_value());
+        auto r = read_frame(cs);
+        REQUIRE(r.has_value());
+        REQUIRE(r.value().opcode == Opcode::GetRecordCountAck);
+        CHECK(srv_rd_u32(r.value().payload) == 3u);
+    }
+
+    // No per-connection session thread was spawned: the pool served it.
+    CHECK(srv.active_session_threads() == 0u);
+
+    sock_close(cs);
+    srv.stop();
+    fs::remove_all(dir, ec);
 }
