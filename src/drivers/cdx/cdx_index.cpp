@@ -152,6 +152,18 @@ encode_compact_leaf_static(
     const std::uint32_t trl_mask = L.tc_mask;
     const std::uint8_t  key_bytes = L.req_byte;
 
+    // Fail loud instead of silently truncating. compute_layout grows the
+    // record-number field to fit max_rec, but that width is capped at the
+    // 5-byte struct-tag layout (and req_byte_override fixes it outright).
+    // If the resulting rn_bits cannot represent the largest recno on this
+    // page, `recno & rec_mask` below would drop the high bits and corrupt
+    // the index silently. Refuse the encode instead — a 5000 here is far
+    // better than an out-of-range recno surfacing on a later ordered walk.
+    if (max_rec > rec_mask) {
+        return util::Error{5000, 0,
+            "CDX leaf encode: record number exceeds index capacity", ""};
+    }
+
     std::fill(p.begin(), p.end(), std::uint8_t{0});
     write_u16_le(p.data() + 0, CDX_NODE_LEAF);
     write_u16_le(p.data() + 2, static_cast<std::uint16_t>(keys.size()));
