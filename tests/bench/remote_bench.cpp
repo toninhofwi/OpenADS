@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
     if (argc > 3) port = atoi(argv[3]);
 
     char uri[256];
-    snprintf(uri, sizeof(uri), "tcp://%s:%d//Users/anto/OpenADS/bench_data", host, port);
+    snprintf(uri, sizeof(uri), "tcp://%s:%d//home/antonio/OpenADS/bench_data", host, port);
     fprintf(stderr, "Connecting to %s ...\n", uri);
 
     double t_total0 = now_ms();

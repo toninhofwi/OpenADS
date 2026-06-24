@@ -169,6 +169,10 @@ add_executable(openads_unit_tests
     unit/abi_sql_system_tables_test.cpp
     unit/abi_sql_dd_sql_test.cpp
     unit/abi_no_current_record_test.cpp
+    unit/codepage_test.cpp
+    unit/adm_memo_test.cpp
+    unit/sqlite_uri_test.cpp
+    unit/proc_test.cpp
 )
 
 if(OPENADS_WITH_POSTGRESQL)
@@ -178,6 +182,8 @@ if(OPENADS_WITH_POSTGRESQL)
     unit/abi_plus_odbc_read_test.cpp
     unit/abi_plus_odbc_seek_test.cpp
     unit/odbc_uri_test.cpp
+    unit/postgres_uri_test.cpp
+    unit/maria_uri_test.cpp
         unit/abi_plus_postgres_seek_test.cpp
     unit/abi_plus_mariadb_seek_test.cpp
     )
