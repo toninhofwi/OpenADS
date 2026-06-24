@@ -21,6 +21,8 @@ Current release: **v1.1.0**.
 - **[What's New](whatsnew/)** — summary of changes since
   v1.0.0-rc29 (SQLite driver, triggers, DA-Web, ADI write, and
   more).
+- **[Project History](history/)** — how OpenADS grew from a
+  minimal skeleton into a full ADS-compatible engine (868 commits).
 - **[Getting started](getting-started/)** — install, first build,
   smoke test.
 - **[Architecture](architecture/)** — five-layer architecture
