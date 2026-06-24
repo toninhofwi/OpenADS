@@ -5,6 +5,15 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.2.1 — 2026-06-24
+
+- Added unit tests: adm_memo, codepage, maria_uri, postgres_uri,
+  proc, sqlite_uri (710 new lines, 706/706 tests pass).
+- Remote benchmark docs: iMac WiFi (784K rec/s) and charleskwon.com
+  SSH tunnel (676K rec/s) with 500K-record results.
+- Removed IMAC_CONNECTION.md from tracking (contains credentials).
+- ORM examples synced to v1.1.0-alpha.
+
 ## 1.2.0 — 2026-06-24
 
 - **Deferred-flush bulk-insert mode (528× speedup).** A new
