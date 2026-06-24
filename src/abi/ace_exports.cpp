@@ -2929,12 +2929,20 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     s.conns.emplace(h, std::move(holder));
     *phConnect = h;
     rddads_default_connection() = h;
-    // Return a non-fatal warning when the DD has SAP-written ACL permissions
-    // that must be imported before OpenADS can enforce them.  The connection
-    // handle IS valid; callers should disconnect, run openads_import_dd, and
-    // reconnect to the imported copy.
-    if (raw->has_dd() && raw->dd()->has_sap_permissions())
-        return openads::AE_SAP_PERMS_NEED_IMPORT;
+    // Reject connections to SAP proprietary binary .add files.  OpenADS
+    // can read them (load_add_binary_) but cannot safely write them back
+    // (format is closed and permission fields are encrypted).  Direct the
+    // caller to run the import_dd tool to produce an OpenADS-format DD.
+    if (raw->has_dd() && raw->dd()->has_sap_permissions()) {
+        s.conns.erase(h);   // destroys the Connection object
+        s.registry.release(h);
+        *phConnect = ADS_INVALID_HANDLE;
+        return fail(openads::AE_SAP_PERMS_NEED_IMPORT,
+            "This is a SAP Advantage Data Dictionary in proprietary binary format. "
+            "OpenADS cannot open it directly. "
+            "Run: import_dd <source.add> <dest.add>  "
+            "to convert it to OpenADS format, then connect to the converted file.");
+    }
     return ok();
 }
 

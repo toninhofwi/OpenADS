@@ -343,8 +343,10 @@ public:
     bool has_table_acl(const std::string& table) const noexcept {
         return table_perms_.find(table) != table_perms_.end();
     }
-    // Always returns false (no SAP binary permissions in new format).
-    bool has_sap_permissions() const noexcept { return false; }
+    // True when the .add file was opened in SAP proprietary binary format.
+    // Callers (AdsConnect60) use this to reject the connection and direct
+    // the user to run import_dd before connecting.
+    bool has_sap_permissions() const noexcept { return binary_format_; }
     // No-op — kept for import_dd compatibility.
     util::Result<void> clear_sap_permissions() { return {}; }
 
@@ -377,6 +379,7 @@ public:
 
 private:
     util::Result<void> load_();
+    util::Result<void> load_add_binary_(const std::string& buf);
 
     std::string                                  path_;
     std::unordered_map<std::string, std::string> tables_;
@@ -412,6 +415,14 @@ private:
                 std::unordered_map<std::string, uint32_t>> perm_cache_;
 
     void invalidate_perm_cache_() noexcept { perm_cache_.clear(); }
+
+    // SAP proprietary binary .add format state (set by load_add_binary_()).
+    // These are used for round-trip write-back to the binary file.
+    bool            binary_format_       = false;
+    std::uint32_t   binary_hdr_len_      = 0;
+    std::uint32_t   binary_rec_len_      = 0;
+    std::string     binary_hdr_;
+    bool            has_sap_permissions_ = false;
 };
 
 } // namespace openads::engine
