@@ -209,6 +209,7 @@ FUNCTION NavSelect( oConn, hAst )
       aRows := NavScanRows( oConn, hAst[ "table" ] )
       aRows := NavFilter( aRows, aWheres )
    ENDIF
+   aRows := NavApplySoftDelete( aRows, hb_HGetDef( hAst, "softDelete", NIL ) )
    aRows := NavApplyOrder( aRows, hb_HGetDef( hAst, "orders", {} ) )
    aRows := NavApplyLimit( aRows, hb_HGetDef( hAst, "limit", NIL ), ;
                                   hb_HGetDef( hAst, "offset", NIL ) )
@@ -300,8 +301,10 @@ STATIC FUNCTION NavScanRows( oConn, cTable )
       AAdd( aNames, AllTrim( hbo_FieldName( nTbl, i ) ) )
    NEXT
    hbo_GoTop( nTbl )
-   DO WHILE ! hbo_Eof( nTbl )                         // ShowDeleted(.F.) ja oculta deletados
-      AAdd( aRows, NavHydrateRow( nTbl, aNames ) )
+   DO WHILE ! hbo_Eof( nTbl )
+      IF ! hbo_IsDeleted( nTbl )                       // pula registros logicamente deletados (hbo_DeleteRec)
+         AAdd( aRows, NavHydrateRow( nTbl, aNames ) )
+      ENDIF
       hbo_Skip( nTbl, 1 )
    ENDDO
    hbo_TableClose( nTbl )
@@ -347,6 +350,23 @@ STATIC FUNCTION NavFilter( aRows, aWheres )
    NEXT
    RETURN aOut
 
+/* esconde (ou isola) linhas apagadas por coluna soft-delete. hSoft NIL = no-op.
+   vivo = coluna vazia/NIL; negate -> devolve so as apagadas. Top-level AND. */
+STATIC FUNCTION NavApplySoftDelete( aRows, hSoft )
+   LOCAL aOut := {}, hRow, cKey, lNeg, lAlive
+   IF hSoft == NIL
+      RETURN aRows
+   ENDIF
+   cKey := Lower( hSoft[ "col" ] )
+   lNeg := hb_HGetDef( hSoft, "negate", .F. )
+   FOR EACH hRow IN aRows
+      lAlive := Empty( hb_HGetDef( hRow, cKey, NIL ) )
+      IF iif( lNeg, ! lAlive, lAlive )
+         AAdd( aOut, hRow )
+      ENDIF
+   NEXT
+   RETURN aOut
+
 /* combina os termos por bool (AND/OR), na ordem -- equivalente ao SQL plano */
 STATIC FUNCTION NavMatch( hRow, aWheres )
    LOCAL lAcc := .T., lFirst := .T., w, lTerm, cBool, cKind
@@ -359,6 +379,11 @@ STATIC FUNCTION NavMatch( hRow, aWheres )
       CASE cKind == "in"
          lTerm := ( AScan( w[ "vals" ], ;
                     {| x | NavEq( hb_HGetDef( hRow, Lower( w[ "col" ] ), NIL ), x ) } ) > 0 )
+      CASE cKind == "null"
+         /* Empty() trata campo em branco E chave ausente (NIL) como nulo -- semantica strict-null do nav */
+         lTerm := iif( hb_HGetDef( w, "negate", .F. ), ;
+                       ! Empty( hb_HGetDef( hRow, Lower( w[ "col" ] ), NIL ) ), ;
+                          Empty( hb_HGetDef( hRow, Lower( w[ "col" ] ), NIL ) ) )
       OTHERWISE
          lTerm := .F.
       ENDCASE

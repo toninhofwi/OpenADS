@@ -22,6 +22,7 @@ CREATE CLASS TORMBlueprint
    METHOD Unique()
    METHOD Primary()
    METHOD Timestamps()
+   METHOD SoftDeletes()
    METHOD Index( aCols, lUnique, cName )
    METHOD ToAst()
    /* aliases PT (casca fina, mesmo metodo real) */
@@ -32,6 +33,11 @@ CREATE CLASS TORMBlueprint
    METHOD Padrao( xVal )                   INLINE ::Default( xVal )
    METHOD Unico()                          INLINE ::Unique()
    METHOD Indice( aCols, lUnique, cName )  INLINE ::Index( aCols, lUnique, cName )
+   METHOD ExclusaoLogica()                 INLINE ::SoftDeletes()
+   /* aliases ES (espanhol, casca fina, mesmo metodo real) */
+   METHOD Entero( cName )                  INLINE ::Integer( cName )
+   METHOD Predeterminado( xVal )           INLINE ::Default( xVal )
+   METHOD ExclusionLogica()                INLINE ::SoftDeletes()
 END CLASS
 
 METHOD New( cTable ) CLASS TORMBlueprint
@@ -127,6 +133,10 @@ METHOD Primary() CLASS TORMBlueprint
 METHOD Timestamps() CLASS TORMBlueprint
    ::DateTime( "created_at" )
    ::DateTime( "updated_at" )
+   RETURN Self
+
+METHOD SoftDeletes() CLASS TORMBlueprint
+   ::DateTime( "deleted_at" ):Nullable( .T. )
    RETURN Self
 
 METHOD Index( aCols, lUnique, cName ) CLASS TORMBlueprint

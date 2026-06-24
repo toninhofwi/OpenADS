@@ -42,6 +42,15 @@ CREATE CLASS TORMCursor
    METHOD Campos()          INLINE ::FieldNames()
    METHOD Linha()           INLINE ::Row()
    METHOD Fechar()          INLINE ::Close()
+   /* aliases ES */
+   METHOD IrInicio()        INLINE ::GoTop()
+   METHOD IrFinal()         INLINE ::GoBottom()
+   METHOD Saltar( n )       INLINE ::Skip( n )
+   METHOD Inicio()          INLINE ::Bof()
+   METHOD Final()           INLINE ::Eof()
+   METHOD RegActual()       INLINE ::RecNo()
+   METHOD Fila()            INLINE ::Row()
+   METHOD Cerrar()          INLINE ::Close()
 END CLASS
 
 METHOD New( oConn, cTable ) CLASS TORMCursor

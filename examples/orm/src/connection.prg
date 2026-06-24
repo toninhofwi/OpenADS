@@ -34,6 +34,10 @@ CREATE CLASS TORMConnection
    METHOD Desfazer()        INLINE ::Rollback()
    METHOD Transacao( bBlk ) INLINE ::Transaction( bBlk )
    METHOD EmTransacao()     INLINE ::nTxDepth > 0
+   /* aliases ES */
+   METHOD Deshacer()          INLINE ::Rollback()
+   METHOD Transaccion( bBlk ) INLINE ::Transaction( bBlk )
+   METHOD EnTransaccion()     INLINE ::nTxDepth > 0
 END CLASS
 
 METHOD New( cUri ) CLASS TORMConnection
