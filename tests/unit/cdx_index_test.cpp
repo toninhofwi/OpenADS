@@ -157,11 +157,18 @@ TEST_CASE("CdxIndex compound layout: file header + struct-tag leaf + sub-tag hea
         CHECK(rd32(hdr + 0) == 1024u);                 // struct-tag root
         CHECK(rd16(hdr + 12) == 10u);                  // struct-tag key_size = 10
         CHECK(static_cast<int>(hdr[14] & 0x40) != 0);  // CDX_TYPE_COMPOUND bit
+        // Native-interop conformance: the structure ("tag of tags") header
+        // MUST carry CDX_TYPE_STRUCTURE (0x80); without it a native reader
+        // tries to compile the tag-name "key expression" and reports the
+        // index corrupt.
+        CHECK(static_cast<int>(hdr[14] & 0x80) != 0);  // CDX_TYPE_STRUCTURE
 
         f.seekg(1024);
         std::uint8_t leaf[512]{};
         f.read(reinterpret_cast<char*>(leaf), 512);
-        CHECK(rd16(leaf + 0) == 2u);                   // CDX_NODE_LEAF
+        // Root-that-is-a-leaf must be ROOT|LEAF (0x03); a native FoxPro /
+        // Harbour reader rejects a root node missing the ROOT bit.
+        CHECK(rd16(leaf + 0) == 3u);                   // CDX_NODE_ROOT | CDX_NODE_LEAF
         CHECK(rd16(leaf + 2) == 1u);                   // one entry
 
         f.seekg(1536);
@@ -182,6 +189,64 @@ TEST_CASE("CdxIndex compound layout: file header + struct-tag leaf + sub-tag hea
         REQUIRE(ix.next().has_value());
         CHECK(ix.current_key() == "beta    ");
     }
+    fs::remove(p);
+}
+
+TEST_CASE("CdxIndex multi-tag: sibling tags don't collide on page allocation") {
+    // Reproduces the multi-tag interop bug: two tags created in the same
+    // .cdx before any record is inserted (CREATE INDEX twice on an empty
+    // table), then both populated. Each CdxIndex instance tracked its own
+    // file_size_, so tag1's first data page used to land on top of tag2's
+    // header. alloc_page_ now reserves each page at the real end-of-file.
+    auto p = fs::temp_directory_path() / "openads_cdx_multitag_alloc.cdx";
+    fs::remove(p);
+    {
+        auto t1 = CdxIndex::create(p.string(), "TAG1", "F1", 10, false, false);
+        REQUIRE(t1.has_value());
+        CdxIndex ix1 = std::move(t1).value();
+        auto t2 = CdxIndex::add_tag(p.string(), "TAG2", "F2", 10, false, false);
+        REQUIRE(t2.has_value());
+        CdxIndex ix2 = std::move(t2).value();
+        for (std::uint32_t r = 1; r <= 30; ++r) {
+            char k1[8], k2[8];
+            std::snprintf(k1, sizeof(k1), "a%02u", r);
+            std::snprintf(k2, sizeof(k2), "b%02u", r);
+            REQUIRE(ix1.insert(r, k1).has_value());
+            REQUIRE(ix2.insert(r, k2).has_value());
+        }
+        REQUIRE(ix1.flush().has_value());
+        REQUIRE(ix2.flush().has_value());
+    }
+
+    // The structure-tag root leaf must still carry ROOT|LEAF after add_tag
+    // re-encoded it.
+    {
+        std::ifstream f(p, std::ios::binary);
+        REQUIRE(f.is_open());
+        f.seekg(1024);
+        std::uint8_t leaf[512]{};
+        f.read(reinterpret_cast<char*>(leaf), 512);
+        CHECK((leaf[0] | (leaf[1] << 8)) == 3);   // ROOT | LEAF
+    }
+
+    // Both tags must reopen and walk all 30 keys — proof neither sub-tag's
+    // pages were overwritten by the other's.
+    auto walk_count = [&](const char* tag) {
+        CdxIndex ix;
+        REQUIRE(ix.open_named(p.string(), IndexOpenMode::Shared, tag)
+                    .has_value());
+        int n = 0;
+        auto o = ix.seek_first();
+        REQUIRE(o.has_value());
+        while (o.value().positioned) {
+            ++n;
+            o = ix.next();
+            REQUIRE(o.has_value());
+        }
+        return n;
+    };
+    CHECK(walk_count("TAG1") == 30);
+    CHECK(walk_count("TAG2") == 30);
     fs::remove(p);
 }
 

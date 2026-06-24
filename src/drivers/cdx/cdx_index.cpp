@@ -173,11 +173,14 @@ encode_compact_leaf_static(
             return util::Error{5000, 0, "CDX leaf encode: page full", ""};
         }
 
-        // Pack so decoder reads trl from the low `trl_bits` and dup from
-        // the next `dup_bits` (matches the decoder layout in
-        // decode_compact_leaf_static). Earlier code inverted these and
-        // round-tripped only when both dup and trl were zero.
-        std::uint32_t bits = ((dup & dup_mask) << trl_bits) | (trl & trl_mask);
+        // FoxPro / Harbour compact-leaf bit layout (hb_cdxPageGetKeyVal,
+        // dbfcdx1.c): within each ReqByte field, from LSB to MSB it is
+        // [recno : RNBits][dup : DCBits][trl : TCBits]. i.e. dup sits
+        // immediately above recno and trl on top. The previous packing
+        // (dup << trl_bits | trl) put trl below dup, which round-tripped
+        // with OpenADS' own decoder but produced scrambled keys for a
+        // native reader. Match the on-disk standard exactly.
+        std::uint32_t bits = ((trl & trl_mask) << dup_bits) | (dup & dup_mask);
         const int top_bytes = (trl_bits + dup_bits + 7) >> 3;
         const int from_byte = key_bytes - top_bytes;
         bits <<= ((top_bytes << 3) - trl_bits - dup_bits);
@@ -236,8 +239,10 @@ decode_compact_leaf_static(const CdxIndex::Page& p, std::uint16_t key_size) {
         std::uint8_t  shift = static_cast<std::uint8_t>(
             32 - dup_bits - trl_bits);
         std::uint32_t tmp = read_u32_le(entry + key_bytes - 4) >> shift;
-        std::uint32_t trl = tmp & trl_mask;
-        std::uint32_t dup = (tmp >> trl_bits) & dup_mask;
+        // Match the on-disk standard: dup occupies the low DCBits of the
+        // dup+trl field (right above recno), trl the high TCBits.
+        std::uint32_t dup = tmp & dup_mask;
+        std::uint32_t trl = (tmp >> dup_bits) & trl_mask;
 
         if (dup > key_size || trl > key_size || dup + trl > key_size) {
             return util::Error{6106, 0, "CDX dup/trl out of range", ""};
@@ -366,17 +371,32 @@ build_subtag_header(std::uint32_t root_page,
     write_u32_le(hdr.data() + 4, 0xFFFFFFFFu);
     write_u32_le(hdr.data() + 8, 1);
     write_u16_le(hdr.data() + 12, key_size);
+    // indexOpt: UNIQUE | COMPACT(0x20) | COMPOUND(0x40). A native FoxPro
+    // sub-tag carries 0x60; we previously wrote 0x20 (no COMPOUND).
     hdr[14] = static_cast<std::uint8_t>(
-        (unique ? 0x01 : 0x00) | 0x20);
+        (unique ? 0x01 : 0x00) | 0x20 | 0x40);
     hdr[15] = 0x01;
     write_u16_le(hdr.data() + 16, CDX_HEADER_LEN);
     write_u16_le(hdr.data() + 18, CDX_PAGE_LEN);
     write_u16_le(hdr.data() + 502, descend ? 1 : 0);
-    write_u16_le(hdr.data() + 508, 512);
-    write_u16_le(hdr.data() + 510,
-                 static_cast<std::uint16_t>(key_expr.size()));
-    std::memcpy(hdr.data() + 512, key_expr.data(),
-                std::min<std::size_t>(key_expr.size(), 511));
+    // Key-/FOR-expression pool layout MUST mirror hb_cdxTagHeaderStore
+    // (Harbour src/rdd/dbfcdx/dbfcdx1.c): the key expression lives at the
+    // START of keyExpPool (relative offset 0, NOT 512 which is the pool's
+    // byte offset inside the 1024-byte header), the lengths INCLUDE the
+    // trailing NUL, and the FOR slot points just past the key NUL. Writing
+    // keyExpPos=512 made the native reader's bounds check
+    // (uiKeyPos + uiKeyLen > CDX_HEADEREXPLEN) fail -> "Corruption detected".
+    // Bound the length to what actually fits the pool: lengths are derived
+    // from the bytes we copy, never from the raw expr size, so the reader
+    // can't be told to read past the copied region / the header buffer.
+    const std::size_t   copy_len    = std::min<std::size_t>(key_expr.size(), 510);
+    const std::uint16_t exp_len_nul =
+        static_cast<std::uint16_t>(copy_len + 1);
+    write_u16_le(hdr.data() + 504, exp_len_nul);  // forExpPos = keyLen+1
+    write_u16_le(hdr.data() + 506, 1);            // forExpLen = 1 (NUL only)
+    write_u16_le(hdr.data() + 508, 0);            // keyExpPos = 0
+    write_u16_le(hdr.data() + 510, exp_len_nul);  // keyExpLen = keyLen+1
+    std::memcpy(hdr.data() + 512, key_expr.data(), copy_len);
     // The sub-tag's name lives in the structure tag's leaf; we also
     // mirror it into reserved2 of the sub-tag header for diagnostics
     // and for legacy single-tag readers.
@@ -1125,6 +1145,18 @@ CdxIndex::erase(std::uint32_t recno, const std::string& key) {
 }
 
 util::Result<void> CdxIndex::flush() {
+    // The page at root_page_ is the B+tree root; native FoxPro / Harbour
+    // readers require the ROOT bit (0x01) on it -> 0x03 for a root that is
+    // also a leaf, 0x01 for a branch root. Every insert rewrites its
+    // target page as a plain LEAF/BRANCH (no ROOT), so stamp ROOT here,
+    // once, on the final root before flushing to disk.
+    if (root_page_ != 0) {
+        auto pg = get_page_(root_page_);
+        if (!pg) return pg.error();
+        write_u16_le(pg.value()->data() + 0,
+                     read_u16_le(pg.value()->data() + 0) | CDX_NODE_ROOT);
+        dirty_[root_page_] = true;
+    }
     for (auto& [off, _] : page_cache_) {
         auto r = flush_page_(off);
         if (!r) return r.error();
@@ -1284,13 +1316,24 @@ CdxIndex::create(const std::string& path,
         write_u32_le(file_hdr.data() + 4, 0xFFFFFFFFu);
         write_u32_le(file_hdr.data() + 8, 1);
         write_u16_le(file_hdr.data() + 12, CDX_STRUCT_KEY_LEN);
-        file_hdr[14] = 0x60; // CDX_TYPE_COMPACT | CDX_TYPE_COMPOUND
+        // STRUCTURE(0x80) | COMPOUND(0x40) | COMPACT(0x20). The STRUCTURE
+        // bit is mandatory: hb_cdxTagLoad only returns early for the
+        // "tag of tags" when it sees CDX_TYPE_STRUCTURE; without it the
+        // reader treats this header as a normal tag, tries to COMPILE its
+        // tag-name "key expression" and declares the index corrupt.
+        file_hdr[14] = 0xE0;
         file_hdr[15] = 0x01;
+        // Harbour index signature "RCHB" (big-endian) at offset 20, as the
+        // native writer emits for the structure tag (TagBlock == 0).
+        file_hdr[20] = 0x52; file_hdr[21] = 0x43;
+        file_hdr[22] = 0x48; file_hdr[23] = 0x42;
         write_u16_le(file_hdr.data() + 16, CDX_HEADER_LEN);
         write_u16_le(file_hdr.data() + 18, CDX_PAGE_LEN);
-        write_u16_le(file_hdr.data() + 502, 0);
-        write_u16_le(file_hdr.data() + 508, 0);
-        write_u16_le(file_hdr.data() + 510, 0);
+        write_u16_le(file_hdr.data() + 502, 0);   // ascending
+        write_u16_le(file_hdr.data() + 504, 1);   // forExpPos
+        write_u16_le(file_hdr.data() + 506, 1);   // forExpLen
+        write_u16_le(file_hdr.data() + 508, 0);   // keyExpPos
+        write_u16_le(file_hdr.data() + 510, 1);   // keyExpLen
         auto wrote = file.write_at(0, file_hdr.data(), file_hdr.size());
         if (!wrote) return wrote.error();
     }
@@ -1312,6 +1355,11 @@ CdxIndex::create(const std::string& path,
                                               0xFFFFFFFFu, 0xFFFFFFFFu,
                                               /*req_byte=*/5);
         if (!enc) return enc.error();
+        // This leaf is also the root of the structure tag's B+tree, so it
+        // must carry ROOT|LEAF (0x03). A native reader rejects a root node
+        // that only has the LEAF bit set.
+        write_u16_le(leaf.data() + 0,
+                     read_u16_le(leaf.data() + 0) | CDX_NODE_ROOT);
         auto wrote = file.write_at(CDX_STRUCT_ROOT_OFFSET,
                                    leaf.data(), leaf.size());
         if (!wrote) return wrote.error();
@@ -1453,6 +1501,11 @@ CdxIndex::add_tag(const std::string& path,
                                           0xFFFFFFFFu, 0xFFFFFFFFu,
                                           /*req_byte=*/5);
     if (!enc) return enc.error();
+    // The structure-tag root leaf must stay ROOT|LEAF (0x03); re-encoding it
+    // here would otherwise drop the ROOT bit and make a native reader reject
+    // the whole index.
+    write_u16_le(new_leaf.data() + 0,
+                 read_u16_le(new_leaf.data() + 0) | CDX_NODE_ROOT);
     auto wrote = file.write_at(struct_root, new_leaf.data(), new_leaf.size());
     if (!wrote) return wrote.error();
 

@@ -15,6 +15,13 @@ enum class IndexOpenMode { ReadOnly, Shared, Exclusive };
 
 enum class SeekHit { Exact, AfterKey, BeforeBegin, AfterEnd };
 
+// How key bytes are encoded on disk. Text = raw/space-padded character
+// bytes (default; NTX, ADI, and character CDX). FoxNumeric = the 8-byte
+// order-preserving encoding FoxPro/Harbour use for numeric and date CDX
+// keys. The engine builds the bytes; the B+tree itself only ever compares
+// keys as opaque bytes, so this lives at the ABI/engine boundary.
+enum class KeyEncoding { Text, FoxNumeric };
+
 struct SeekOutcome {
     SeekHit       hit          = SeekHit::AfterEnd;
     std::uint32_t recno        = 0;
@@ -46,6 +53,12 @@ public:
     virtual void invalidate_cursor() {}
 
     virtual std::string current_key() const = 0;
+
+    // On-disk key encoding for this index. Default Text; CdxIndex returns
+    // FoxNumeric once the ABI marks a numeric/date key. The engine consults
+    // this when building keys (see Table::compute_index_key_).
+    virtual KeyEncoding key_encoding() const { return KeyEncoding::Text; }
+    virtual void set_key_encoding(KeyEncoding) {}
 
     virtual util::Result<void> insert(std::uint32_t recno,
                                       const std::string& key) = 0;
