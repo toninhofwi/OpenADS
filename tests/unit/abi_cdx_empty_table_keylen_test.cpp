@@ -60,17 +60,31 @@ fs::path stage_empty_char_dbf(const fs::path& dir) {
     return p;
 }
 
+struct TempDirGuard {
+    fs::path path;
+    explicit TempDirGuard(fs::path p) : path(std::move(p)) {}
+    ~TempDirGuard() {
+        std::error_code ec;
+        fs::remove_all(path, ec);
+    }
+    TempDirGuard(const TempDirGuard&) = delete;
+    TempDirGuard& operator=(const TempDirGuard&) = delete;
+};
+
 } // namespace
 
 TEST_CASE("CDX empty table: bare CHAR index uses declared field width") {
     auto dir = fs::temp_directory_path() / "openads_cdx_empty_keylen";
     std::error_code ec;
     fs::remove_all(dir, ec);
+    TempDirGuard cleanup{dir};
     stage_empty_char_dbf(dir);
 
+    const auto dir_str = dir.string();
     UNSIGNED8 srv[512];
     std::memset(srv, 0, sizeof(srv));
-    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    REQUIRE(dir_str.size() < sizeof(srv));
+    std::memcpy(srv, dir_str.c_str(), dir_str.size() + 1);
     ADSHANDLE hConn = 0;
     REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == 0);
 
@@ -95,6 +109,4 @@ TEST_CASE("CDX empty table: bare CHAR index uses declared field width") {
 
     REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
-
-    fs::remove_all(dir, ec);
 }
