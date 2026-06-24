@@ -5,6 +5,27 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.2.3 — 2026-06-25
+
+- **CDX character index key width fix (PR #68).** `AdsCreateIndex61`
+  derived a character tag's fixed key width from the **trimmed** value
+  of the first record. When the first row was short (e.g. `"ANA"`) and
+  later rows shared a longer prefix (`"ANABELA CARDOSO"`,
+  `"ANABELA FERREIRA"`), every later key was truncated to the first
+  row's width and collapsed onto the same stored key, so distinct
+  values became indistinguishable and a seek landed on the wrong
+  record — both inside the index and for native FoxPro/Clipper readers
+  of the bag. The key width now comes from the declared field length
+  for a bare character field, falling back to the **untrimmed**
+  first-record width for a composite expression, keeping the 32-char
+  default only for an empty table. Numeric CDX/NTX key widths are
+  unchanged. Pinned by `abi_cdx_char_keylen_test`.
+- **Build fix: `<cstdint>` in `sqlite_uri_test`.** `std::uint8_t` was
+  used without including `<cstdint>`; clang/libc++ does not pull it in
+  transitively, so the `ninja-clang` `-Werror` CI job failed while MSVC
+  and AppleClang stayed green. Added the explicit include.
+- Full unit suite **739/739**, 0 regression (was 738).
+
 ## 1.2.2 — 2026-06-24
 
 - **CDX empty-leaf walk fix (PR #63).** Forward and backward
