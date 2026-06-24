@@ -9028,8 +9028,7 @@ UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
 
 UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
                              ADSHANDLE* phIndex) {
-    Table* t = get_table(hTable);
-    if (!t || phIndex == nullptr) {
+    if (phIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
     auto name = openads::abi::to_internal(pucName, 0);
@@ -9037,6 +9036,32 @@ UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
     // up to ADS_MAX_TAG_NAME before passing them to us).
     while (!name.empty() && (name.back() == ' ' || name.back() == '\0')) {
         name.pop_back();
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    // SQL backend (postgresql): resolve an already-open PG index by its
+    // tag/column name. AdsOpenIndex creates the PostgresIndex handle; this
+    // is the by-name lookup path the ORM uses after opening. A PG handle has
+    // no native Table*, so without this branch the function fell through to
+    // get_table() below and errored for every PG table. Match the tag the
+    // way postgres_open_index derives it (strip path + extension).
+    if (auto* st = get_postgres_table(hTable)) {
+        std::string tag = name;
+        const auto dot = tag.find_last_of("./\\");
+        if (dot != std::string::npos) tag = tag.substr(dot + 1);
+        const auto dot2 = tag.find('.');
+        if (dot2 != std::string::npos) tag = tag.substr(0, dot2);
+        for (auto& [h, si] : postgres_indexes_map()) {
+            if (si && si->parent == st && si->column == tag) {
+                *phIndex = h;
+                return ok();
+            }
+        }
+        return fail(openads::AE_INTERNAL_ERROR, "index name not found");
+    }
+#endif
+    Table* t = get_table(hTable);
+    if (!t) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
     }
     for (auto& [h, b] : index_bindings()) {
         if (b.table == t && b.tag_name == name) { *phIndex = h; return ok(); }
