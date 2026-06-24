@@ -6952,25 +6952,37 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         }
     }
 
-    // Determine key length by evaluating the expression against the
-    // first live record. Empty tables get a 32-char default. Numeric
-    // CDX keys use the 8-byte binary width; numeric NTX keys use the
-    // field's own width so the on-disk key matches the native reader.
+    // Determine the on-disk key length. Numeric CDX keys use the 8-byte
+    // binary width; numeric NTX keys use the field's own width so the key
+    // matches the native reader.
     std::uint16_t klen = cdx_numeric_key ? 8
                        : ntx_numeric_key ? ntx_num_width
-                       : 32;
-    if (!cdx_numeric_key && !ntx_numeric_key && t->record_count() > 0) {
-        if (auto g = t->goto_record(1); g) {
-            auto k = openads::engine::evaluate_index_expr(*t, expr, 254);
-            if (k) {
-                std::string s = std::move(k).value();
-                while (!s.empty() && s.back() == ' ') s.pop_back();
-                if (!s.empty()) {
-                    klen = static_cast<std::uint16_t>(
-                        std::min<std::size_t>(s.size(), 254));
+                       : 0;
+    if (!cdx_numeric_key && !ntx_numeric_key) {
+        // A character key is fixed-width on disk. For a bare character field
+        // the width is the declared field length; deriving it from the
+        // *trimmed* value of the first record truncates every later key that
+        // shares a prefix beyond that width (a short first row collapses
+        // longer rows onto the same key), corrupting ordering and seeks in
+        // both the index itself and native FoxPro/Clipper readers. Prefer the
+        // field width; fall back to the untrimmed first-record key width for a
+        // composite expression; keep the 32-char default only for an empty
+        // table with nothing to probe.
+        const std::string bare = openads::engine::strip_alias_qualifiers(expr);
+        std::int32_t fi = t->field_index(bare);
+        if (fi >= 0) {
+            klen = t->field_descriptor(static_cast<std::uint16_t>(fi)).length;
+        } else if (t->record_count() > 0) {
+            if (auto g = t->goto_record(1); g) {
+                if (auto k = openads::engine::evaluate_index_expr(*t, expr, 254)) {
+                    std::size_t n = std::move(k).value().size();  // untrimmed
+                    if (n > 0)
+                        klen = static_cast<std::uint16_t>(
+                            std::min<std::size_t>(n, 254));
                 }
             }
         }
+        if (klen == 0) klen = 32;
     }
 
     std::unique_ptr<openads::drivers::IIndex> idx_owner;
