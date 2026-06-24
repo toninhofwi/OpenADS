@@ -53,6 +53,17 @@ public:
     // are resolved under this directory.
     void set_data_dir(const std::string& dir) { data_dir_ = dir; }
 
+    // Enterprise: cap on concurrent session threads (0 = unlimited). Overrides
+    // the env-loaded EnterpriseConfig value; call before start(). Production
+    // reads OPENADS_SERVER_MAX_SESSIONS; this exists mainly for tests.
+    void set_max_sessions(std::uint32_t n) { max_sessions_override_ = n; }
+    // Observability: live session-thread count, and the number of connections
+    // refused because the cap was reached.
+    std::uint32_t active_session_threads() const;
+    std::uint32_t rejected_sessions() const noexcept {
+        return rejected_sessions_.load();
+    }
+
     // studio.web.0.4 — observable session info exposed for the
     // Studio "Sessions" tab. Snapshot is taken under a mutex so
     // concurrent reads from the HTTP console are safe.
@@ -77,13 +88,29 @@ public:
 private:
     void accept_loop();
     void session_loop(Socket s);
+    // Join + drop every session thread whose loop has returned. Bounds the
+    // live thread set on a long-running server. Caller must NOT hold
+    // sessions_mu_ (this takes it).
+    void reap_finished_threads_();
 
     Socket                   listener_;
     std::uint16_t            port_ = 0;
     std::atomic<bool>        running_{false};
     std::thread              accept_thread_;
     mutable std::mutex       sessions_mu_;
-    std::vector<std::thread> sessions_;
+    // Live session threads keyed by a spawn-time id, plus the ids of threads
+    // whose session_loop has returned. accept_loop reaps finished threads each
+    // iteration so the set stays bounded — it previously only grew (joined
+    // only at shutdown), leaking thread handles on a 24x7 server. Guarded by
+    // sessions_mu_.
+    std::unordered_map<std::uint64_t, std::thread> session_threads_;
+    std::vector<std::uint64_t>                     finished_threads_;
+    std::atomic<std::uint64_t>                     thread_seq_{1};
+    // Enterprise limits resolved at start() (0 = unlimited). The override lets
+    // tests inject a small cap without touching the env-loaded singleton.
+    std::uint32_t                                  max_sessions_ = 0;
+    std::uint32_t                                  max_sessions_override_ = 0;
+    std::atomic<std::uint32_t>                     rejected_sessions_{0};
 
     // Data root directory: relative client paths are resolved under it.
     std::string                                   data_dir_;

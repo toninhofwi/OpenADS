@@ -857,6 +857,76 @@ TEST_CASE("M12.3 server stop() drops in-flight connection cleanly") {
     CHECK_FALSE(srv.running());
 }
 
+TEST_CASE("Enterprise: server_max_sessions caps concurrent sessions") {
+    Server srv;
+    srv.set_max_sessions(2);
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    auto port = srv.port();
+
+    auto hello = [&](Socket cs) {
+        Frame req; req.opcode = Opcode::Hello;
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        return rep.has_value() && rep.value().opcode == Opcode::HelloAck;
+    };
+
+    // Two sessions, each held open (their threads block on the next read),
+    // so the server sits at capacity.
+    auto c1 = connect_tcp("127.0.0.1", port); REQUIRE(c1.has_value());
+    CHECK(hello(c1.value()));
+    auto c2 = connect_tcp("127.0.0.1", port); REQUIRE(c2.has_value());
+    CHECK(hello(c2.value()));
+
+    // A third connection must be refused (server closes it before it serves).
+    auto c3 = connect_tcp("127.0.0.1", port); REQUIRE(c3.has_value());
+    bool rejected = false;
+    for (int i = 0; i < 300 && !rejected; ++i) {
+        if (srv.rejected_sessions() >= 1) { rejected = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(rejected);
+    CHECK(srv.active_session_threads() <= 2);
+
+    sock_close(c1.value());
+    sock_close(c2.value());
+    sock_close(c3.value());
+    srv.stop();
+}
+
+TEST_CASE("Enterprise: finished session threads are reaped (no unbounded growth)") {
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    auto port = srv.port();
+
+    // Connect / Hello / disconnect many times. Without reaping the server's
+    // thread set would grow to ~N; with reaping it stays tiny because each
+    // accept first joins+drops the threads whose loop already returned.
+    const int N = 30;
+    for (int i = 0; i < N; ++i) {
+        auto c = connect_tcp("127.0.0.1", port);
+        REQUIRE(c.has_value());
+        Frame req; req.opcode = Opcode::Hello;
+        REQUIRE(write_frame(c.value(), req).has_value());
+        auto rep = read_frame(c.value());
+        CHECK(rep.has_value());
+        sock_close(c.value());
+    }
+
+    // Drive a few more accept iterations so the tail gets reaped, and assert
+    // the live set stabilises at a small number — not N.
+    std::uint32_t active = static_cast<std::uint32_t>(N);
+    for (int i = 0; i < 300; ++i) {
+        auto c = connect_tcp("127.0.0.1", port);   // each accept reaps first
+        if (c.has_value()) sock_close(c.value());
+        active = srv.active_session_threads();
+        if (active <= 3) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(active <= 3);
+
+    srv.stop();
+}
+
 TEST_CASE("Server::build_mg_snapshot counts live sessions") {
     using openads::network::Server;
     Server srv;

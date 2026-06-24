@@ -182,6 +182,7 @@ add_executable(openads_unit_tests
     unit/sqlite_uri_test.cpp
     unit/proc_test.cpp
     unit/sql_common_test.cpp
+    unit/enterprise_config_test.cpp
     unit/legacy_crt_shims_test.cpp
     unit/dll_test.cpp
     unit/network_client_test.cpp

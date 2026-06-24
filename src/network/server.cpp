@@ -10,6 +10,7 @@
 #include "openads/ace.h"
 #include "openads/error.h"
 #include "session/connection.h"
+#include "sql_backend/enterprise_config.h"
 
 #include <cstring>
 #include <filesystem>
@@ -149,7 +150,7 @@ mgmt::MgSnapshot Server::build_mg_snapshot() const {
     {
         std::lock_guard<std::mutex> g(sessions_mu_);
         snap.worker_threads =
-            static_cast<std::uint32_t>(sessions_.size());
+            static_cast<std::uint32_t>(session_threads_.size());
     }
 
     std::uint32_t conn_no = 1;
@@ -263,9 +264,16 @@ bool Server::kill_session_by_conn_no(std::uint16_t conn_no) {
 util::Result<void> Server::start(const std::string& host,
                                  std::uint16_t port) {
     if (running_.load()) return {};
+    // Resolve enterprise limits once at start. A test/embedder override wins;
+    // otherwise take the env-loaded EnterpriseConfig (OPENADS_SERVER_*).
+    const auto& ecfg = openads::sql_backend::enterprise_config();
+    max_sessions_ = (max_sessions_override_ != 0)
+                        ? max_sessions_override_
+                        : ecfg.server_max_sessions;
     ListenerOptions opts;
     opts.host = host;
     opts.port = port;
+    opts.backlog = static_cast<int>(ecfg.server_listen_backlog);
     auto l = listen_tcp(opts);
     if (!l) return l.error();
     listener_ = l.value();
@@ -298,10 +306,11 @@ void Server::stop() noexcept {
     sock_close(listener_);
     if (accept_thread_.joinable()) accept_thread_.join();
     std::lock_guard<std::mutex> lk(sessions_mu_);
-    for (auto& t : sessions_) {
-        if (t.joinable()) t.join();
+    for (auto& kv : session_threads_) {
+        if (kv.second.joinable()) kv.second.join();
     }
-    sessions_.clear();
+    session_threads_.clear();
+    finished_threads_.clear();
 }
 
 void Server::accept_loop() {
@@ -321,11 +330,49 @@ void Server::accept_loop() {
             break;
         }
         Socket s = cli.value();
-        std::lock_guard<std::mutex> lk(sessions_mu_);
-        sessions_.emplace_back([this, s]() mutable {
-            this->session_loop(s);
-        });
+        // Reap threads whose session_loop already returned so the live set
+        // stays bounded on a long-running server.
+        reap_finished_threads_();
+        {
+            std::lock_guard<std::mutex> lk(sessions_mu_);
+            if (max_sessions_ != 0 &&
+                session_threads_.size() >= max_sessions_) {
+                // At capacity: refuse this connection instead of spawning an
+                // unbounded number of threads. The client sees a dropped
+                // connection (a future milestone can send a "busy" frame).
+                rejected_sessions_.fetch_add(1);
+                sock_close(s);
+                continue;
+            }
+            std::uint64_t tid = thread_seq_.fetch_add(1);
+            // The session records its own id in finished_threads_ when its loop
+            // returns; the next reap joins and drops it. The push takes
+            // sessions_mu_, which this scope holds during emplace, so the id is
+            // in the map before the thread can mark itself finished.
+            session_threads_.emplace(tid,
+                std::thread([this, s, tid]() mutable {
+                    this->session_loop(s);
+                    std::lock_guard<std::mutex> lk2(sessions_mu_);
+                    finished_threads_.push_back(tid);
+                }));
+        }
     }
+}
+
+void Server::reap_finished_threads_() {
+    std::lock_guard<std::mutex> lk(sessions_mu_);
+    for (std::uint64_t id : finished_threads_) {
+        auto it = session_threads_.find(id);
+        if (it == session_threads_.end()) continue;
+        if (it->second.joinable()) it->second.join();
+        session_threads_.erase(it);
+    }
+    finished_threads_.clear();
+}
+
+std::uint32_t Server::active_session_threads() const {
+    std::lock_guard<std::mutex> lk(sessions_mu_);
+    return static_cast<std::uint32_t>(session_threads_.size());
 }
 
 namespace {
