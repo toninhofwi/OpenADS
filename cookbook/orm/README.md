@@ -90,7 +90,14 @@ include folder and the DLL folder from the environment / arguments. Full
 details and the POSIX variant are in
 [`../docs/building-and-running.md`](../docs/building-and-running.md).
 
-> Which ORM? These examples use the published, stable ORM. A newer
-> revision is in active development; the public API used here
-> (`TORMConnection` / `TORMQuery` / `TORMModel`) is the same on both,
-> so the examples carry over.
+> **Which ORM?** The companion ORM is **hb_orm2** —
+> <https://github.com/Admnwk/hb_orm2> (open-source, **MIT**). Clone it and point
+> `OADS_ORM_SRC` at its `src\` folder. `build.cmd` pulls **every** `.prg` from
+> that folder, so it works whether you point it at a small stable build or the
+> full hb_orm2 (model + fluent builder + relations + soft-deletes + observers +
+> migrations + scopes, all over the OpenADS engine). The public API used here
+> (`TORMConnection` / `TORMQuery` / `TORMModel`, incl. `oQ:ToSql()`) is stable
+> across revisions, so the examples carry over.
+>
+> hb_orm2 is a **separate project** under its own MIT license; this cookbook
+> does **not** vendor it — you build each example against your local checkout.
