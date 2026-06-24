@@ -46,6 +46,9 @@ CREATE CLASS TORMMigrator
    METHOD Migrar()   INLINE ::Migrate()
    METHOD Reverter() INLINE ::Rollback()
    METHOD Situacao() INLINE ::Status()
+   /* aliases ES */
+   METHOD Revertir()  INLINE ::Rollback()
+   METHOD Situacion() INLINE ::Status()
 END CLASS
 
 METHOD New( oConn ) CLASS TORMMigrator

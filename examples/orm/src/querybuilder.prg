@@ -16,6 +16,10 @@ CREATE CLASS TORMQuery
    DATA hAgg     INIT NIL
    DATA oProto   INIT NIL
    DATA aEager   INIT {}
+   DATA cCountBy   INIT NIL
+   DATA aWithCount INIT {}
+   DATA cSoftCol   INIT NIL
+   DATA nTrashMode INIT 0
    METHOD New( oConn, cTable ) CONSTRUCTOR
    METHOD Select( aCols )  INLINE ( ::aColumns := aCols, Self )
    METHOD Where( cCol, xOpOrVal, xVal )
@@ -23,6 +27,12 @@ CREATE CLASS TORMQuery
    METHOD WhereIn( cCol, aVals )    INLINE ( AAdd( ::aWheres, { "kind" => "in", "bool" => "AND", "col" => cCol, "vals" => aVals } ), Self )
    METHOD OrWhereIn( cCol, aVals )  INLINE ( AAdd( ::aWheres, { "kind" => "in", "bool" => "OR",  "col" => cCol, "vals" => aVals } ), Self )
    METHOD WhereRaw( cFrag, aVals )  INLINE ( AAdd( ::aWheres, { "kind" => "raw", "bool" => "AND", "frag" => cFrag, "params" => iif( aVals == NIL, {}, aVals ) } ), Self )
+   METHOD WhereNull( cCol )    INLINE ( AAdd( ::aWheres, { "kind" => "null", "bool" => "AND", "col" => cCol, "negate" => .F. } ), Self )
+   METHOD WhereNotNull( cCol ) INLINE ( AAdd( ::aWheres, { "kind" => "null", "bool" => "AND", "col" => cCol, "negate" => .T. } ), Self )
+   METHOD OndeNulo( cCol )     INLINE ::WhereNull( cCol )
+   METHOD OndeNaoNulo( cCol )  INLINE ::WhereNotNull( cCol )
+   METHOD DondeNulo( cCol )    INLINE ::WhereNull( cCol )
+   METHOD DondeNoNulo( cCol )  INLINE ::WhereNotNull( cCol )
    METHOD Onde( cCol, xOpOrVal, xVal )
    METHOD OuOnde( cCol, xOpOrVal, xVal )
    METHOD OndeEm( cCol, aVals )     INLINE ::WhereIn( cCol, aVals )
@@ -61,6 +71,31 @@ CREATE CLASS TORMQuery
    METHOD With( xNames )       INLINE ::Com( xNames )
    METHOD Obter()
    METHOD ObterModelos()       INLINE ::Obter()
+   /* aliases ES (espanhol) */
+   METHOD Donde( cCol, xOpOrVal, xVal )    // real (PCount)
+   METHOD ODonde( cCol, xOpOrVal, xVal )   // real (PCount)
+   METHOD Teniendo( cCol, xOpOrVal, xVal ) // real (PCount)
+   METHOD DondeEn( cCol, aVals )        INLINE ::WhereIn( cCol, aVals )
+   METHOD ODondeEn( cCol, aVals )       INLINE ::OrWhereIn( cCol, aVals )
+   METHOD DondeCrudo( cFrag, aVals )    INLINE ::WhereRaw( cFrag, aVals )
+   METHOD Unir( cTab, c1, cOp, c2 )     INLINE ::Join( cTab, c1, cOp, c2 )
+   METHOD UnirIzq( cTab, c1, cOp, c2 )  INLINE ::LeftJoin( cTab, c1, cOp, c2 )
+   METHOD Saltar( n )                   INLINE ::Offset( n )
+   METHOD Sumar( cCol )    INLINE ::Sum( cCol )
+   METHOD Con( xNames )        INLINE ::Com( xNames )
+   METHOD Obtener()           INLINE ::Obter()
+   METHOD ObtenerModelos()    INLINE ::Obter()
+   METHOD CountBy( cCol )
+   METHOD WithCount( xNames )
+   METHOD ComContagem( xNames ) INLINE ::WithCount( xNames )
+   METHOD ConConteo( xNames )   INLINE ::WithCount( xNames )
+   METHOD SoftScope( cCol, nMode ) INLINE ( ::cSoftCol := cCol, ::nTrashMode := iif( nMode == NIL, 0, nMode ), Self )
+   METHOD WithTrashed()    INLINE ( ::nTrashMode := 1, Self )
+   METHOD OnlyTrashed()    INLINE ( ::nTrashMode := 2, Self )
+   METHOD ComApagados()    INLINE ::WithTrashed()
+   METHOD SoApagados()     INLINE ::OnlyTrashed()
+   METHOD ConEliminados()  INLINE ::WithTrashed()
+   METHOD SoloEliminados() INLINE ::OnlyTrashed()
 END CLASS
 
 METHOD New( oConn, cTable ) CLASS TORMQuery
@@ -92,6 +127,19 @@ METHOD Onde( cCol, xOpOrVal, xVal ) CLASS TORMQuery
    RETURN ::Where( cCol, xOpOrVal, xVal )
 
 METHOD OuOnde( cCol, xOpOrVal, xVal ) CLASS TORMQuery
+   IF PCount() == 2
+      RETURN ::OrWhere( cCol, xOpOrVal )
+   ENDIF
+   RETURN ::OrWhere( cCol, xOpOrVal, xVal )
+
+/* aliases ES reais (PCount nao e confiavel em INLINE) */
+METHOD Donde( cCol, xOpOrVal, xVal ) CLASS TORMQuery
+   IF PCount() == 2
+      RETURN ::Where( cCol, xOpOrVal )
+   ENDIF
+   RETURN ::Where( cCol, xOpOrVal, xVal )
+
+METHOD ODonde( cCol, xOpOrVal, xVal ) CLASS TORMQuery
    IF PCount() == 2
       RETURN ::OrWhere( cCol, xOpOrVal )
    ENDIF
@@ -131,6 +179,13 @@ METHOD Tendo( cCol, xOpOrVal, xVal ) CLASS TORMQuery
    ENDIF
    RETURN ::Having( cCol, xOpOrVal, xVal )
 
+/* alias ES de Having (real -- PCount) */
+METHOD Teniendo( cCol, xOpOrVal, xVal ) CLASS TORMQuery
+   IF PCount() == 2
+      RETURN ::Having( cCol, xOpOrVal )
+   ENDIF
+   RETURN ::Having( cCol, xOpOrVal, xVal )
+
 METHOD OrderBy( cCol, cDir ) CLASS TORMQuery
    AAdd( ::aOrders, { cCol, iif( cDir == NIL, "ASC", Upper( cDir ) ) } )
    RETURN Self
@@ -139,7 +194,9 @@ METHOD ToAst() CLASS TORMQuery
    RETURN { "type" => "select", "table" => ::cTable, "columns" => ::aColumns, ;
             "wheres" => ::aWheres, "joins" => ::aJoins, "groups" => ::aGroups, ;
             "havings" => ::aHavings, "orders" => ::aOrders, "limit" => ::nLimit, ;
-            "offset" => ::nOffset, "aggregate" => ::hAgg }
+            "offset" => ::nOffset, "aggregate" => ::hAgg, "countBy" => ::cCountBy, ;
+            "softDelete" => iif( ::cSoftCol == NIL .OR. ::nTrashMode == 1, NIL, ;
+                                 hb_Hash( "col", ::cSoftCol, "negate", ( ::nTrashMode == 2 ) ) ) }
 
 METHOD RunAggregate( cFn, cCol ) CLASS TORMQuery
    LOCAL hSave := ::hAgg, r, aRows, aVals, xV
@@ -197,7 +254,28 @@ METHOD Obter() CLASS TORMQuery
    aRows   := ::Get()
    aModels := ORM_HydrateModels( aRows, {|| __objClone( oProto ) } )
    ORM_ApplyEager( aModels, ::aEager, oProto:RelDefs(), oProto:oConn )
+   ORM_ApplyWithCount( aModels, ::aWithCount, oProto:RelDefs(), oProto:oConn )
    RETURN aModels
+
+/* terminal de contagem agrupada: { hb_CStr(valorChave) => nContagem } */
+METHOD CountBy( cCol ) CLASS TORMQuery
+   LOCAL hSave := ::cCountBy, r, aRows, hOut := hb_Hash(), hRow, xK
+   IF ::oConn:IsNavigational()
+      QRaise( "CountBy", "count agrupado nao suportado no backend navegacional" )
+   ENDIF
+   ::cCountBy := cCol
+   r := ::Compiled()
+   ::cCountBy := hSave                               // restaura: builder reutilizavel
+   aRows := ::oConn:Query( r[ "sql" ], r[ "params" ] )
+   FOR EACH hRow IN aRows
+      xK := hb_HGetDef( hRow, cCol, NIL )
+      hOut[ hb_CStr( xK ) ] := Val( hb_CStr( hb_HGetDef( hRow, "aggregate_count", 0 ) ) )
+   NEXT
+   RETURN hOut
+
+METHOD WithCount( xNames ) CLASS TORMQuery
+   ORM_AddEager( ::aWithCount, xNames )
+   RETURN Self
 
 STATIC PROCEDURE QRaise( cOp, cDesc )
    LOCAL oErr := ErrorNew()
