@@ -15,15 +15,8 @@
     },
     {
         "name": "PMsys",
-        "path": "f:\\OpenAds\\testdata\\pmsys\\pmsys.add",
+        "path": "f:\\PMSys\\data\\pmsys.add",
         "username": "adssys",
-        "connType": "local",
-        "entryType": "dd"
-    },
-    {
-        "name": "PMsys_OpenADS",
-        "path": "f:\\OpenAds\\testdata\\pmsys\\pmsys_openads.add",
-        "username": "AdsSys",
         "connType": "local",
         "entryType": "dd"
     }

@@ -1543,7 +1543,17 @@ util::Result<void> DataDict::load_() {
     namespace fs = std::filesystem;
 
     auto fres = platform::File::open(path_, platform::OpenMode::ReadOnly);
-    if (!fres) return fres.error();
+    if (!fres) {
+        // Windows ERROR_SHARING_VIOLATION (sub_code 32): another process
+        // has the .add file open with exclusive lock — almost certainly SAP
+        // ADS/ACE.  Surface 5174 so the caller shows the import dialog.
+        if (fres.error().sub_code == 32)
+            return util::Error{5174, 0,
+                "SAP Advantage Data Dictionary is open exclusively by another "
+                "process (likely SAP ADS). Run import_dd to convert it to "
+                "OpenADS format.", path_};
+        return fres.error();
+    }
     auto& file = fres.value();
 
     auto sz_res = file.size();
