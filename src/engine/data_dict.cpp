@@ -79,16 +79,6 @@ static std::string am_path(const std::string& add_path) {
     return add_path.substr(0, dot) + ".am";
 }
 
-// Trim whitespace.
-static std::string trim(std::string s) {
-    auto is_ws = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    std::size_t b = 0, e = s.size();
-    while (b < e && is_ws(s[b])) ++b;
-    while (e > b && is_ws(s[e - 1])) --e;
-    return s.substr(b, e - b);
-}
 
 // ---------------------------------------------------------------------------
 // Binary .add helpers — string-based LE readers and record struct
@@ -102,8 +92,9 @@ static inline std::uint32_t le32(const std::string& buf, std::size_t off) {
 }
 
 static inline std::uint16_t le16(const std::string& buf, std::size_t off) {
-    return  static_cast<std::uint16_t>(static_cast<std::uint8_t>(buf[off]))
-          | (static_cast<std::uint16_t>(static_cast<std::uint8_t>(buf[off+1])) << 8);
+    return static_cast<std::uint16_t>(
+              static_cast<std::uint16_t>(static_cast<std::uint8_t>(buf[off]))
+            | (static_cast<std::uint16_t>(static_cast<std::uint8_t>(buf[off+1])) << 8));
 }
 
 // Split a string on embedded NUL bytes.
@@ -211,7 +202,7 @@ static std::unordered_map<std::string,std::string> json_parse_flat(const std::st
                             unsigned cp = 0;
                             bool ok = true;
                             for (int k = 1; k <= 4; ++k) {
-                                char h = s[i + k];
+                                char h = s[i + static_cast<std::size_t>(k)];
                                 unsigned nib = 0;
                                 if      (h >= '0' && h <= '9') nib = static_cast<unsigned>(h - '0');
                                 else if (h >= 'a' && h <= 'f') nib = static_cast<unsigned>(h - 'a') + 10u;
@@ -504,19 +495,6 @@ util::Result<DataDict> DataDict::create(const std::string& path) {
     dd.path_ = path;
     return dd;
 }
-
-namespace {
-std::vector<std::string> split_tabs(const std::string& s) {
-    std::vector<std::string> out;
-    std::string cur;
-    for (char c : s) {
-        if (c == '\t') { out.push_back(cur); cur.clear(); }
-        else cur.push_back(c);
-    }
-    out.push_back(cur);
-    return out;
-}
-}  // namespace
 
 // Trim trailing spaces and embedded nulls from a fixed-length CHAR field.
 static std::string trim_char(const std::string& buf,
@@ -1543,7 +1521,17 @@ util::Result<void> DataDict::load_() {
     namespace fs = std::filesystem;
 
     auto fres = platform::File::open(path_, platform::OpenMode::ReadOnly);
-    if (!fres) return fres.error();
+    if (!fres) {
+        // Windows ERROR_SHARING_VIOLATION (sub_code 32): another process
+        // has the .add file open with exclusive lock — almost certainly SAP
+        // ADS/ACE.  Surface 5174 so the caller shows the import dialog.
+        if (fres.error().sub_code == 32)
+            return util::Error{5174, 0,
+                "SAP Advantage Data Dictionary is open exclusively by another "
+                "process (likely SAP ADS). Run import_dd to convert it to "
+                "OpenADS format.", path_};
+        return fres.error();
+    }
     auto& file = fres.value();
 
     auto sz_res = file.size();
@@ -1562,11 +1550,17 @@ util::Result<void> DataDict::load_() {
 
     // Check signature.
     if (std::memcmp(hdr.data(), "Advantage Table", 15) != 0) {
-        // SAP binary .add files start with "ADS Data Dictionary" — return the
-        // well-known "needs import" code so callers can show the import dialog.
-        if (file_sz >= 19 && std::memcmp(hdr.data(), "ADS Data Dictionary", 19) == 0)
-            return util::Error{5174, 0,
-                "SAP binary DD — use openads_import_dd to convert to OpenADS format", path_};
+        // SAP binary .add files start with "ADS Data Dictionary".
+        // Parse them with load_add_binary_() so the import tool can open the
+        // copy it made and write memberships/permissions into it.
+        // AdsConnect60 rejects binary-format DDs via has_sap_permissions().
+        if (file_sz >= 19 && std::memcmp(hdr.data(), "ADS Data Dictionary", 19) == 0) {
+            std::vector<std::uint8_t> raw_buf(static_cast<std::size_t>(file_sz), 0);
+            if (auto r = file.read_at(0, raw_buf.data(), raw_buf.size()); !r)
+                return r.error();
+            std::string buf(reinterpret_cast<char*>(raw_buf.data()), raw_buf.size());
+            return load_add_binary_(buf);
+        }
         return util::Error{5103, 0,
             "DD file has unrecognised signature (expected OpenADS ADT format)", path_};
     }

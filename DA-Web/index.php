@@ -414,7 +414,7 @@
       </div>
       <div class="form-group">
         <label for="isdd-saplib">SAP library path <span class="opt">(optional — leave blank for defaults; directory or ace64.dll path)</span></label>
-        <input type="text" id="isdd-saplib" placeholder="e.g. f:\Ads11  or  f:\Ads11\ace64.dll" autocomplete="off">
+        <input type="text" id="isdd-saplib" placeholder="e.g. C:\php\ace64.dll  or  C:\ADS  (blank = auto-detect)" autocomplete="off">
       </div>
       <div id="isdd-result" style="display:none;margin-top:10px;padding:10px;border-radius:6px;font-size:12px;line-height:1.6;"></div>
     </div>
