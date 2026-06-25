@@ -5,7 +5,7 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
-## 1.2.4 — 2026-06-25
+## 1.3.0 — 2026-06-25
 
 - **CDX index direction fix for Harbour rddads (FiveWin).** `AdsCreateIndex61`
   decoded `descending = ulOptions & ADS_DESCENDING (0x08)`. Instrumenting the
