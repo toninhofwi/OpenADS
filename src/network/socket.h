@@ -50,6 +50,14 @@ util::Result<std::size_t> sock_send(Socket& sock,
 util::Result<std::size_t> sock_recv(Socket& sock,
                                      std::uint8_t* buf,
                                      std::size_t n);
+
+// Toggle non-blocking I/O. When enabled, sock_recv returns a would-block error
+// (classified by socket_recv_would_block) instead of blocking when no data is
+// available — the reactor pool relies on this so one stalled client cannot
+// freeze a worker thread (no head-of-line blocking).
+util::Result<void> socket_set_nonblocking(Socket& sock, bool enable);
+bool               socket_recv_would_block(const util::Error& e) noexcept;
+
 void                      sock_close(Socket& sock) noexcept;
 
 // Reactor multiplexing primitive (M-enterprise step 3). socket_poll

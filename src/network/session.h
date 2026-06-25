@@ -1,5 +1,6 @@
 #pragma once
 
+#include "network/frame_reader.h"
 #include "network/server.h"
 #include "network/socket.h"
 #include "network/wire.h"
@@ -50,9 +51,17 @@ public:
     Socket socket() const noexcept { return s_; }
 
 private:
+    // Telemetry + dispatch + reply for one complete frame. Shared by the
+    // blocking thread-per-connection loop and the non-blocking reactor path.
+    // Returns false when the connection should be torn down.
+    bool process_frame(const Frame& f);
+
     Server*       srv_;
     Socket        s_;
     std::uint64_t sid_;
+    // Reassembles complete frames from partial non-blocking reads (reactor
+    // path). Harmless on the blocking path — each read yields a whole frame.
+    FrameReader   reader_;
 
     // M12.4 — per-session state. Connection is opened by the
     // Connect frame; OpenTable allocates a session-scoped 32-bit

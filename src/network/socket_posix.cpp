@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -124,6 +125,23 @@ util::Result<std::size_t> sock_recv(Socket& sock,
         return util::Error{5000, errno, "recv() failed", ""};
     }
     return static_cast<std::size_t>(got);
+}
+
+util::Result<void> socket_set_nonblocking(Socket& sock, bool enable) {
+    int fd = static_cast<int>(sock.handle);
+    int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return util::Error{5000, errno, "fcntl(F_GETFL) failed", ""};
+    }
+    flags = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+    if (::fcntl(fd, F_SETFL, flags) < 0) {
+        return util::Error{5000, errno, "fcntl(F_SETFL) failed", ""};
+    }
+    return {};
+}
+
+bool socket_recv_would_block(const util::Error& e) noexcept {
+    return e.sub_code == EWOULDBLOCK || e.sub_code == EAGAIN;
 }
 
 void sock_close(Socket& sock) noexcept {

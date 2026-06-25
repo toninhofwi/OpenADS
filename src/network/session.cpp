@@ -84,19 +84,17 @@ Session::~Session() {
     srv_->unregister_session(sid_);
 }
 
-bool Session::handle_readable() {
-    auto fr = read_frame(s_);
-    if (!fr) return false;                        // peer closed / read error
+bool Session::process_frame(const Frame& f) {
     srv_->touch_session(sid_, true, false);
     {
         // M9.25 — inbound comm telemetry. +5 accounts for the 4-byte
         // length prefix + 1-byte opcode of the wire framing.
         auto& mgst = openads::mgmt::process_mg_stats();
         mgst.packets_in.fetch_add(1, std::memory_order_relaxed);
-        mgst.bytes_in.fetch_add(fr.value().payload.size() + 5,
+        mgst.bytes_in.fetch_add(f.payload.size() + 5,
                                 std::memory_order_relaxed);
     }
-    auto res = dispatch(fr.value());
+    auto res = dispatch(f);
     if (res.reply) {
         if (auto wr = write_frame(s_, *res.reply); !wr) return false;
         openads::mgmt::process_mg_stats()
@@ -104,6 +102,29 @@ bool Session::handle_readable() {
         srv_->touch_session(sid_, false, true);
     }
     return !res.close_session;
+}
+
+bool Session::handle_readable() {
+    // Read whatever a single recv yields — a partial frame, one frame, or
+    // several — then reassemble and dispatch every complete frame. On a
+    // non-blocking socket (reactor pool) an idle or stalled peer returns
+    // would-block and we hand the worker straight back to its other
+    // connections, so one slow client can't cause head-of-line blocking. On a
+    // blocking socket (legacy thread-per-connection loop) recv just waits for
+    // the next bytes, preserving the previous one-frame-at-a-time behavior.
+    std::uint8_t buf[16384];
+    auto r = sock_recv(s_, buf, sizeof(buf));
+    if (!r) {
+        if (socket_recv_would_block(r.error())) return true;  // nothing right now
+        return false;                                         // peer reset / error
+    }
+    if (r.value() == 0) return false;                         // peer closed cleanly
+    auto frames = reader_.feed(buf, r.value());
+    if (!frames) return false;                                // malformed framing
+    for (const auto& f : frames.value()) {
+        if (!process_frame(f)) return false;
+    }
+    return true;
 }
 
 void Session::cleanup() {

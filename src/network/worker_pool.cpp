@@ -112,6 +112,10 @@ void WorkerPool::worker_loop(Worker& w) {
             std::vector<Socket> news;
             { std::lock_guard<std::mutex> lk(w.mu); news.swap(w.incoming); }
             for (Socket sock : news) {
+                // Reactor reads are non-blocking: a partial/stalled frame must
+                // yield the worker back to its other connections rather than
+                // park it in recv (Session::handle_readable buffers partials).
+                (void)socket_set_nonblocking(sock, true);
                 w.sessions.push_back(std::make_unique<Session>(*srv_, sock));
                 w.session_socks.push_back(sock);
                 w.live.fetch_add(1);

@@ -2,6 +2,7 @@
 #include "network/socket.h"
 #include "network/wire.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -118,4 +119,45 @@ TEST_CASE("socket_poll reports a readable socket and times out cleanly") {
     sock_close(cs);
     sock_close(as);
     sock_close(l.value());
+}
+
+TEST_CASE("socket_set_nonblocking makes an idle recv report would-block") {
+    ListenerOptions o;
+    o.host = "127.0.0.1";
+    o.port = 0;
+    auto lis = listen_tcp(o);
+    REQUIRE(lis.has_value());
+    auto port = socket_local_port(lis.value());
+    REQUIRE(port.has_value());
+    auto p = port.value();
+
+    // Client connects but stays quiet for a beat, then sends one byte.
+    std::thread client([&]() {
+        auto c = connect_tcp("127.0.0.1", p);
+        if (!c) return;
+        Socket cs = c.value();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        std::uint8_t b = 0x42;
+        (void)sock_send(cs, &b, 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        sock_close(cs);
+    });
+
+    Socket listener = lis.value();
+    auto acc = accept_one(listener);
+    REQUIRE(acc.has_value());
+    Socket s = acc.value();
+
+    REQUIRE(openads::network::socket_set_nonblocking(s, true).has_value());
+
+    // Nothing sent yet: recv must return a would-block error (not block, not a
+    // fatal error). If set_nonblocking were a no-op this recv would hang.
+    std::uint8_t buf[8];
+    auto r = sock_recv(s, buf, sizeof(buf));
+    CHECK_FALSE(r.has_value());
+    CHECK(openads::network::socket_recv_would_block(r.error()));
+
+    client.join();
+    sock_close(s);
+    sock_close(listener);
 }
