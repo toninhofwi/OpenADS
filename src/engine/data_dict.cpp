@@ -496,19 +496,6 @@ util::Result<DataDict> DataDict::create(const std::string& path) {
     return dd;
 }
 
-namespace {
-std::vector<std::string> split_tabs(const std::string& s) {
-    std::vector<std::string> out;
-    std::string cur;
-    for (char c : s) {
-        if (c == '\t') { out.push_back(cur); cur.clear(); }
-        else cur.push_back(c);
-    }
-    out.push_back(cur);
-    return out;
-}
-}  // namespace
-
 // Trim trailing spaces and embedded nulls from a fixed-length CHAR field.
 static std::string trim_char(const std::string& buf,
                               std::size_t off, std::size_t maxlen) {
