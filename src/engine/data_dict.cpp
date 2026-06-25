@@ -79,16 +79,6 @@ static std::string am_path(const std::string& add_path) {
     return add_path.substr(0, dot) + ".am";
 }
 
-// Trim whitespace.
-static std::string trim(std::string s) {
-    auto is_ws = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    std::size_t b = 0, e = s.size();
-    while (b < e && is_ws(s[b])) ++b;
-    while (e > b && is_ws(s[e - 1])) --e;
-    return s.substr(b, e - b);
-}
 
 // ---------------------------------------------------------------------------
 // Binary .add helpers — string-based LE readers and record struct

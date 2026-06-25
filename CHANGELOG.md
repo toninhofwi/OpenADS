@@ -5,6 +5,25 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.2.4 — 2026-06-25
+
+- **CDX index direction fix for Harbour rddads (FiveWin).** `AdsCreateIndex61`
+  decoded `descending = ulOptions & ADS_DESCENDING (0x08)`. Instrumenting the
+  two RDD clients showed they put the compound/descending option bits on
+  **swapped** positions: X#'s ADSRDD sends `0x02` for an ascending tag and
+  `0x0A` for descending, while Harbour's `rddads` sends `0x08` for ascending
+  and `0x0A` for descending. So a plain Harbour `INDEX ON f TAG t` (`0x08`)
+  was read as descending and **every** Harbour/FiveWin index was built
+  reversed — `AdsGotoTop` landed on the last key and `Skip` walked backward,
+  so a `TBrowse`/`tDatabase` grid showed its rows upside-down (`Seek` still
+  worked, which masked it). Direction is now decoded as descending only when
+  **both** `0x02` and `0x08` are set (`0x0A`); a lone `0x02` or `0x08` is that
+  client's compound marker and is ascending. The SQL `CREATE INDEX` path emits
+  `0x0A` for a descending tag so it round-trips through the same decode. Pinned
+  by `abi_cdx_index_direction_test` and `examples/fivewin/tdata_index_test.prg`.
+- **Build fix: drop a dead `trim()` in `data_dict.cpp`.** An unreferenced
+  static function tripped `-WX` C4505 on a clean MSVC build.
+
 ## 1.2.3 — 2026-06-25
 
 - **CDX character index key width fix (PR #68).** `AdsCreateIndex61`
