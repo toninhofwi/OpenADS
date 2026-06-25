@@ -3604,12 +3604,24 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
 
         std::vector<AdtFieldSpec> specs;
         specs.reserve(fields.size());
-        bool has_memo = false;
+        // Header offset 88 holds the count of DISTINCT companion-stream types
+        // present in the table (memo / binary / image), each stored in the side
+        // companion file. Stamping a flat 1 whenever any memo field existed made
+        // a conforming reader reject tables that mix several companion types (it
+        // expects N distinct streams but the header claims one) -- the table was
+        // reported as corrupt. Count the distinct types actually present.
+        bool has_memo = false, has_binary = false, has_image = false;
         for (auto& f : fields) {
             AdtFieldSpec sp = adt_spec_for(f);
-            if (sp.adt_type == 5u) has_memo = true;  // MEMO .adm companion
+            switch (sp.adt_type) {
+                case 5u: has_memo   = true; break;  // MEMO   .adm companion
+                case 6u: has_binary = true; break;  // BINARY .adm companion
+                case 7u: has_image  = true; break;  // IMAGE  .adm companion
+                default: break;
+            }
             specs.push_back(sp);
         }
+        const bool has_companion = has_memo || has_binary || has_image;
 
         // Record: 5-byte prefix (delete-flag byte + 4-byte null bitmap) + fields
         std::uint32_t rec_len = 5;
@@ -3637,7 +3649,8 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         adt_hdr[356] = 4;
         adt_hdr[358] = static_cast<std::uint8_t>(fields.size() & 0xFFu);
         adt_hdr[359] = static_cast<std::uint8_t>((fields.size() >> 8) & 0xFFu);
-        if (has_memo) adt_hdr[88] = 1;
+        adt_hdr[88] = static_cast<std::uint8_t>(
+            (has_memo ? 1 : 0) + (has_binary ? 1 : 0) + (has_image ? 1 : 0));
 
         // 200-byte field descriptors
         std::vector<std::uint8_t> fds(fields.size() * 200, 0);
@@ -3685,8 +3698,8 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
                                   "AdsCreateTable: ADT write failed");
         }
 
-        // Create a companion .adm for MEMO/BINARY fields
-        if (has_memo) {
+        // Create a companion .adm for MEMO/BINARY/IMAGE fields
+        if (has_companion) {
             fs::path adm = full;
             adm.replace_extension(".adm");
             { std::error_code ec; fs::remove(adm, ec); }
