@@ -1,5 +1,7 @@
 #include "sql_backend/enterprise_config.h"
 
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -18,8 +20,17 @@ bool env_bool(const char* name, bool default_val) {
 std::uint32_t env_u32(const char* name, std::uint32_t default_val) {
     const char* v = std::getenv(name);
     if (v == nullptr || *v == '\0') return default_val;
-    const long n = std::strtol(v, nullptr, 10);
-    if (n < 0) return default_val;
+    errno = 0;
+    char* end = nullptr;
+    const long long n = std::strtoll(v, &end, 10);
+    // Reject non-numeric, trailing junk, out-of-range, and negative values —
+    // a malformed env var falls back to the safe default rather than 0 or a
+    // truncated/overflowed cap.
+    if (end == v || *end != '\0') return default_val;
+    if (errno == ERANGE || n < 0 ||
+        n > static_cast<long long>(UINT32_MAX)) {
+        return default_val;
+    }
     return static_cast<std::uint32_t>(n);
 }
 

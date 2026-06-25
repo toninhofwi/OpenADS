@@ -305,12 +305,32 @@ void Server::stop() noexcept {
     }
     sock_close(listener_);
     if (accept_thread_.joinable()) accept_thread_.join();
-    std::lock_guard<std::mutex> lk(sessions_mu_);
-    for (auto& kv : session_threads_) {
+    // Wake any session thread blocked in recv() by closing its socket from the
+    // outside (same mechanism kill_session uses). Without this, a client that
+    // connected but never sent another frame leaves its session thread parked
+    // in read_frame forever, and the join() below would hang on it.
+    {
+        std::lock_guard<std::mutex> lk(info_mu_);
+        for (auto& kv : sockets_) {
+            Socket s = kv.second;
+            sock_close(s);
+        }
+        sockets_.clear();
+    }
+    // Move the session-thread set out UNDER sessions_mu_, then join with the
+    // lock RELEASED. A session thread, right after session_loop returns, takes
+    // sessions_mu_ to record itself in finished_threads_; joining it while we
+    // still hold sessions_mu_ would deadlock (it blocks on the mutex, we block
+    // on the join).
+    std::unordered_map<std::uint64_t, std::thread> to_join;
+    {
+        std::lock_guard<std::mutex> lk(sessions_mu_);
+        to_join.swap(session_threads_);
+        finished_threads_.clear();
+    }
+    for (auto& kv : to_join) {
         if (kv.second.joinable()) kv.second.join();
     }
-    session_threads_.clear();
-    finished_threads_.clear();
 }
 
 void Server::accept_loop() {
@@ -360,14 +380,24 @@ void Server::accept_loop() {
 }
 
 void Server::reap_finished_threads_() {
-    std::lock_guard<std::mutex> lk(sessions_mu_);
-    for (std::uint64_t id : finished_threads_) {
-        auto it = session_threads_.find(id);
-        if (it == session_threads_.end()) continue;
-        if (it->second.joinable()) it->second.join();
-        session_threads_.erase(it);
+    // Collect the finished threads UNDER sessions_mu_, then join them with the
+    // lock RELEASED. Joining under the lock would block accept_loop and other
+    // exiting session threads (which need sessions_mu_ to register themselves)
+    // for the duration of every join — a latency spike under load.
+    std::vector<std::thread> to_join;
+    {
+        std::lock_guard<std::mutex> lk(sessions_mu_);
+        for (std::uint64_t id : finished_threads_) {
+            auto it = session_threads_.find(id);
+            if (it == session_threads_.end()) continue;
+            to_join.push_back(std::move(it->second));
+            session_threads_.erase(it);
+        }
+        finished_threads_.clear();
     }
-    finished_threads_.clear();
+    for (auto& t : to_join) {
+        if (t.joinable()) t.join();
+    }
 }
 
 std::uint32_t Server::active_session_threads() const {
