@@ -77,15 +77,16 @@ generated baseline; OpenADS clears every line of the regenerated
 ADS-flavoured baseline. The session that closed the last gap is
 recorded across 28 incremental commits ending at `28be1be`.
 
-**Current release: v1.1.0 (2026-06-23).** Full Data Dictionary
-engine enforcement, DA-Web management UI, SAP DD import, and TCP
-remote server are all in production. `openads_serverd` serves the
-OpenADS wire protocol; clients connect with
-`AdsConnect60("tcp://host:port/path.add", ...)` and no application
-code changes. The `php_openads` native Zend extension
-(`bindings/php_ext/`) powers DA-Web and is also available as a
-standalone PHP 8.x extension for applications migrating from SAP's
-now-obsolete `php_ads.dll`. The wire protocol covers **read**,
+**Current release: v1.2.2 (2026-06-24).** Full Data Dictionary
+engine enforcement, DA-Web management UI, SAP DD import, TCP
+remote server, SQL backends (PostgreSQL / MariaDB / MSSQL / ODBC /
+SQLite), and deferred-flush bulk-insert (528× speedup) are all in
+production. `openads_serverd` serves the OpenADS wire protocol;
+clients connect with `AdsConnect60("tcp://host:port/path.add", ...)`
+and no application code changes. The `php_openads` native Zend
+extension (`bindings/php_ext/`) powers DA-Web and is also available
+as a standalone PHP 8.x extension for applications migrating from
+SAP's now-obsolete `php_ads.dll`. The wire protocol covers **read**,
 **write**, **SQL exec**, **credential auth**, **ACE error-code
 propagation**, **batched row fetch**, and **real TLS** (vendored
 mbedtls 3.6, client side). `docs/wire-protocol.md` is the formal
@@ -99,6 +100,14 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **v1.2.2** | 2026-06-24 | CDX empty-leaf walk fix (skip holes after `erase`); CDX leaf recno bits sized from `max_rec` + prefix-seek fix; MSSQL backward SKIP off-by-one; ABI typed getters + `AdsGetIndexHandle` for SQL backends; NTX numeric-key edge-case tests; CDX empty-tree + prefix-seek edge tests. Full suite **738/738**. |
+| **v1.2.1** | 2026-06-24 | NTX numeric key format fix — keys stored in native xBase zero-padded + complement form so native `dbSeek(<number>)` matches on-disk layout. adm_memo, codepage, maria_uri, postgres_uri, proc, sqlite_uri unit tests added. Remote benchmark docs (iMac WiFi 784K rec/s, SSH tunnel 676K rec/s). Suite 720/720. |
+| **v1.2.0** | 2026-06-24 | **Deferred-flush bulk-insert (528× speedup)** — `AdsSetDeferredFlush` / `AdsFlushFileBuffers`; 500K records in ~26s locally, 0.69s over WiFi tcp:// (784K rec/s). **MSSQL native TDS 7.4 backend** via `mssql://` URI with optional mbedTLS encryption. Suite 649/649. |
+| **v1.1.0** | 2026-06-23 | **SQL backends: PostgreSQL / MariaDB / ODBC** behind a pluggable `BackendTableOps` registry; `postgresql://` / `mariadb://` / `odbc://` URIs; navigation, field read, SEEK, write per-backend; 17-pointer ops vtable design. Suite 572/572. |
+| **v1.0.4** | 2026-06-23 | CDX stale record-count refresh on the fetch path — shared-header-lock re-read before declaring a recno out of range, fixing spurious ADSCDX 5000 in multi-user append scenarios. |
+| **v1.0.3** | 2026-06-23 | Round-trip-thrifty remote scan (PR #47) — sequential-prefetch path on `tcp://` wire; 50k-record loopback scan 3.9× faster (NAV-only). Cookbook expansion: SQL, native ADT, tcp:// remote, FiveWin xbrowse CRUD, ORM benchmark. |
+| **v1.0.2** | 2026-06-23 | Responsive Studio web console — sidebar collapses to slide-in drawer on mobile; tabs scroll; dark-theme CSS variable fix. |
+| **v1.0.1** | 2026-06-23 | `SKIP` honours `SET DELETED ON` in natural order. Native ADT/ADI create+read+write+seek (PR #41). POSIX platform hardening. macOS/clang build fixes. SQLite + stored-procedures docs. Cookbook (PR #44). |
 | **post-rc29** | 2026-06-03 | **Full Data Dictionary engine enforcement + DA-Web management UI.** Triggers fire server-side (BEFORE/AFTER INSERT/UPDATE/DELETE; bodies loaded from binary `.add`/`.am`); RI rules enforced (Restrict/Cascade/SetNull); permissions enforced on `AdsOpenTable` (`GRANT`/`REVOKE` SQL persists to `.add` and takes effect immediately). Binary `.add` parser extended: User property-byte XOR group-membership tokens decoded alongside Permission-record memberships; trigger SQL bodies loaded from the `.am` continuation memo. `system.permissions` virtual table returns SELECT/UPDATE/INSERT/DELETE/EXECUTE/ALTER/DROP per (grantee, object) with correct 0/1/2 values; `system.effectivepermissions` merges direct + inherited group rights. `AdsDDGetPermissions` / `AdsDDSetUserTableRights` / `AdsDDGetUserTableRights` implemented. SAP ACE API name aliases forwarded. `system.functions` virtual table added. Auto-opens `.adi` index when `AdsOpenTable` opens an `.adt`. ADT RowVersion/ModTime field type support. **DA-Web**: full browser-based Data Architect replacement (tables, fields, indexes, triggers, stored procedures, functions, views, RI objects, users, groups, permissions, SQL editor with export); powered by the `php_openads` native Zend extension. |
 | **v1.0.0-rc29** | 2026-05-26 | **Turnkey `hbmk2` (`.hbp`) example for Harbour apps — `examples/harbour-hbmk2/`.** Asked on the FiveTech forum: "alguna alma caritativa que proporcione un archivo de compilación `.hbp` para crear un programa con OpenADS — todos mis intentos han fracasado". The repo now ships a complete `hbmk2` project (x64 + x86 variants, Windows `build.cmd` + POSIX `build.sh` wrappers, `openads_demo.prg` console app that exercises `AdsConnect` → `DbCreate` → `INDEX ON UPPER(NAME)` → `dbSeek`) — drop in your `.prg`, set `OPENADS_LIB`, run `hbmk2`. The `.hbp` is short by design: only the two link entries that change for OpenADS (`-lrddads` + `-L${OPENADS_LIB} -lace64`). README and `docs/{en,es,pt}/getting-started.md` carry walkthroughs, including the typical "unresolved `AdsConnect60`" / "loaded the wrong `ace64.dll`" pitfalls. |
 | **v1.0.0-rc28** | 2026-05-22 | **ADT / ADM support (M4 ADT) — read + write SAP Advantage native tables.** OpenADS can now open `.adt` files produced by the original Advantage Client Engine and write records back; `.adm` memo stores auto-attach when the table carries `Memo` or `Binary` fields. Full 13-type field vocabulary: CHAR, CICHAR (case-insensitive, maps to `ADS_CISTRING` = 25), LOGICAL, DATE (4-byte Julian Day Number), DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY. ADM uses 256-byte fixed blocks with no per-block header; the 9-byte in-record reference (`block_no LE` + `data_len LE` + `0x00`) is resolved transparently by the engine. Record prefix: `0x04` = active / `0x05` = deleted, normalised to DBF convention on read and restored on write; null-bitmap bytes (1–4) are zeroed on `AppendBlank` rather than space-filled. `AdsCreateTable` with `ADS_ADT` still creates a DBF (ADT creation deferred); ADI index files are not yet implemented. Verified against `f:\pmsys\data\landlords.adt` (13 fields, 7 records, CICHAR key, ADM memo round-trip "SEC 8 preferred") via `tests/unit/abi_adt_smoke_test.cpp` (skipped on machines without the fixture). Suite 398 / 398. |
@@ -441,11 +450,28 @@ different hosts.
 
 ### openads_import_dd — SAP `.add` migration tool
 
+**`AdsConnect60` rejects SAP binary `.add` files.** If you point an
+OpenADS connection at a `.add` file created by the original SAP
+Advantage Client Engine, `AdsConnect60` returns error code
+`AE_SAP_PERMS_NEED_IMPORT` (5174) with the message:
+
+```
+This is a SAP Advantage Data Dictionary in proprietary binary format.
+OpenADS cannot open it directly.
+Run: import_dd <source.add> <dest.add>
+to convert it to OpenADS format, then connect to the converted file.
+```
+
+The engine can *read* the SAP binary format (via `DataDict::load_add_binary_()`)
+but not write back to it safely — the format is closed and per-user permission
+fields are stored in per-database encrypted blobs. The solution is a one-time
+import to the OpenADS-native format.
+
 `tools/import_dd/openads_import_dd` reads a SAP-format binary `.add`
-file and emits an OpenADS-native text `.add` (plus an optional SQL
-script with `GRANT` / `REVOKE` statements). Use it to migrate a SAP
-Data Dictionary to OpenADS without touching the underlying `.dbf` /
-`.adt` data files:
+file and emits an OpenADS-native `.add` (plus an optional SQL script
+with `GRANT` / `REVOKE` statements). Use it to migrate a SAP Data
+Dictionary to OpenADS without touching the underlying `.dbf` / `.adt`
+data files:
 
 ```
 openads_import_dd --input pmsys.add --output pmsys_openads.add [--sql pmsys_grants.sql]
@@ -456,6 +482,15 @@ Procedure sections from the SAP format, including the group-membership
 XOR tokens and permission bitmasks. SAP-encrypted permission blobs
 (per-table DML differentiation within a group) are approximated as
 full-access grants with a warning comment.
+
+After import, connect to the new file:
+
+```c
+AdsConnect60((UNSIGNED8*)"pmsys_openads.add", ADS_LOCAL_SERVER,
+             (UNSIGNED8*)"AdsSysAdmin", (UNSIGNED8*)"", 0, &hConn);
+```
+
+The original SAP `.add` is never modified by the import tool.
 
 ### AOF — Rushmore-style query optimisation
 
@@ -671,13 +706,13 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   FPT blocks carry an explicit type tag (Text / Picture / Object), so
   the same field can hold either text memos or `ADS_BINARY` /
   `ADS_IMAGE` payloads with embedded NULs.
-- **Data Dictionary** — Full read/write support for both OpenADS-native text
-  format and the SAP binary `.add` / `.am` / `.ai` format.
-  `Connection::open(<.add>)` resolves member tables on every `AdsOpenTable`.
-  The engine enforces server-side: **triggers** (BEFORE / AFTER INSERT / UPDATE
-  / DELETE dispatch; bodies loaded from binary `.add` / `.am`), **referential
-  integrity** (Restrict, Cascade, SetNull on child INSERT / parent DELETE-UPDATE),
-  and **permissions** (GRANT/REVOKE; effective rights OR group memberships).
+- **Data Dictionary** — Full read/write support for the **OpenADS-native**
+  `.add` format. `Connection::open(<.add>)` resolves member tables on every
+  `AdsOpenTable`. The engine enforces server-side: **triggers** (BEFORE /
+  AFTER INSERT / UPDATE / DELETE dispatch; bodies loaded from the `.add` / `.am`
+  pair), **referential integrity** (Restrict, Cascade, SetNull on child INSERT /
+  parent DELETE-UPDATE), and **permissions** (GRANT/REVOKE; effective rights OR
+  group memberships).
   Virtual system tables: `system.tables`, `system.columns`, `system.indexes`,
   `system.views`, `system.storedprocedures`, `system.functions`,
   `system.triggers`, `system.relations`, `system.links`,
@@ -687,10 +722,13 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   `CREATE TABLE`/`INDEX`/`TRIGGER`/`PROCEDURE`/`FUNCTION`.
   Group memberships decoded from both Permission records (SAP ACE v8+) and
   User property-byte XOR tokens (pre-v8 format); both sources unioned.
-  **Note:** for SAP-created `.add` files, per-table DML differentiation within
-  a group grant is stored in opaque encrypted blobs that OpenADS cannot decode;
-  the engine approximates these as full access. OpenADS-created grants store
-  exact ADS_PERMISSION bitmasks and are fully accurate.
+  **SAP binary `.add` files are not supported as live connection targets** —
+  `AdsConnect60` returns error `AE_SAP_PERMS_NEED_IMPORT` (5174) with a
+  message directing the caller to run `import_dd` first (see
+  `openads_import_dd` below). The binary format can be *read* by the import
+  tool (using `DataDict::load_add_binary_()`) but writing back to it is
+  unsafe because the format is closed and per-user permission fields are
+  encrypted; OpenADS uses its own fully-documented format for all new work.
   **DA-Web** — a companion web administration tool (separate from OpenADS
   core) that manages data dictionaries through a browser: browse tables,
   views, stored procedures, functions, triggers, RI objects, users, groups;

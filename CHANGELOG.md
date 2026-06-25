@@ -5,6 +5,46 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.3.0 — 2026-06-25
+
+- **CDX index direction fix for Harbour rddads (FiveWin).** `AdsCreateIndex61`
+  decoded `descending = ulOptions & ADS_DESCENDING (0x08)`. Instrumenting the
+  two RDD clients showed they put the compound/descending option bits on
+  **swapped** positions: X#'s ADSRDD sends `0x02` for an ascending tag and
+  `0x0A` for descending, while Harbour's `rddads` sends `0x08` for ascending
+  and `0x0A` for descending. So a plain Harbour `INDEX ON f TAG t` (`0x08`)
+  was read as descending and **every** Harbour/FiveWin index was built
+  reversed — `AdsGotoTop` landed on the last key and `Skip` walked backward,
+  so a `TBrowse`/`tDatabase` grid showed its rows upside-down (`Seek` still
+  worked, which masked it). Direction is now decoded as descending only when
+  **both** `0x02` and `0x08` are set (`0x0A`); a lone `0x02` or `0x08` is that
+  client's compound marker and is ascending. The SQL `CREATE INDEX` path emits
+  `0x0A` for a descending tag so it round-trips through the same decode. Pinned
+  by `abi_cdx_index_direction_test` and `examples/fivewin/tdata_index_test.prg`.
+- **Build fix: drop a dead `trim()` in `data_dict.cpp`.** An unreferenced
+  static function tripped `-WX` C4505 on a clean MSVC build.
+
+## 1.2.3 — 2026-06-25
+
+- **CDX character index key width fix (PR #68).** `AdsCreateIndex61`
+  derived a character tag's fixed key width from the **trimmed** value
+  of the first record. When the first row was short (e.g. `"ANA"`) and
+  later rows shared a longer prefix (`"ANABELA CARDOSO"`,
+  `"ANABELA FERREIRA"`), every later key was truncated to the first
+  row's width and collapsed onto the same stored key, so distinct
+  values became indistinguishable and a seek landed on the wrong
+  record — both inside the index and for native FoxPro/Clipper readers
+  of the bag. The key width now comes from the declared field length
+  for a bare character field, falling back to the **untrimmed**
+  first-record width for a composite expression, keeping the 32-char
+  default only for an empty table. Numeric CDX/NTX key widths are
+  unchanged. Pinned by `abi_cdx_char_keylen_test`.
+- **Build fix: `<cstdint>` in `sqlite_uri_test`.** `std::uint8_t` was
+  used without including `<cstdint>`; clang/libc++ does not pull it in
+  transitively, so the `ninja-clang` `-Werror` CI job failed while MSVC
+  and AppleClang stayed green. Added the explicit include.
+- Full unit suite **739/739**, 0 regression (was 738).
+
 ## 1.2.2 — 2026-06-24
 
 - **CDX empty-leaf walk fix (PR #63).** Forward and backward
