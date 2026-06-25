@@ -36,7 +36,10 @@ if ($action === 'connect') {
         $conn = AdsConnection::connect($opts);
         $conn->close();
     } catch (AdsException $e) {
-        api_exception(401, $e, $e->getCode() === 5174 ? ['path' => $path] : []);
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $needs_import = $e->getCode() === 5174 ||
+            ($e->getCode() === 5103 && $ext === 'add');
+        api_exception(401, $e, $needs_import ? ['path' => $path] : []);
     }
 
     if (!isset($_SESSION['connections'])) {

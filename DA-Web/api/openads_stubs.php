@@ -65,6 +65,9 @@ if (!extension_loaded('openads') && !class_exists('AdsConnection')) {
         public function setFieldProperty(string $table, string $field, int $property, string $value): void {}
         public function getDatabaseProperty(int $property): string {}
         public function setDatabaseProperty(int $property, string $value): void {}
+        // User property codes: 1101=password, 1102=group_membership, 1103=bad_logins, 1=comment
+        public function getUserProperty(string $user, int $property): string {}
+        public function setUserProperty(string $user, int $property, string $value): void {}
         public function addTable(string $alias, string $path, int $tableType = 3, int $charType = 1, string $indexPath = '', string $comment = ''): void {}
         public function removeTable(string $alias, bool $deleteFiles = false): void {}
         public function addIndexFile(string $table, string $indexPath, string $comment = ''): void {}

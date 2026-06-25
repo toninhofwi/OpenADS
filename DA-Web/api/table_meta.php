@@ -113,6 +113,7 @@ function fieldTypeLabel(string $raw, int $len, int $dec): string {
         case '+': return 'AutoIncrement';
         case 'W': return 'Blob';
         case 'G': return 'Binary';
+        case 'P': return 'Picture';
     }
     switch (ord(substr($raw, 0, 1))) {
         case  1: return 'Logical';
@@ -153,6 +154,7 @@ function fieldBaseType(string $raw): string {
         case '+': return 'AutoIncrement';
         case 'W': return 'Blob';
         case 'G': return 'Binary';
+        case 'P': return 'Picture';
     }
     switch (ord(substr($raw, 0, 1))) {
         case  1: return 'Logical';

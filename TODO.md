@@ -6,6 +6,21 @@ Check off completed work and commit the file update so it stays current.
 ---
 
 ## Data Dictionary (DD) support
+Data dictionaries are proving to be too hard to maintain.  We keep going back and forth.  You fix one thing, while at the same time breaking another.    I think the problem is that we are trying to maintain certain amount of compatability with SAP ADS DD.  We don't need to do that.  We can create our own structure for data dictionaries.  The important thing is to name data dictionaries with a .add file extention, memos be stored on .am file extension and any indexes as a compound .ai index.  The .add file can keep compatability with .adt, the .am with .adm and the .ai with .adi.  The only reason we name these files with alternate file extention is sto distinguish a data dictionary file with data files that will be boudn to a data dictionary.
+
+Data dictionary needs to store db schema, functions, stored procedures, triggers, referential integrity rules, user groups (or roles), group permissions, users, direct user permissions, and user membership to groups.   User effective permissions will become user direct permissions plus permissions of groups the user belongs to.
+
+In directory C:\Program Files (x86)\Advantage 10.10\Help you have help files you can read. Search for data dictionary to see everything a data dictionary does in SAP ADS.   We want to honor that but what's important that you understand is that we will store DD data with our own prefferd record structure.  I suggest we write records as objects.  Each object has a number, tables, stored procedures, functions, users, groups, referential integrity rules, triggers.  Each object may have a parent.  For example a trigger needs to have a parent table.  Each object has at lease a name.  For a table is the table name that doesn't necessarilty is the file name.  A lot of the data for many objects is different depending on the object type.  This data with different labels (or columns) can be stored as json structures on the memo file (.am).
+
+The import tools we wrote (f:\OpenAds\Tools\import_dd ) will need to be ammended so that it reads from SAP DD using SAP ACE each and every DD information and writes it to the newly created imported DD using OpenAds ACE on our own OpenADs DD format.
+
+Using SAP ACE64 you can query all DD properties (read from help files) and make sure all these properties can be stored on our newly designed OpenADS DD format.  And also make sure we have impelmented each and every SAP ACE function and stored procedres documented on help files. 
+
+After we have implemented our new DD structure, we want to write tests where a new DD is created, functions, sp, RI, users, groups, ect... are added and stored and tested.
+
+Once we have this working, document how dd work with OpenADs on readme.md of this project. 
+
+Our new DD needs to keep permissions information.  Permissions are granted to groups and directly to users.  A user's effective permissions is the combination or sum of permissions granted to the group the user belongs to and the permissions directly assigned to the user.  Permissions can be assigned over many objects: tables, stored procedures, functions.  A user may have permission to execute a given function or procedure, to insert, update, delete, modify from tables with grant or without.  Permissions can also be assigned to specific fields inside tables.  This information needs to be stored on the dd in a way that is quickly retrievable.  Imagine a transaction that triggers a table trigger or selecting from multiple tables, the ADS server has to check if the user has approriate permissions before actually executing.  That is a lot of checking.  I imagine permissions information could be kept in ADS Server memroy so that it can be retrieve as fast as possible.   How do you suggest we store this information on the DD?  Perhaps have an additional integer field and store bits for each operation on or off so that it can be read quickly?  Can OpenAds load permissions into memor vars so that it can access this info without having to re-read time after time for each transaction?
 
 ### Done
 - [x] Text-format DD parse + save (`# OpenADS Data Dictionary v1`):
@@ -309,10 +324,82 @@ Check off completed work and commit the file update so it stays current.
 
 ---
 
+## DA-Web (Data Architect web app — port 8080)
+
+### Done
+
+- [x] Connect / disconnect to Data Dictionaries and Free Tables directories.
+- [x] Import SAP DD (reads SAP ACE binary .add via import_dd tool, writes
+      OpenADS DD); RI parent/child tags pulled from `system.relations`.
+- [x] Table browser — paged rows, sort by index tag, seek, AOF filter,
+      add / edit / delete rows, inline cell editing.
+- [x] Table meta editor — fields list and index list (create, delete,
+      rename, change expression / unique / descending).
+- [x] Table triggers — per-table trigger list, create / edit / delete,
+      ACE editor for body.
+- [x] SQL tab — ACE editor, F5/F9 run, Ctrl+Enter run selection,
+      CSV/JSON export of results, save/load named scripts.
+- [x] Stored procedures and functions — view/edit body and parameter grids.
+- [x] Users — group membership grid, direct permissions grid, effective
+      permissions (read-only), change password.
+- [x] Groups — permissions grid, members grid.
+- [x] RI Objects — view and edit existing referential integrity rules
+      (parent/child table+tag, update/delete rule).
+- [x] Generate SQL — DDL preview for a table's CREATE TABLE statement.
+- [x] Blob / binary / picture / memo fields are non-editable in table
+      browser (prevent binary data corruption on inline edit).
+- [x] Tab auto-close on disconnect; Done button enabled after SAP import.
+
+### Open
+
+- [x] **View tab** — clicking a View node opens an editable ACE pane with
+      the view's SQL; Save updates via `api/save_view.php` (setViewProperty
+      prop 701/702); Drop removes via `dropView`. Backed by `api/view_body.php`.
+
+- [x] **Link tab** — clicking a Link node opens a read-only info panel
+      (alias, path, user) with a Drop button; backed by `api/link_meta.php`
+      (queries `system.links`) and `api/link_ops.php` (`dropLink`).
+
+- [x] **Create / delete user from UI** — clicking the Users category node
+      opens "New User" modal (calls `sp_CreateUser`); Delete button on User
+      tab calls `sp_DropUser` via `api/user_ops.php`.
+
+- [x] **Create / delete group from UI** — clicking the Groups category node
+      opens "New Group" modal (calls `sp_CreateGroup`); Delete button on
+      Group tab calls `sp_DropGroup` via `api/group_ops.php`.
+
+- [x] **Create RI rule from UI** — clicking the RI category node opens "New
+      RI…" modal; on OK calls `openRiTab` which opens a blank RI form
+      backed by the existing `api/save_ri.php`.
+
+- [x] **Database properties panel** — clicking the connected DD root node
+      opens a Properties tab (`dbprops`) backed by `api/db_props.php`;
+      shows description, login-required toggle, and version (read-only).
+
+- [x] **Blob / memo field viewer** — eye-icon button on blob/memo/binary
+      cells; text memos show content in a modal; binary/blob fields offer a
+      download link via `api/blob_data.php?download=1`.
+
+- [x] **Create table wizard** — clicking the Tables category node opens
+      "New Table…" modal (name, ADT/DBF toggle, ANSI/OEM toggle) that calls
+      `sp_AddTableToDatabase` via `api/table_ops.php`; opens Fields tab after.
+
+- [x] **Drop / remove table from DD** — "Drop Table" button on the table's
+      Fields meta tab calls `sp_RemoveTableFromDatabase` via `api/table_ops.php`
+      after confirmation; closes all related tabs and refreshes tree.
+
+- [x] **Table data export from browser** — Export button (📥) on the table
+      browser toolbar downloads all rows as UTF-8 CSV (respects current AOF
+      filter and sort) via `api/export_table.php`.
+
+---
+
 ## Wire protocol
 
 ### Open
 
-- [ ] **Forward-only prefetch (M12.21)** — disabled in M12.21b after
-      cursor-drift regressions on indexed scans. Re-enable once the
-      indexed-scan drift is understood and fixed.
+- [x] **Forward-only prefetch (M12.21)** — re-implemented as a
+      sequential-prefetch path negotiated via a Connect capability
+      flag (PR #47, v1.0.3). 50k-record loopback scan 3.9× faster.
+      Previous cursor-drift issue resolved by tying lookahead block
+      to forward-Skip acks with server cursor sync. (2026-06-23)
