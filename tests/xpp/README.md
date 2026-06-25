@@ -1,5 +1,7 @@
 # Xbase++ (Alaska) raw-ACE smoke test
 
+*Traducciones: [Español](README.es.md) · [Português](README.pt.md)*
+
 `test_ads.prg` is a headless Xbase++ app that drives OpenADS' ACE DLL
 through the **raw ACE C API**, called dynamically with
 `DllPrepareCall` / `DllExecuteCall`. It does **not** go through
