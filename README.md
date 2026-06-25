@@ -450,11 +450,28 @@ different hosts.
 
 ### openads_import_dd — SAP `.add` migration tool
 
+**`AdsConnect60` rejects SAP binary `.add` files.** If you point an
+OpenADS connection at a `.add` file created by the original SAP
+Advantage Client Engine, `AdsConnect60` returns error code
+`AE_SAP_PERMS_NEED_IMPORT` (5174) with the message:
+
+```
+This is a SAP Advantage Data Dictionary in proprietary binary format.
+OpenADS cannot open it directly.
+Run: import_dd <source.add> <dest.add>
+to convert it to OpenADS format, then connect to the converted file.
+```
+
+The engine can *read* the SAP binary format (via `DataDict::load_add_binary_()`)
+but not write back to it safely — the format is closed and per-user permission
+fields are stored in per-database encrypted blobs. The solution is a one-time
+import to the OpenADS-native format.
+
 `tools/import_dd/openads_import_dd` reads a SAP-format binary `.add`
-file and emits an OpenADS-native text `.add` (plus an optional SQL
-script with `GRANT` / `REVOKE` statements). Use it to migrate a SAP
-Data Dictionary to OpenADS without touching the underlying `.dbf` /
-`.adt` data files:
+file and emits an OpenADS-native `.add` (plus an optional SQL script
+with `GRANT` / `REVOKE` statements). Use it to migrate a SAP Data
+Dictionary to OpenADS without touching the underlying `.dbf` / `.adt`
+data files:
 
 ```
 openads_import_dd --input pmsys.add --output pmsys_openads.add [--sql pmsys_grants.sql]
@@ -465,6 +482,15 @@ Procedure sections from the SAP format, including the group-membership
 XOR tokens and permission bitmasks. SAP-encrypted permission blobs
 (per-table DML differentiation within a group) are approximated as
 full-access grants with a warning comment.
+
+After import, connect to the new file:
+
+```c
+AdsConnect60((UNSIGNED8*)"pmsys_openads.add", ADS_LOCAL_SERVER,
+             (UNSIGNED8*)"AdsSysAdmin", (UNSIGNED8*)"", 0, &hConn);
+```
+
+The original SAP `.add` is never modified by the import tool.
 
 ### AOF — Rushmore-style query optimisation
 
@@ -680,13 +706,13 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   FPT blocks carry an explicit type tag (Text / Picture / Object), so
   the same field can hold either text memos or `ADS_BINARY` /
   `ADS_IMAGE` payloads with embedded NULs.
-- **Data Dictionary** — Full read/write support for both OpenADS-native text
-  format and the SAP binary `.add` / `.am` / `.ai` format.
-  `Connection::open(<.add>)` resolves member tables on every `AdsOpenTable`.
-  The engine enforces server-side: **triggers** (BEFORE / AFTER INSERT / UPDATE
-  / DELETE dispatch; bodies loaded from binary `.add` / `.am`), **referential
-  integrity** (Restrict, Cascade, SetNull on child INSERT / parent DELETE-UPDATE),
-  and **permissions** (GRANT/REVOKE; effective rights OR group memberships).
+- **Data Dictionary** — Full read/write support for the **OpenADS-native**
+  `.add` format. `Connection::open(<.add>)` resolves member tables on every
+  `AdsOpenTable`. The engine enforces server-side: **triggers** (BEFORE /
+  AFTER INSERT / UPDATE / DELETE dispatch; bodies loaded from the `.add` / `.am`
+  pair), **referential integrity** (Restrict, Cascade, SetNull on child INSERT /
+  parent DELETE-UPDATE), and **permissions** (GRANT/REVOKE; effective rights OR
+  group memberships).
   Virtual system tables: `system.tables`, `system.columns`, `system.indexes`,
   `system.views`, `system.storedprocedures`, `system.functions`,
   `system.triggers`, `system.relations`, `system.links`,
@@ -696,10 +722,13 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   `CREATE TABLE`/`INDEX`/`TRIGGER`/`PROCEDURE`/`FUNCTION`.
   Group memberships decoded from both Permission records (SAP ACE v8+) and
   User property-byte XOR tokens (pre-v8 format); both sources unioned.
-  **Note:** for SAP-created `.add` files, per-table DML differentiation within
-  a group grant is stored in opaque encrypted blobs that OpenADS cannot decode;
-  the engine approximates these as full access. OpenADS-created grants store
-  exact ADS_PERMISSION bitmasks and are fully accurate.
+  **SAP binary `.add` files are not supported as live connection targets** —
+  `AdsConnect60` returns error `AE_SAP_PERMS_NEED_IMPORT` (5174) with a
+  message directing the caller to run `import_dd` first (see
+  `openads_import_dd` below). The binary format can be *read* by the import
+  tool (using `DataDict::load_add_binary_()`) but writing back to it is
+  unsafe because the format is closed and per-user permission fields are
+  encrypted; OpenADS uses its own fully-documented format for all new work.
   **DA-Web** — a companion web administration tool (separate from OpenADS
   core) that manages data dictionaries through a browser: browse tables,
   views, stored procedures, functions, triggers, RI objects, users, groups;

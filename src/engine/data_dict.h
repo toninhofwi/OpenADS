@@ -2,6 +2,7 @@
 
 #include "util/result.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -343,8 +344,10 @@ public:
     bool has_table_acl(const std::string& table) const noexcept {
         return table_perms_.find(table) != table_perms_.end();
     }
-    // Always returns false (no SAP binary permissions in new format).
-    bool has_sap_permissions() const noexcept { return false; }
+    // True when the .add file was opened in SAP proprietary binary format.
+    // Callers (AdsConnect60) use this to reject the connection and direct
+    // the user to run import_dd before connecting.
+    bool has_sap_permissions() const noexcept { return binary_format_; }
     // No-op — kept for import_dd compatibility.
     util::Result<void> clear_sap_permissions() { return {}; }
 
@@ -377,6 +380,7 @@ public:
 
 private:
     util::Result<void> load_();
+    util::Result<void> load_add_binary_(const std::string& buf);
 
     std::string                                  path_;
     std::unordered_map<std::string, std::string> tables_;
@@ -412,6 +416,29 @@ private:
                 std::unordered_map<std::string, uint32_t>> perm_cache_;
 
     void invalidate_perm_cache_() noexcept { perm_cache_.clear(); }
+
+    // SAP proprietary binary .add format state (set by load_add_binary_()).
+    struct BinaryRecord {
+        bool                         active       = false;
+        std::uint32_t                obj_id       = 0;
+        std::uint32_t                parent_id    = 0;
+        std::string                  obj_type;
+        std::string                  obj_name;
+        bool                         prop_null    = false;
+        std::string                  property;
+        std::uint16_t                prop_plen    = 0;
+        std::array<std::uint8_t, 9>  more_property{};
+        std::uint32_t                info1        = 0;
+        std::uint32_t                info2        = 0;
+        std::array<std::uint8_t, 9>  comment{};
+    };
+
+    bool                         binary_format_       = false;
+    std::uint32_t                binary_hdr_len_      = 0;
+    std::uint32_t                binary_rec_len_      = 0;
+    std::string                  binary_hdr_;
+    bool                         has_sap_permissions_ = false;
+    std::vector<BinaryRecord>    binary_recs_;
 };
 
 } // namespace openads::engine
