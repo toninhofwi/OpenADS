@@ -475,9 +475,9 @@ DispatchResult Session::dispatch(const Frame& f) {
                             openads::AE_NO_CONNECTION);
                 break;
             }
-            std::string rel(reinterpret_cast<const char*>(
-                                f.payload.data()),
-                            f.payload.size());
+            // Iterator-based ctor: payload.data() may be nullptr when empty,
+            // and std::string(nullptr, 0) is UB.
+            std::string rel(f.payload.begin(), f.payload.end());
             auto th = sess_conn_->open_table(rel,
                 openads::engine::TableType::Cdx,
                 openads::engine::OpenMode::Shared);
@@ -1665,9 +1665,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             break;
         }
         case Opcode::MgRequest: {
-            std::string reqbuf(
-                reinterpret_cast<const char*>(f.payload.data()),
-                f.payload.size());
+            // Iterator-based ctor: payload.data() may be nullptr when empty,
+            // and std::string(nullptr, 0) is UB.
+            std::string reqbuf(f.payload.begin(), f.payload.end());
             auto req = decode_mg_request(reqbuf);
             if (!req) {
                 reply = err("bad mg request");

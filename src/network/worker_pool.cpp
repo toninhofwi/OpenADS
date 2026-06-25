@@ -63,17 +63,25 @@ WorkerPool::WorkerPool(Server& srv, std::uint32_t workers) : srv_(&srv) {
 WorkerPool::~WorkerPool() { stop(); }
 
 void WorkerPool::start() {
-    if (running_.exchange(true)) return;
+    if (running_.load()) return;
     workers_.clear();
     workers_.reserve(nworkers_);
     for (std::uint32_t i = 0; i < nworkers_; ++i) {
+        // Only keep a worker that obtained a valid wake pair. A worker started
+        // with default (invalid) wake sockets would make WSAPoll fail with
+        // WSAENOTSOCK and exit immediately, silently shrinking the pool.
+        auto wp = make_wake_pair();
+        if (!wp) continue;
         auto w = std::make_unique<Worker>();
-        if (auto wp = make_wake_pair(); wp) {
-            w->wake_read  = wp.value().first;
-            w->wake_write = wp.value().second;
-        }
+        w->wake_read  = wp.value().first;
+        w->wake_write = wp.value().second;
         workers_.push_back(std::move(w));
     }
+    // Publish running_ only after workers_ is fully populated — otherwise a
+    // concurrent submit() could observe running_ == true and index into an
+    // empty/half-built workers_ (data race / UB). Threads are spawned after,
+    // and worker_loop gates on running_.load().
+    running_.store(true);
     for (auto& w : workers_) {
         Worker* wptr = w.get();
         wptr->th = std::thread([this, wptr]() { this->worker_loop(*wptr); });
