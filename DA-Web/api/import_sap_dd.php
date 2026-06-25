@@ -56,12 +56,32 @@ $destDir = dirname($dest);
 if ($destDir !== '' && $destDir !== '.' && !is_dir($destDir)) {
     api_error(400, 'dest parent directory does not exist');
 }
+// Resolve sapLib: accept a directory (append ace64.dll) or a direct file path.
+// When blank, probe well-known locations so the user can leave the field empty.
 if ($sapLib !== '') {
+    // If the user supplied a directory, append the DLL name.
+    $dllName = (PHP_OS_FAMILY === 'Windows') ? 'ace64.dll' : 'libace64.so';
+    if (is_dir($sapLib)) {
+        $sapLib = rtrim($sapLib, '/\\') . DIRECTORY_SEPARATOR . $dllName;
+    }
     $sapReal = realpath($sapLib);
     if ($sapReal === false || !is_file($sapReal)) {
-        api_error(400, 'sapLib path does not exist or is not a file');
+        api_error(400, 'sapLib path does not exist or is not a file: ' . $sapLib);
     }
     $sapLib = $sapReal;
+} else {
+    // Auto-detect: check locations where SAP ACE / php_advantage is typically installed.
+    $dllName = (PHP_OS_FAMILY === 'Windows') ? 'ace64.dll' : 'libace64.so';
+    $probes = [
+        'C:\\php\\' . $dllName,
+        'C:\\ADS\\' . $dllName,
+        'C:\\Program Files\\Advantage Database Server\\' . $dllName,
+        'C:\\Program Files (x86)\\Advantage Database Server\\' . $dllName,
+    ];
+    foreach ($probes as $p) {
+        if (is_file($p)) { $sapLib = $p; break; }
+    }
+    // If still not found, leave empty — import_dd will try its own search.
 }
 $source = $sourceReal;
 
