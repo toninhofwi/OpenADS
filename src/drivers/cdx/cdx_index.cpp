@@ -594,13 +594,18 @@ CdxIndex::open_named(const std::string& path,
     if (fep_len > 1) {
         std::uint32_t abs_pos = 512u + static_cast<std::uint32_t>(fep_pos);
         std::uint32_t abs_end = abs_pos + fep_len;
-        if (abs_pos >= 512 && abs_end <= CDX_HEADER_LEN) {
-            for_expr_.assign(
-                reinterpret_cast<const char*>(sub_hdr.data() + abs_pos),
-                fep_len);
-            while (!for_expr_.empty() && for_expr_.back() == '\0')
-                for_expr_.pop_back();
+        // Fail loud on a corrupt header: silently dropping the FOR would
+        // reopen a conditional tag as unconditional — the very data-integrity
+        // defect this change exists to prevent.
+        if (abs_pos < 512 || abs_end > CDX_HEADER_LEN) {
+            return util::Error{6106, 0,
+                "Corrupt CDX header: FOR expression out of bounds", ""};
         }
+        for_expr_.assign(
+            reinterpret_cast<const char*>(sub_hdr.data() + abs_pos),
+            fep_len);
+        while (!for_expr_.empty() && for_expr_.back() == '\0')
+            for_expr_.pop_back();
     }
 
     return {};
@@ -1339,11 +1344,21 @@ util::Result<void> CdxIndex::set_condition(const std::string& for_expr) {
     // expr's NUL). Bound the copy to the remaining pool space, mirroring
     // build_subtag_header. forExpLen INCLUDES the trailing NUL (1 == none).
     std::uint16_t fep_pos = read_u16_le(hdr.data() + 504);  // pool-relative
+    std::uint16_t key_len = read_u16_le(hdr.data() + 510);  // keyExpLen (incl NUL)
+    // Reject a corrupt header whose FOR slot would overlap the key expr.
+    if (fep_pos < key_len) {
+        return util::Error{6106, 0,
+            "Corrupt CDX header: FOR expression overlaps key expression", ""};
+    }
     std::size_t   abs_pos = 512u + static_cast<std::size_t>(fep_pos);
     std::size_t   for_room =
         (abs_pos < 1024u) ? (1024u - abs_pos - 1u) : 0u;   // leave room for NUL
-    std::size_t   for_copy_len =
-        std::min<std::size_t>(for_expr.size(), for_room);
+    // Refuse to silently truncate a condition that does not fit the pool.
+    if (for_expr.size() > for_room) {
+        return util::Error{6106, 0,
+            "FOR expression too long for CDX header pool", ""};
+    }
+    std::size_t   for_copy_len = for_expr.size();
     // Wipe the old FOR region (to its prior length) before writing the new
     // one so a shorter / cleared condition leaves no stale bytes.
     std::uint16_t old_len = read_u16_le(hdr.data() + 506);
@@ -1533,6 +1548,12 @@ CdxIndex::create(const std::string& path,
     // 3) Sub-tag CDXTAGHEADER at CDX_SUB_HEADER_OFFSET (1024B).
     //    root_page = 0 (no data yet); first insert allocates the leaf.
     {
+        // Key + FOR (each plus a NUL) must fit the 512-byte expression pool;
+        // refuse rather than silently truncate into a malformed index.
+        if (key_expr.size() + for_expr.size() > 509) {
+            return util::Error{6106, 0,
+                "Key and FOR expressions too long for CDX header pool", ""};
+        }
         auto sub_hdr = build_subtag_header(0, key_size, key_expr,
                                            tag_name, unique, descend,
                                            for_expr);
@@ -1678,6 +1699,12 @@ CdxIndex::add_tag(const std::string& path,
     if (!wrote) return wrote.error();
 
     // 5) Write fresh sub-tag CDXTAGHEADER at new_off.
+    // Key + FOR (each plus a NUL) must fit the 512-byte expression pool;
+    // refuse rather than silently truncate into a malformed index.
+    if (key_expr.size() + for_expr.size() > 509) {
+        return util::Error{6106, 0,
+            "Key and FOR expressions too long for CDX header pool", ""};
+    }
     auto sub_hdr = build_subtag_header(0, key_size, key_expr,
                                        tag_name, unique, descend,
                                        for_expr);

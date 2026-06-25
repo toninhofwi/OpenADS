@@ -1089,6 +1089,11 @@ util::Result<void> Table::reindex() {
     bool any_for = false;
     for (auto& f : snap_for) if (!f.empty()) { any_for = true; break; }
 
+    // Hoisted out of the per-record loop to avoid a heap allocation on every
+    // record of a large table; cleared and refilled each iteration.
+    std::vector<std::pair<drivers::IIndex*, std::string>> pass;
+    if (any_for) pass.reserve(snap.size());
+
     auto rec_count = driver_->record_count();
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto g = goto_record(r); !g) return g.error();
@@ -1099,8 +1104,7 @@ util::Result<void> Table::reindex() {
         }
         // Re-insert only into the indexes whose FOR clause this record
         // passes (an empty FOR is unconditional).
-        std::vector<std::pair<drivers::IIndex*, std::string>> pass;
-        pass.reserve(snap.size());
+        pass.clear();
         for (std::size_t i = 0; i < snap.size(); ++i) {
             if (snap_for[i].empty() ||
                 evaluate_index_expr_truthy(*this, snap_for[i])) {
