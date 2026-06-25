@@ -45,6 +45,55 @@ Windows resolves each extension's DLL imports to the correct file. Applications 
 
 ---
 
+## Why Import Instead of Using the SAP DD Natively?
+
+When you have an existing SAP Advantage Data Dictionary (a `.add` file created by SAP ACE), DA-Web does not connect to it directly. Instead, you run a one-time **import** that reads the SAP file and writes a new OpenADS-format DD. Here is why.
+
+### 1. The SAP binary format has encrypted zones
+
+The SAP `.add` file uses a closed proprietary binary layout: 524-byte fixed records, a 2,200-byte header, and per-user cipher-encrypted permission blobs. OpenADS has reverse-engineered the record layout far enough to read `Table`, `Trigger`, `Procedure`, and `Link` records (`DataDict::load_add_binary_()` in `data_dict.cpp`). However, the permission blobs use a per-database cipher that OpenADS cannot replicate, and writing back to the SAP file risks corrupting it. Read access is feasible; reliable round-trip write access is not.
+
+### 2. Two separate DLL stacks cannot share a DD connection
+
+DA-Web runs through `openace64.dll` (OpenADS engine) via `php_openads`. If we used the SAP DD natively, we would need `ace64.dll` (SAP engine) via `php_advantage` for DD operations — a different PHP extension, a different in-process connection pool, and a different locking model. You cannot have one DD file open simultaneously through two different engine DLLs without risking data corruption or deadlock.
+
+The import workflow solves this cleanly:
+
+- **Import phase** — `php_advantage` (SAP engine) opens the SAP `.add` read-only and queries every DD object via the SAP ACE API.
+- **Write phase** — `php_openads` (OpenADS engine) creates a new `.add` using the OpenADS DD format and writes everything across.
+- **After import** — `php_advantage` is no longer involved. DA-Web operates entirely through `php_openads` on the new file.
+
+### 3. OpenADS extends beyond what the SAP format can represent
+
+OpenADS adds features the SAP binary format has no slot for: the prefetch-capable wire protocol, open-format SQL extensions, and future schema additions. Storing the DD in OpenADS format means these extensions have a place to live. A SAP-format `.add` cannot be extended without reverse-engineering new binary record types.
+
+### 4. No SAP license required after import
+
+Once imported, the OpenADS DD is completely independent of SAP software. No SAP ACE license is needed to run the application or DA-Web. The `ace64.dll` and `php_advantage` extension are only needed during the import itself, and only on the machine running the import tool.
+
+### 5. The OpenADS DD format is fully under our control
+
+The OpenADS DD format is documented in `data_dict.h` / `data_dict.cpp` and version-controlled in this repository. Every field has a known purpose. The format can be debugged, extended, and tested without reverse-engineering closed binaries.
+
+### What the import preserves and what it does not
+
+| DD Object | Imported | Notes |
+|-----------|----------|-------|
+| Tables (names, paths) | Yes | |
+| Index file registrations | Yes | |
+| Triggers (name, timing, event, body, priority) | Yes | Body read from SAP binary via `load_add_binary_()` |
+| Stored procedures (name, body, params) | Yes | |
+| Users and groups | Yes | |
+| Group memberships | Yes | |
+| RI rules | Yes | Parent/child tags sourced from `system.relations` |
+| Group permissions | Partial | Unencrypted bits preserved; encrypted per-user blobs not decodeable |
+| Per-user direct permissions | Manual | Encrypted in SAP format; must be re-entered after import |
+| Encrypted table data | No | Table files (`.adt`/`.dbf`) are read directly — never imported |
+
+The original SAP `.add` file is never modified by the import.
+
+---
+
 ## Installation
 
 ### 1. Build the engine
