@@ -2936,7 +2936,7 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     if (raw->has_dd() && raw->dd()->has_sap_permissions()) {
         s.conns.erase(h);   // destroys the Connection object
         s.registry.release(h);
-        *phConnect = ADS_INVALID_HANDLE;
+        *phConnect = 0;
         return fail(openads::AE_SAP_PERMS_NEED_IMPORT,
             "This is a SAP Advantage Data Dictionary in proprietary binary format. "
             "OpenADS cannot open it directly. "

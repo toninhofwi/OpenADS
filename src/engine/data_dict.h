@@ -2,6 +2,7 @@
 
 #include "util/result.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -417,12 +418,27 @@ private:
     void invalidate_perm_cache_() noexcept { perm_cache_.clear(); }
 
     // SAP proprietary binary .add format state (set by load_add_binary_()).
-    // These are used for round-trip write-back to the binary file.
-    bool            binary_format_       = false;
-    std::uint32_t   binary_hdr_len_      = 0;
-    std::uint32_t   binary_rec_len_      = 0;
-    std::string     binary_hdr_;
-    bool            has_sap_permissions_ = false;
+    struct BinaryRecord {
+        bool                         active       = false;
+        std::uint32_t                obj_id       = 0;
+        std::uint32_t                parent_id    = 0;
+        std::string                  obj_type;
+        std::string                  obj_name;
+        bool                         prop_null    = false;
+        std::string                  property;
+        std::uint16_t                prop_plen    = 0;
+        std::array<std::uint8_t, 9>  more_property{};
+        std::uint32_t                info1        = 0;
+        std::uint32_t                info2        = 0;
+        std::array<std::uint8_t, 9>  comment{};
+    };
+
+    bool                         binary_format_       = false;
+    std::uint32_t                binary_hdr_len_      = 0;
+    std::uint32_t                binary_rec_len_      = 0;
+    std::string                  binary_hdr_;
+    bool                         has_sap_permissions_ = false;
+    std::vector<BinaryRecord>    binary_recs_;
 };
 
 } // namespace openads::engine

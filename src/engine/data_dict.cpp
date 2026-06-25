@@ -91,6 +91,54 @@ static std::string trim(std::string s) {
 }
 
 // ---------------------------------------------------------------------------
+// Binary .add helpers — string-based LE readers and record struct
+// ---------------------------------------------------------------------------
+
+static inline std::uint32_t le32(const std::string& buf, std::size_t off) {
+    return  static_cast<std::uint32_t>(static_cast<std::uint8_t>(buf[off]))
+          | (static_cast<std::uint32_t>(static_cast<std::uint8_t>(buf[off+1])) <<  8)
+          | (static_cast<std::uint32_t>(static_cast<std::uint8_t>(buf[off+2])) << 16)
+          | (static_cast<std::uint32_t>(static_cast<std::uint8_t>(buf[off+3])) << 24);
+}
+
+static inline std::uint16_t le16(const std::string& buf, std::size_t off) {
+    return  static_cast<std::uint16_t>(static_cast<std::uint8_t>(buf[off]))
+          | (static_cast<std::uint16_t>(static_cast<std::uint8_t>(buf[off+1])) << 8);
+}
+
+// Split a string on embedded NUL bytes.
+static std::vector<std::string> split_nul(const std::string& s) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : s) {
+        if (c == '\0') { out.push_back(cur); cur.clear(); }
+        else cur.push_back(c);
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+// Read a JSON blob from the companion .am buffer using a 9-byte
+// more_property pointer ([4-byte LE block] [4-byte LE len] [0x00]).
+// Block size for the SAP continuation .am is 8 bytes.
+static std::string read_am_json(const std::string& am_buf,
+                                const std::array<std::uint8_t, 9>& mp) {
+    std::uint32_t blk = static_cast<std::uint32_t>(mp[0])
+                      | (static_cast<std::uint32_t>(mp[1]) <<  8)
+                      | (static_cast<std::uint32_t>(mp[2]) << 16)
+                      | (static_cast<std::uint32_t>(mp[3]) << 24);
+    std::uint32_t len = static_cast<std::uint32_t>(mp[4])
+                      | (static_cast<std::uint32_t>(mp[5]) <<  8)
+                      | (static_cast<std::uint32_t>(mp[6]) << 16)
+                      | (static_cast<std::uint32_t>(mp[7]) << 24);
+    if (blk == 0 || len == 0 || am_buf.empty()) return {};
+    std::size_t off = static_cast<std::size_t>(blk) * 8;
+    if (off >= am_buf.size()) return {};
+    std::size_t readable = std::min<std::size_t>(len, am_buf.size() - off);
+    return am_buf.substr(off, readable);
+}
+
+// ---------------------------------------------------------------------------
 // JSON helpers (shared by trigger/proc/func/view serialization)
 // ---------------------------------------------------------------------------
 
