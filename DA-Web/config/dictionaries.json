@@ -1,12 +1,5 @@
 [
     {
-        "name": "Pmsys-TestData",
-        "path": "f:\\openads\\testdata\\pmsys\\pmsys.add",
-        "username": "adssys",
-        "connType": "local",
-        "entryType": "dd"
-    },
-    {
         "name": "Aquarium",
         "path": "f:\\openads\\testdata\\Aquarium\\",
         "username": "",
@@ -14,17 +7,24 @@
         "entryType": "free"
     },
     {
-        "name": "Pmsys-Imported",
-        "path": "f:\\OpenAds\\Testdata\\Pmsys\\pmsys_imported.add",
-        "username": "AdsSys",
-        "connType": "local",
-        "entryType": "dd"
-    },
-    {
         "name": "Invoices",
         "path": "f:\\Openads\\testdata\\invoices\\",
         "username": "",
         "connType": "local",
         "entryType": "free"
+    },
+    {
+        "name": "PMsys",
+        "path": "f:\\OpenAds\\testdata\\pmsys\\pmsys.add",
+        "username": "adssys",
+        "connType": "local",
+        "entryType": "dd"
+    },
+    {
+        "name": "PMsys_OpenADS",
+        "path": "f:\\OpenAds\\testdata\\pmsys\\pmsys_openads.add",
+        "username": "AdsSys",
+        "connType": "local",
+        "entryType": "dd"
     }
 ]
