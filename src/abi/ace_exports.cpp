@@ -12511,7 +12511,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             ADSHANDLE hTable = 0;
             UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
-                                           ADS_ADT, 0, 0, 0, 0,
+                                           ADS_CDX, 0, 0, 0, 0,
                                            def_buf.data(), &hTable);
             if (rc != openads::AE_SUCCESS) {
                 AdsCloseTable(srcCur);
@@ -12610,7 +12610,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         });
         if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
-                                       ADS_ADT, 0, 0, 0, 0,
+                                       ADS_CDX, 0, 0, 0, 0,
                                        def_buf.data(), &hTable);
         if (rc != openads::AE_SUCCESS) return rc;
         // Close the table immediately; CREATE TABLE returns no cursor.
@@ -12646,9 +12646,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         namespace fs = std::filesystem;
         fs::path tbl_path(c->data_dir());
         tbl_path /= ci.value().table;
-        if (!tbl_path.has_extension()) tbl_path.replace_extension(".adt");
+        if (!tbl_path.has_extension()) tbl_path.replace_extension(".dbf");
         fs::path bag = tbl_path;
-        bag.replace_extension(".adi");
+        bag.replace_extension(".cdx");
 
         std::vector<UNSIGNED8> bag_buf(bag.string().size() + 1, 0);
         std::memcpy(bag_buf.data(), bag.string().data(),
