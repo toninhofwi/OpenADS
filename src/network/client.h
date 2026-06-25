@@ -160,6 +160,21 @@ public:
         fetch_batch(std::uint32_t                   id,
                     std::uint32_t                   max_rows,
                     const std::vector<std::string>& columns);
+    // Tier-2 server-side filtered scan. Like fetch_batch, but the
+    // server evaluates `where_expr` (a Clipper-style FOR predicate,
+    // e.g. "AGE > 40 .AND. CITY = 'RIO'") against each row and returns
+    // only the matching rows' requested columns, walking the table
+    // server-side until `max_rows` matches or EOF. Collapses a
+    // non-index-optimisable SET FILTER / COUNT FOR / LOCATE scan from
+    // one round-trip per record to ceil(matches / max_rows). Base
+    // tables only — a SQL cursor already filters via its WHERE clause.
+    // Callers continue the walk like fetch_batch: a batch returning
+    // fewer than `max_rows` rows has reached EOF.
+    util::Result<std::vector<std::vector<std::string>>>
+        fetch_where(std::uint32_t                   id,
+                    std::uint32_t                   max_rows,
+                    const std::string&              where_expr,
+                    const std::vector<std::string>& columns);
 
 private:
     util::Result<Frame> request(const Frame& f);
