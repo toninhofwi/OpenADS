@@ -1077,11 +1077,39 @@ util::Result<void> Table::reindex() {
     for (auto* x : extra_index_views_) {
         if (x) snap.emplace_back(x, std::string{});
     }
+    // A conditional (FOR) tag must only hold records that pass its
+    // predicate; reindexing must re-apply that filter, not rebuild the
+    // tag unconditional. Capture each index's FOR clause once.
+    std::vector<std::string> snap_for;
+    snap_for.reserve(snap.size());
+    for (auto& [idx, prev] : snap) {
+        (void)prev;
+        snap_for.push_back(idx ? idx->condition() : std::string{});
+    }
+    bool any_for = false;
+    for (auto& f : snap_for) if (!f.empty()) { any_for = true; break; }
+
     auto rec_count = driver_->record_count();
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto g = goto_record(r); !g) return g.error();
         if (is_deleted()) continue;
-        if (auto s = sync_all_indexes_(snap); !s) return s.error();
+        if (!any_for) {
+            if (auto s = sync_all_indexes_(snap); !s) return s.error();
+            continue;
+        }
+        // Re-insert only into the indexes whose FOR clause this record
+        // passes (an empty FOR is unconditional).
+        std::vector<std::pair<drivers::IIndex*, std::string>> pass;
+        pass.reserve(snap.size());
+        for (std::size_t i = 0; i < snap.size(); ++i) {
+            if (snap_for[i].empty() ||
+                evaluate_index_expr_truthy(*this, snap_for[i])) {
+                pass.push_back(snap[i]);
+            }
+        }
+        if (!pass.empty()) {
+            if (auto s = sync_all_indexes_(pass); !s) return s.error();
+        }
     }
 
     // 3) Flush every index so the rebuilt entries hit disk before the
