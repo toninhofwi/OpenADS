@@ -414,13 +414,138 @@
       </div>
       <div class="form-group">
         <label for="isdd-saplib">SAP library path <span class="opt">(optional — leave blank for defaults; directory or ace64.dll path)</span></label>
-        <input type="text" id="isdd-saplib" placeholder="e.g. f:\Ads11  or  f:\Ads11\ace64.dll" autocomplete="off">
+        <input type="text" id="isdd-saplib" placeholder="e.g. C:\php\ace64.dll  or  C:\ADS  (blank = auto-detect)" autocomplete="off">
       </div>
       <div id="isdd-result" style="display:none;margin-top:10px;padding:10px;border-radius:6px;font-size:12px;line-height:1.6;"></div>
     </div>
     <div class="modal-footer">
       <button class="btn" id="isdd-cancel">Cancel</button>
       <button class="btn btn-primary" id="isdd-run">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: New User ─────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-new-user" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <span>New User — <span id="new-user-dd-label"></span></span>
+      <span class="modal-close" onclick="document.getElementById('modal-new-user').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="new-user-err" class="modal-err"></div>
+      <input type="hidden" id="new-user-dd">
+      <div class="form-group">
+        <label for="new-user-name">Username <span class="req">*</span></label>
+        <input type="text" id="new-user-name" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="new-user-pw">Password</label>
+        <input type="password" id="new-user-pw" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label for="new-user-pw2">Confirm password</label>
+        <input type="password" id="new-user-pw2" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="new-user-cancel">Cancel</button>
+      <button class="btn btn-primary" id="new-user-ok">Create User</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: New Group ────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-new-group" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header">
+      <span>New Group — <span id="new-group-dd-label"></span></span>
+      <span class="modal-close" onclick="document.getElementById('modal-new-group').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="new-group-err" class="modal-err"></div>
+      <input type="hidden" id="new-group-dd">
+      <div class="form-group">
+        <label for="new-group-name">Group name <span class="req">*</span></label>
+        <input type="text" id="new-group-name" autocomplete="off">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="new-group-cancel">Cancel</button>
+      <button class="btn btn-primary" id="new-group-ok">Create Group</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: New RI ───────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-new-ri" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header">
+      <span>New RI Rule — <span id="new-ri-dd-label"></span></span>
+      <span class="modal-close" onclick="document.getElementById('modal-new-ri').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="new-ri-err" class="modal-err"></div>
+      <input type="hidden" id="new-ri-dd">
+      <div class="form-group">
+        <label for="new-ri-name">RI rule name <span class="req">*</span></label>
+        <input type="text" id="new-ri-name" autocomplete="off" placeholder="e.g. Orders2Customers">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="new-ri-cancel">Cancel</button>
+      <button class="btn btn-primary" id="new-ri-ok">Open RI Form</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: New Table ───────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-new-table" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span>New Table — <span id="new-table-dd-label"></span></span>
+      <span class="modal-close" onclick="document.getElementById('modal-new-table').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="new-table-err" class="modal-err"></div>
+      <input type="hidden" id="new-table-dd">
+      <div class="form-group">
+        <label for="new-table-name">Table name <span class="req">*</span></label>
+        <input type="text" id="new-table-name" autocomplete="off" placeholder="e.g. Customers">
+      </div>
+      <div class="form-group">
+        <label>Table format</label>
+        <div class="toggle-group" id="new-table-type">
+          <button type="button" class="toggle-btn active" data-value="ADT">ADT (native)</button>
+          <button type="button" class="toggle-btn" data-value="DBF">DBF (dBASE)</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Character set</label>
+        <div class="toggle-group" id="new-table-char">
+          <button type="button" class="toggle-btn active" data-value="ANSI">ANSI</button>
+          <button type="button" class="toggle-btn" data-value="OEM">OEM</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="new-table-cancel">Cancel</button>
+      <button class="btn btn-primary" id="new-table-ok">Create Table</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: Blob / Memo viewer ──────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-blob-viewer" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <span id="blob-viewer-title">Field content</span>
+      <span class="modal-close" onclick="document.getElementById('modal-blob-viewer').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body" id="blob-viewer-body" style="padding:12px;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="blob-viewer-download" style="display:none;">&#11015; Download</button>
+      <button class="btn" onclick="document.getElementById('modal-blob-viewer').classList.remove('open')">Close</button>
     </div>
   </div>
 </div>

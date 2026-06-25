@@ -106,6 +106,7 @@ add_executable(openads_unit_tests
     unit/abi_ntx_multitag_test.cpp
     unit/abi_ntx_numeric_key_test.cpp
     unit/abi_cdx_char_keylen_test.cpp
+    unit/abi_cdx_index_direction_test.cpp
     unit/abi_ordnumber_test.cpp
     unit/abi_server_info_test.cpp
     unit/abi_unicode_test.cpp
@@ -186,6 +187,7 @@ add_executable(openads_unit_tests
     unit/legacy_crt_shims_test.cpp
     unit/dll_test.cpp
     unit/network_client_test.cpp
+    unit/abi_dd_invoicing_test.cpp
 )
 
 if(OPENADS_WITH_POSTGRESQL)

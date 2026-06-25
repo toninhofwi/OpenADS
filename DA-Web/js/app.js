@@ -192,10 +192,11 @@
     });
 
     $('#tree-container').on('select_node.jstree', function (e, data) {
-      const a    = data.node.a_attr || {};
-      const type = a['data-type']   || '';
-      const dd   = a['data-dd']     || '';
-      const tbl  = a['data-table']  || '';
+      const a     = data.node.a_attr || {};
+      const type  = a['data-type']  || '';
+      const dd    = a['data-dd']    || '';
+      const tbl   = a['data-table'] || '';
+      const entry = a['data-entry'] || 'dd';  // 'dd' or 'free'
 
       // Track which DD is currently highlighted so SQL editor can pre-select it
       if (dd) state.selectedDD = dd;
@@ -203,6 +204,14 @@
       if (type === 'dd') {
         const connected = a['data-connected'] === 'true';
         if (!connected) openConnectModal(dd);
+        else if (entry === 'dd') openDbPropsTab(dd);
+        // free-table directory: nothing to show at the root level
+      } else if (type === 'category') {
+        const cat = a['data-cat'] || '';
+        if      (cat === 'users')  openNewUserModal(dd);
+        else if (cat === 'groups') openNewGroupModal(dd);
+        else if (cat === 'tables') openNewTableModal(dd);
+        else if (cat === 'ri')     openNewRiModal(dd);
       } else if (type === 'table') {
         openTableTab(dd, tbl);
       } else if (type === 'fields') {
@@ -221,6 +230,10 @@
         openUserTab(dd, a['data-name'] || data.node.text || '');
       } else if (type === 'ri') {
         openRiTab(dd, a['data-name'] || data.node.text || '');
+      } else if (type === 'view') {
+        openViewTab(dd, a['data-name'] || data.node.text || '');
+      } else if (type === 'link') {
+        openLinkTab(dd, a['data-name'] || data.node.text || '');
       }
     });
 
@@ -421,6 +434,7 @@
              <button class="btn btn-sm btn-primary" id="save-group-${tabId}" style="margin-left:auto;">&#128190; Save Changes</button>
              <span id="save-group-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
              <span id="grp-perm-note-${tabId}" style="font-size:11px;color:#585b70;">Field rows reflect table-level permissions</span>
+             <button class="btn btn-sm" id="del-group-tab-${tabId}" style="color:#f38ba8;background:#313244;border:1px solid #45475a;">&#128465; Delete Group</button>
            </div>
            <div id="group-tbl-${tabId}"     style="flex:1;min-height:0;overflow:hidden;"></div>
            <div id="group-members-${tabId}" style="flex:1;min-height:0;overflow:hidden;display:none;"></div>`;
@@ -523,6 +537,20 @@
 
         btnPerm?.addEventListener('click',    () => switchGroupTab('perm'));
         btnMembers?.addEventListener('click', () => switchGroupTab('members'));
+
+        document.getElementById('del-group-tab-' + tabId)?.addEventListener('click', async () => {
+          if (!confirm(`Delete group "${groupName}" from "${dd}"?\nThis cannot be undone.`)) return;
+          try {
+            const r = await apiFetch('api/group_ops.php', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'delete', dd, group: groupName }),
+            });
+            if (r.error) { setStatus(`Error: ${r.error}`); return; }
+            closeTab(tabId);
+            refreshTree();
+            setStatus(`Group "${groupName}" deleted`);
+          } catch (err) { setStatus(`Error: ${err.message}`); }
+        });
       })
       .catch(err => {
         if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
@@ -637,9 +665,23 @@
            <button class="btn btn-sm" id="del-group-${tabId}">&#8722; Remove Selected</button>
            <button class="btn btn-sm btn-primary" id="save-grp-${tabId}">&#128190; Save</button>
            <span id="save-grp-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+           <button class="btn btn-sm" id="del-user-${tabId}" style="margin-left:auto;color:#f38ba8;background:#313244;border:1px solid #45475a;">&#128465; Delete User</button>
          </div>
          <div id="user-grp-${tabId}" style="flex:0 0 160px;min-height:0;overflow:hidden;"></div>
          <div id="user-grp-builtin-${tabId}" style="border-bottom:2px solid #313244;background:#1e1e2e;min-height:22px;"></div>
+         <div style="padding:4px 8px;display:flex;gap:6px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;flex-wrap:wrap;">
+           <span style="font-size:12px;color:#89b4fa;font-weight:600;white-space:nowrap;">Change Password</span>
+           <input type="password" id="pw-new-${tabId}" autocomplete="new-password"
+                  placeholder="New password"
+                  style="font-size:12px;background:#313244;border:1px solid #45475a;color:#cdd6f4;
+                         border-radius:4px;padding:2px 6px;width:140px;">
+           <input type="password" id="pw-confirm-${tabId}" autocomplete="new-password"
+                  placeholder="Confirm"
+                  style="font-size:12px;background:#313244;border:1px solid #45475a;color:#cdd6f4;
+                         border-radius:4px;padding:2px 6px;width:120px;">
+           <button class="btn btn-sm btn-primary" id="pw-save-${tabId}">Set Password</button>
+           <span id="pw-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+         </div>
          <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
            <button class="perm-tab-btn btn btn-sm" id="ptab-direct-${tabId}"
                    style="background:#313244;color:#cdd6f4;border:1px solid #45475a;"
@@ -714,6 +756,50 @@
           if (saveGrpMsg) saveGrpMsg.textContent = r.error ? `Error: ${r.error}` : 'Saved';
         } catch (err) {
           if (saveGrpMsg) saveGrpMsg.textContent = `Error: ${err.message}`;
+        }
+      });
+
+      // ── Delete user ─────────────────────────────────────────────────────────
+      document.getElementById('del-user-' + tabId)?.addEventListener('click', async () => {
+        if (!confirm(`Delete user "${userName}" from "${dd}"?\nThis cannot be undone.`)) return;
+        try {
+          const r = await apiFetch('api/user_ops.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete', dd, user: userName }),
+          });
+          if (r.error) { setStatus(`Error: ${r.error}`); return; }
+          closeTab(tabId);
+          refreshTree();
+          setStatus(`User "${userName}" deleted`);
+        } catch (err) { setStatus(`Error: ${err.message}`); }
+      });
+
+      // ── Change password ─────────────────────────────────────────────────────
+      document.getElementById('pw-save-' + tabId)?.addEventListener('click', async () => {
+        const pwNew     = document.getElementById('pw-new-'     + tabId);
+        const pwConfirm = document.getElementById('pw-confirm-' + tabId);
+        const pwMsg     = document.getElementById('pw-msg-'     + tabId);
+        if (!pwNew || !pwConfirm || !pwMsg) return;
+        if (pwNew.value !== pwConfirm.value) {
+          pwMsg.style.color = '#f38ba8';
+          pwMsg.textContent = 'Passwords do not match';
+          return;
+        }
+        pwMsg.style.color = '#a6adc8';
+        pwMsg.textContent = 'Saving…';
+        try {
+          await apiFetch('api/change_password.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dd, user: userName, password: pwNew.value }),
+          });
+          pwNew.value = '';
+          pwConfirm.value = '';
+          pwMsg.style.color = '#a6e3a1';
+          pwMsg.textContent = 'Password changed';
+          setTimeout(() => { if (pwMsg) pwMsg.textContent = ''; }, 3000);
+        } catch (err) {
+          pwMsg.style.color = '#f38ba8';
+          pwMsg.textContent = err.message;
         }
       });
 
@@ -1049,6 +1135,137 @@
     }).catch(err => {
       if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
     });
+  }
+
+  // ── New RI modal opener ──────────────────────────────────────────────────────
+  function openNewRiModal(dd) {
+    const ddEl = document.getElementById('new-ri-dd');
+    const lbl  = document.getElementById('new-ri-dd-label');
+    const name = document.getElementById('new-ri-name');
+    const err  = document.getElementById('new-ri-err');
+    if (ddEl)  ddEl.value      = dd;
+    if (lbl)   lbl.textContent = dd;
+    if (name)  name.value      = '';
+    if (err)   err.textContent = '';
+    openModal('modal-new-ri');
+    setTimeout(() => name?.focus(), 50);
+  }
+
+  document.getElementById('new-ri-cancel').addEventListener('click', () => closeModal('modal-new-ri'));
+  document.getElementById('new-ri-ok').addEventListener('click', () => {
+    const dd   = document.getElementById('new-ri-dd')?.value || '';
+    const name = document.getElementById('new-ri-name')?.value.trim() || '';
+    const err  = document.getElementById('new-ri-err');
+    if (!name) { if (err) err.textContent = 'Name is required'; return; }
+    closeModal('modal-new-ri');
+    openRiTab(dd, name);
+  });
+  document.getElementById('new-ri-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('new-ri-ok').click();
+  });
+
+  // ── DB Properties tab ────────────────────────────────────────────────────────
+  function openDbPropsTab(dd) {
+    const existing = state.tabs.find(t => t.type === 'dbprops' && t.dd === dd);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `Props: ${dd}`, type: 'dbprops', dd });
+    renderTabs();
+    activateTab(id);
+    loadDbProps(id, dd);
+  }
+
+  function loadDbProps(tabId, dd) {
+    const container = document.getElementById('dbprops-' + tabId);
+    if (!container) return;
+
+    const chk = (val) => val ? 'checked' : '';
+    const inp  = (id, val, type = 'text', extra = '') =>
+      `<input type="${type}" id="${id}" value="${escAttr(String(val ?? ''))}" ${extra}
+              style="background:#313244;color:#cdd6f4;border:1px solid #45475a;
+                     border-radius:4px;padding:4px 8px;font-size:12px;width:100%;box-sizing:border-box;">`;
+    const cbRow = (label, id, checked, hint) =>
+      `<label style="padding-top:2px;">${label}</label>
+       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+         <input type="checkbox" id="${id}" ${checked} style="width:15px;height:15px;accent-color:#89b4fa;">
+         <span style="font-size:12px;color:#a6adc8;">${hint}</span>
+       </label>`;
+
+    apiFetch(`api/db_props.php?dd=${encodeURIComponent(dd)}`)
+      .then(resp => {
+        if (resp.error) {
+          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+        container.innerHTML = `
+          <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;
+                      background:#1e1e2e;border-bottom:1px solid #313244;flex-shrink:0;">
+            <button class="btn btn-sm btn-primary" id="save-dbprops-${tabId}">&#128190; Save</button>
+            <span id="dbprops-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+          </div>
+          <div style="padding:16px;max-width:560px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
+            <h3 style="margin:0;color:#cdd6f4;font-size:14px;">Dictionary: ${escHtml(dd)}</h3>
+
+            <div style="display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:start;">
+
+              <label style="padding-top:6px;font-size:12px;">Description</label>
+              <textarea id="dbprops-desc-${tabId}" rows="3"
+                style="background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;
+                       padding:6px;font-size:12px;resize:vertical;">${escHtml(resp.description || '')}</textarea>
+
+              ${cbRow('Login required', `dbprops-login-${tabId}`, chk(resp.loginRequired),
+                      'Require username/password to connect')}
+
+              ${cbRow('Verify access rights', `dbprops-verify-${tabId}`, chk(resp.verifyAccessRights),
+                      'Enforce per-user table/view/proc permissions')}
+
+              <label style="font-size:12px;padding-top:4px;">User-defined property</label>
+              ${inp(`dbprops-udp-${tabId}`, resp.userDefinedProp)}
+
+              <label style="font-size:12px;padding-top:4px;">Default table path</label>
+              ${inp(`dbprops-dtp-${tabId}`, resp.defaultTablePath, 'text', 'placeholder="(same as .add file)"')}
+
+              <label style="font-size:12px;padding-top:4px;">Temp table path</label>
+              ${inp(`dbprops-ttp-${tabId}`, resp.tempTablePath, 'text', 'placeholder="(same as default table path)"')}
+
+              <label style="font-size:12px;">Version major</label>
+              ${inp(`dbprops-vmaj-${tabId}`, resp.versionMajor ?? 0, 'number',
+                    'min="0" max="65535" style="width:80px;"')}
+
+              <label style="font-size:12px;">Version minor</label>
+              ${inp(`dbprops-vmin-${tabId}`, resp.versionMinor ?? 0, 'number',
+                    'min="0" max="65535" style="width:80px;"')}
+
+            </div>
+          </div>`;
+
+        const msgEl = document.getElementById('dbprops-msg-' + tabId);
+        document.getElementById('save-dbprops-' + tabId)?.addEventListener('click', async () => {
+          if (msgEl) msgEl.textContent = 'Saving…';
+          const payload = {
+            dd,
+            description:        document.getElementById(`dbprops-desc-${tabId}`)?.value   ?? '',
+            loginRequired:      document.getElementById(`dbprops-login-${tabId}`)?.checked ?? false,
+            verifyAccessRights: document.getElementById(`dbprops-verify-${tabId}`)?.checked ?? false,
+            userDefinedProp:    document.getElementById(`dbprops-udp-${tabId}`)?.value      ?? '',
+            defaultTablePath:   document.getElementById(`dbprops-dtp-${tabId}`)?.value      ?? '',
+            tempTablePath:      document.getElementById(`dbprops-ttp-${tabId}`)?.value      ?? '',
+            versionMajor:  parseInt(document.getElementById(`dbprops-vmaj-${tabId}`)?.value ?? '0', 10) || 0,
+            versionMinor:  parseInt(document.getElementById(`dbprops-vmin-${tabId}`)?.value ?? '0', 10) || 0,
+          };
+          try {
+            const r = await apiFetch('api/db_props.php', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : 'Saved';
+            setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000);
+          } catch (err) { if (msgEl) msgEl.textContent = `Error: ${err.message}`; }
+        });
+      })
+      .catch(err => {
+        if (container) container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
   }
 
   // ── Trigger tab: resizable grid (top) + ACE editor (bottom) ──────────────────
@@ -1474,12 +1691,16 @@
         const saveBtnExtra = kind === 'indexes'
           ? ' disabled style="opacity:0.5;cursor:not-allowed;"'
           : '';
+        const dropTblBtn = kind === 'fields'
+          ? `<button class="btn btn-sm" id="drop-tbl-btn-${tabId}" style="margin-left:auto;color:#f38ba8;background:#313244;border:1px solid #45475a;">&#128465; Drop Table</button>`
+          : '';
         const toolbarHtml = showSave
           ? `<div style="padding:4px 6px;display:flex;gap:8px;align-items:center;background:#1e1e2e;border-bottom:1px solid #313244;">
                <button class="btn btn-sm btn-primary" id="save-meta-${tabId}"${saveBtnExtra}>&#128190; Save Changes</button>
                ${addIdxBtn}
                ${delIdxBtn}
                <span id="save-meta-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+               ${dropTblBtn}
              </div>`
           : '';
         const addIdxForm = kind === 'indexes'
@@ -1536,6 +1757,24 @@
               if (msgEl) msgEl.textContent = errs.length
                 ? `Saved ${resp2.saved}, errors: ${errs.join('; ')}`
                 : `Saved ${resp2.saved} property change(s)`;
+            } catch (err) {
+              if (msgEl) msgEl.textContent = `Error: ${err.message}`;
+            }
+          });
+
+          document.getElementById('drop-tbl-btn-' + tabId)?.addEventListener('click', async () => {
+            if (!confirm(`Remove table "${table}" from dictionary "${dd}"?\n\nThe physical file will NOT be deleted — only the DD registration is removed.`)) return;
+            try {
+              const r = await apiFetch('api/table_ops.php', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'drop', dd, table }),
+              });
+              if (r.error) { if (msgEl) msgEl.textContent = `Error: ${r.error}`; return; }
+              // Close every open tab for this table
+              const tabIds = state.tabs.filter(t => t.dd === dd && t.table === table).map(t => t.id);
+              tabIds.forEach(id => closeTab(id));
+              refreshTree();
+              setStatus(`Table "${table}" removed from ${dd}`);
             } catch (err) {
               if (msgEl) msgEl.textContent = `Error: ${err.message}`;
             }
@@ -1751,6 +1990,12 @@
           panel.innerHTML = `<div class="data-panel" id="user-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'ri') {
           panel.innerHTML = `<div class="data-panel" id="ri-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'dbprops') {
+          panel.innerHTML = `<div class="data-panel" id="dbprops-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'view') {
+          panel.innerHTML = buildViewPanel(tab.id, tab);
+        } else if (tab.type === 'link') {
+          panel.innerHTML = `<div class="data-panel" id="link-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;padding:16px;"><div class="alert alert-info">Loading…</div></div>`;
         } else if (tab.type === 'sql') {
           panel.innerHTML = buildSqlPanel(tab.id, tab);
           bindSqlPanel(tab.id, tab);
@@ -1911,7 +2156,7 @@
 
     // Types that are intrinsically read-only (engine-managed counters / binary blobs)
     const READ_ONLY_TYPES = new Set([
-      'RowVersion', 'ModTime', 'AutoIncrement', 'Binary', 'Blob', 'Varbinary',
+      'RowVersion', 'ModTime', 'AutoIncrement', 'Binary', 'Blob', 'Varbinary', 'Picture', 'Memo',
     ]);
 
     // Build a Tabulator formatter for a field based on its BaseType.
@@ -2099,6 +2344,25 @@
             col.variableHeight = true;
             col.width          = 280;
           }
+          // Blob/memo: override formatter to add an eye-icon view button
+          if (isROType && (baseType === 'Memo' || baseType === 'Binary' || baseType === 'Blob'
+                           || baseType === 'Varbinary' || baseType === 'Picture')) {
+            const capturedField = def.field;
+            const isBinary = baseType !== 'Memo';
+            col.formatter = function (cell) {
+              const v = cell.getValue();
+              if (isBinary) {
+                return `<span style="color:#585b70;font-size:11px;">[${baseType}]</span>
+                  <button class="blob-eye-btn" data-tabid="${tabId}" data-field="${escAttr(capturedField)}" data-binary="1"
+                    style="font-size:10px;padding:0 4px;margin-left:4px;background:#313244;color:#89b4fa;border:1px solid #45475a;border-radius:3px;cursor:pointer;">&#128065;</button>`;
+              }
+              const preview = v ? v.toString().slice(0, 60) + (v.toString().length > 60 ? '…' : '') : '';
+              return `<span style="color:#a6adc8;font-size:11px;">${escHtml(preview)}</span>${v
+                ? ` <button class="blob-eye-btn" data-tabid="${tabId}" data-field="${escAttr(capturedField)}" data-binary="0"
+                    style="font-size:10px;padding:0 4px;margin-left:2px;background:#313244;color:#89b4fa;border:1px solid #45475a;border-radius:3px;cursor:pointer;">&#128065;</button>`
+                : ''}`;
+            };
+          }
           return col;
         });
       },
@@ -2139,11 +2403,30 @@
         <button class="tbl-btn tbl-btn-save" data-act="save-edits" title="Save cell edits" disabled>&#x1F4BE;</button>
         <button class="tbl-btn" data-act="discard-edits" title="Discard unsaved edits" disabled>&#x21BA;</button>
         <span class="tbl-edit-hint" title="Double-click a non-PK cell to edit">edit</span>
+        <span class="tbl-btn-sep"></span>
+        <button class="tbl-btn" data-act="export-csv" title="Export all rows to CSV">&#x1F4E5;</button>
         <span class="tbl-btn-sep"></span>`;
       bar.addEventListener('click', e => {
         const btn = e.target.closest('[data-act]');
         if (btn) handleTblAction(btn.dataset.act, tabId);
       });
+
+      // Delegated handler for blob/memo eye buttons rendered inside cells
+      const tblContainer = document.getElementById('tabulator-' + tabId);
+      tblContainer?.addEventListener('click', e => {
+        const eyeBtn = e.target.closest('.blob-eye-btn');
+        if (!eyeBtn || eyeBtn.dataset.tabid !== tabId) return;
+        e.stopPropagation();
+        const fieldName = eyeBtn.dataset.field;
+        const isBinary  = eyeBtn.dataset.binary === '1';
+        const rowEl     = e.target.closest('.tabulator-row');
+        if (!rowEl) return;
+        const tblRows = tbl.getRows();
+        const tblRow  = tblRows.find(r => r.getElement() === rowEl);
+        if (!tblRow) return;
+        openBlobViewer(dd, table, fieldName, isBinary, tblRow.getData(), [...pkFieldsUpper]);
+      });
+
       const paginator = document.querySelector('#tabulator-' + tabId + ' .tabulator-paginator');
       if (paginator) paginator.prepend(bar);
       tblState[tabId] = {
@@ -2394,6 +2677,14 @@
         if (inst.rowIdx < 0) { setStatus('Select a row to delete'); return; }
         pendingDeleteTabId = tabId;
         openModal('modal-del-confirm');
+        break;
+      }
+
+      case 'export-csv': {
+        let url = `api/export_table.php?dd=${encodeURIComponent(inst.dd)}&table=${encodeURIComponent(inst.table)}`;
+        if (inst.orderby)  url += `&orderby=${encodeURIComponent(inst.orderby)}&orderdir=${encodeURIComponent(inst.orderdir)}`;
+        if (inst.aofExpr)  url += `&aof=${encodeURIComponent(inst.aofExpr)}`;
+        window.open(url, '_blank');
         break;
       }
 
@@ -2791,6 +3082,179 @@
     }, 50);
   }
 
+  // ── View tab ──────────────────────────────────────────────────────────────
+  function openViewTab(dd, name) {
+    if (!name || !dd) return;
+    const key = `${dd}.view.${name}`;
+    const existing = state.tabs.find(t => t.type === 'view' && t.metaKey === key);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `View: ${name}`, type: 'view', dd, viewName: name, metaKey: key });
+    renderTabs();
+    activateTab(id);
+    loadViewData(id, dd, name);
+  }
+
+  function buildViewPanel(tabId, tab) {
+    return `
+      <div class="sql-panel" style="display:flex;flex-direction:column;height:100%;">
+        <div class="sql-editor-wrap" style="flex:1;min-height:0;">
+          <div id="view-ace-${tabId}" class="sql-ace-editor"></div>
+        </div>
+        <div class="sql-toolbar">
+          <span style="font-size:12px;color:#a6adc8;white-space:nowrap;margin-right:4px;">Comment:</span>
+          <input id="view-comment-${tabId}" type="text" placeholder="(optional)"
+                 style="flex:1;background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;
+                        padding:3px 8px;border-radius:4px;font-size:12px;">
+          <button class="btn btn-primary" id="view-save-${tabId}">&#128190; Save</button>
+          <button class="btn" id="view-drop-${tabId}"
+                  style="color:#f38ba8;background:#313244;border:1px solid #45475a;">&#128465; Drop</button>
+          <span id="view-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:8px;"></span>
+        </div>
+      </div>`;
+  }
+
+  function loadViewData(tabId, dd, name) {
+    setTimeout(async () => {
+      const aceDiv  = document.getElementById('view-ace-' + tabId);
+      if (!aceDiv) return;
+
+      ace.require('ace/ext/language_tools');
+      const editor = ace.edit('view-ace-' + tabId);
+      setAdsMode(editor);
+      editor.setOptions({
+        enableBasicAutocompletion: true,
+        enableSnippets: false,
+        enableLiveAutocompletion: false,
+        showPrintMargin: false,
+        useWorker: false,
+        fontSize: '13px',
+        fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
+        tabSize: 2,
+        useSoftTabs: true,
+        scrollPastEnd: 0.5,
+      });
+      state.aceEditors[tabId] = editor;
+
+      const msgEl     = document.getElementById('view-msg-' + tabId);
+      const commentEl = document.getElementById('view-comment-' + tabId);
+      const saveBtn   = document.getElementById('view-save-' + tabId);
+      const dropBtn   = document.getElementById('view-drop-' + tabId);
+
+      try {
+        const resp = await apiFetch('api/view_body.php', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dd, name }),
+        });
+        if (resp.error) { if (msgEl) msgEl.textContent = resp.error; return; }
+        editor.setValue(resp.sql || '', -1);
+        if (commentEl) commentEl.value = resp.comment || '';
+      } catch (e) {
+        if (msgEl) msgEl.textContent = `Error: ${e.message}`;
+      }
+
+      saveBtn?.addEventListener('click', async () => {
+        const sql     = editor.getValue().trim();
+        const comment = commentEl?.value || '';
+        if (msgEl) msgEl.textContent = 'Saving…';
+        try {
+          const r = await apiFetch('api/save_view.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'save', dd, name, sql, comment }),
+          });
+          if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : 'Saved.';
+          setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000);
+        } catch (e) {
+          if (msgEl) msgEl.textContent = `Error: ${e.message}`;
+        }
+      });
+
+      dropBtn?.addEventListener('click', async () => {
+        if (!confirm(`Drop view "${name}" from "${dd}"?\nThis cannot be undone.`)) return;
+        try {
+          const r = await apiFetch('api/save_view.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'drop', dd, name }),
+          });
+          if (r.error) { if (msgEl) msgEl.textContent = `Error: ${r.error}`; return; }
+          closeTab(tabId);
+          refreshTree();
+          setStatus(`View "${name}" dropped from ${dd}`);
+        } catch (e) {
+          if (msgEl) msgEl.textContent = `Error: ${e.message}`;
+        }
+      });
+    }, 50);
+  }
+
+  // ── Link tab ──────────────────────────────────────────────────────────────
+  function openLinkTab(dd, name) {
+    if (!name || !dd) return;
+    const key = `${dd}.link.${name}`;
+    const existing = state.tabs.find(t => t.type === 'link' && t.metaKey === key);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `Link: ${name}`, type: 'link', dd, linkName: name, metaKey: key });
+    renderTabs();
+    activateTab(id);
+    loadLinkData(id, dd, name);
+  }
+
+  function loadLinkData(tabId, dd, name) {
+    const container = document.getElementById('link-' + tabId);
+    if (!container) return;
+
+    apiFetch(`api/link_meta.php?dd=${encodeURIComponent(dd)}&name=${encodeURIComponent(name)}`)
+      .then(r => {
+        if (r.error) { container.innerHTML = `<div class="alert alert-danger">${escHtml(r.error)}</div>`; return; }
+        container.innerHTML = `
+          <div style="max-width:520px;">
+            <h3 style="margin:0 0 16px;color:#cdd6f4;font-size:15px;">&#128279; Link: ${escHtml(r.name)}</h3>
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <tr>
+                <th style="text-align:left;padding:6px 12px 6px 0;color:#a6adc8;white-space:nowrap;width:90px;">Alias</th>
+                <td style="padding:6px 0;color:#cdd6f4;font-family:monospace;">${escHtml(r.name)}</td>
+              </tr>
+              <tr>
+                <th style="text-align:left;padding:6px 12px 6px 0;color:#a6adc8;">Path</th>
+                <td style="padding:6px 0;color:#cdd6f4;font-family:monospace;word-break:break-all;">${escHtml(r.path)}</td>
+              </tr>
+              <tr>
+                <th style="text-align:left;padding:6px 12px 6px 0;color:#a6adc8;">User</th>
+                <td style="padding:6px 0;color:${r.user ? '#cdd6f4' : '#585b70'};font-family:monospace;">${r.user ? escHtml(r.user) : '(none)'}</td>
+              </tr>
+            </table>
+            <div style="margin-top:20px;border-top:1px solid #313244;padding-top:16px;">
+              <button class="btn" id="link-drop-${tabId}"
+                      style="color:#f38ba8;background:#313244;border:1px solid #45475a;">
+                &#128465; Drop Link
+              </button>
+              <span id="link-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:12px;"></span>
+            </div>
+          </div>`;
+
+        document.getElementById('link-drop-' + tabId)?.addEventListener('click', async () => {
+          const msgEl = document.getElementById('link-msg-' + tabId);
+          if (!confirm(`Drop link "${name}" from "${dd}"?\nThis cannot be undone.`)) return;
+          try {
+            const res = await apiFetch('api/link_ops.php', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'drop', dd, name }),
+            });
+            if (res.error) { if (msgEl) msgEl.textContent = `Error: ${res.error}`; return; }
+            closeTab(tabId);
+            refreshTree();
+            setStatus(`Link "${name}" dropped from ${dd}`);
+          } catch (e) {
+            if (msgEl) msgEl.textContent = `Error: ${e.message}`;
+          }
+        });
+      })
+      .catch(e => {
+        container.innerHTML = `<div class="alert alert-danger">${escHtml(e.message)}</div>`;
+      });
+  }
+
   // ── Proc / Function panel ─────────────────────────────────────────────────
   function bindProcPanel(tabId, tab) {
     setTimeout(() => {
@@ -2965,6 +3429,144 @@
   function openModal(id)  { document.getElementById(id)?.classList.add('open'); }
   function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
   function clearModalErr(id) { const el = document.getElementById(id); if (el) el.textContent = ''; }
+
+  // ── Blob / memo viewer ────────────────────────────────────────────────────────
+  function openBlobViewer(dd, table, fieldName, isBinary, rowData, pkFieldsUpper) {
+    const titleEl = document.getElementById('blob-viewer-title');
+    const bodyEl  = document.getElementById('blob-viewer-body');
+    const dlBtn   = document.getElementById('blob-viewer-download');
+    if (titleEl) titleEl.textContent = `${fieldName} (${isBinary ? 'Binary' : 'Memo'})`;
+
+    if (isBinary) {
+      const pkData = {};
+      pkFieldsUpper.forEach(pkF => {
+        if (pkF in rowData) pkData[pkF] = rowData[pkF];
+        else {
+          const key = Object.keys(rowData).find(k => k.toUpperCase() === pkF);
+          if (key) pkData[key] = rowData[key];
+        }
+      });
+      const pkJson = JSON.stringify(pkData);
+      const url = `api/blob_data.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}&field=${encodeURIComponent(fieldName)}&pk=${encodeURIComponent(pkJson)}&download=1`;
+      if (bodyEl) bodyEl.innerHTML =
+        `<p style="margin:0 0 8px;color:#cdd6f4;">Binary field — cannot be displayed as text.</p>
+         <p style="margin:0;color:#a6adc8;font-size:12px;">Use the Download button to save the raw binary content.</p>`;
+      if (dlBtn) {
+        dlBtn.style.display = '';
+        dlBtn.onclick = () => { window.open(url, '_blank'); };
+      }
+    } else {
+      // Memo: show text already in rowData
+      const key = Object.keys(rowData).find(k => k.toUpperCase() === fieldName.toUpperCase()) || fieldName;
+      const text = String(rowData[key] ?? '');
+      if (bodyEl) bodyEl.innerHTML =
+        `<textarea readonly style="width:100%;height:300px;box-sizing:border-box;background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;padding:8px;font-family:monospace;font-size:12px;resize:vertical;">${escHtml(text)}</textarea>`;
+      if (dlBtn) dlBtn.style.display = 'none';
+    }
+    openModal('modal-blob-viewer');
+  }
+
+  // ── Modal: New User ────────────────────────────────────────────────────────────
+  function openNewUserModal(dd) {
+    document.getElementById('new-user-dd').value      = dd;
+    document.getElementById('new-user-dd-label').textContent = dd;
+    document.getElementById('new-user-name').value    = '';
+    document.getElementById('new-user-pw').value      = '';
+    document.getElementById('new-user-pw2').value     = '';
+    clearModalErr('new-user-err');
+    openModal('modal-new-user');
+    setTimeout(() => document.getElementById('new-user-name')?.focus(), 50);
+  }
+  document.getElementById('new-user-cancel').addEventListener('click', () => closeModal('modal-new-user'));
+  document.getElementById('new-user-ok').addEventListener('click', async () => {
+    const dd   = document.getElementById('new-user-dd')?.value || '';
+    const user = document.getElementById('new-user-name')?.value.trim() || '';
+    const pw   = document.getElementById('new-user-pw')?.value || '';
+    const pw2  = document.getElementById('new-user-pw2')?.value || '';
+    const err  = document.getElementById('new-user-err');
+    if (!user) { if (err) err.textContent = 'Username is required'; return; }
+    if (pw !== pw2) { if (err) err.textContent = 'Passwords do not match'; return; }
+    try {
+      const r = await apiFetch('api/user_ops.php', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', dd, user, password: pw }),
+      });
+      if (r.error) { if (err) err.textContent = r.error; return; }
+      closeModal('modal-new-user');
+      refreshTree();
+      setStatus(`User "${user}" created in ${dd}`);
+      openUserTab(dd, user);
+    } catch (e) { if (err) err.textContent = e.message; }
+  });
+  document.getElementById('new-user-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('new-user-ok').click();
+  });
+
+  // ── Modal: New Group ───────────────────────────────────────────────────────────
+  function openNewGroupModal(dd) {
+    document.getElementById('new-group-dd').value           = dd;
+    document.getElementById('new-group-dd-label').textContent = dd;
+    document.getElementById('new-group-name').value         = '';
+    clearModalErr('new-group-err');
+    openModal('modal-new-group');
+    setTimeout(() => document.getElementById('new-group-name')?.focus(), 50);
+  }
+  document.getElementById('new-group-cancel').addEventListener('click', () => closeModal('modal-new-group'));
+  document.getElementById('new-group-ok').addEventListener('click', async () => {
+    const dd    = document.getElementById('new-group-dd')?.value || '';
+    const group = document.getElementById('new-group-name')?.value.trim() || '';
+    const err   = document.getElementById('new-group-err');
+    if (!group) { if (err) err.textContent = 'Group name is required'; return; }
+    try {
+      const r = await apiFetch('api/group_ops.php', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', dd, group }),
+      });
+      if (r.error) { if (err) err.textContent = r.error; return; }
+      closeModal('modal-new-group');
+      refreshTree();
+      setStatus(`Group "${group}" created in ${dd}`);
+      openGroupTab(dd, group);
+    } catch (e) { if (err) err.textContent = e.message; }
+  });
+  document.getElementById('new-group-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('new-group-ok').click();
+  });
+
+  // ── Modal: New Table ───────────────────────────────────────────────────────────
+  function openNewTableModal(dd) {
+    document.getElementById('new-table-dd').value           = dd;
+    document.getElementById('new-table-dd-label').textContent = dd;
+    document.getElementById('new-table-name').value         = '';
+    clearModalErr('new-table-err');
+    resetToggleGroup('new-table-type');
+    resetToggleGroup('new-table-char');
+    openModal('modal-new-table');
+    setTimeout(() => document.getElementById('new-table-name')?.focus(), 50);
+  }
+  document.getElementById('new-table-cancel').addEventListener('click', () => closeModal('modal-new-table'));
+  document.getElementById('new-table-ok').addEventListener('click', async () => {
+    const dd        = document.getElementById('new-table-dd')?.value || '';
+    const table     = document.getElementById('new-table-name')?.value.trim() || '';
+    const tableType = toggleGroupValue('new-table-type') || 'ADT';
+    const charType  = toggleGroupValue('new-table-char')  || 'ANSI';
+    const err       = document.getElementById('new-table-err');
+    if (!table) { if (err) err.textContent = 'Table name is required'; return; }
+    try {
+      const r = await apiFetch('api/table_ops.php', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', dd, table, tableType, charType }),
+      });
+      if (r.error) { if (err) err.textContent = r.error; return; }
+      closeModal('modal-new-table');
+      refreshTree();
+      setStatus(`Table "${table}" created in ${dd}`);
+      openMetaTab(dd, table, 'fields');
+    } catch (e) { if (err) err.textContent = e.message; }
+  });
+  document.getElementById('new-table-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('new-table-ok').click();
+  });
 
   // ── Modal: New DD (create) ─────────────────────────────────────────────────
   function openCreateDDModal() {
@@ -3143,11 +3745,13 @@
       setStatus(`Connected to '${ddName}'`);
       updateConnectionCount();
     } catch (err) {
-      if (err.data?.code === 5174) {
+      if (err.data?.code === 5174 || err.data?.code === 5103) {
         overlay.classList.remove('open');
         openImportSapDDModal();
         document.getElementById('isdd-source').value = path;
         document.getElementById('isdd-name').value = ddName;
+        const destEl = document.getElementById('isdd-dest');
+        if (!destEl.value) destEl.value = path.replace(/\.add$/i, '_openads.add');
         return;
       }
       errEl.textContent = err.message;
@@ -3169,6 +3773,21 @@
         body: JSON.stringify({ action: 'disconnect', name: ddName }),
       });
       state.openConnections.delete(ddName);
+
+      // Close all tabs that belong to this DD
+      const wasActive = state.tabs.find(t => t.id === state.activeTabId)?.dd === ddName;
+      state.tabs.filter(t => t.dd === ddName).forEach(t => {
+        if (state.aceEditors[t.id]) { state.aceEditors[t.id].destroy(); delete state.aceEditors[t.id]; }
+        if (procParamGrids[t.id])   { procParamGrids[t.id].destroy();   delete procParamGrids[t.id]; }
+        delete tblState[t.id];
+      });
+      state.tabs = state.tabs.filter(t => t.dd !== ddName);
+      if (wasActive) {
+        state.activeTabId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
+      }
+      renderTabs();
+      if (state.activeTabId) activateTab(state.activeTabId);
+
       refreshTree();
       setStatus(`Disconnected from '${ddName}'`);
       updateConnectionCount();
@@ -3537,7 +4156,32 @@
       resEl.textContent = lines.join('\n');
 
       btn.textContent = 'Done';
+      btn.disabled = false;
       setStatus(`Imported SAP DD as '${name}'`);
+      // Attempt auto-connect with empty password — imported users have no password
+      // set in the new OpenADS DD (SAP doesn't expose plain-text passwords), so an
+      // empty password matches the empty stored value and authentication succeeds.
+      try {
+        await apiFetch('api/connect.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'connect', name, path: dest, username: user, password: '' }),
+        });
+        state.openConnections.add(name);
+        updateConnectionCount();
+      } catch (_) { /* non-fatal — user can click the tree node to connect manually */ }
+      // After the tree refreshes, open and scroll to the new DD node.
+      const nodeId = 'dd_' + name;
+      $('#tree-container').one('refresh.jstree', function () {
+        const inst = $(this).jstree(true);
+        if (inst && inst.get_node(nodeId)) {
+          inst.open_node(nodeId);
+          setTimeout(() => {
+            const el = document.getElementById(nodeId);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }, 200);
+        }
+      });
       refreshTree();
     } catch (err) {
       resEl.style.display = 'block';

@@ -2894,7 +2894,13 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     if (raw->has_dd()) {
         auto* dd = raw->dd();
         std::string login_req = dd->get_db_property("prop_5");
-        bool require_login = (!login_req.empty() && login_req != "0");
+        // Stored as decimal string by import tool and UI: "0" = not required,
+        // "1" = required.  Keep raw-byte fallback for any old imports.
+        bool is_raw_zero = (login_req.size() >= 2 &&
+                            static_cast<unsigned char>(login_req[0]) == 0 &&
+                            static_cast<unsigned char>(login_req[1]) == 0);
+        bool require_login = (!login_req.empty() && login_req != "0" &&
+                              login_req != "False" && !is_raw_zero);
         std::string user = pucUser ? openads::abi::to_internal(pucUser, 0)
                                    : std::string();
         std::string pwd  = pucPwd  ? openads::abi::to_internal(pucPwd, 0)
@@ -2909,8 +2915,13 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
             if (stored != pwd)
                 return fail(openads::AE_LOGIN_FAILED, "invalid password");
         }
-        if (!user.empty())
+        if (!user.empty()) {
             raw->set_username(user);
+            // Pre-build effective-permission cache for this user so that
+            // subsequent AdsOpenTable / AdsExecuteSQLDirect checks are O(1).
+            if (dd->has_any_acl())
+                dd->build_perm_cache(user);
+        }
     }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -2918,12 +2929,20 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     s.conns.emplace(h, std::move(holder));
     *phConnect = h;
     rddads_default_connection() = h;
-    // Return a non-fatal warning when the DD has SAP-written ACL permissions
-    // that must be imported before OpenADS can enforce them.  The connection
-    // handle IS valid; callers should disconnect, run openads_import_dd, and
-    // reconnect to the imported copy.
-    if (raw->has_dd() && raw->dd()->has_sap_permissions())
-        return openads::AE_SAP_PERMS_NEED_IMPORT;
+    // Reject connections to SAP proprietary binary .add files.  OpenADS
+    // can read them (load_add_binary_) but cannot safely write them back
+    // (format is closed and permission fields are encrypted).  Direct the
+    // caller to run the import_dd tool to produce an OpenADS-format DD.
+    if (raw->has_dd() && raw->dd()->has_sap_permissions()) {
+        s.conns.erase(h);   // destroys the Connection object
+        s.registry.release(h);
+        *phConnect = 0;
+        return fail(openads::AE_SAP_PERMS_NEED_IMPORT,
+            "This is a SAP Advantage Data Dictionary in proprietary binary format. "
+            "OpenADS cannot open it directly. "
+            "Run: import_dd <source.add> <dest.add>  "
+            "to convert it to OpenADS format, then connect to the converted file.");
+    }
     return ok();
 }
 
@@ -3451,7 +3470,7 @@ DbfTypeSpec dbf_type_for(const std::string& name) {
     // ── ADT-specific type names: use sentinel chars handled by adt_spec_for ──
     if (eq("CICHARACTER") || eq("CiCharacter") || eq("CICHAR"))
         return {'W', 0, 0, false};    // ADT type 20: case-insensitive char
-    if (eq("ShortInt"))
+    if (eq("ShortInt") || eq("SmallInt") || eq("SMALLINT"))
         return {'S', 2, 0, false};    // ADT type 12: 2-byte int16
     if (eq("Money") || eq("Currency"))
         return {'$', 8, 0, false};    // ADT type 18: 8-byte int64 * 10000
@@ -3498,7 +3517,10 @@ std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs) {
             DbfTypeSpec ts = dbf_type_for(parts[1]);
             FieldOut f;
             f.name = parts[0];
-            if (f.name.size() > 10) f.name.resize(10);
+            // Each write path enforces its own limit:
+            //   DBF: std::min(name.size(), 10) at the header-write site
+            //   ADT: std::min(name.size(), 127u) at the field-descriptor site
+            if (f.name.size() > 128) f.name.resize(128);
             f.type = ts.type;
             f.length = ts.length;
             f.dec    = ts.dec;
@@ -6865,19 +6887,28 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
     bool is_adi = path_ends_with_ci(p.string(), ".adi");
 
-    // ACE AdsCreateIndex* option bits (include/openads/ace.h, values
-    // verified against the rddads contrib):
-    //   ADS_UNIQUE 0x01  ADS_COMPOUND 0x02  ADS_CUSTOM 0x04
-    //   ADS_DESCENDING 0x08
-    // ADS_COMPOUND (0x02) is redundant here (compound-ness comes from
-    // the .cdx extension) and MUST be ignored for direction — rddads
-    // and X#'s ADSRDD set it for EVERY CDX/NTX tag. `INDEX ON f TAG t`
-    // sends 0x02 alone; reading 0x02 as "descending" builds every
-    // order reversed (AdsGotoTop on the last key, SKIP walking
-    // backward). Direction comes ONLY from ADS_DESCENDING (0x08), which
-    // rddads adds for `... DESCENDING`.
+    // ACE AdsCreateIndex* option bits. include/openads/ace.h carries the
+    // SDK-standard values (ADS_UNIQUE 0x01, ADS_COMPOUND 0x02, ADS_CUSTOM
+    // 0x04, ADS_DESCENDING 0x08) — but the two RDD clients we interop with
+    // put the "compound" and "descending" flags on SWAPPED bits, measured
+    // by instrumenting this function:
+    //
+    //   client          ascending tag   descending tag
+    //   X#  ADSRDD       0x02            0x0A   (compound 0x02 | descending 0x08)
+    //   Harbour rddads   0x08            0x0A   (compound 0x08 | descending 0x02)
+    //
+    // Each client always sets ITS compound bit on EVERY tag (cdx and ntx),
+    // and adds the OTHER bit of the {0x02,0x08} pair to mean descending. So a
+    // lone 0x02 OR a lone 0x08 is ascending (it is just that client's
+    // "compound" marker), and "descending" is the one case where BOTH bits
+    // are set (0x0A). Reading a lone 0x08 (or 0x02) as descending built every
+    // Harbour (resp. X#) order reversed — AdsGotoTop landing on the last key,
+    // SKIP walking backward. The internal SQL CREATE INDEX path (below) emits
+    // 0x0A for a descending tag so it round-trips through this same decode.
+    const bool opt_compound_bit   = (ulOptions & ADS_COMPOUND) != 0;   // 0x02
+    const bool opt_descending_bit = (ulOptions & ADS_DESCENDING) != 0; // 0x08
     bool unique  = (ulOptions & ADS_UNIQUE) != 0;
-    bool descend = (ulOptions & ADS_DESCENDING) != 0;
+    bool descend = opt_compound_bit && opt_descending_bit;
 
     // Validate the key expression: a bare identifier that is not a column
     // is a bug in the caller's PRG (typo / renamed field). Native
@@ -12430,7 +12461,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             ADSHANDLE hTable = 0;
             UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
-                                           ADS_CDX, 0, 0, 0, 0,
+                                           ADS_ADT, 0, 0, 0, 0,
                                            def_buf.data(), &hTable);
             if (rc != openads::AE_SUCCESS) {
                 AdsCloseTable(srcCur);
@@ -12529,7 +12560,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         });
         if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
-                                       ADS_CDX, 0, 0, 0, 0,
+                                       ADS_ADT, 0, 0, 0, 0,
                                        def_buf.data(), &hTable);
         if (rc != openads::AE_SUCCESS) return rc;
         // Close the table immediately; CREATE TABLE returns no cursor.
@@ -12560,15 +12591,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             return rc;
         }
 
-        // CREATE INDEX writes a structural .cdx sidecar named after
-        // the table's stem so subsequent ADS_CDX opens auto-attach
-        // (and so multi-tag CREATE INDEX accumulates into one bag).
+        // CREATE INDEX writes a structural .adi sidecar named after
+        // the table's stem so AdsOpenTable auto-attaches it next open.
         namespace fs = std::filesystem;
         fs::path tbl_path(c->data_dir());
         tbl_path /= ci.value().table;
-        if (!tbl_path.has_extension()) tbl_path.replace_extension(".dbf");
+        if (!tbl_path.has_extension()) tbl_path.replace_extension(".adt");
         fs::path bag = tbl_path;
-        bag.replace_extension(".cdx");
+        bag.replace_extension(".adi");
 
         std::vector<UNSIGNED8> bag_buf(bag.string().size() + 1, 0);
         std::memcpy(bag_buf.data(), bag.string().data(),
@@ -12580,12 +12610,13 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::memcpy(expr_buf.data(), ci.value().expression.data(),
                     ci.value().expression.size());
         UNSIGNED32 opts = 0;
-        // Re-encode using the named ACE option bits so this round-trips
-        // through AdsCreateIndex61's `& ADS_DESCENDING` decode. Hardcoded
-        // literals here would silently lose the direction if the bit
-        // values are ever revisited.
+        // Re-encode for AdsCreateIndex61's decode. That decode treats a
+        // .cdx (compound) tag as descending only when BOTH the compound and
+        // descending bits are set (the two RDD clients disagree on which bit
+        // is which — see the decode comment there), so a descending index
+        // must carry ADS_COMPOUND | ADS_DESCENDING (0x0A), not 0x08 alone.
         if (ci.value().unique)     opts |= ADS_UNIQUE;
-        if (ci.value().descending) opts |= ADS_DESCENDING;
+        if (ci.value().descending) opts |= (ADS_COMPOUND | ADS_DESCENDING);
         ADSHANDLE hIdx = 0;
         UNSIGNED32 rc = AdsCreateIndex61(
             hTable, bag_buf.data(), tag_buf.data(),
@@ -12622,15 +12653,32 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (c->has_dd()) {
             auto* dd = c->dd();
             const auto& g = gs.value();
+            // Map right name → bitmask.  Grants accumulate (OR into existing).
+            using DD = openads::engine::DataDict;
+            uint32_t new_bits = 0;
             std::string r = g.right;
-            int level = 4;
-            if      (r == "SELECT")                   level = 1;
-            else if (r == "INSERT" || r == "UPDATE")  level = 2;
-            else if (r == "DELETE")                   level = 3;
-            // Take max of current and requested (grants accumulate)
-            int cur = dd->has_table_acl(g.object)
-                ? dd->get_effective_permission(g.principal, g.object) : 0;
-            dd->set_table_permission(g.object, g.principal, std::max(cur, level));
+            for (auto& ch : r)
+                ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            if      (r == "ALL")       new_bits = DD::DD_PERM_FULL;
+            else if (r == "SELECT")    new_bits = DD::DD_PERM_SELECT;
+            else if (r == "INSERT")    new_bits = DD::DD_PERM_INSERT;
+            else if (r == "UPDATE")    new_bits = DD::DD_PERM_UPDATE;
+            else if (r == "DELETE")    new_bits = DD::DD_PERM_DELETE;
+            else if (r == "EXECUTE")   new_bits = DD::DD_PERM_EXECUTE;
+            else if (r == "REFERENCE" || r == "REFERENCES")
+                                       new_bits = DD::DD_PERM_REFERENCE;
+            else                       new_bits = DD::DD_PERM_FULL;  // unknown → full
+            // Determine object type from the DD.
+            std::string obj_type = "Table";
+            if (dd->has_proc(g.object))     obj_type = "StoredProc";
+            else if (dd->has_function(g.object)) obj_type = "Function";
+            else if (dd->has_view(g.object))     obj_type = "View";
+            // Accumulate with existing grant for same grantee+object.
+            uint32_t cur_bits = 0;
+            for (const auto& pe : dd->permissions())
+                if (pe.object_name == g.object && pe.grantee == g.principal)
+                    cur_bits |= pe.bitmask;
+            dd->grant_permission(obj_type, g.object, g.principal, cur_bits | new_bits);
         }
         *phCursor = 0;
         return ok();
@@ -12643,16 +12691,27 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (c->has_dd()) {
             auto* dd = c->dd();
             const auto& g = gs.value();
-            int level = 0;
-            if (g.right != "ALL") {
-                std::string r = g.right;
-                int rl = 4;
-                if      (r == "SELECT")                  rl = 1;
-                else if (r == "INSERT" || r == "UPDATE") rl = 2;
-                else if (r == "DELETE")                  rl = 3;
-                level = (rl > 0) ? rl - 1 : 0;
+            using DD = openads::engine::DataDict;
+            uint32_t revoke_bits = DD::DD_PERM_FULL;
+            std::string r = g.right;
+            for (auto& ch : r)
+                ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            if      (r == "SELECT")    revoke_bits = DD::DD_PERM_SELECT;
+            else if (r == "INSERT")    revoke_bits = DD::DD_PERM_INSERT;
+            else if (r == "UPDATE")    revoke_bits = DD::DD_PERM_UPDATE;
+            else if (r == "DELETE")    revoke_bits = DD::DD_PERM_DELETE;
+            else if (r == "EXECUTE")   revoke_bits = DD::DD_PERM_EXECUTE;
+            // Compute new bitmask = current & ~revoke_bits.
+            uint32_t cur_bits = 0;
+            std::string obj_type = "Table";
+            for (const auto& pe : dd->permissions()) {
+                if (pe.object_name == g.object && pe.grantee == g.principal) {
+                    cur_bits |= pe.bitmask;
+                    obj_type  = pe.object_type;
+                }
             }
-            dd->set_table_permission(g.object, g.principal, level);
+            dd->grant_permission(obj_type, g.object, g.principal,
+                                  cur_bits & ~revoke_bits);
         }
         *phCursor = 0;
         return ok();

@@ -12,6 +12,7 @@ DA-Web is a browser-based administration tool for **OpenADS** data dictionaries 
    - [Adding a Data Dictionary](#adding-a-data-dictionary-existing-add-file)
    - [Adding a Free-Table Directory](#adding-a-free-table-directory)
    - [Creating a Brand-New Data Dictionary](#creating-a-brand-new-data-dictionary)
+   - [Importing a SAP Data Dictionary](#importing-a-sap-data-dictionary)
 4. [The Navigation Tree](#4-the-navigation-tree)
 5. [Browsing Table Data](#5-browsing-table-data)
 6. [Table Structure](#6-table-structure)
@@ -176,6 +177,56 @@ Alternatively, open the **Connection** menu — each registered DD appears with 
 ### Removing or editing a registered dictionary
 
 There is currently no UI dialog to remove or rename a registered DD. Edit `config/dictionaries.json` directly to remove or rename entries, then click **Tools → Refresh Tree** (or **Refresh Tree** at the bottom of the Connection menu) to reload the tree.
+
+### Importing a SAP Data Dictionary
+
+If you are migrating from SAP Advantage Database Server, you will have an existing `.add` file created by the SAP tools. DA-Web does not open SAP-format `.add` files directly. You first **import** the SAP DD into an OpenADS DD, and then connect to the new file.
+
+#### Why we import rather than connect directly
+
+The SAP `.add` file uses a closed proprietary binary format with per-user encrypted permission fields that OpenADS cannot fully decode, and with no published write specification. Attempting to write back to the SAP file risks corrupting it. Beyond that, the SAP engine (`ace64.dll`) and the OpenADS engine (`openace64.dll`) have separate in-process connection pools — they cannot both hold a DD open at the same time without risking deadlock or data corruption.
+
+The import approach is clean and safe:
+
+- The import tool reads the SAP `.add` using the SAP ACE DLL (read-only, the original is never changed).
+- It writes everything to a new OpenADS `.add` file using the OpenADS engine.
+- After import, the SAP DLL is no longer needed. DA-Web connects to the new file through the OpenADS engine alone.
+- Your actual data files (`.adt` / `.dbf`) are standard xBase files that both engines read identically — they are never imported, just re-pointed to from the new DD.
+
+This also means that once imported, your application no longer requires a SAP ACE license.
+
+#### What the import preserves
+
+| DD Object | Result |
+|-----------|--------|
+| Tables (names and paths) | Fully imported |
+| Index file registrations | Fully imported |
+| Triggers (name, timing, event, body) | Fully imported |
+| Stored procedures and functions | Fully imported |
+| Users and groups | Fully imported |
+| Group memberships | Fully imported |
+| Referential integrity rules | Fully imported |
+| Group-level permissions | Partially — unencrypted bits are preserved |
+| Per-user direct permissions | Not imported — encrypted in the SAP format; re-enter manually after import |
+
+#### How to import
+
+1. Click **Connection → Import SAP DD…** in the menu bar.
+2. Fill in the dialog:
+
+   | Field | Description |
+   |-------|-------------|
+   | **SAP .add file path** | Full path to the existing SAP-format `.add` file |
+   | **New OpenADS .add path** | Full path where the new OpenADS DD file should be written (must not exist yet) |
+   | **SAP username** | Username for the SAP DD (usually `AdsSysAdmin`) |
+   | **SAP password** | Password for the SAP DD |
+
+3. Click **Import**. The status bar updates as tables, triggers, procedures, users, and RI rules are transferred.
+4. When the **Done** button becomes active, the import is complete.
+5. The new `.add` is automatically registered in `config/dictionaries.json` and appears in the tree.
+6. Click the new DD name to connect to it and verify the import.
+
+> **Note:** The import requires that both `php_advantage` (SAP ACE extension) and `php_openads` (OpenADS extension) are loaded in the same PHP instance. The import script calls into `php_advantage` to read from the SAP file and into `php_openads` to write the OpenADS file. If `php_advantage` is not available, the import menu item is hidden.
 
 ---
 
