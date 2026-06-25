@@ -1562,11 +1562,17 @@ util::Result<void> DataDict::load_() {
 
     // Check signature.
     if (std::memcmp(hdr.data(), "Advantage Table", 15) != 0) {
-        // SAP binary .add files start with "ADS Data Dictionary" — return the
-        // well-known "needs import" code so callers can show the import dialog.
-        if (file_sz >= 19 && std::memcmp(hdr.data(), "ADS Data Dictionary", 19) == 0)
-            return util::Error{5174, 0,
-                "SAP binary DD — use openads_import_dd to convert to OpenADS format", path_};
+        // SAP binary .add files start with "ADS Data Dictionary".
+        // Parse them with load_add_binary_() so the import tool can open the
+        // copy it made and write memberships/permissions into it.
+        // AdsConnect60 rejects binary-format DDs via has_sap_permissions().
+        if (file_sz >= 19 && std::memcmp(hdr.data(), "ADS Data Dictionary", 19) == 0) {
+            std::vector<std::uint8_t> raw_buf(static_cast<std::size_t>(file_sz), 0);
+            if (auto r = file.read_at(0, raw_buf.data(), raw_buf.size()); !r)
+                return r.error();
+            std::string buf(reinterpret_cast<char*>(raw_buf.data()), raw_buf.size());
+            return load_add_binary_(buf);
+        }
         return util::Error{5103, 0,
             "DD file has unrecognised signature (expected OpenADS ADT format)", path_};
     }

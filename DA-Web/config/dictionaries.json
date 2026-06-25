@@ -14,9 +14,16 @@
         "entryType": "free"
     },
     {
-        "name": "PMsys",
-        "path": "f:\\PMSys\\data\\pmsys.add",
-        "username": "adssys",
+        "name": "PMSys",
+        "path": "f:\\OpenAds\\TestData\\Pmsys\\pmsys.add",
+        "username": "Adssys",
+        "connType": "local",
+        "entryType": "dd"
+    },
+    {
+        "name": "PMSys_OpenADS",
+        "path": "f:\\OpenAds\\TestData\\Pmsys\\pmsys_openads.add",
+        "username": "AdsSys",
         "connType": "local",
         "entryType": "dd"
     }
