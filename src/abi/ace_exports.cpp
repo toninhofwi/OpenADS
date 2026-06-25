@@ -3614,9 +3614,9 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         for (auto& f : fields) {
             AdtFieldSpec sp = adt_spec_for(f);
             switch (sp.adt_type) {
-                case 5u: has_memo   = true; break;  // MEMO   .adm companion
-                case 6u: has_binary = true; break;  // BINARY .adm companion
-                case 7u: has_image  = true; break;  // IMAGE  .adm companion
+                case ADS_MEMO:   has_memo   = true; break;  // .adm companion
+                case ADS_BINARY: has_binary = true; break;  // .adm companion
+                case ADS_IMAGE:  has_image  = true; break;  // .adm companion
                 default: break;
             }
             specs.push_back(sp);
@@ -3650,7 +3650,7 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         adt_hdr[358] = static_cast<std::uint8_t>(fields.size() & 0xFFu);
         adt_hdr[359] = static_cast<std::uint8_t>((fields.size() >> 8) & 0xFFu);
         adt_hdr[88] = static_cast<std::uint8_t>(
-            (has_memo ? 1 : 0) + (has_binary ? 1 : 0) + (has_image ? 1 : 0));
+            has_memo + has_binary + has_image);
 
         // 200-byte field descriptors
         std::vector<std::uint8_t> fds(fields.size() * 200, 0);
