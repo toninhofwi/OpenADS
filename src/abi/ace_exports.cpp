@@ -2422,8 +2422,11 @@ void snapshot_ri_pks(Table* t) {
 // against the parent's current record. A child with no controlling order
 // is moved to the record number the expression yields. A miss (or a
 // parent sitting off a record) leaves the child at EOF, matching ACE /
-// Clipper dbSetRelation. Relations live only for local Tables.
-struct AdsRelation { ADSHANDLE child; std::string expr; };
+// Clipper dbSetRelation. A `scoped` relation (AdsSetScopedRelation) also
+// constrains the child to the group of records whose key matches, by
+// setting the child order's top/bottom scope to the relation key.
+// Relations live only for local Tables.
+struct AdsRelation { ADSHANDLE child; std::string expr; bool scoped; };
 std::unordered_map<Table*, std::vector<AdsRelation>>& relation_table() {
     static std::unordered_map<Table*, std::vector<AdsRelation>> m;
     return m;
@@ -2436,9 +2439,69 @@ void relation_child_to_eof(Table* child) {
     (void)child->skip(1);
 }
 
-void seek_child_relation(Table* parent, Table* child, const std::string& expr) {
+// Build the seek key for a relation, in the child index's encoding,
+// mirroring AdsSeek's numeric handling so a numeric child index is matched
+// the same way an explicit dbSeek would be. `dk` must be non-null.
+std::string relation_child_key(Table* parent, Table* child,
+                               const std::string& expr,
+                               openads::drivers::IIndex* dk) {
+    std::int32_t fidx = child->field_index(
+        openads::engine::strip_alias_qualifiers(dk->expression()));
+    bool numeric = false;
+    if (fidx >= 0) {
+        auto ft = child->field_descriptor(
+            static_cast<std::uint16_t>(fidx)).type;
+        numeric = (ft == openads::drivers::DbfFieldType::Numeric ||
+                   ft == openads::drivers::DbfFieldType::Float);
+    }
+    const auto enc = dk->key_encoding();
+    double dv = 0;
+    const bool want_numeric =
+        enc == openads::drivers::KeyEncoding::FoxNumeric ||
+        enc == openads::drivers::KeyEncoding::NtxNumeric || numeric;
+    if (want_numeric &&
+        openads::engine::evaluate_index_expr_number(*parent, expr, dv)) {
+        if (enc == openads::drivers::KeyEncoding::FoxNumeric)
+            return openads::engine::fox_numeric_key(dv);
+        if (enc == openads::drivers::KeyEncoding::NtxNumeric)
+            return openads::engine::ntx_numeric_key(
+                dv, dk->key_length(), dk->key_decimals());
+        // ASCII-stored numeric key (DBF text): right-align to the field
+        // width, pad to the index key length with spaces.
+        std::uint16_t klen = dk->key_length();
+        std::uint16_t w = klen, dec = 0;
+        if (fidx >= 0) {
+            const auto& fd = child->field_descriptor(
+                static_cast<std::uint16_t>(fidx));
+            if (fd.length > 0) w = static_cast<std::uint16_t>(fd.length);
+            dec = static_cast<std::uint16_t>(fd.decimals);
+        }
+        char buf[264];
+        int n = (dec > 0)
+            ? std::snprintf(buf, sizeof(buf), "%*.*f",
+                            static_cast<int>(w), static_cast<int>(dec), dv)
+            : std::snprintf(buf, sizeof(buf), "%*.0f",
+                            static_cast<int>(w), dv);
+        std::size_t take = (n < 0)
+            ? 0u
+            : std::min<std::size_t>(static_cast<std::size_t>(n),
+                                    sizeof(buf) - 1);
+        std::string key(buf, take);
+        if (key.size() < klen) key.append(klen - key.size(), ' ');
+        return key;
+    }
+    // Character key (or a non-numeric parent expression): evaluate the
+    // expression against the parent and pad to the child key length.
+    auto k = openads::engine::evaluate_index_expr(
+        *parent, expr, dk->key_length());
+    return k ? k.value() : std::string();
+}
+
+void seek_child_relation(Table* parent, Table* child, const std::string& expr,
+                         bool scoped) {
     if (parent == nullptr || child == nullptr) return;
     if (parent->eof() || !parent->positioned()) {
+        if (scoped) (void)child->clear_scopes();
         relation_child_to_eof(child);
         return;
     }
@@ -2446,6 +2509,8 @@ void seek_child_relation(Table* parent, Table* child, const std::string& expr) {
     openads::drivers::IIndex* dk = (ord != nullptr) ? ord->index() : nullptr;
     if (dk == nullptr) {
         // No controlling order: the expression yields a record number.
+        // A scope needs an order, so a scoped relation degrades to a plain
+        // record-number move here.
         double dv = 0;
         if (openads::engine::evaluate_index_expr_number(*parent, expr, dv)) {
             auto rn = static_cast<std::uint32_t>(dv);
@@ -2457,62 +2522,17 @@ void seek_child_relation(Table* parent, Table* child, const std::string& expr) {
         return;
     }
 
-    // Keyed relation: build the seek key in the child index's encoding,
-    // mirroring AdsSeek's numeric handling so a numeric child index is
-    // matched the same way an explicit dbSeek would be.
-    std::int32_t fidx = child->field_index(
-        openads::engine::strip_alias_qualifiers(dk->expression()));
-    bool numeric = false;
-    if (fidx >= 0) {
-        auto ft = child->field_descriptor(
-            static_cast<std::uint16_t>(fidx)).type;
-        numeric = (ft == openads::drivers::DbfFieldType::Numeric ||
-                   ft == openads::drivers::DbfFieldType::Float);
-    }
-    const auto enc = dk->key_encoding();
+    std::string key = relation_child_key(parent, child, expr, dk);
 
-    std::string key;
-    double dv = 0;
-    const bool want_numeric =
-        enc == openads::drivers::KeyEncoding::FoxNumeric ||
-        enc == openads::drivers::KeyEncoding::NtxNumeric || numeric;
-    if (want_numeric &&
-        openads::engine::evaluate_index_expr_number(*parent, expr, dv)) {
-        if (enc == openads::drivers::KeyEncoding::FoxNumeric) {
-            key = openads::engine::fox_numeric_key(dv);
-        } else if (enc == openads::drivers::KeyEncoding::NtxNumeric) {
-            key = openads::engine::ntx_numeric_key(
-                dv, dk->key_length(), dk->key_decimals());
-        } else {
-            // ASCII-stored numeric key (DBF text): right-align to the
-            // field width, pad to the index key length with spaces.
-            std::uint16_t klen = dk->key_length();
-            std::uint16_t w = klen, dec = 0;
-            if (fidx >= 0) {
-                const auto& fd = child->field_descriptor(
-                    static_cast<std::uint16_t>(fidx));
-                if (fd.length > 0) w = static_cast<std::uint16_t>(fd.length);
-                dec = static_cast<std::uint16_t>(fd.decimals);
-            }
-            char buf[264];
-            int n = (dec > 0)
-                ? std::snprintf(buf, sizeof(buf), "%*.*f",
-                                static_cast<int>(w), static_cast<int>(dec), dv)
-                : std::snprintf(buf, sizeof(buf), "%*.0f",
-                                static_cast<int>(w), dv);
-            std::size_t take = (n < 0)
-                ? 0u
-                : std::min<std::size_t>(static_cast<std::size_t>(n),
-                                        sizeof(buf) - 1);
-            key.assign(buf, take);
-            if (key.size() < klen) key.append(klen - key.size(), ' ');
-        }
-    } else {
-        // Character key (or a non-numeric parent expression): evaluate the
-        // expression against the parent and pad to the child key length.
-        auto k = openads::engine::evaluate_index_expr(
-            *parent, expr, dk->key_length());
-        key = k ? k.value() : std::string();
+    if (scoped) {
+        // Constrain the child to the matching key group: top == bottom ==
+        // key, then land on the first record in scope.
+        (void)child->clear_scopes();
+        (void)child->set_scope(true,  key);
+        (void)child->set_scope(false, key);
+        auto gt = child->goto_top();
+        child->set_last_seek_found(static_cast<bool>(gt) && !child->eof());
+        return;
     }
 
     auto r = child->seek_key(key, /*soft=*/true);
@@ -2535,7 +2555,7 @@ void apply_relations_for(Table* parent) {
     for (auto& rel : it->second) {
         Table* child = get_table(rel.child);
         if (child != nullptr) {
-            seek_child_relation(parent, child, rel.expr);
+            seek_child_relation(parent, child, rel.expr, rel.scoped);
             apply_relations_for(child);
         }
     }
@@ -2547,7 +2567,18 @@ void apply_relations_for(Table* parent) {
 // the same address (or a reused handle) inherits nothing.
 void forget_relations(Table* t, ADSHANDLE h) {
     auto& tbl = relation_table();
-    if (t != nullptr) tbl.erase(t);
+    if (t != nullptr) {
+        // Release scopes this table imposed on its scoped children before
+        // dropping its relations (the children may outlive it).
+        if (auto it = tbl.find(t); it != tbl.end()) {
+            for (auto& rel : it->second) {
+                if (rel.scoped)
+                    if (Table* child = get_table(rel.child))
+                        (void)child->clear_scopes();
+            }
+        }
+        tbl.erase(t);
+    }
     for (auto& [parent, kids] : tbl) {
         for (auto it = kids.begin(); it != kids.end();) {
             it = (it->child == h) ? kids.erase(it) : it + 1;
@@ -18079,7 +18110,19 @@ UNSIGNED32 AdsClearFilter(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsClearRelation(ADSHANDLE hParent) {
     // Drop only the relations this table drives as a parent; it may still
     // be a child of another work area, so leave those bindings intact.
-    if (Table* parent = get_table(hParent)) relation_table().erase(parent);
+    Table* parent = get_table(hParent);
+    if (parent == nullptr) return ok();
+    auto& tbl = relation_table();
+    auto it = tbl.find(parent);
+    if (it != tbl.end()) {
+        // Release any scope a scoped relation imposed on its child so the
+        // child can navigate its whole table again.
+        for (auto& rel : it->second) {
+            if (!rel.scoped) continue;
+            if (Table* child = get_table(rel.child)) (void)child->clear_scopes();
+        }
+        tbl.erase(it);
+    }
     return ok();
 }
 UNSIGNED32 AdsClearCallbackFunction(void) { ADS_STUB(openads::AE_SUCCESS); }
@@ -18900,8 +18943,8 @@ UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE h, double pos) {
 }
 // Not yet implemented — return AE_FUNCTION_NOT_AVAILABLE so callers know to
 // use a workaround rather than silently getting no relation following.
-UNSIGNED32 AdsSetRelation(ADSHANDLE hParent, ADSHANDLE hChild,
-                          UNSIGNED8* pucExpr) {
+UNSIGNED32 set_relation_impl(ADSHANDLE hParent, ADSHANDLE hChild,
+                             UNSIGNED8* pucExpr, bool scoped) {
     if (pucExpr == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
     if (get_remote_table(hParent) || get_remote_table(hChild))
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
@@ -18911,13 +18954,22 @@ UNSIGNED32 AdsSetRelation(ADSHANDLE hParent, ADSHANDLE hChild,
     if (parent == nullptr || child == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::string expr = openads::abi::to_internal(pucExpr, 0);
-    relation_table()[parent].push_back(AdsRelation{hChild, std::move(expr)});
+    relation_table()[parent].push_back(
+        AdsRelation{hChild, std::move(expr), scoped});
     // Position the child against the parent's current record immediately,
     // the way ACE / Clipper do on dbSetRelation.
     apply_relations_for(parent);
     return ok();
 }
-UNSIGNED32 AdsSetScopedRelation(ADSHANDLE, ADSHANDLE, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+
+UNSIGNED32 AdsSetRelation(ADSHANDLE hParent, ADSHANDLE hChild,
+                          UNSIGNED8* pucExpr) {
+    return set_relation_impl(hParent, hChild, pucExpr, /*scoped=*/false);
+}
+UNSIGNED32 AdsSetScopedRelation(ADSHANDLE hParent, ADSHANDLE hChild,
+                                UNSIGNED8* pucExpr) {
+    return set_relation_impl(hParent, hChild, pucExpr, /*scoped=*/true);
+}
 UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetServerType(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsShowDeleted(UNSIGNED16 us) {
