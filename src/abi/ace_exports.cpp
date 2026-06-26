@@ -18190,6 +18190,15 @@ namespace {
 
 std::string g_date_format = "yyyy-mm-dd";
 
+// Connection-wide settings stored so their Set/Get pairs round-trip.
+// AdsSetDefault / AdsGetDefault, AdsSetSearchPath / AdsGetSearchPath and
+// AdsSetDecimals (queried by STR-style formatting callers via their own
+// getter when present). OpenADS resolves paths against the connection's
+// own data path, so g_default_path is recorded for API parity.
+std::string   g_default_path;
+std::string   g_search_path;
+std::uint16_t g_set_decimals = 2;
+
 // Render (y, m, d) through an ACE-style format string. Recognised,
 // case-insensitively: CCYY / YYYY → 4-digit year, YY → 2-digit year,
 // MM → 2-digit month, DD → 2-digit day. Every other character is
@@ -18298,7 +18307,12 @@ UNSIGNED32 AdsClearCallbackFunction(void) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsClearProgressCallback(void) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCacheOpenCursors(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCacheOpenTables(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsCacheRecords(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsCacheRecords(ADSHANDLE hTable, UNSIGNED16 /*usNumRecords*/) {
+    // Read-ahead hint. OpenADS does not pre-cache rows, so this is a no-op
+    // beyond validating the table handle.
+    if (get_remote_table(hTable) || get_table(hTable) != nullptr) return ok();
+    return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+}
 UNSIGNED32 AdsCloseCachedTables(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
     Table* src = get_table(hSrc);
@@ -18399,8 +18413,11 @@ UNSIGNED32 AdsGetDateFormat(UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     copy_ace_string(g_date_format, pucBuf, pusLen);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l)
-    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l) {
+    if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    openads::abi::copy_to_caller(p, l, g_default_path);
+    return ok();
+}
 UNSIGNED32 AdsGetDeleted(UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // show_deleted()==true means "show deleted records" which is
@@ -18885,8 +18902,11 @@ UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
     return ok();
 }
-UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l)
-    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l) {
+    if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    openads::abi::copy_to_caller(p, l, g_search_path);
+    return ok();
+}
 UNSIGNED32 AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -19030,7 +19050,24 @@ UNSIGNED32 AdsIsTableLocked(ADSHANDLE hTable, UNSIGNED16* p) {
     *p = t->is_table_locked() ? 1 : 0;
     return ok();
 }
-UNSIGNED32 AdsRefreshAOF(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsRefreshAOF(ADSHANDLE hTable) {
+    // Remote AOFs are maintained server-side; nothing to do client-side.
+    if (get_remote_table(hTable)) return ok();
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (!t->aof_active()) return ok();          // no AOF to refresh
+    const std::string cond = t->aof_expr();
+    if (cond.empty()) return ok();              // AdsCustomizeAOF-only set
+    // Re-evaluate the stored AOF expression against current data and
+    // reinstall the bitmap, so rows that changed since AdsSetAOF are
+    // re-classified.
+    auto ast = openads::engine::aof::parse(cond);
+    if (!ast) return ok();
+    auto rep = openads::engine::aof::evaluate_optimised(*ast.value(), *t);
+    if (!rep) return fail(rep.error());
+    t->install_aof_bitmap(std::move(rep.value().bm));
+    return ok();
+}
 UNSIGNED32 AdsRegisterCallbackFunction(void*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsRegisterProgressCallback(void*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetDateFormat(UNSIGNED8* pucFormat) {
@@ -19038,8 +19075,15 @@ UNSIGNED32 AdsSetDateFormat(UNSIGNED8* pucFormat) {
         g_date_format.assign(reinterpret_cast<const char*>(pucFormat));
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsSetDecimals(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsSetDefault(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetDecimals(UNSIGNED16 usDecimals) {
+    g_set_decimals = usDecimals;
+    return openads::AE_SUCCESS;
+}
+UNSIGNED32 AdsSetDefault(UNSIGNED8* pucPath) {
+    g_default_path = pucPath
+        ? openads::abi::to_internal(pucPath, 0) : std::string();
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsSetEpoch(UNSIGNED16 us) {
     openads::engine::set_epoch(us);
     return openads::AE_SUCCESS;
@@ -19161,7 +19205,11 @@ UNSIGNED32 AdsSetScopedRelation(ADSHANDLE hParent, ADSHANDLE hChild,
                                 UNSIGNED8* pucExpr) {
     return set_relation_impl(hParent, hChild, pucExpr, /*scoped=*/true);
 }
-UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetSearchPath(UNSIGNED8* pucPath) {
+    g_search_path = pucPath
+        ? openads::abi::to_internal(pucPath, 0) : std::string();
+    return openads::AE_SUCCESS;
+}
 // Caller's preferred server-type mask (ADS_LOCAL_SERVER / ADS_REMOTE_SERVER
 // / ADS_AIS_SERVER). OpenADS serves both local and remote connections
 // regardless, so this is recorded for ACE API parity; nothing consults it
@@ -19210,7 +19258,12 @@ UNSIGNED32 AdsStmtSetTableType(ADSHANDLE h, UNSIGNED16 us) {
 }
 UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
     { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsTestRecLocks(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsTestRecLocks(ADSHANDLE hTable) {
+    // Diagnostic hook. Validate the handle and report success — OpenADS
+    // has no separate lock-table consistency check to run.
+    if (get_remote_table(hTable) || get_table(hTable) != nullptr) return ok();
+    return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+}
 UNSIGNED32 AdsWriteAllRecords(void) { return openads::AE_SUCCESS; }
 
 // This file is largely one big `extern "C"` block; the mgmt helpers
