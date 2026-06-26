@@ -7114,7 +7114,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         // tag already exists, open it and clear its B+tree so the
         // caller's per-record insert loop rebuilds it fresh.
         auto added = openads::drivers::cdx::CdxIndex::add_tag(
-            p.string(), tag, expr, klen, unique, descend);
+            p.string(), tag, expr, klen, unique, descend, for_expr);
         if (!added && added.error().code == 5044) {
             openads::drivers::cdx::CdxIndex existing;
             auto reopen = existing.open_named(p.string(),
@@ -7131,6 +7131,11 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             // prior options.
             if (auto so = existing.set_options(unique, descend, klen); !so)
                 return fail(so.error());
+            // Re-creating an existing tag overwrites its FOR clause too
+            // (a new condition, or none, replaces the old one) so the
+            // on-disk header matches the just-issued CREATE INDEX.
+            if (auto sc = existing.set_condition(for_expr); !sc)
+                return fail(sc.error());
             idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
                 std::move(existing));
         } else if (!added) {
@@ -7141,7 +7146,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         }
     } else if (is_cdx) {
         auto created = openads::drivers::cdx::CdxIndex::create(
-            p.string(), tag, expr, klen, unique, descend);
+            p.string(), tag, expr, klen, unique, descend, for_expr);
         if (!created) return fail(created.error());
         idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
             std::move(created).value());
@@ -7282,6 +7287,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                 if (!sib_has_data) {
                     if (auto cl = sub->clear_data(); !cl) continue;
                     std::string sib_expr = sub->expression();
+                    std::string sib_for  = sub->condition();
                     std::uint16_t sib_klen = sub->key_length();
                     const bool sib_fox = sub->key_encoding() ==
                         openads::drivers::KeyEncoding::FoxNumeric;
@@ -7289,6 +7295,13 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                     sib_keys.reserve(rec_count);
                     for (std::uint32_t r2 = 1; r2 <= rec_count; ++r2) {
                         if (auto g = t->goto_record(r2); !g) continue;
+                        // Honor the sibling tag's own FOR clause so a
+                        // conditional tag is not silently rebuilt
+                        // unconditional during this resync.
+                        if (!sib_for.empty() &&
+                            !openads::engine::evaluate_index_expr_truthy(
+                                *t, sib_for))
+                            continue;
                         std::string k2b;
                         if (sib_fox) {
                             double dv = 0.0;
