@@ -18993,10 +18993,17 @@ UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 // / ADS_AIS_SERVER). OpenADS serves both local and remote connections
 // regardless, so this is recorded for ACE API parity; nothing consults it
 // in a way that would block an otherwise-valid connection.
+//
+// Internal helper — give it C++ linkage (it returns a reference, which a
+// C-linkage function may not, tripping clang's -Werror=return-type-c-linkage
+// inside this file's big `extern "C"` block). Mirrors the extern "C++" island
+// used for the other reference-returning helpers above.
+extern "C++" {
 std::uint16_t& server_type_mask() {
     static std::uint16_t m = ADS_LOCAL_SERVER | ADS_REMOTE_SERVER;
     return m;
 }
+}  // extern "C++"
 UNSIGNED32 AdsSetServerType(UNSIGNED16 usServerOptions) {
     server_type_mask() = usServerOptions;
     return openads::AE_SUCCESS;
