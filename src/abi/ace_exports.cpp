@@ -12463,7 +12463,26 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     schema.push_back(src->field_descriptor(k));
                 }
             }
+            // Determine target table type. If the caller explicitly set a
+            // type via AdsStmtSetTableType(), honour it; otherwise mirror
+            // the source so that an ADT source produces an ADT target and a
+            // DBF source produces a CDX target.  Hardcoding ADS_CDX here
+            // caused silent schema corruption: ADT field types (Money,
+            // Timestamp, ShortInt, …) have no DBF equivalent, so they were
+            // silently coerced to Character when the target was forced to
+            // .dbf regardless of the source format.
+            UNSIGNED16 ctas_tgt_type = it->second->table_type;
+            if (ctas_tgt_type == 0 || ctas_tgt_type == ADS_DEFAULT) {
+                UNSIGNED16 src_type = ADS_CDX;
+                AdsGetTableType(srcCur, &src_type);
+                ctas_tgt_type = (src_type == ADS_ADT) ? ADS_ADT : ADS_CDX;
+            }
             // Build NAME,Type,Len,Dec;… from schema.
+            // Two switch blocks: the first covers printable-letter DBF type
+            // codes ('C', 'N', …); the second covers ADT numeric type codes
+            // (1–20) stored as raw bytes by adt_driver.cpp.  The ranges are
+            // disjoint (DBF letters are all ≥ 0x42; ADT codes top out at 20)
+            // so there is no ambiguity.
             auto type_name = [](char raw) -> const char* {
                 switch (raw) {
                     case 'C': return "Character";
@@ -12477,6 +12496,22 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     case 'B': return "Double";
                     case 'V': return "Varchar";
                     case 'Q': return "Varbinary";
+                }
+                switch (static_cast<std::uint8_t>(raw)) {
+                    case  1: return "Logical";
+                    case  3: return "Date";
+                    case  4: return "Character";
+                    case  5: return "Memo";
+                    case  6: return "Binary";
+                    case  7: return "Image";
+                    case 10: return "Double";
+                    case 11: return "Integer";
+                    case 12: return "ShortInt";
+                    case 13: return "Time";
+                    case 14: return "Timestamp";
+                    case 15: return "AutoInc";
+                    case 18: return "Money";
+                    case 20: return "CiCharacter";
                 }
                 return "Character";
             };
@@ -12511,7 +12546,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             ADSHANDLE hTable = 0;
             UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
-                                           ADS_ADT, 0, 0, 0, 0,
+                                           ctas_tgt_type, 0, 0, 0, 0,
                                            def_buf.data(), &hTable);
             if (rc != openads::AE_SUCCESS) {
                 AdsCloseTable(srcCur);
@@ -12577,6 +12612,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             return ok();
         }
 
+        // Use the caller-supplied table type (AdsStmtSetTableType), falling
+        // back to CDX.  There is no source table to infer from here, so the
+        // default is always CDX; callers that want ADT must set it explicitly.
+        UNSIGNED16 ct_tgt_type = it->second->table_type;
+        if (ct_tgt_type == 0 || ct_tgt_type == ADS_DEFAULT) ct_tgt_type = ADS_CDX;
+
         // Build the rddads `NAME,Type,Len,Dec;…` field-def string and
         // route through AdsCreateTable so M9.5's parser owns the
         // schema-write logic.
@@ -12610,7 +12651,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         });
         if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
-                                       ADS_ADT, 0, 0, 0, 0,
+                                       ct_tgt_type, 0, 0, 0, 0,
                                        def_buf.data(), &hTable);
         if (rc != openads::AE_SUCCESS) return rc;
         // Close the table immediately; CREATE TABLE returns no cursor.
@@ -12646,9 +12687,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         namespace fs = std::filesystem;
         fs::path tbl_path(c->data_dir());
         tbl_path /= ci.value().table;
-        if (!tbl_path.has_extension()) tbl_path.replace_extension(".adt");
+        if (!tbl_path.has_extension()) tbl_path.replace_extension(".dbf");
         fs::path bag = tbl_path;
-        bag.replace_extension(".adi");
+        bag.replace_extension(".cdx");
 
         std::vector<UNSIGNED8> bag_buf(bag.string().size() + 1, 0);
         std::memcpy(bag_buf.data(), bag.string().data(),
