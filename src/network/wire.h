@@ -155,6 +155,17 @@ enum class Opcode : std::uint8_t {
     MgRequest          = 0xA2,
     MgReplyAck         = 0xA3,
 
+    // Tier-2 server-side filtered scan. Like Fetch (0x32) but the
+    // server evaluates a Clipper-style FOR predicate per row and
+    // returns only matching rows + the requested columns, walking
+    // the table server-side until `max_rows` matches or EOF. Removes
+    // the per-record Skip/GetField round-trips for a `SET FILTER` /
+    // `COUNT FOR` / `LOCATE FOR` scan whose predicate is outside the
+    // index-optimisable AOF subset (where the client RDD would
+    // otherwise filter row-by-row over the wire).
+    FetchWhere         = 0xA4,
+    FetchWhereAck      = 0xA5,
+
     Error              = 0xFF,
 };
 

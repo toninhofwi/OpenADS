@@ -296,7 +296,16 @@ NtxIndex::seek_key_for_write_(const std::string& padded, bool soft) {
         if (child == 0) {
             if (i >= kc) {
                 if (!soft) return SeekOutcome{SeekHit::AfterEnd, 0, false};
-                if (kc == 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+                if (kc == 0) {
+                    // Empty-but-rooted leaf: reindex()/erase can clear every
+                    // key without resetting root_page_, leaving a 0-key root.
+                    // That is a valid insertion target — hand insert() the
+                    // leaf frame so it places the first key here, instead of
+                    // returning an empty descent stack that insert() rejects
+                    // with 5004 ("empty stack post-seek").
+                    stack_.push_back({cur, 0});
+                    return SeekOutcome{SeekHit::AfterEnd, 0, false};
+                }
                 stack_.push_back({cur, kc - 1});
                 if (auto r = load_current_key_(); !r) return r.error();
                 return SeekOutcome{SeekHit::AfterKey, current_recno_, true};
@@ -446,7 +455,8 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
 
     // Determine insertion index inside the leaf.
     std::int32_t insert_at = leaf_frame.key_index;
-    {
+    if (kc > 0) {
+        // A 0-key leaf has no entry to compare against; insert at slot 0.
         const std::uint8_t* kdata = get_key_data(leaf, insert_at);
         int cmp = std::memcmp(padded.data(), kdata, key_size_);
         if (cmp > 0) ++insert_at;

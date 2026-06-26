@@ -3626,12 +3626,24 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
 
         std::vector<AdtFieldSpec> specs;
         specs.reserve(fields.size());
-        bool has_memo = false;
+        // Header offset 88 holds the count of DISTINCT companion-stream types
+        // present in the table (memo / binary / image), each stored in the side
+        // companion file. Stamping a flat 1 whenever any memo field existed made
+        // a conforming reader reject tables that mix several companion types (it
+        // expects N distinct streams but the header claims one) -- the table was
+        // reported as corrupt. Count the distinct types actually present.
+        bool has_memo = false, has_binary = false, has_image = false;
         for (auto& f : fields) {
             AdtFieldSpec sp = adt_spec_for(f);
-            if (sp.adt_type == 5u) has_memo = true;  // MEMO .adm companion
+            switch (sp.adt_type) {
+                case ADS_MEMO:   has_memo   = true; break;  // .adm companion
+                case ADS_BINARY: has_binary = true; break;  // .adm companion
+                case ADS_IMAGE:  has_image  = true; break;  // .adm companion
+                default: break;
+            }
             specs.push_back(sp);
         }
+        const bool has_companion = has_memo || has_binary || has_image;
 
         // Record: 5-byte prefix (delete-flag byte + 4-byte null bitmap) + fields
         std::uint32_t rec_len = 5;
@@ -3659,7 +3671,8 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
         adt_hdr[356] = 4;
         adt_hdr[358] = static_cast<std::uint8_t>(fields.size() & 0xFFu);
         adt_hdr[359] = static_cast<std::uint8_t>((fields.size() >> 8) & 0xFFu);
-        if (has_memo) adt_hdr[88] = 1;
+        adt_hdr[88] = static_cast<std::uint8_t>(
+            has_memo + has_binary + has_image);
 
         // 200-byte field descriptors
         std::vector<std::uint8_t> fds(fields.size() * 200, 0);
@@ -3707,8 +3720,8 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
                                   "AdsCreateTable: ADT write failed");
         }
 
-        // Create a companion .adm for MEMO/BINARY fields
-        if (has_memo) {
+        // Create a companion .adm for MEMO/BINARY/IMAGE fields
+        if (has_companion) {
             fs::path adm = full;
             adm.replace_extension(".adm");
             { std::error_code ec; fs::remove(adm, ec); }
@@ -6990,30 +7003,32 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                        : ntx_numeric_key ? ntx_num_width
                        : 0;
     if (!cdx_numeric_key && !ntx_numeric_key) {
-        // A character key is fixed-width on disk. For a bare character field
-        // the width is the declared field length; deriving it from the
+        // A character key is fixed-width on disk. For a BARE character field
+        // the width is the declared field length: deriving it from the
         // *trimmed* value of the first record truncates every later key that
         // shares a prefix beyond that width (a short first row collapses
         // longer rows onto the same key), corrupting ordering and seeks in
-        // both the index itself and native FoxPro/Clipper readers. Prefer the
-        // field width; fall back to the untrimmed first-record key width for a
-        // composite expression; keep the 32-char default only for an empty
-        // table with nothing to probe.
+        // both the index itself and native FoxPro/Clipper readers.
         const std::string bare = openads::engine::strip_alias_qualifiers(expr);
         std::int32_t fi = t->field_index(bare);
         if (fi >= 0) {
             klen = t->field_descriptor(static_cast<std::uint16_t>(fi)).length;
         } else if (t->record_count() > 0) {
+            // Composite expression: probe the first record's key. Note
+            // evaluate_index_expr right-pads its result to the probe width, so
+            // trim the padding back off — otherwise every composite key would
+            // be pinned to the 254-byte probe length.
             if (auto g = t->goto_record(1); g) {
                 if (auto k = openads::engine::evaluate_index_expr(*t, expr, 254)) {
-                    std::size_t n = std::move(k).value().size();  // untrimmed
-                    if (n > 0)
+                    std::string s = std::move(k).value();
+                    while (!s.empty() && s.back() == ' ') s.pop_back();
+                    if (!s.empty())
                         klen = static_cast<std::uint16_t>(
-                            std::min<std::size_t>(n, 254));
+                            std::min<std::size_t>(s.size(), 254));
                 }
             }
         }
-        if (klen == 0) klen = 32;
+        if (klen == 0) klen = 32;  // empty table, composite expression
     }
 
     std::unique_ptr<openads::drivers::IIndex> idx_owner;
@@ -7099,7 +7114,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         // tag already exists, open it and clear its B+tree so the
         // caller's per-record insert loop rebuilds it fresh.
         auto added = openads::drivers::cdx::CdxIndex::add_tag(
-            p.string(), tag, expr, klen, unique, descend);
+            p.string(), tag, expr, klen, unique, descend, for_expr);
         if (!added && added.error().code == 5044) {
             openads::drivers::cdx::CdxIndex existing;
             auto reopen = existing.open_named(p.string(),
@@ -7116,6 +7131,11 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             // prior options.
             if (auto so = existing.set_options(unique, descend, klen); !so)
                 return fail(so.error());
+            // Re-creating an existing tag overwrites its FOR clause too
+            // (a new condition, or none, replaces the old one) so the
+            // on-disk header matches the just-issued CREATE INDEX.
+            if (auto sc = existing.set_condition(for_expr); !sc)
+                return fail(sc.error());
             idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
                 std::move(existing));
         } else if (!added) {
@@ -7126,7 +7146,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         }
     } else if (is_cdx) {
         auto created = openads::drivers::cdx::CdxIndex::create(
-            p.string(), tag, expr, klen, unique, descend);
+            p.string(), tag, expr, klen, unique, descend, for_expr);
         if (!created) return fail(created.error());
         idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
             std::move(created).value());
@@ -7267,6 +7287,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                 if (!sib_has_data) {
                     if (auto cl = sub->clear_data(); !cl) continue;
                     std::string sib_expr = sub->expression();
+                    std::string sib_for  = sub->condition();
                     std::uint16_t sib_klen = sub->key_length();
                     const bool sib_fox = sub->key_encoding() ==
                         openads::drivers::KeyEncoding::FoxNumeric;
@@ -7274,6 +7295,13 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                     sib_keys.reserve(rec_count);
                     for (std::uint32_t r2 = 1; r2 <= rec_count; ++r2) {
                         if (auto g = t->goto_record(r2); !g) continue;
+                        // Honor the sibling tag's own FOR clause so a
+                        // conditional tag is not silently rebuilt
+                        // unconditional during this resync.
+                        if (!sib_for.empty() &&
+                            !openads::engine::evaluate_index_expr_truthy(
+                                *t, sib_for))
+                            continue;
                         std::string k2b;
                         if (sib_fox) {
                             double dv = 0.0;
@@ -8308,8 +8336,50 @@ UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
     UNSIGNED16 cap = *pusLen;
     if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
 
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(
+            std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+
     auto* dd = (c != nullptr && c->has_dd()) ? c->dd() : nullptr;
-    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    if (dd == nullptr) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+        // No Advantage Data Dictionary on this connection: a SQL backend with a
+        // live catalog (PostgreSQL information_schema) can still answer REQUIRED
+        // (=> nullable) and DEFAULT per field. The value uses the same encoding as
+        // the dictionary path ("T"/"F" for REQUIRED, the literal for DEFAULT) so
+        // the caller need not know which source provided it.
+        if (usProp == ADS_DD_FIELD_REQUIRED || usProp == ADS_DD_FIELD_DEFAULT) {
+            if (auto* pc = state().registry
+                    .lookup<openads::sql_backend::PostgresConnection>(
+                        hConn, HandleKind::PostgresConnection)) {
+                openads::sql_backend::PostgresTable probe;
+                probe.name = openads::abi::to_internal(pucTable, 0);
+                auto fr = pc->describe_table(&probe);
+                if (fr) {
+                    const auto want = openads::abi::to_internal(pucField, 0);
+                    for (const auto& fd2 : fr.value()) {
+                        if (fd2.name.size() == want.size() &&
+                            std::equal(fd2.name.begin(), fd2.name.end(),
+                                       want.begin(), [](char a, char b) {
+                                           return std::toupper((unsigned char) a) ==
+                                                  std::toupper((unsigned char) b);
+                                       })) {
+                            return usProp == ADS_DD_FIELD_REQUIRED
+                                ? put_str(fd2.nullable ? "F" : "T")
+                                : put_str(fd2.default_value);
+                        }
+                    }
+                }
+            }
+        }
+#endif
+        *pusLen = 0;
+        return ok();
+    }
 
     auto alias  = openads::abi::to_internal(pucTable, 0);
     auto field  = openads::abi::to_internal(pucField, 0);
@@ -8318,13 +8388,6 @@ UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
         return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND), alias.c_str());
     }
 
-    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
-        UNSIGNED16 n = static_cast<UNSIGNED16>(
-            std::min<std::size_t>(s.size(), cap));
-        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
-        *pusLen = static_cast<UNSIGNED16>(s.size());
-        return ok();
-    };
     auto put_u16 = [&](std::uint16_t v) -> UNSIGNED32 {
         if (pBuf != nullptr && cap >= 2) {
             auto* b = static_cast<std::uint8_t*>(pBuf);
@@ -10875,9 +10938,46 @@ std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>>& stmt_map() {
     return m;
 }
 
+// stmt_map() is a process-wide table shared by every connection. Its
+// structural operations (insert / find / erase) must all hold stmt_mu();
+// without it, an insert that rehashes the map while another thread walks a
+// bucket corrupts the structure (the load-tested crash/hang at >= 8 threads).
+// A dedicated mutex (not the global state lock) keeps query execution off the
+// lock and avoids any cross-ordering with it.
+std::mutex& stmt_mu() {
+    static std::mutex m;
+    return m;
+}
+
 ADSHANDLE next_stmt_handle() {
-    static std::uint64_t n = 0x60000000ULL;
-    return ++n;
+    // Atomic so concurrent AdsCreateSQLStatement calls never hand out a
+    // duplicate handle (the old non-atomic ++ could race two callers onto the
+    // same value).
+    static std::atomic<std::uint64_t> n{0x60000000ULL};
+    return static_cast<ADSHANDLE>(++n);
+}
+
+// Look up a statement and return the raw pointer under the lock, then release:
+// a statement is only ever executed by the thread that owns its handle, so the
+// pointer stays valid for that thread while long query execution runs free of
+// the lock. Returns nullptr if the handle is unknown.
+SqlStatement* stmt_lookup(ADSHANDLE h) {
+    std::lock_guard<std::mutex> lk(stmt_mu());
+    auto& m = stmt_map();
+    auto it = m.find(h);
+    return it == m.end() ? nullptr : it->second.get();
+}
+
+ADSHANDLE stmt_register(std::unique_ptr<SqlStatement> stmt) {
+    ADSHANDLE h = next_stmt_handle();
+    std::lock_guard<std::mutex> lk(stmt_mu());
+    stmt_map()[h] = std::move(stmt);
+    return h;
+}
+
+void stmt_unregister(ADSHANDLE h) {
+    std::lock_guard<std::mutex> lk(stmt_mu());
+    stmt_map().erase(h);
 }
 
 // RCB 2026-05-22 17:03 — Statement handles live in stmt_map() which is a plain
@@ -10888,6 +10988,7 @@ ADSHANDLE next_stmt_handle() {
 // and return true so the caller skips the table path entirely.  The parameter
 // name may arrive with or without a leading colon depending on the caller.
 bool set_stmt_param(ADSHANDLE h, const char* pname, std::string literal) {
+    std::lock_guard<std::mutex> lk(stmt_mu());
     auto& m = stmt_map();
     auto it = m.find(h);
     if (it == m.end()) return false;
@@ -10925,9 +11026,7 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
             hConnect, HandleKind::RemoteConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->remote = rc;
-        ADSHANDLE h = next_stmt_handle();
-        stmt_map()[h] = std::move(stmt);
-        *phStatement = h;
+        *phStatement = stmt_register(std::move(stmt));
         return ok();
     }
 #if defined(OPENADS_WITH_SQLITE)
@@ -10935,9 +11034,7 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
             hConnect, HandleKind::SqliteConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->sqlite = sc;
-        ADSHANDLE h = next_stmt_handle();
-        stmt_map()[h] = std::move(stmt);
-        *phStatement = h;
+        *phStatement = stmt_register(std::move(stmt));
         return ok();
     }
 #endif
@@ -10946,9 +11043,7 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
             hConnect, HandleKind::MssqlConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->mssql_conn = mc;
-        ADSHANDLE h = next_stmt_handle();
-        stmt_map()[h] = std::move(stmt);
-        *phStatement = h;
+        *phStatement = stmt_register(std::move(stmt));
         return ok();
     }
 #endif
@@ -10956,32 +11051,27 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto stmt = std::make_unique<SqlStatement>();
     stmt->conn = c;
-    ADSHANDLE h = next_stmt_handle();
-    stmt_map()[h] = std::move(stmt);
-    *phStatement = h;
+    *phStatement = stmt_register(std::move(stmt));
     return ok();
 }
 
 UNSIGNED32 AdsCloseSQLStatement(ADSHANDLE hStatement) {
-    auto& m = stmt_map();
-    m.erase(hStatement);
+    stmt_unregister(hStatement);
     return ok();
 }
 
 UNSIGNED32 AdsPrepareSQL(ADSHANDLE hStatement, UNSIGNED8* pucSQL) {
-    auto& m = stmt_map();
-    auto it = m.find(hStatement);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
-    it->second->sql = openads::abi::to_internal(pucSQL, 0);
+    SqlStatement* st = stmt_lookup(hStatement);
+    if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    st->sql = openads::abi::to_internal(pucSQL, 0);
     return ok();
 }
 
 UNSIGNED32 AdsGetNumParams(ADSHANDLE hStatement, UNSIGNED16* pusNumParams) {
     if (!pusNumParams) return fail(openads::AE_INTERNAL_ERROR, "");
-    auto& m = stmt_map();
-    auto it = m.find(hStatement);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
-    const std::string& sql = it->second->sql;
+    SqlStatement* st = stmt_lookup(hStatement);
+    if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    const std::string& sql = st->sql;
     std::unordered_set<std::string> names;
     for (std::size_t i = 0; i < sql.size(); ) {
         if (sql[i] == ':' && i + 1 < sql.size() &&
@@ -11001,9 +11091,12 @@ UNSIGNED32 AdsGetNumParams(ADSHANDLE hStatement, UNSIGNED16* pusNumParams) {
 }
 
 UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
-    auto& m = stmt_map();
-    auto it = m.find(hStatement);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    SqlStatement* st_ptr = stmt_lookup(hStatement);
+    if (st_ptr == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    // Alias so the body below keeps its `it->second->...` accesses unchanged;
+    // the lookup is now serialised and the pointer is used off the lock.
+    std::pair<const ADSHANDLE, SqlStatement*> it_kv{hStatement, st_ptr};
+    auto* it = &it_kv;
     if (it->second->sql.empty()) {
         return fail(openads::AE_PARSE_ERROR, "no prepared SQL");
     }
@@ -12279,9 +12372,13 @@ extern "C" {  // reopen for the ACE API exports
 UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                ADSHANDLE* phCursor) {
     if (phCursor == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    auto& m = stmt_map();
-    auto it = m.find(hStatement);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    SqlStatement* st_ptr = stmt_lookup(hStatement);
+    if (st_ptr == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    // Alias so the long body below keeps its `it->second->...` accesses
+    // unchanged; the lookup is now serialised and the pointer is used off
+    // the lock (only the owning thread executes this handle).
+    std::pair<const ADSHANDLE, SqlStatement*> it_kv{hStatement, st_ptr};
+    auto* it = &it_kv;
     // M12.7 — remote SQL exec. The statement was created against a
     // RemoteConnection; ship the SQL over the wire, allocate a
     // RemoteTable handle around the returned cursor table-id, and
@@ -18356,26 +18453,26 @@ UNSIGNED32 AdsShowDeleted(UNSIGNED16 us) {
 }
 UNSIGNED32 AdsShowError(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsStmtSetTableLockType(ADSHANDLE h, UNSIGNED16 us) {
-    auto& m = stmt_map(); auto it = m.find(h);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
-    it->second->lock_type = us; return ok();
+    SqlStatement* st = stmt_lookup(h);
+    if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    st->lock_type = us; return ok();
 }
 UNSIGNED32 AdsStmtSetTablePassword(ADSHANDLE h, UNSIGNED8* pTable, UNSIGNED8* pPwd) {
-    auto& m = stmt_map(); auto it = m.find(h);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
-    it->second->passwords.emplace_back(openads::abi::to_internal(pTable, 0),
-                                       openads::abi::to_internal(pPwd, 0));
+    SqlStatement* st = stmt_lookup(h);
+    if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    st->passwords.emplace_back(openads::abi::to_internal(pTable, 0),
+                               openads::abi::to_internal(pPwd, 0));
     return ok();
 }
 UNSIGNED32 AdsStmtSetTableReadOnly(ADSHANDLE h, UNSIGNED16 us) {
-    auto& m = stmt_map(); auto it = m.find(h);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
-    it->second->read_only = us; return ok();
+    SqlStatement* st = stmt_lookup(h);
+    if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    st->read_only = us; return ok();
 }
 UNSIGNED32 AdsStmtSetTableType(ADSHANDLE h, UNSIGNED16 us) {
-    auto& m = stmt_map(); auto it = m.find(h);
-    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
-    it->second->table_type = us; return ok();
+    SqlStatement* st = stmt_lookup(h);
+    if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    st->table_type = us; return ok();
 }
 UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
     { ADS_STUB(openads::AE_SUCCESS); }
@@ -19311,28 +19408,23 @@ UNSIGNED32 AdsMgDumpInternalTables(ADSHANDLE h) {
 UNSIGNED32 AdsClearSQLAbortFunc(void) { return ok(); }
 UNSIGNED32 AdsClearSQLParams(ADSHANDLE) { return ok(); }
 UNSIGNED32 AdsStmtClearTablePasswords(ADSHANDLE h) {
-    auto it = stmt_map().find(h);
-    if (it != stmt_map().end()) it->second->passwords.clear();
+    if (auto* st = stmt_lookup(h)) st->passwords.clear();
     return ok();
 }
 UNSIGNED32 AdsStmtDisableEncryption(ADSHANDLE h) {
-    auto it = stmt_map().find(h);
-    if (it != stmt_map().end()) it->second->disable_enc = true;
+    if (auto* st = stmt_lookup(h)) st->disable_enc = true;
     return ok();
 }
 UNSIGNED32 AdsStmtSetTableCharType(ADSHANDLE h, UNSIGNED16 us) {
-    auto it = stmt_map().find(h);
-    if (it != stmt_map().end()) it->second->char_type = us;
+    if (auto* st = stmt_lookup(h)) st->char_type = us;
     return ok();
 }
 UNSIGNED32 AdsStmtSetTableCollation(ADSHANDLE h, UNSIGNED8* puc) {
-    auto it = stmt_map().find(h);
-    if (it != stmt_map().end()) it->second->collation = openads::abi::to_internal(puc, 0);
+    if (auto* st = stmt_lookup(h)) st->collation = openads::abi::to_internal(puc, 0);
     return ok();
 }
 UNSIGNED32 AdsStmtSetTableRights(ADSHANDLE h, UNSIGNED16 us) {
-    auto it = stmt_map().find(h);
-    if (it != stmt_map().end()) it->second->check_rights = us;
+    if (auto* st = stmt_lookup(h)) st->check_rights = us;
     return ok();
 }
 

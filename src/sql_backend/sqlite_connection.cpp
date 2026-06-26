@@ -185,6 +185,17 @@ util::Result<SqliteConnection> SqliteConnection::open(const SqliteUri& uri) {
             return ck.error();
         }
     }
+    // Concurrency hardening. Without a busy timeout, any contended write
+    // returns SQLITE_BUSY ("database is locked") immediately, so a workload
+    // spread over several connections sheds a large fraction of its writes.
+    // A bounded busy timeout turns that hard failure into a short wait, which
+    // is the behaviour a multi-user ADS application expects. WAL additionally
+    // lets readers run concurrently with a writer; it is a best-effort
+    // optimisation (it cannot be enabled on :memory: or read-only media), so a
+    // failure to switch journal mode is left non-fatal — the busy timeout is
+    // the part that matters for correctness under contention.
+    sqlite3_busy_timeout(raw, 5000);
+    sqlite3_exec(raw, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
     conn.impl_->db = raw;
     return conn;
 #else

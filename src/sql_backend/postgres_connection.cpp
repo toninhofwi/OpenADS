@@ -101,7 +101,8 @@ describe_table_impl(PGconn* conn, PostgresTable* tbl) {
     PGresult* res = PQexecParams(
         conn,
         "SELECT column_name, data_type, is_nullable, "
-        "character_maximum_length, numeric_precision, numeric_scale "
+        "character_maximum_length, numeric_precision, numeric_scale, "
+        "column_default "
         "FROM information_schema.columns "
         "WHERE table_schema = ANY (current_schemas(true)) "
         "AND table_name = $1 "
@@ -122,13 +123,16 @@ describe_table_impl(PGconn* conn, PostgresTable* tbl) {
     out.reserve(static_cast<std::size_t>(rows));
     for (int r = 0; r < rows; ++r) {
         const char* nullable = PQgetvalue(res, r, 2);
-        out.push_back(map_pg_column(
+        PostgresTable::FieldDesc fd = map_pg_column(
             PQgetvalue(res, r, 0),
             PQgetvalue(res, r, 1),
             nullable && nullable[0] == 'Y',
             std::atoi(PQgetvalue(res, r, 3)),
             std::atoi(PQgetvalue(res, r, 4)),
-            std::atoi(PQgetvalue(res, r, 5))));
+            std::atoi(PQgetvalue(res, r, 5)));
+        fd.default_value = PQgetisnull(res, r, 6)
+            ? std::string{} : std::string(PQgetvalue(res, r, 6));
+        out.push_back(std::move(fd));
     }
     PQclear(res);
     tbl->fields        = out;

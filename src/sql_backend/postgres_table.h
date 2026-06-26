@@ -18,6 +18,7 @@ struct PostgresTable {
         std::uint32_t length   = 0;
         std::uint16_t decimals = 0;
         bool          nullable = true;
+        std::string   default_value;   // information_schema column_default ("" = none)
     };
 
     std::vector<FieldDesc> fields;

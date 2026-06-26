@@ -77,8 +77,10 @@ add_executable(openads_unit_tests
     unit/abi_index_expr_validation_test.cpp
     unit/abi_zap_pack_test.cpp
     unit/abi_pack_reindex_softseek_test.cpp
+    unit/abi_ntx_pack_reindex_test.cpp
     unit/abi_record_count_filter_test.cpp
     unit/abi_reindex_test.cpp
+    unit/abi_cdx_conditional_index_test.cpp
     unit/ntx_multilevel_test.cpp
     unit/cdx_multilevel_test.cpp
     unit/cdx_multitag_2nd_test.cpp
@@ -107,6 +109,7 @@ add_executable(openads_unit_tests
     unit/abi_ntx_numeric_key_test.cpp
     unit/abi_cdx_char_keylen_test.cpp
     unit/abi_cdx_index_direction_test.cpp
+    unit/abi_cdx_empty_table_keylen_test.cpp
     unit/abi_ordnumber_test.cpp
     unit/abi_server_info_test.cpp
     unit/abi_unicode_test.cpp
@@ -183,6 +186,8 @@ add_executable(openads_unit_tests
     unit/codepage_test.cpp
     unit/adm_memo_test.cpp
     unit/sqlite_uri_test.cpp
+    unit/abi_sql_stmt_concurrency_test.cpp
+    unit/sqlite_concurrency_test.cpp
     unit/proc_test.cpp
     unit/sql_common_test.cpp
     unit/enterprise_config_test.cpp
