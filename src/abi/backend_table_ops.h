@@ -26,6 +26,10 @@ struct BackendTableOps {
     UNSIGNED32 (*is_record_deleted)(ADSHANDLE, UNSIGNED16*);
     UNSIGNED32 (*open_index)       (ADSHANDLE, UNSIGNED8*, ADSHANDLE*, UNSIGNED16*);
     UNSIGNED32 (*is_found)         (ADSHANDLE, UNSIGNED16*);
+    // Tier-2 push-down: install (non-null) or clear (null) a SQL WHERE
+    // fragment so the backend filters rows server-side; navigation then walks
+    // only matching rows. Null when the backend can't push filters down.
+    UNSIGNED32 (*set_filter)       (ADSHANDLE, UNSIGNED8* /*where, null=clear*/);
 };
 
 }  // namespace openads::abi

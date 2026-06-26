@@ -40,6 +40,12 @@ struct SqliteTable {
     bool                      positioned = false;
     std::vector<bool>         current_nulls;
 
+    // Tier-2 push-down: when non-empty, the rowid list is loaded with this
+    // SQL WHERE fragment so navigation only walks matching rows (the backend
+    // filters via its own indexes). Set by SqliteConnection::set_filter from
+    // a translated SET FILTER / AOF predicate; empty = no filter.
+    std::string where_filter;
+
     bool last_seek_found = false;
 
     // Result-set cursor mode (AdsExecuteSQLDirect SELECT passthrough): rows are

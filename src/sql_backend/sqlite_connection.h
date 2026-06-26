@@ -41,6 +41,13 @@ public:
     util::Result<void> goto_bottom(SqliteTable* tbl);
     util::Result<void> skip(SqliteTable* tbl, std::int32_t step);
 
+    // Tier-2 push-down: install (where non-empty) or clear (where empty) a SQL
+    // WHERE fragment and reload the rowid list so navigation walks only the
+    // matching rows. `where` must be a trusted, already-translated SQL boolean
+    // expression (see engine::try_emit_sql_where) — it is spliced into the
+    // SELECT verbatim. Resets the cursor to an unpositioned state.
+    util::Result<void> set_filter(SqliteTable* tbl, const std::string& where);
+
     util::Result<bool>          at_eof(SqliteTable* tbl) const;
     util::Result<bool>          at_bof(SqliteTable* tbl) const;
     util::Result<std::uint32_t> record_count(SqliteTable* tbl);
