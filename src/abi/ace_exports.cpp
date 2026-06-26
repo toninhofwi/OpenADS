@@ -10635,16 +10635,6 @@ UNSIGNED32 AdsReindex(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsPackTable_DEFERRED(ADSHANDLE /*hTable*/) {
-    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "AdsPackTable lands in M4 alongside memo store");
-}
-
-UNSIGNED32 AdsZapTable_DEFERRED(ADSHANDLE /*hTable*/) {
-    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "AdsZapTable lands in M4 alongside memo store");
-}
-
 // Tier-2 SQL push-down: for a SQL-backend table, translate a Clipper filter
 // predicate into a SQL WHERE and install it on the backend so it filters
 // server-side. Returns true when handled here (backend table); `rc` then holds
@@ -19517,7 +19507,14 @@ UNSIGNED32 AdsShowDeleted(UNSIGNED16 us) {
     openads::engine::set_show_deleted(us != 0);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsShowError(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsShowError(UNSIGNED8* pucErrText) {
+    // ADS pops up a message box on a GUI host; OpenADS is headless, so the
+    // closest faithful behaviour is to write the caller's text to stderr.
+    if (pucErrText != nullptr && pucErrText[0] != '\0')
+        std::fprintf(stderr, "%s\n",
+                     reinterpret_cast<const char*>(pucErrText));
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsStmtSetTableLockType(ADSHANDLE h, UNSIGNED16 us) {
     SqlStatement* st = stmt_lookup(h);
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");

@@ -61,6 +61,14 @@ TEST_CASE("AdsSetDecimals and the cache/diagnostic hooks validate their input") 
     CHECK(AdsTestRecLocks(0) != openads::AE_SUCCESS);
 }
 
+TEST_CASE("AdsShowError accepts null, empty, and non-empty messages") {
+    CHECK(AdsShowError(nullptr) == openads::AE_SUCCESS);
+    UNSIGNED8 empty[] = "";
+    CHECK(AdsShowError(empty) == openads::AE_SUCCESS);
+    UNSIGNED8 msg[] = "openads test diagnostic";
+    CHECK(AdsShowError(msg) == openads::AE_SUCCESS);
+}
+
 TEST_CASE("AdsRefreshAOF re-evaluates the stored filter over current data") {
     const auto dir = fs::temp_directory_path() / "openads_refresh_aof";
     std::error_code ec;
