@@ -49,6 +49,12 @@ struct PostgresTable {
     std::vector<bool>        staging_nulls;
     bool                     pending_append = false;
     bool                     row_dirty      = false;
+
+    // Tier-2 push-down: when non-empty, the PK snapshot is loaded with this
+    // SQL WHERE fragment so navigation only walks matching rows (PostgreSQL
+    // filters via its own indexes). Set by PostgresConnection::set_filter from
+    // a translated SET FILTER / AOF predicate; empty = no filter.
+    std::string where_filter;
 };
 
 } // namespace openads::sql_backend

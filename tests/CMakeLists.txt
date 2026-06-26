@@ -228,6 +228,7 @@ if(OPENADS_WITH_POSTGRESQL)
     target_sources(openads_unit_tests PRIVATE
         unit/abi_plus_postgres_read_test.cpp
         unit/abi_plus_postgres_write_test.cpp
+        unit/abi_plus_postgres_filter_test.cpp
     unit/abi_plus_mariadb_read_test.cpp
     unit/abi_plus_odbc_read_test.cpp
     unit/abi_plus_odbc_seek_test.cpp
