@@ -1,6 +1,7 @@
 #include "network/session.h"
 
 #include "engine/aof_eval.h"
+#include "engine/index_expr.h"
 #include "engine/aof_expr.h"
 #include "engine/table.h"
 #include "mgmt/mg_collector.h"
@@ -1663,6 +1664,117 @@ DispatchResult Session::dispatch(const Frame& f) {
                                  rowbuf.begin(), rowbuf.end());
             break;
         }
+            case Opcode::FetchWhere: {
+                // Tier-2 server-side filtered scan. Payload:
+                //   [u32 tid][u32 max_rows][u16 exprlen][expr]
+                //   [u8 ncols][u8 nlen][name]...
+                // Reply (FetchWhereAck):
+                //   [u32 nrows][u8 ncols]
+                //   [per row, per col: u16 vlen][val]
+                //   [u8 eof]
+                // The server walks the table from the cursor's current
+                // position, evaluating `expr` (Clipper-style FOR
+                // predicate) per row, and emits only the matching rows'
+                // requested columns until `max_rows` matches or EOF.
+                // The cursor is left positioned past the last examined
+                // row so a follow-up FetchWhere resumes the scan.
+                if (f.payload.size() < 11) {
+                    reply = err("FetchWhere: bad payload"); break;
+                }
+                std::uint32_t id      = read_u32_le(f.payload.data());
+                std::uint32_t maxrows = read_u32_le(f.payload.data() + 4);
+                std::uint16_t elen    =
+                    static_cast<std::uint16_t>(
+                        static_cast<std::uint32_t>(f.payload[8]) |
+                        (static_cast<std::uint32_t>(f.payload[9]) << 8));
+                std::size_t p = 10;
+                if (p + elen > f.payload.size()) {
+                    reply = err("FetchWhere: truncated expr"); break;
+                }
+                std::string expr(
+                    reinterpret_cast<const char*>(f.payload.data() + p),
+                    elen);
+                p += elen;
+                if (p + 1 > f.payload.size()) {
+                    reply = err("FetchWhere: missing ncols"); break;
+                }
+                std::uint8_t ncols = f.payload[p++];
+                std::vector<std::string> cols;
+                cols.reserve(ncols);
+                bool parse_ok = true;
+                for (std::uint8_t c = 0; c < ncols && parse_ok; ++c) {
+                    if (p + 1 > f.payload.size()) {
+                        reply = err("FetchWhere: truncated col header");
+                        parse_ok = false; break;
+                    }
+                    std::uint8_t nlen = f.payload[p++];
+                    if (p + nlen > f.payload.size()) {
+                        reply = err("FetchWhere: truncated col name");
+                        parse_ok = false; break;
+                    }
+                    cols.emplace_back(
+                        reinterpret_cast<const char*>(f.payload.data() + p),
+                        nlen);
+                    p += nlen;
+                }
+                if (!parse_ok) break;
+
+                auto write_u16_le = [](std::vector<std::uint8_t>& out,
+                                       std::uint16_t v) {
+                    out.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+                    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+                };
+
+                // Slice 1 is base-table only: a SQL cursor already
+                // filters server-side via its WHERE clause, and the
+                // FOR-predicate evaluator needs an engine Table to read
+                // the current record. Reject cursor ids with a clear
+                // error rather than silently mis-filtering.
+                if (cursor_tbls_.find(id) != cursor_tbls_.end()) {
+                    reply = err("FetchWhere: not supported on SQL "
+                                "cursors (use SQL WHERE)");
+                    break;
+                }
+                auto it = tbls_.find(id);
+                if (it == tbls_.end() || !sess_conn_) {
+                    reply = err("FetchWhere: bad table id"); break;
+                }
+                auto* tbl = sess_conn_->lookup_table(it->second);
+                if (!tbl) { reply = err("FetchWhere: lookup failed"); break; }
+
+                reply.opcode = Opcode::FetchWhereAck;
+                std::vector<std::uint8_t> rowbuf;
+                std::uint32_t nrows_out = 0;
+                while (!tbl->eof() && nrows_out < maxrows) {
+                    if (openads::engine::evaluate_index_expr_truthy(
+                            *tbl, expr)) {
+                        for (auto& cn : cols) {
+                            std::int32_t fi = tbl->field_index(cn);
+                            std::string val;
+                            if (fi >= 0) {
+                                auto v = tbl->read_field(
+                                    static_cast<std::uint16_t>(fi));
+                                if (v) val = v.value().as_string;
+                            }
+                            write_u16_le(rowbuf,
+                                static_cast<std::uint16_t>(val.size()));
+                            rowbuf.insert(rowbuf.end(),
+                                          val.begin(), val.end());
+                        }
+                        ++nrows_out;
+                    }
+                    auto sk = tbl->skip(1);
+                    if (!sk) break;
+                }
+
+                write_u32_le(nrows_out, reply.payload);
+                reply.payload.push_back(ncols);
+                reply.payload.insert(reply.payload.end(),
+                                     rowbuf.begin(), rowbuf.end());
+                reply.payload.push_back(
+                    static_cast<std::uint8_t>(tbl->eof() ? 1 : 0));
+                break;
+            }
         case Opcode::Reindex: {
             if (f.payload.size() < 4) { reply = err("Reindex: bad payload"); break; }
             std::uint32_t id = read_u32_le(f.payload.data());
