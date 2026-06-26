@@ -45,7 +45,9 @@ struct StmtH {
     bool                                  synth = false;
     std::vector<std::string>              scols;
     std::vector<std::vector<std::string>> srows;
-    long                                  spos = 0;   // 0 = before first row
+    long                                  spos = 0;   // synth: 0 = before first row
+    // engine cursor row position: 0 = before first, 1..N = on row, -1 = after last
+    long                                  epos = 0;
 };
 
 HKind kind_of(SQLHANDLE h) { return *reinterpret_cast<HKind*>(h); }
@@ -179,6 +181,7 @@ void reset_result(StmtH* s) {
     s->scols.clear();
     s->srows.clear();
     s->spos = 0;
+    s->epos = 0;
     s->err.clear();
 }
 
@@ -441,8 +444,58 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) {
     }
     if (!s->st) return SQL_ERROR;
     int rc = openads_fetch_next(s->st);
-    if (rc == OPENADS_OK) return SQL_SUCCESS;
-    if (rc == OPENADS_NO_DATA) return SQL_NO_DATA;
+    if (rc == OPENADS_OK) { s->epos = (s->epos < 0 ? s->epos : s->epos + 1);
+                            return SQL_SUCCESS; }
+    if (rc == OPENADS_NO_DATA) { s->epos = -1; return SQL_NO_DATA; }
+    return SQL_ERROR;
+}
+
+// Scrollable cursor. Honours the forward/backward/absolute/relative
+// orientations; bookmarks are not supported. Forward NEXT keeps the efficient
+// sequential path; random access uses openads_fetch_absolute.
+SQLRETURN SQL_API SQLFetchScroll(SQLHSTMT hstmt, SQLSMALLINT orient,
+                                 SQLLEN offset) {
+    if (!hstmt) return SQL_ERROR;
+    auto* s = reinterpret_cast<StmtH*>(hstmt);
+
+    SQLLEN count = 0, cur = 0;
+    if (s->synth) {
+        count = static_cast<SQLLEN>(s->srows.size());
+        cur   = s->spos;
+    } else {
+        if (!s->st) return SQL_ERROR;
+        long rc = 0;
+        if (openads_row_count(s->st, &rc) != OPENADS_OK) return SQL_ERROR;
+        count = rc;
+        cur   = (s->epos < 0) ? count + 1 : s->epos;   // -1 == after last
+    }
+
+    SQLLEN target = 0;
+    switch (orient) {
+        case SQL_FETCH_NEXT:     target = cur + 1;                       break;
+        case SQL_FETCH_PRIOR:    target = cur - 1;                       break;
+        case SQL_FETCH_FIRST:    target = 1;                             break;
+        case SQL_FETCH_LAST:     target = count;                         break;
+        case SQL_FETCH_ABSOLUTE: target = (offset >= 0) ? offset
+                                                        : count + offset + 1; break;
+        case SQL_FETCH_RELATIVE: target = cur + offset;                  break;
+        default:                 return SQL_ERROR;   // bookmarks unsupported
+    }
+
+    if (count == 0 || target < 1 || target > count) {
+        if (s->synth) s->spos = (target < 1) ? 0 : static_cast<long>(count);
+        else          s->epos = (target < 1) ? 0 : -1;  // before-first / after-last
+        return SQL_NO_DATA;
+    }
+
+    if (s->synth) { s->spos = static_cast<long>(target); return SQL_SUCCESS; }
+
+    int rc = (orient == SQL_FETCH_NEXT)
+                 ? openads_fetch_next(s->st)
+                 : openads_fetch_absolute(s->st, static_cast<long>(target));
+    if (rc == OPENADS_OK)      { s->epos = static_cast<long>(target);
+                                 return SQL_SUCCESS; }
+    if (rc == OPENADS_NO_DATA) { s->epos = -1; return SQL_NO_DATA; }
     return SQL_ERROR;
 }
 

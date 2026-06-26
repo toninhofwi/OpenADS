@@ -12,6 +12,7 @@
 #include <sqlext.h>
 
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -189,6 +190,67 @@ TEST_CASE("openads ODBC driver: typed describe + typed SQLGetData") {
     SQLCHAR nm[32] = {0};
     REQUIRE(SQLGetData(st, 1, SQL_C_CHAR, nm, sizeof(nm), &ind) == SQL_SUCCESS);
     CHECK(std::string(reinterpret_cast<char*>(nm)) == "alice");
+
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+    REQUIRE(SQLDisconnect(dbc) == SQL_SUCCESS);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
+}
+
+// Read column 1 of the current row as text (helper for the scroll case).
+static std::string get_str1(SQLHSTMT st) {
+    SQLCHAR buf[32] = {0};
+    SQLLEN ind = 0;
+    REQUIRE(SQLGetData(st, 1, SQL_C_CHAR, buf, sizeof(buf), &ind) == SQL_SUCCESS);
+    return std::string(reinterpret_cast<char*>(buf));
+}
+
+TEST_CASE("openads ODBC driver: scrollable cursor (SQLFetchScroll)") {
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    connect_fresh("openads_odbc_scroll", &env, &dbc);
+
+    exec_ok(dbc, "CREATE TABLE seq (NM Character(2))");
+    for (int i = 1; i <= 5; ++i) {
+        char ins[64];
+        std::snprintf(ins, sizeof(ins),
+                      "INSERT INTO seq (NM) VALUES ('0%d')", i);
+        exec_ok(dbc, ins);
+    }
+
+    SQLHSTMT st = SQL_NULL_HSTMT;
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &st) == SQL_SUCCESS);
+    REQUIRE(SQLExecDirect(st,
+            reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT NM FROM seq")),
+            SQL_NTS) == SQL_SUCCESS);
+
+    REQUIRE(SQLFetchScroll(st, SQL_FETCH_LAST, 0) == SQL_SUCCESS);
+    CHECK(get_str1(st) == "05");
+
+    REQUIRE(SQLFetchScroll(st, SQL_FETCH_FIRST, 0) == SQL_SUCCESS);
+    CHECK(get_str1(st) == "01");
+
+    REQUIRE(SQLFetchScroll(st, SQL_FETCH_ABSOLUTE, 3) == SQL_SUCCESS);
+    CHECK(get_str1(st) == "03");
+
+    REQUIRE(SQLFetchScroll(st, SQL_FETCH_PRIOR, 0) == SQL_SUCCESS);
+    CHECK(get_str1(st) == "02");
+
+    REQUIRE(SQLFetchScroll(st, SQL_FETCH_NEXT, 0) == SQL_SUCCESS);
+    CHECK(get_str1(st) == "03");
+
+    REQUIRE(SQLFetchScroll(st, SQL_FETCH_RELATIVE, 2) == SQL_SUCCESS);
+    CHECK(get_str1(st) == "05");
+
+    // Past the last row → SQL_NO_DATA.
+    CHECK(SQLFetchScroll(st, SQL_FETCH_NEXT, 0) == SQL_NO_DATA);
+
+    // Plain SQLFetch still advances forward from the top after a re-exec.
+    REQUIRE(SQLExecDirect(st,
+            reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT NM FROM seq")),
+            SQL_NTS) == SQL_SUCCESS);
+    REQUIRE(SQLFetch(st) == SQL_SUCCESS);
+    CHECK(get_str1(st) == "01");
 
     SQLFreeHandle(SQL_HANDLE_STMT, st);
     REQUIRE(SQLDisconnect(dbc) == SQL_SUCCESS);

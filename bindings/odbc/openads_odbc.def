@@ -19,6 +19,7 @@ EXPORTS
     SQLDescribeCol
     SQLColAttribute
     SQLFetch
+    SQLFetchScroll
     SQLGetData
     SQLRowCount
     SQLMoreResults
