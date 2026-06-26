@@ -8,6 +8,15 @@ nav_order: 1
 
 A free, open-source, ADS-compatible engine and web Studio.
 
+**One API, many backends.** OpenADS *presents as ADS* — your app keeps
+using the same ACE entry points — but the same API can be backed by
+**DBF/ADT** (the default), **SQLite**, **PostgreSQL**, **MariaDB/MySQL**,
+**Microsoft SQL Server**, or **ODBC**. So you run on DBF today and switch
+to a server-class database tomorrow if you outgrow flat files — without
+rewriting your business logic. It's a scalable suite, not a single file
+format: keep your legacy code, change the engine under it on your own
+schedule. See [OpenADS Plus](OPENADS_PLUS.md).
+
 ## Read the docs
 
 | Language | |
