@@ -61,7 +61,9 @@ Name: "{group}\Quick start";                    Filename: "{app}\QUICKSTART.md"
 Name: "{group}\Uninstall OpenADS";              Filename: "{uninstallexe}"
 
 [UninstallRun]
-; Drop the service (best effort) before files are removed.
+; Stop the service synchronously first so its .exe isn't locked when the
+; uninstaller deletes files, then deregister it.
+Filename: "net.exe"; Parameters: "stop openads_serverd"; Flags: runhidden; RunOnceId: "StopOpenadsSvc"
 Filename: "{app}\openads_serverd.exe"; Parameters: "--uninstall-service"; Flags: runhidden; RunOnceId: "DelOpenadsSvc"
 
 [Code]
@@ -81,7 +83,10 @@ begin
   CfgPage.Add('Studio web console port:', False);
   CfgPage.Add('Studio admin user (leave blank for an open console):', False);
   CfgPage.Add('Studio admin password:', True);
-  CfgPage.Values[0] := ExpandConstant('{autopf}\OpenADS\data');
+  { Default the data dir under ProgramData, not Program Files: a service
+    needs write access to where the tables live, and {autopf} is read-only
+    for non-elevated processes / subject to UAC virtualisation. }
+  CfgPage.Values[0] := ExpandConstant('{commonappdata}\OpenADS\data');
   CfgPage.Values[1] := '6262';
   CfgPage.Values[2] := '6263';
 
@@ -125,6 +130,14 @@ begin
     if (p < 0) or (p > 65535) then
     begin
       MsgBox('The Studio port must be a number between 0 and 65535.',
+             mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    { Wire port and Studio port must differ, or the server can't bind both. }
+    if Trim(CfgPage.Values[1]) = Trim(CfgPage.Values[2]) then
+    begin
+      MsgBox('The wire port and the Studio port must be different.',
              mbError, MB_OK);
       Result := False;
     end;
@@ -182,7 +195,12 @@ begin
         MsgBox('Service registration returned code ' + IntToStr(rc) +
                '. You can register it later with:'#13#10 +
                '  openads_serverd --install-service --config "' + iniPath + '"',
-               mbInformation, MB_OK);
+               mbInformation, MB_OK)
+      else
+        { Registered as auto-start; bring it up now so the user doesn't have
+          to reboot or start it by hand. }
+        Exec('net.exe', 'start openads_serverd', '',
+             SW_HIDE, ewWaitUntilTerminated, rc);
     end;
   end;
 end;
