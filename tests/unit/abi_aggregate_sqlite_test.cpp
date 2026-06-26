@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -119,6 +120,46 @@ TEST_CASE("Tier-3 push-down: SQLite zero matches -> 0 / 0 / empty") {
     agg_value(hRes, 3, ty);               CHECK(ty == 0u);   // MIN   -> empty
 
     REQUIRE(AdsAggregateClose(hRes) == AE_SUCCESS);
+}
+
+// Regression for the Tier-3 review (#113): the SQLite push-down concatenated
+// the spec's field name straight into `TOTAL("<field>")` etc. A field that is
+// not a real column (a typo, or an injection probe carrying a quote) must be
+// rejected by validating against the cached schema BEFORE any SQL is built --
+// never reach the backend as a raw identifier.
+TEST_CASE("Tier-3 push-down: SQLite rejects an unknown aggregate field") {
+    SqliteFixture fx;
+    fx.open();
+
+    UNSIGNED8 forc[] = "";
+    UNSIGNED8 spec[] = "SUM:NOPE";       // NOPE is not a column of items
+    ADSHANDLE hRes   = 0;
+    CHECK(AdsAggregate(fx.hTable, forc, spec, &hRes) != AE_SUCCESS);
+    CHECK(hRes == 0);
+}
+
+TEST_CASE("Tier-3 push-down: SQLite rejects an injection-shaped field name") {
+    SqliteFixture fx;
+    fx.open();
+
+    UNSIGNED8 forc[] = "";
+    // A quote in the field name would break out of the quoted identifier if it
+    // ever reached SQL. Validation must reject it up front.
+    UNSIGNED8 spec[] = "MIN:nm\")--";
+    ADSHANDLE hRes   = 0;
+    CHECK(AdsAggregate(fx.hTable, forc, spec, &hRes) != AE_SUCCESS);
+    CHECK(hRes == 0);
+}
+
+TEST_CASE("Tier-3 push-down: SQLite rejects empty field for non-COUNT") {
+    SqliteFixture fx;
+    fx.open();
+
+    UNSIGNED8 forc[] = "";
+    UNSIGNED8 spec[] = "SUM:";           // empty field, non-COUNT
+    ADSHANDLE hRes   = 0;
+    CHECK(AdsAggregate(fx.hTable, forc, spec, &hRes) != AE_SUCCESS);
+    CHECK(hRes == 0);
 }
 
 TEST_CASE("Tier-3 push-down: untranslatable FOR declines (caller falls back)") {

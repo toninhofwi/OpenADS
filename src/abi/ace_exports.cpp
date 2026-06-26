@@ -893,11 +893,29 @@ UNSIGNED32 sqlite_aggregate(
         return false;
     };
 
+    // Resolve a spec's field to its canonical, schema-validated column name.
+    // An unknown name must be rejected, never concatenated into the SQL: a
+    // double-quoted token that is not a real column is silently treated as a
+    // string literal by SQLite (TOTAL("NOPE") -> 0), and a quote in the name
+    // would break out of the identifier. Empty field is valid only for COUNT.
+    auto resolve_col = [&](const openads::engine::AggSpec& s,
+                           std::string& col) -> bool {
+        if (s.field.empty())
+            return s.fn == openads::engine::AggFn::Count;
+        for (const auto& f : st->fields) {
+            if (iequal(f.name, s.field)) { col = "\"" + f.name + "\""; return true; }
+        }
+        return false;
+    };
+
     std::string sql = "SELECT ";
     for (std::size_t i = 0; i < specs->size(); ++i) {
         if (i) sql += ", ";
         const auto& s   = (*specs)[i];
-        const std::string col = "\"" + s.field + "\"";
+        std::string col;
+        if (!resolve_col(s, col))
+            return fail(openads::AE_INTERNAL_ERROR,
+                        ("sqlite_aggregate: invalid field " + s.field).c_str());
         switch (s.fn) {
             case openads::engine::AggFn::Count:
                 sql += s.field.empty() ? "COUNT(*)" : ("COUNT(" + col + ")");
@@ -13537,6 +13555,18 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (static_cast<Connection*>(p) == c) conn_h = h;
         });
         if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+
+        // M13.1 — validate table name is not a SELECT result.
+        // INDEX ON (SELECT ...) would open the source table file instead
+        // of using the materialized cursor → corrupts the source indexes.
+        // Enforce that table name is a simple identifier/filename.
+        const auto& tname = ci.value().table;
+        if (tname.empty() || tname[0] == '(' || tname.find("SELECT") != std::string::npos) {
+            return fail(openads::AE_SYNTAX_ERROR,
+                "INDEX ON requires a table name, not a SELECT result; "
+                "use SELECT ... ORDER BY/DISTINCT/LIMIT to materialize first");
+        }
+
         std::vector<UNSIGNED8> name_buf(ci.value().table.size() + 1, 0);
         std::memcpy(name_buf.data(), ci.value().table.data(),
                     ci.value().table.size());

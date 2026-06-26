@@ -171,6 +171,45 @@ TEST_CASE("AdsAggregate remote wire: COUNT/SUM/AVG/MIN/MAX over a FOR predicate"
     CHECK(AdsAggregateCount(hRes, &dummy) != AE_SUCCESS);   // handle freed
 }
 
+// ── 4. Remote wire: an unknown field must be rejected, not silently counted ──
+// Regression for the Tier-3 review (#113): the server resolved each spec's
+// field with field_index(), which returns -1 for a name that isn't in the
+// table -- and the scan loop treated fidx < 0 as COUNT(*). So `SUM:NOPE`
+// silently returned the *row count* as a numeric total with AE_SUCCESS,
+// masking a typo'd or injected field name. It must fail instead.
+TEST_CASE("AdsAggregate remote wire: unknown field is rejected, not silent COUNT") {
+    agg_wipe();
+    auto dir = agg_tmp_dir();
+    seed_agg_fixture(dir);
+
+    RemoteFixture fx;
+    fx.open(dir);
+
+    UNSIGNED8 forc[] = "";
+    UNSIGNED8 spec[] = "SUM:NOPE";        // NOPE is not a column of agg.dbf
+    ADSHANDLE hRes   = 0;
+    CHECK(AdsAggregate(fx.hTable, forc, spec, &hRes) != AE_SUCCESS);
+    CHECK(hRes == 0);
+}
+
+// ── 5. Remote wire: an empty field is only valid for COUNT ───────────────────
+// `SUM:` / `AVG:` / `MIN:` / `MAX:` with no field used to fall through the same
+// fidx < 0 path and be folded as COUNT(*). Only COUNT may omit the field.
+TEST_CASE("AdsAggregate remote wire: empty field for non-COUNT is rejected") {
+    agg_wipe();
+    auto dir = agg_tmp_dir();
+    seed_agg_fixture(dir);
+
+    RemoteFixture fx;
+    fx.open(dir);
+
+    UNSIGNED8 forc[] = "";
+    UNSIGNED8 spec[] = "SUM:";            // empty field, non-COUNT
+    ADSHANDLE hRes   = 0;
+    CHECK(AdsAggregate(fx.hTable, forc, spec, &hRes) != AE_SUCCESS);
+    CHECK(hRes == 0);
+}
+
 // ── 3. Remote wire: zero matches ─────────────────────────────────────────────
 TEST_CASE("AdsAggregate remote wire: zero matches -> 0 / 0 / empty") {
     agg_wipe();

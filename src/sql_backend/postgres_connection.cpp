@@ -428,14 +428,32 @@ PostgresConnection::aggregate(PostgresTable* tbl,
         return false;
     };
 
+    // Resolve a spec's field to its canonical, schema-validated column name and
+    // quote it. An unknown name must be rejected, never concatenated raw: a
+    // crafted field could otherwise inject SQL. Empty field is only for COUNT.
+    auto resolve_col = [&](const engine::AggSpec& s, std::string& col) -> bool {
+        if (s.field.empty()) return s.fn == engine::AggFn::Count;
+        for (const auto& f : tbl->fields) {
+            if (f.name.size() != s.field.size()) continue;
+            bool same = true;
+            for (std::size_t j = 0; j < s.field.size(); ++j)
+                if (std::toupper(static_cast<unsigned char>(f.name[j])) !=
+                    std::toupper(static_cast<unsigned char>(s.field[j]))) {
+                    same = false; break;
+                }
+            if (same) { col = quote_ident(f.name); return true; }
+        }
+        return false;
+    };
+
     std::string sql = "SELECT ";
     for (std::size_t i = 0; i < specs.size(); ++i) {
         if (i) sql += ", ";
         const auto& s = specs[i];
-        // Leave the column unquoted so PostgreSQL case-folds it (the ABI hands
-        // field names in upper case, e.g. "QTY", but the column is "qty");
-        // this matches how the translated WHERE refers to the same column.
-        const std::string col = s.field;
+        std::string col;
+        if (!resolve_col(s, col))
+            return util::Error{5001, 0,
+                               "invalid postgres aggregate field: " + s.field, ""};
         switch (s.fn) {
             case engine::AggFn::Count:
                 sql += s.field.empty() ? "COUNT(*)" : ("COUNT(" + col + ")");
