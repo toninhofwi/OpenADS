@@ -13555,6 +13555,18 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (static_cast<Connection*>(p) == c) conn_h = h;
         });
         if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+
+        // M13.1 — validate table name is not a SELECT result.
+        // INDEX ON (SELECT ...) would open the source table file instead
+        // of using the materialized cursor → corrupts the source indexes.
+        // Enforce that table name is a simple identifier/filename.
+        const auto& tname = ci.value().table;
+        if (tname.empty() || tname[0] == '(' || tname.find("SELECT") != std::string::npos) {
+            return fail(openads::AE_SYNTAX_ERROR,
+                "INDEX ON requires a table name, not a SELECT result; "
+                "use SELECT ... ORDER BY/DISTINCT/LIMIT to materialize first");
+        }
+
         std::vector<UNSIGNED8> name_buf(ci.value().table.size() + 1, 0);
         std::memcpy(name_buf.data(), ci.value().table.data(),
                     ci.value().table.size());
