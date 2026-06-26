@@ -774,6 +774,11 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC, SQLUSMALLINT type, SQLPOINTER buf,
         case SQL_DBMS_VER:              put("01.00.0000");   return SQL_SUCCESS;
         case SQL_DRIVER_NAME:           put("openads_odbc"); return SQL_SUCCESS;
         case SQL_DRIVER_VER:            put("01.00.0000");   return SQL_SUCCESS;
+        // The Driver Manager demands a valid ODBC conformance string here during
+        // the connect handshake; without it MSDASQL/ADO, Excel and Power BI
+        // refuse the driver with "invalid SQL_DRIVER_ODBC_VER".
+        case SQL_DRIVER_ODBC_VER:       put("03.80");        return SQL_SUCCESS;
+        case SQL_ODBC_VER:              put("03.80.0000");   return SQL_SUCCESS;
         case SQL_IDENTIFIER_QUOTE_CHAR: put("\"");           return SQL_SUCCESS;
         case SQL_CATALOG_NAME_SEPARATOR:put(".");            return SQL_SUCCESS;
         case SQL_SEARCH_PATTERN_ESCAPE: put("\\");           return SQL_SUCCESS;
