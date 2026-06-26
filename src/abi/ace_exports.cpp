@@ -1979,6 +1979,17 @@ UNSIGNED32 postgres_goto_top(ADSHANDLE hTable) {
     return ok();
 }
 
+UNSIGNED32 postgres_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
+    auto* st = get_postgres_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    std::string where =
+        pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
+    auto r = st->conn->set_filter(st, where);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 postgres_goto_bottom(ADSHANDLE hTable) {
     auto* st = get_postgres_table(hTable);
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -2185,6 +2196,7 @@ const openads::abi::BackendTableOps* postgres_table_ops() {
         o.is_record_deleted = &postgres_is_record_deleted;
         o.open_index        = &postgres_open_index;
         o.is_found          = &postgres_is_found;
+        o.set_filter        = &postgres_set_filter;
         return o;
     }();
     return &ops;

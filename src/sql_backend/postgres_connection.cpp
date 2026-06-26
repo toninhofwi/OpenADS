@@ -294,36 +294,31 @@ bool PostgresConnection::valid() const noexcept {
 #endif
 }
 
-util::Result<std::unique_ptr<PostgresTable>>
-PostgresConnection::open_table(const std::string& table_name) {
 #if defined(OPENADS_WITH_POSTGRESQL)
-    if (!valid()) {
-        return util::Error{5001, 0, "postgres connection not open", ""};
-    }
-    if (!is_safe_identifier(table_name)) {
-        return util::Error{5001, 0, "invalid table name", table_name};
-    }
+namespace {
 
-    auto tbl = std::make_unique<PostgresTable>();
-    tbl->conn = this;
-    tbl->name = table_name;
-
-    auto pk = discover_pk_columns(impl_->conn, table_name);
-    if (!pk) return pk.error();
-    tbl->pk_columns = std::move(pk).value();
-
+// Load (or reload) the PK snapshot for `tbl`, honouring any `tbl->where_filter`
+// push-down predicate. Requires tbl->pk_columns already discovered. The WHERE
+// fragment is trusted (produced by engine::try_emit_sql_where, which constrains
+// operators, escapes string literals and only emits known functions), so it is
+// spliced into the SELECT verbatim — mirroring how the table name is here.
+util::Result<void> load_pk_snapshot(PGconn* conn, PostgresTable* tbl) {
     const std::string sel = pk_select_list(*tbl);
-    const std::string sql =
-        "SELECT " + sel + " FROM " + quote_ident(table_name) +
-        " ORDER BY " + sel;
-    PGresult* res = PQexec(impl_->conn, sql.c_str());
+    std::string sql = "SELECT " + sel + " FROM " + quote_ident(tbl->name);
+    if (!tbl->where_filter.empty()) {
+        sql += " WHERE (" + tbl->where_filter + ")";
+    }
+    sql += " ORDER BY " + sel;
+
+    PGresult* res = PQexec(conn, sql.c_str());
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
-        const char* msg = PQerrorMessage(impl_->conn);
+        const char* msg = PQerrorMessage(conn);
         PQclear(res);
         return postgres_error("pk snapshot", msg);
     }
     const int rows    = PQntuples(res);
     const int pk_cols = PQnfields(res);
+    tbl->pk_snapshot.clear();
     tbl->pk_snapshot.reserve(static_cast<std::size_t>(rows));
     for (int r = 0; r < rows; ++r) {
         PostgresTable::PkRow pk_row;
@@ -344,6 +339,33 @@ PostgresConnection::open_table(const std::string& table_name) {
     tbl->current_recno    = 0;
     tbl->current_deleted  = false;
     tbl->pos              = 0;
+    return util::Result<void>{};
+}
+
+}  // namespace
+#endif
+
+util::Result<std::unique_ptr<PostgresTable>>
+PostgresConnection::open_table(const std::string& table_name) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid()) {
+        return util::Error{5001, 0, "postgres connection not open", ""};
+    }
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{5001, 0, "invalid table name", table_name};
+    }
+
+    auto tbl = std::make_unique<PostgresTable>();
+    tbl->conn = this;
+    tbl->name = table_name;
+
+    auto pk = discover_pk_columns(impl_->conn, table_name);
+    if (!pk) return pk.error();
+    tbl->pk_columns = std::move(pk).value();
+
+    if (auto r = load_pk_snapshot(impl_->conn, tbl.get()); !r) {
+        return r.error();
+    }
 
     if (auto d = describe_table_impl(impl_->conn, tbl.get()); !d) {
         return d.error();
@@ -355,6 +377,20 @@ PostgresConnection::open_table(const std::string& table_name) {
                        "postgresql backend requires "
                        "OPENADS_WITH_POSTGRESQL=ON",
                        ""};
+#endif
+}
+
+util::Result<void>
+PostgresConnection::set_filter(PostgresTable* tbl, const std::string& where) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres set_filter", ""};
+    }
+    tbl->where_filter = where;
+    return load_pk_snapshot(impl_->conn, tbl);   // reload the (filtered) snapshot
+#else
+    (void)tbl; (void)where;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
 #endif
 }
 

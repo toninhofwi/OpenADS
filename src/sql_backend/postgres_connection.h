@@ -33,6 +33,12 @@ public:
     util::Result<void> goto_bottom(PostgresTable* tbl);
     util::Result<void> skip(PostgresTable* tbl, std::int32_t step);
 
+    // Tier-2 push-down: install (where non-empty) or clear (where empty) a SQL
+    // WHERE fragment and reload the PK snapshot so navigation walks only the
+    // matching rows. `where` must be a trusted, already-translated SQL boolean
+    // expression (see engine::try_emit_sql_where). Resets the cursor.
+    util::Result<void> set_filter(PostgresTable* tbl, const std::string& where);
+
     util::Result<bool>          at_eof(PostgresTable* tbl) const;
     util::Result<bool>          at_bof(PostgresTable* tbl) const;
     util::Result<std::uint32_t> record_count(PostgresTable* tbl);
