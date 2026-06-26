@@ -6881,6 +6881,14 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     if (!t) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     }
+    // The native (DBF/CDX/NTX/ADI) create path mutates the process-global
+    // index_bindings() / active_binding_for() maps (and the per-table order
+    // list) with no synchronization, so two connections building indexes
+    // concurrently corrupt the unordered_map (heap corruption / AV). Serialize
+    // the whole native create under the registry mutex — the SQL backends above
+    // already take it. (state().mu is recursive, so nested handle lookups are
+    // safe.)
+    std::lock_guard<std::recursive_mutex> _create_lk(state().mu);
     (void)pucKeyFilter; (void)usPageSize;
     auto bag  = openads::abi::to_internal(pucFileName, 0);
     auto tag  = openads::abi::to_internal(pucIndexName, 0);
