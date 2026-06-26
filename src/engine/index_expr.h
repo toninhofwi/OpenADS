@@ -4,6 +4,7 @@
 #include "util/result.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -68,5 +69,37 @@ std::string ntx_numeric_key(double value, std::uint16_t width, std::uint16_t dec
 // stored key was built. Compound expressions keep their structure;
 // only the qualifier is removed (e.g. `UPPER(CUST->NAME)` -> `UPPER(NAME)`).
 std::string strip_alias_qualifiers(const std::string& expr);
+
+// ── Tier-2 SQL push-down (spike) ──────────────────────────────────────────
+//
+// Per-backend knobs for translating a Clipper predicate into SQL. Defaults
+// target SQLite / PostgreSQL / Firebird (ANSI-ish). MySQL needs CONCAT() and
+// SUBSTRING().
+struct SqlDialect {
+    std::string concat_op     = "||";       // Clipper string '+'  (MySQL: CONCAT)
+    bool        use_concat_fn = false;       // a + b -> CONCAT(a, b)
+    std::string substr_fn     = "SUBSTR";    // SUBSTR(s, start [, len])
+    std::string alltrim_open  = "TRIM(";     // ALLTRIM(x) -> TRIM(x)
+    std::string alltrim_close = ")";
+};
+
+// Translate a Clipper-style FOR / SET FILTER predicate into an equivalent SQL
+// boolean expression (a WHERE fragment), for tables backed by a SQL engine —
+// so the backend filters server-side instead of the engine scanning every row
+// and evaluating evaluate_index_expr_truthy() per record.
+//
+// Returns std::nullopt when ANY part of the expression falls outside the
+// safely-translatable subset (RECNO()/DELETED(), STR/VAL/DTOS, an unknown
+// function, or any construct without a portable SQL form). The caller then
+// filters with evaluate_index_expr_truthy() — so push-down is ALWAYS optional
+// and never changes the result set. Conservative by design: on any doubt it
+// declines rather than emit a predicate that could match the wrong rows.
+//
+// Supported subset: field/literal/number operands; comparisons
+// = == # != <> < <= > >=; .AND. .OR. .NOT. / !; parenthesised groups;
+// string concat '+'; functions UPPER LOWER LTRIM RTRIM/TRIM ALLTRIM
+// SUBSTR/SUBS.
+std::optional<std::string>
+    try_emit_sql_where(const std::string& expr, const SqlDialect& dialect = {});
 
 } // namespace openads::engine

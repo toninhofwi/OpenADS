@@ -33,6 +33,7 @@ add_library(openads_core STATIC
     engine/lock_mgr.cpp
     engine/order.cpp
     engine/index_expr.cpp
+    engine/index_expr_sql.cpp
     engine/aof_expr.cpp
     engine/aof_eval.cpp
     engine/aes.cpp
