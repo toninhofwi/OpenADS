@@ -1093,17 +1093,20 @@ UNSIGNED32 sqlite_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
     auto* st = get_sqlite_table(hTable);
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto fname = openads::abi::to_internal(pucField, 0);
+    // rddads reads by ORDINAL: pucField is ADSFIELD(n) (a 1-based field
+    // number cast to a pointer), not a NUL-terminated name. Resolve it with
+    // the ordinal-aware index helper BEFORE reading -- to_internal()/strlen()
+    // on the tiny pointer dereferences invalid memory and crashes.
+    auto fi = sqlite_field_index(st, pucField);
+    if (fi == std::numeric_limits<std::size_t>::max())
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
     bool is_null = false;
     std::string val;
-    auto r = st->conn->read_field(st, fname, val, is_null);
+    auto r = st->conn->read_field(st, st->fields[fi].name, val, is_null);
     if (!r) return fail(r.error());
     if (is_null) val.clear();
-    auto fi = sqlite_field_index(st, pucField);
-    if (fi != std::numeric_limits<std::size_t>::max() &&
-        st->fields[fi].type == ADS_STRING) {
+    if (st->fields[fi].type == ADS_STRING)
         val = pad_char_field(std::move(val), st->fields[fi].length);
-    }
     openads::abi::copy_to_caller(pucBuf, pulLen, val);
     return ok();
 }
@@ -1333,17 +1336,20 @@ UNSIGNED32 odbc_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
     auto* st = get_odbc_table(hTable);
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto fname = openads::abi::to_internal(pucField, 0);
+    // rddads reads by ORDINAL: pucField is ADSFIELD(n) (a 1-based field
+    // number cast to a pointer), not a NUL-terminated name. Resolve it with
+    // the ordinal-aware index helper BEFORE reading -- to_internal()/strlen()
+    // on the tiny pointer dereferences invalid memory and crashes.
+    auto fi = odbc_field_index(st, pucField);
+    if (fi == std::numeric_limits<std::size_t>::max())
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
     bool is_null = false;
     std::string val;
-    auto r = st->conn->read_field(st, fname, val, is_null);
+    auto r = st->conn->read_field(st, st->fields[fi].name, val, is_null);
     if (!r) return fail(r.error());
     if (is_null) val.clear();
-    auto fi = odbc_field_index(st, pucField);
-    if (fi != std::numeric_limits<std::size_t>::max() &&
-        st->fields[fi].type == ADS_STRING) {
+    if (st->fields[fi].type == ADS_STRING)
         val = pad_char_field(std::move(val), st->fields[fi].length);
-    }
     openads::abi::copy_to_caller(pucBuf, pulLen, val);
     return ok();
 }
@@ -1747,17 +1753,20 @@ UNSIGNED32 firebird_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
     auto* st = get_firebird_table(hTable);
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto fname = openads::abi::to_internal(pucField, 0);
+    // rddads reads by ORDINAL: pucField is ADSFIELD(n) (a 1-based field
+    // number cast to a pointer), not a NUL-terminated name. Resolve it with
+    // the ordinal-aware index helper BEFORE reading -- to_internal()/strlen()
+    // on the tiny pointer dereferences invalid memory and crashes.
+    auto fi = firebird_field_index(st, pucField);
+    if (fi == std::numeric_limits<std::size_t>::max())
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
     bool is_null = false;
     std::string val;
-    auto r = st->conn->read_field(st, fname, val, is_null);
+    auto r = st->conn->read_field(st, st->fields[fi].name, val, is_null);
     if (!r) return fail(r.error());
     if (is_null) val.clear();
-    auto fi = firebird_field_index(st, pucField);
-    if (fi != std::numeric_limits<std::size_t>::max() &&
-        st->fields[fi].type == ADS_STRING) {
+    if (st->fields[fi].type == ADS_STRING)
         val = pad_char_field(std::move(val), st->fields[fi].length);
-    }
     openads::abi::copy_to_caller(pucBuf, pulLen, val);
     return ok();
 }
@@ -1985,17 +1994,20 @@ UNSIGNED32 maria_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
     auto* st = get_maria_table(hTable);
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto fname = openads::abi::to_internal(pucField, 0);
+    // rddads reads by ORDINAL: pucField is ADSFIELD(n) (a 1-based field
+    // number cast to a pointer), not a NUL-terminated name. Resolve it with
+    // the ordinal-aware index helper BEFORE reading -- to_internal()/strlen()
+    // on the tiny pointer dereferences invalid memory and crashes.
+    auto fi = maria_field_index(st, pucField);
+    if (fi == std::numeric_limits<std::size_t>::max())
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
     bool is_null = false;
     std::string val;
-    auto r = st->conn->read_field(st, fname, val, is_null);
+    auto r = st->conn->read_field(st, st->fields[fi].name, val, is_null);
     if (!r) return fail(r.error());
     if (is_null) val.clear();
-    auto fi = maria_field_index(st, pucField);
-    if (fi != std::numeric_limits<std::size_t>::max() &&
-        st->fields[fi].type == ADS_STRING) {
+    if (st->fields[fi].type == ADS_STRING)
         val = pad_char_field(std::move(val), st->fields[fi].length);
-    }
     openads::abi::copy_to_caller(pucBuf, pulLen, val);
     return ok();
 }
@@ -2252,17 +2264,20 @@ UNSIGNED32 postgres_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
     auto* st = get_postgres_table(hTable);
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto fname = openads::abi::to_internal(pucField, 0);
+    // rddads reads by ORDINAL: pucField is ADSFIELD(n) (a 1-based field
+    // number cast to a pointer), not a NUL-terminated name. Resolve it with
+    // the ordinal-aware index helper BEFORE reading -- to_internal()/strlen()
+    // on the tiny pointer dereferences invalid memory and crashes.
+    auto fi = postgres_field_index(st, pucField);
+    if (fi == std::numeric_limits<std::size_t>::max())
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
     bool is_null = false;
     std::string val;
-    auto r = st->conn->read_field(st, fname, val, is_null);
+    auto r = st->conn->read_field(st, st->fields[fi].name, val, is_null);
     if (!r) return fail(r.error());
     if (is_null) val.clear();
-    auto fi = postgres_field_index(st, pucField);
-    if (fi != std::numeric_limits<std::size_t>::max() &&
-        st->fields[fi].type == ADS_STRING) {
+    if (st->fields[fi].type == ADS_STRING)
         val = pad_char_field(std::move(val), st->fields[fi].length);
-    }
     openads::abi::copy_to_caller(pucBuf, pulLen, val);
     return ok();
 }
