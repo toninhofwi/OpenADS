@@ -51,6 +51,16 @@ public:
                                   bool soft,
                                   bool last_key);
 
+    // Write surface (mirrors FirebirdConnection): append_blank stages a blank
+    // row, set_field stages one column, flush_record emits an INSERT
+    // (pending_append) or a PK-keyed UPDATE, delete_record a PK-keyed DELETE.
+    util::Result<void> append_blank(MariaTable* tbl);
+    util::Result<void> set_field(MariaTable* tbl,
+                                 const std::string& field_name,
+                                 const std::string& value);
+    util::Result<void> flush_record(MariaTable* tbl);
+    util::Result<void> delete_record(MariaTable* tbl);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
