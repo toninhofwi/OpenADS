@@ -96,9 +96,10 @@ struct SqlDialect {
 // declines rather than emit a predicate that could match the wrong rows.
 //
 // Supported subset: field/literal/number operands; comparisons
-// = == # != <> < <= > >=; .AND. .OR. .NOT. / !; parenthesised groups;
-// string concat '+'; functions UPPER LOWER LTRIM RTRIM/TRIM ALLTRIM
-// SUBSTR/SUBS.
+// = == # != <> < <= > >=; the '$' substring test ('needle' $ haystack ->
+// haystack LIKE '%needle%', literal needle only); .AND. .OR. .NOT. / !;
+// parenthesised groups; string concat '+'; functions UPPER LOWER LTRIM
+// RTRIM/TRIM ALLTRIM SUBSTR/SUBS LEFT.
 std::optional<std::string>
     try_emit_sql_where(const std::string& expr, const SqlDialect& dialect = {});
 
