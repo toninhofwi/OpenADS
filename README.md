@@ -11,6 +11,32 @@ A free and open-source implementation compatible with Advantage Database Server 
 
 The goal is to provide a *drop-in* replacement for the Advantage Client Engine (`ace32.dll` / `ace64.dll` / `libace.so`) so existing applications — particularly Harbour/Clipper apps using `contrib/rddads` — keep working without recompilation.
 
+### One API, many backends — DBF today, any database tomorrow
+
+OpenADS **presents as ADS** — your application talks to the same ACE
+entry points it always did — but that ADS surface is just the front
+door. Behind it, the very same API can be served by different storage
+engines:
+
+| Backend | Connection | Use it for |
+|---------|-----------|------------|
+| **DBF / ADT** (native xBase, CDX/NTX/ADI indexes) | local path or `tcp://` | the default — your existing `.dbf` data, unchanged |
+| **SQLite** | `AdsConnect60("sqlite://…")` | a single-file SQL database, zero server |
+| **PostgreSQL** | `postgresql://…` | a scalable, concurrent, server-class RDBMS |
+| **MariaDB / MySQL** | `mariadb://…` | the MySQL ecosystem |
+| **Microsoft SQL Server** | `mssql://…` | native TDS 7.4, optional TLS |
+| **ODBC** | `odbc://…` | anything else with a driver |
+
+Because the application only ever sees the ADS API, **you run on DBF
+today and switch to PostgreSQL, MSSQL, or SQLite tomorrow if you
+outgrow flat files — without rewriting your business logic.** The same
+Harbour/Clipper/FiveWin code, the same `USE` / `dbSeek` / `tDatabase`
+calls, now backed by a real database when you need concurrency, scale,
+or central administration. OpenADS is a *scalable suite*, not a single
+file format: keep your legacy investment, change the engine under it on
+your own schedule. See [`docs/OPENADS_PLUS.md`](docs/OPENADS_PLUS.md)
+and the per-backend cookbooks under [`cookbook/orm/`](cookbook/orm/).
+
 ### Independence, provenance, and trademarks
 
 - **Independent implementation.** OpenADS is an independent
