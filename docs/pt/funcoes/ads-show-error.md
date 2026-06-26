@@ -8,35 +8,32 @@ permalink: /pt/funcoes/ads-show-error/
 
 # AdsShowError
 
-Reporta uma mensagem de erro ao host.
+Mostra uma mensagem de erro.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsShowError(UNSIGNED8 *pucErrText);
+UNSIGNED32 AdsShowError(UNSIGNED8* pucErrText);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `pucErrText` | `UNSIGNED8*` | Mensagem terminada em nulo a reportar. Uma cadeia nula ou vazia é ignorada. |
+| `pucErrText` | `UNSIGNED8*` | Texto do erro a mostrar. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0).
+`AE_SUCCESS` (0) sempre.
 
 ## Descrição
 
-`AdsShowError` reporta uma mensagem de erro ao host. Num host com interface gráfica o ADS mostra uma caixa de mensagem; o OpenADS é headless, pelo que o comportamento fiel mais próximo é escrever a mensagem na saída de erro padrão (`stderr`), seguida de uma nova linha. Uma mensagem nula ou vazia não produz saída. A chamada tem sempre sucesso.
+`AdsShowError` mostra uma mensagem de erro. No OpenADS (headless), o texto é escrito para stderr.
 
 ## Exemplo
 
 ```c
-UNSIGNED8 buf[256];
-UNSIGNED16 len = sizeof(buf);
-AdsGetLastError(&ulCode, buf, &len);
-AdsShowError(buf);
+AdsShowError("Erro ao abrir tabela");
 ```
 
 ## Ver Também
@@ -46,4 +43,4 @@ AdsShowError(buf);
 
 ---
 
-[AdsGetLastError →]({{ site.baseurl }}/pt/funcoes/ads-get-last-error/)
+[AdsGetVersion →]({{ site.baseurl }}/pt/funcoes/ads-get-version/)

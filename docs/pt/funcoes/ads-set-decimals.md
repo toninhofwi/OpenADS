@@ -8,7 +8,7 @@ permalink: /pt/funcoes/ads-set-decimals/
 
 # AdsSetDecimals
 
-Define o número de casas decimais padrão registado para a sessão.
+Define o número de casas decimais padrão.
 
 ## Sintaxe
 
@@ -20,15 +20,15 @@ UNSIGNED32 AdsSetDecimals(UNSIGNED16 usDecimals);
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `usDecimals` | `UNSIGNED16` | Número padrão de casas decimais. |
+| `usDecimals` | `UNSIGNED16` | Número de casas decimais. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0).
+`AE_SUCCESS` (0) sempre.
 
 ## Descrição
 
-`AdsSetDecimals` regista o número padrão de casas decimais (a definição SET DECIMALS). É armazenado por paridade com a API ACE; o OpenADS lê e escreve os campos numéricos com a precisão definida no esquema, independentemente deste valor.
+`AdsSetDecimals` define o número de casas decimais padrão para campos numéricos.
 
 ## Exemplo
 
@@ -38,9 +38,10 @@ AdsSetDecimals(4);
 
 ## Ver Também
 
-- [AdsSetExact]({{ site.baseurl }}/pt/funcoes/ads-set-exact/)
-- [AdsSetEpoch]({{ site.baseurl }}/pt/funcoes/ads-set-epoch/)
+- [AdsGetFieldDecimals]({{ site.baseurl }}/pt/funcoes/ads-get-field-decimals/)
+- [AdsSetDouble]({{ site.baseurl }}/pt/funcoes/ads-set-double/)
+- [AdsSetDateFormat]({{ site.baseurl }}/pt/funcoes/ads-set-date-format/)
 
 ---
 
-[AdsSetExact →]({{ site.baseurl }}/pt/funcoes/ads-set-exact/)
+[AdsSetDefault →]({{ site.baseurl }}/pt/funcoes/ads-set-default/)

@@ -8,12 +8,12 @@ permalink: /pt/funcoes/ads-get-table-alias/
 
 # AdsGetTableAlias
 
-Retorna o alias de uma tabela.
+Retorna o alias da tabela.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8 *pucBuf, UNSIGNED16 *pusLen);
+UNSIGNED32 AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l);
 ```
 
 ## Parâmetros
@@ -21,35 +21,32 @@ UNSIGNED32 AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8 *pucBuf, UNSIGNED16 *pus
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `pucBuf` | `UNSIGNED8*` | Buffer de saída para a cadeia do alias. |
-| `pusLen` | `UNSIGNED16*` | Entrada/saída — tamanho do buffer; recebe o comprimento do alias retornado. |
+| `p` | `UNSIGNED8*` | Buffer para receber o alias. |
+| `l` | `UNSIGNED16*` | Ponteiro para o tamanho do buffer. Na saída, contém o comprimento. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetTableAlias` recupera o nome do alias atribuído ao handle
-da tabela dado. O alias é o nome utilizado na instrução `USE`
-ou quando a tabela foi aberta.
+`AdsGetTableAlias` retorna o alias da tabela (normalmente o nome do arquivo sem extensão).
 
 ## Exemplo
 
 ```c
-char alias[32];
-unsigned short len = sizeof(alias);
-AdsGetTableAlias(hTable, (unsigned char *)alias, &len);
-printf("Alias: %s\n", alias);
+UNSIGNED8 szAlias[128];
+UNSIGNED16 usLen = sizeof(szAlias);
+AdsGetTableAlias(hTable, szAlias, &usLen);
+// szAlias contém o alias da tabela
 ```
 
 ## Ver Também
 
-- [AdsOpenTable]({{ site.baseurl }}/pt/funcoes/ads-open-table/)
 - [AdsGetTableFilename]({{ site.baseurl }}/pt/funcoes/ads-get-table-filename/)
 - [AdsGetTableType]({{ site.baseurl }}/pt/funcoes/ads-get-table-type/)
+- [AdsOpenTable]({{ site.baseurl }}/pt/funcoes/ads-open-table/)
 
 ---
 
-[← AdsGetTableCharType]({{ site.baseurl }}/pt/funcoes/ads-get-table-char-type/)
-[AdsGetTableConnection →]({{ site.baseurl }}/pt/funcoes/ads-get-table-connection/)
+[AdsGetTableCharType →]({{ site.baseurl }}/pt/funcoes/ads-get-table-char-type/)

@@ -8,53 +8,42 @@ permalink: /pt/funcoes/ads-get-deleted/
 
 # AdsGetDeleted
 
-Retorna se os registos eliminados estão ocultos (estado `SET DELETED`).
+Retorna se os registos eliminados são visíveis.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetDeleted(UNSIGNED16 *pbShow);
+UNSIGNED32 AdsGetDeleted(UNSIGNED16* p);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `pbShow` | `UNSIGNED16*` | Saída — `ADS_TRUE` se os registos eliminados estiverem ocultos, `ADS_FALSE` caso contrário. |
+| `p` | `UNSIGNED16*` | Ponteiro para receber 1 se visíveis, 0 caso contrário. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetDeleted` consulta o estado atual de `SET DELETED` para o
-processo. Quando ativado (`ADS_TRUE`), os registos marcados como
-eliminados são excluídos dos comandos de navegação como `Skip`,
-`GoTop` e `Seek`. Quando desativado (`ADS_FALSE`), os registos
-eliminados permanecem visíveis.
-
-Isto espelha o comportamento de `SET DELETED` do Clipper e é
-independente de qualquer expressão AOF ou filtro.
+`AdsGetDeleted` retorna se os registos eliminados são visíveis. Retorna 1 quando os registos eliminados SÃO visíveis (corresponde a SET DELETED OFF no Clipper).
 
 ## Exemplo
 
 ```c
-UNSIGNED16 bShow = 0;
-AdsGetDeleted(&bShow);
-if (bShow == ADS_TRUE)
-    printf("Os registos eliminados estão ocultos\n");
-else
-    printf("Os registos eliminados são visíveis\n");
+UNSIGNED16 p;
+AdsGetDeleted(&p);
+// p é 1 (registos eliminados visíveis) ou 0 (ocultos)
 ```
 
 ## Ver Também
 
 - [AdsShowDeleted]({{ site.baseurl }}/pt/funcoes/ads-show-deleted/)
-- [AdsGetFilter]({{ site.baseurl }}/pt/funcoes/ads-get-filter/)
-- [AdsGetAOF]({{ site.baseurl }}/pt/funcoes/ads-get-aof/)
+- [AdsDeleteRecord]({{ site.baseurl }}/pt/funcoes/ads-delete-record/)
+- [AdsIsRecordDeleted]({{ site.baseurl }}/pt/funcoes/ads-is-record-deleted/)
 
 ---
 
-[← AdsGetDateFormat]({{ site.baseurl }}/pt/funcoes/ads-get-date-format/)
 [AdsGetEpoch →]({{ site.baseurl }}/pt/funcoes/ads-get-epoch/)

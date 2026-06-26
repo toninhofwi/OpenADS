@@ -8,12 +8,12 @@ permalink: /pt/funcoes/ads-get-aof/
 
 # AdsGetAOF
 
-Retorna a cadeia de expressão do Advantage Optimized Filter (AOF) atual.
+Retorna a expressão da AOF ativa.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetAOF(ADSHANDLE hTable, UNSIGNED8 *pucFilter, UNSIGNED16 *pusLen);
+UNSIGNED32 AdsGetAOF(ADSHANDLE hTable, UNSIGNED8* pucFilter, UNSIGNED16* pusLen);
 ```
 
 ## Parâmetros
@@ -21,43 +21,32 @@ UNSIGNED32 AdsGetAOF(ADSHANDLE hTable, UNSIGNED8 *pucFilter, UNSIGNED16 *pusLen)
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `pucFilter` | `UNSIGNED8*` | Buffer de saída para a cadeia de expressão do AOF. |
-| `pusLen` | `UNSIGNED16*` | Entrada/saída — tamanho do buffer; recebe o comprimento da expressão retornada. |
+| `pucFilter` | `UNSIGNED8*` | Buffer para receber a expressão. |
+| `pusLen` | `UNSIGNED16*` | Ponteiro para o tamanho do buffer. Na saída, contém o comprimento. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetAOF` recupera a cadeia de expressão do AOF atual instalada
-na tabela através de `AdsSetAOF`. Se não houver AOF ativo, a
-função retorna uma cadeia vazia.
-
-As expressões AOF são predicados de filtro otimizados com Rushmore
-que podem aproveitar as chaves de índice para filtragem rápida de
-registos. Use `AdsGetAOFOptLevel` para verificar o nível de
-otimização.
+`AdsGetAOF` retorna a expressão da AOF atualmente ativa na tabela.
 
 ## Exemplo
 
 ```c
-char buf[256];
-unsigned short len = sizeof(buf);
-AdsGetAOF(hTable, (unsigned char *)buf, &len);
-if (len > 0)
-    printf("AOF: %s\n", buf);
-else
-    printf("Nenhum AOF ativo\n");
+UNSIGNED8 szAOF[256];
+UNSIGNED16 usLen = sizeof(szAOF);
+AdsGetAOF(hTable, szAOF, &usLen);
+// szAOF contém a expressão da AOF
 ```
 
 ## Ver Também
 
 - [AdsSetAOF]({{ site.baseurl }}/pt/funcoes/ads-set-aof/)
 - [AdsClearAOF]({{ site.baseurl }}/pt/funcoes/ads-clear-aof/)
-- [AdsGetAOFOptLevel]({{ site.baseurl }}/pt/funcoes/ads-get-aofopt-level/)
+- [AdsGetAOFOptLevel]({{ site.baseurl }}/pt/funcoes/ads-get-aof-opt-level/)
 
 ---
 
-[← AdsEvalAOF]({{ site.baseurl }}/pt/funcoes/ads-eval-aof/)
-[AdsCustomizeAOF →]({{ site.baseurl }}/pt/funcoes/ads-customize-aof/)
+[AdsGetConnectionType →]({{ site.baseurl }}/pt/funcoes/ads-get-connection-type/)

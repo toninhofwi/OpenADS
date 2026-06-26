@@ -8,42 +8,44 @@ permalink: /pt/funcoes/ads-get-search-path/
 
 # AdsGetSearchPath
 
-Devolve o caminho de pesquisa de tabelas registado para a sessão.
+Retorna o caminho de procura.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetSearchPath(UNSIGNED8 *pucPath, UNSIGNED16 *pusLen);
+UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `pucPath` | `UNSIGNED8*` | Buffer que recebe a cadeia do caminho de pesquisa. |
-| `pusLen` | `UNSIGNED16*` | Entrada/saída — tamanho do buffer à entrada; comprimento da cadeia à saída. |
+| `p` | `UNSIGNED8*` | Buffer para receber o caminho. |
+| `l` | `UNSIGNED16*` | Ponteiro para o tamanho do buffer. Na saída, contém o comprimento. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0).
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetSearchPath` devolve o caminho de pesquisa definido previamente com `AdsSetSearchPath`, ou uma cadeia vazia se nenhum foi definido. As duas funções formam um round-trip.
+`AdsGetSearchPath` retorna o caminho de procura para localização de tabelas.
 
 ## Exemplo
 
 ```c
-UNSIGNED8 buf[512];
-UNSIGNED16 len = sizeof(buf);
-AdsGetSearchPath(buf, &len);
+UNSIGNED8 szPath[256];
+UNSIGNED16 usLen = sizeof(szPath);
+AdsGetSearchPath(szPath, &usLen);
+// szPath contém o caminho de procura
 ```
 
 ## Ver Também
 
 - [AdsSetSearchPath]({{ site.baseurl }}/pt/funcoes/ads-set-search-path/)
 - [AdsGetDefault]({{ site.baseurl }}/pt/funcoes/ads-get-default/)
+- [AdsSetDefault]({{ site.baseurl }}/pt/funcoes/ads-set-default/)
 
 ---
 
-[← AdsSetSearchPath]({{ site.baseurl }}/pt/funcoes/ads-set-search-path/)
+[AdsSetSearchPath →]({{ site.baseurl }}/pt/funcoes/ads-set-search-path/)

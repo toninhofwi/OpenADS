@@ -8,50 +8,42 @@ permalink: /pt/funcoes/ads-get-epoch/
 
 # AdsGetEpoch
 
-Retorna o valor do pivô de ano de 2 algarismos.
+Retorna o epoch para datas de dois dígitos.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetEpoch(UNSIGNED16 *pusEpoch);
+UNSIGNED32 AdsGetEpoch(UNSIGNED16* p);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `pusEpoch` | `UNSIGNED16*` | Saída — o ano pivô (por exemplo, 1970 ou 2000). |
+| `p` | `UNSIGNED16*` | Ponteiro para receber o ano base do epoch. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetEpoch` retorna o pivô de ano de 2 algarismos a nível de
-processo. Datas com anos de 2 algarismos abaixo do pivô são
-interpretadas como datas do século XXI; as que estão em ou acima
-são interpretadas como datas do século XX.
-
-O epoch predefinido é 1970. Esta configuração afeta como as datas
-são analisadas quando armazenadas como valores de ano de 2
-algarismos.
+`AdsGetEpoch` retorna o ano base para interpretação de datas de dois dígitos.
 
 ## Exemplo
 
 ```c
-UNSIGNED16 usEpoch = 0;
+UNSIGNED16 usEpoch;
 AdsGetEpoch(&usEpoch);
-printf("Pivô do epoch: %u\n", usEpoch);
+// usEpoch contém o ano base
 ```
 
 ## Ver Também
 
 - [AdsSetEpoch]({{ site.baseurl }}/pt/funcoes/ads-set-epoch/)
 - [AdsGetDateFormat]({{ site.baseurl }}/pt/funcoes/ads-get-date-format/)
-- [AdsGetDeleted]({{ site.baseurl }}/pt/funcoes/ads-get-deleted/)
+- [AdsSetDateFormat]({{ site.baseurl }}/pt/funcoes/ads-set-date-format/)
 
 ---
 
-[← AdsGetDeleted]({{ site.baseurl }}/pt/funcoes/ads-get-deleted/)
-[AdsGetExact →]({{ site.baseurl }}/pt/funcoes/ads-get-exact/)
+[AdsGetSearchPath →]({{ site.baseurl }}/pt/funcoes/ads-get-search-path/)

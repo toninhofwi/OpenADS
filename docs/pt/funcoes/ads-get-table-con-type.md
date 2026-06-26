@@ -8,12 +8,12 @@ permalink: /pt/funcoes/ads-get-table-con-type/
 
 # AdsGetTableConType
 
-Retorna o tipo de tabela (CDX, NTX, ADT, etc.).
+Retorna o tipo de conexão da tabela.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetTableConType(ADSHANDLE hTable, UNSIGNED16 *pusType);
+UNSIGNED32 AdsGetTableConType(ADSHANDLE hTable, UNSIGNED16* p);
 ```
 
 ## Parâmetros
@@ -21,49 +21,29 @@ UNSIGNED32 AdsGetTableConType(ADSHANDLE hTable, UNSIGNED16 *pusType);
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `pusType` | `UNSIGNED16*` | Saída — constante do tipo de tabela. |
+| `p` | `UNSIGNED16*` | Ponteiro para receber o tipo. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
-
-## Constantes de Tipo de Tabela
-
-| Constante | Valor | Descrição |
-|-----------|-------|-----------|
-| `ADS_CDX` | 1 | Índice composto CDX (FoxPro/Harbour). |
-| `ADS_NTX` | 2 | Índice NTX (Clipper). |
-| `ADS_ADT` | 5 | Tabela ADT (Advantage nativa). |
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetTableConType` delega para `AdsGetTableType` que
-deriva o tipo de tabela a partir da extensão do arquivo (`.dbf` → CDX,
-`.adt` → ADT). Isso substitui o stub anterior que sempre
-retornava `ADS_CDX`.
+`AdsGetTableConType` retorna o tipo de conexão da tabela. Delega para `AdsGetTableType`.
 
 ## Exemplo
 
 ```c
-ADSHANDLE hTable;
-UNSIGNED16 tableType = 0;
-AdsOpenTable(&hTable, "data.adt", NULL, NULL,
-             ADS_ANSI, ADS_EXCLUSIVE, NULL, NULL);
-AdsGetTableConType(hTable, &tableType);
-if (tableType == ADS_ADT)
-    printf("ADT table\n");
-else
-    printf("DBF/CDX table\n");
-AdsCloseTable(hTable);
+UNSIGNED16 usConType;
+AdsGetTableConType(hTable, &usConType);
 ```
 
 ## Ver Também
 
 - [AdsGetTableType]({{ site.baseurl }}/pt/funcoes/ads-get-table-type/)
-- [AdsOpenTable]({{ site.baseurl }}/pt/funcoes/ads-open-table/)
-- [AdsCreateTable]({{ site.baseurl }}/pt/funcoes/ads-create-table/)
+- [AdsGetTableConnection]({{ site.baseurl }}/pt/funcoes/ads-get-table-connection/)
+- [AdsGetConnectionType]({{ site.baseurl }}/pt/funcoes/ads-get-connection-type/)
 
 ---
 
-[← AdsGetTableCharType]({{ site.baseurl }}/pt/funcoes/ads-get-table-char-type/)
 [AdsGetTableConnection →]({{ site.baseurl }}/pt/funcoes/ads-get-table-connection/)

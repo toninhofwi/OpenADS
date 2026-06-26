@@ -8,12 +8,12 @@ permalink: /pt/funcoes/ads-get-filter/
 
 # AdsGetFilter
 
-Retorna a expressão de filtro atual de uma tabela.
+Retorna a expressão do filtro ativo.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetFilter(ADSHANDLE hTable, UNSIGNED8 *pucBuf, UNSIGNED16 *pusLen);
+UNSIGNED32 AdsGetFilter(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l);
 ```
 
 ## Parâmetros
@@ -21,32 +21,24 @@ UNSIGNED32 AdsGetFilter(ADSHANDLE hTable, UNSIGNED8 *pucBuf, UNSIGNED16 *pusLen)
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `pucBuf` | `UNSIGNED8*` | Buffer de saída para a cadeia da expressão de filtro. |
-| `pusLen` | `UNSIGNED16*` | Entrada/saída — tamanho do buffer; recebe o comprimento da expressão retornada. |
+| `p` | `UNSIGNED8*` | Buffer para receber a expressão. |
+| `l` | `UNSIGNED16*` | Ponteiro para o tamanho do buffer. Na saída, contém o comprimento. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetFilter` recupera a cadeia de expressão de filtro atual
-instalada na tabela através de `AdsSetFilter`. Se não houver filtro
-ativo, a função retorna uma cadeia vazia.
-
-Nota: Isto retorna a expressão de filtro não indexada. Para filtros
-otimizados com Rushmore, use `AdsGetAOF` em vez disso.
+`AdsGetFilter` retorna a expressão do filtro Clipper atualmente ativo na tabela.
 
 ## Exemplo
 
 ```c
-char buf[256];
-unsigned short len = sizeof(buf);
-AdsGetFilter(hTable, (unsigned char *)buf, &len);
-if (len > 0)
-    printf("Filtro: %s\n", buf);
-else
-    printf("Nenhum filtro ativo\n");
+UNSIGNED8 szFilter[256];
+UNSIGNED16 usLen = sizeof(szFilter);
+AdsGetFilter(hTable, szFilter, &usLen);
+// szFilter contém a expressão do filtro
 ```
 
 ## Ver Também
@@ -57,5 +49,4 @@ else
 
 ---
 
-[← AdsGetExact]({{ site.baseurl }}/pt/funcoes/ads-get-exact/)
-[AdsGetHandleType →]({{ site.baseurl }}/pt/funcoes/ads-get-handle-type/)
+[AdsSetAOF →]({{ site.baseurl }}/pt/funcoes/ads-set-aof/)

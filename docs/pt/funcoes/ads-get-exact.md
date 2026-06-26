@@ -8,52 +8,42 @@ permalink: /pt/funcoes/ads-get-exact/
 
 # AdsGetExact
 
-Retorna se `SET EXACT` está ativado.
+Retorna se a comparação de strings é exata.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetExact(UNSIGNED16 *pbExact);
+UNSIGNED32 AdsGetExact(UNSIGNED16* p);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `pbExact` | `UNSIGNED16*` | Saída — `ADS_TRUE` se a comparação exata estiver ativada, `ADS_FALSE` caso contrário. |
+| `p` | `UNSIGNED16*` | Ponteiro para receber 1 se exato, 0 caso contrário. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetExact` consulta o estado atual de `SET EXACT` para o
-processo. Quando ativado, as comparações de cadeias requerem que
-ambas as cadeias coincidam exatamente em comprimento e conteúdo.
-Quando desativado, uma comparação de `"ABC" = "AB"` retorna true
-(espaços/caracteres finais são ignorados).
-
-Isto espelha o comportamento de `SET EXACT` do Clipper.
+`AdsGetExact` retorna se as comparações de strings são exatas (SET EXACT ON/OFF).
 
 ## Exemplo
 
 ```c
-UNSIGNED16 bExact = 0;
-AdsGetExact(&bExact);
-if (bExact == ADS_TRUE)
-    printf("SET EXACT está ligado\n");
-else
-    printf("SET EXACT está desligado\n");
+UNSIGNED16 usExact;
+AdsGetExact(&usExact);
+// usExact é 1 (exato) ou 0 (parcial)
 ```
 
 ## Ver Também
 
 - [AdsSetExact]({{ site.baseurl }}/pt/funcoes/ads-set-exact/)
-- [AdsGetDeleted]({{ site.baseurl }}/pt/funcoes/ads-get-deleted/)
-- [AdsGetEpoch]({{ site.baseurl }}/pt/funcoes/ads-get-epoch/)
+- [AdsSeek]({{ site.baseurl }}/pt/funcoes/ads-seek/)
+- [AdsSetFilter]({{ site.baseurl }}/pt/funcoes/ads-set-filter/)
 
 ---
 
-[← AdsGetEpoch]({{ site.baseurl }}/pt/funcoes/ads-get-epoch/)
-[AdsGetFilter →]({{ site.baseurl }}/pt/funcoes/ads-get-filter/)
+[AdsGetDeleted →]({{ site.baseurl }}/pt/funcoes/ads-get-deleted/)

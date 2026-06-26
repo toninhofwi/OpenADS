@@ -8,7 +8,7 @@ permalink: /pt/funcoes/ads-test-rec-locks/
 
 # AdsTestRecLocks
 
-Hook de diagnóstico para os bloqueios de registo de uma tabela.
+Testa a consistência dos bloqueios de registos.
 
 ## Sintaxe
 
@@ -28,20 +28,23 @@ UNSIGNED32 AdsTestRecLocks(ADSHANDLE hTable);
 
 ## Descrição
 
-`AdsTestRecLocks` é um hook de diagnóstico. O OpenADS não tem uma verificação de consistência da tabela de bloqueios separada para executar, pelo que a chamada valida o handle da tabela e reporta sucesso. É fornecida por compatibilidade com a API ACE. Para inspecionar o estado real dos bloqueios, use `AdsGetAllLocks` ou `AdsIsRecordLocked`.
+`AdsTestRecLocks` é um hook de diagnóstico que valida o handle da tabela.
 
 ## Exemplo
 
 ```c
-AdsTestRecLocks(hTable);
+UNSIGNED32 rc = AdsTestRecLocks(hTable);
+if (rc == AE_SUCCESS) {
+    // Tabela válida
+}
 ```
 
 ## Ver Também
 
-- [AdsGetAllLocks]({{ site.baseurl }}/pt/funcoes/ads-get-all-locks/)
+- [AdsIsTableLocked]({{ site.baseurl }}/pt/funcoes/ads-is-table-locked/)
 - [AdsIsRecordLocked]({{ site.baseurl }}/pt/funcoes/ads-is-record-locked/)
-- [AdsGetNumLocks]({{ site.baseurl }}/pt/funcoes/ads-get-num-locks/)
+- [AdsLockTable]({{ site.baseurl }}/pt/funcoes/ads-lock-table/)
 
 ---
 
-[AdsGetNumLocks →]({{ site.baseurl }}/pt/funcoes/ads-get-num-locks/)
+[AdsGetLockCycle →]({{ site.baseurl }}/pt/funcoes/ads-get-lock-cycle/)

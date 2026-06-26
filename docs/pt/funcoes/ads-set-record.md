@@ -8,12 +8,13 @@ permalink: /pt/funcoes/ads-set-record/
 
 # AdsSetRecord
 
-Sobrescreve o registo atual com uma imagem física em bruto.
+Define o conteúdo bruto do registo atual.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsSetRecord(ADSHANDLE hTable, UNSIGNED8 *pucRecord, UNSIGNED32 ulLen);
+UNSIGNED32 AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
+                        UNSIGNED32 ulLen);
 ```
 
 ## Parâmetros
@@ -21,44 +22,34 @@ UNSIGNED32 AdsSetRecord(ADSHANDLE hTable, UNSIGNED8 *pucRecord, UNSIGNED32 ulLen
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `pucRecord` | `UNSIGNED8*` | Buffer com a imagem em bruto do registo (byte de eliminação + bytes dos campos). |
-| `ulLen` | `UNSIGNED32` | Comprimento da imagem fornecida, em bytes. |
+| `pucRecord` | `UNSIGNED8*` | Buffer com o conteúdo do registo. |
+| `ulLen` | `UNSIGNED32` | Comprimento do buffer. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso. `AE_NO_CURRENT_RECORD` (5068) quando o cursor está em BOF/EOF. `AE_INTERNAL_ERROR` (5000) se o buffer for nulo, a tabela for só de leitura ou o handle for desconhecido.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_FUNCTION_NOT_AVAILABLE` para tabelas remotas.
 
 ## Descrição
 
-`AdsSetRecord` escreve uma imagem física completa do registo — tal como produzida por `AdsGetRecord` — sobre o registo atual, descarrega-a para disco e ressincroniza todos os índices vinculados, de modo que qualquer alteração num campo de chave se reflete na ordem do índice.
+`AdsSetRecord` define o conteúdo bruto (binário) do registo atual. O buffer deve conter o registo no formato interno do DBF.
 
-São copiados no máximo *comprimento do registo* bytes; se `ulLen` for menor, apenas esses bytes são escritos e o resto do registo permanece intacto. O primeiro byte da imagem é a marca de eliminação (um espaço se ativo, `*` se eliminado).
+**Nota:** Esta função não está disponível para tabelas remotas.
 
-É a contraparte de escrita de `AdsGetRecord`. Não está disponível para tabelas remotas.
+Para gravar as alterações, é necessário chamar `AdsWriteRecord`.
 
 ## Exemplo
 
 ```c
-UNSIGNED32 ulLen = 0;
-
-AdsGetRecord(hTable, NULL, &ulLen);
-UNSIGNED8 *pucRec = malloc(ulLen);
-AdsGetRecord(hTable, pucRec, &ulLen);
-
-// Corrigir um campo de largura fixa e reescrever.
-memcpy(pucRec + 5, "BBBBBBBB", 8);
-AdsSetRecord(hTable, pucRec, ulLen);
-
-free(pucRec);
+AdsSetRecord(hTable, buffer, ulLen);
+AdsWriteRecord(hTable);
 ```
 
 ## Ver Também
 
 - [AdsGetRecord]({{ site.baseurl }}/pt/funcoes/ads-get-record/)
 - [AdsWriteRecord]({{ site.baseurl }}/pt/funcoes/ads-write-record/)
-- [AdsAppendRecord]({{ site.baseurl }}/pt/funcoes/ads-append-record/)
 - [AdsGetRecordLength]({{ site.baseurl }}/pt/funcoes/ads-get-record-length/)
 
 ---
 
-[← AdsGetRecord]({{ site.baseurl }}/pt/funcoes/ads-get-record/)
+[AdsGetString →]({{ site.baseurl }}/pt/funcoes/ads-get-string/)

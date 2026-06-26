@@ -8,60 +8,45 @@ permalink: /pt/funcoes/ads-get-key-type/
 
 # AdsGetKeyType
 
-Retorna o tipo de codificação da chave de índice para a ordem ativa.
+Retorna o tipo da chave do índice.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetKeyType(ADSHANDLE hIndex, UNSIGNED16 *pusKeyType);
+UNSIGNED32 AdsGetKeyType(ADSHANDLE hIndex, UNSIGNED16* p);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `hIndex` | `ADSHANDLE` | Handle da ordem de índice. |
-| `pusKeyType` | `UNSIGNED16*` | Saída — constante do tipo de chave. |
+| `hIndex` | `ADSHANDLE` | Handle do índice. |
+| `p` | `UNSIGNED16*` | Ponteiro para receber o tipo da chave. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
-
-## Constantes de Tipo de Chave
-
-| Constante | Valor | Descrição |
-|-----------|-------|-----------|
-| `ADS_RAWKEY` | 0 | Bytes de chave binária bruta. |
-| `ADS_STRINGKEY` | 1 | Chave de string de caractere/preenchida com espaços. |
-| `ADS_DOUBLEKEY` | 2 | Chave numérica ou de data (codificação FoxNumeric/NtxNumeric de 8 bytes). |
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o handle for desconhecido.
 
 ## Descrição
 
-`AdsGetKeyType` inspeciona o `KeyEncoding` do índice ativo
-e o mapeia para as constantes de tipo de chave do ACE. Índices
-de expressão de caractere retornam `ADS_STRINGKEY`; índices de
-expressão numérica e de data retornam `ADS_DOUBLEKEY`.
+`AdsGetKeyType` retorna o tipo da chave do índice:
+- `ADS_STRINGKEY` (0) - Chave de texto
+- `ADS_DOUBLEKEY` (1) - Chave numérica
 
 ## Exemplo
 
 ```c
-ADSHANDLE hIndex;
-UNSIGNED16 keyType = 0;
-AdsGetIndexHandle(hTable, "amount", &hIndex);
-AdsGetKeyType(hIndex, &keyType);
-if (keyType == ADS_DOUBLEKEY)
-    printf("Numeric index key\n");
-else
-    printf("Character index key\n");
+UNSIGNED16 usKeyType;
+AdsGetKeyType(hIndex, &usKeyType);
+// usKeyType é ADS_STRINGKEY ou ADS_DOUBLEKEY
 ```
 
 ## Ver Também
 
 - [AdsGetKeyLength]({{ site.baseurl }}/pt/funcoes/ads-get-key-length/)
-- [AdsGetIndexExpr]({{ site.baseurl }}/pt/funcoes/ads-get-index-expr/)
+- [AdsGetKeyCount]({{ site.baseurl }}/pt/funcoes/ads-get-key-count/)
 - [AdsExtractKey]({{ site.baseurl }}/pt/funcoes/ads-extract-key/)
 
 ---
 
-[← AdsGetKeyLength]({{ site.baseurl }}/pt/funcoes/ads-get-key-length/)
-[AdsGetLastTableUpdate →]({{ site.baseurl }}/pt/funcoes/ads-get-last-table-update/)
+[AdsGetIndexHandle →]({{ site.baseurl }}/pt/funcoes/ads-get-index-handle/)

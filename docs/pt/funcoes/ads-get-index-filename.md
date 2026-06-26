@@ -8,53 +8,47 @@ permalink: /pt/funcoes/ads-get-index-filename/
 
 # AdsGetIndexFilename
 
-Retorna o caminho do arquivo de índice para uma determinada ordem.
+Retorna o nome do arquivo do índice.
 
 ## Sintaxe
 
 ```c
 UNSIGNED32 AdsGetIndexFilename(ADSHANDLE hIndex, UNSIGNED16 usOrder,
-                                UNSIGNED8 *pucBuf, UNSIGNED16 *pusBufLen);
+                               UNSIGNED8* p, UNSIGNED16* l);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `hIndex` | `ADSHANDLE` | Handle da ordem de índice. |
-| `usOrder` | `UNSIGNED16` | Reservado, passe 0. |
-| `pucBuf` | `UNSIGNED8*` | Buffer de saída para o caminho do arquivo. |
-| `pusBufLen` | `UNSIGNED16*` | Entrada/saída — capacidade do buffer na entrada, comprimento real na retorno. |
+| `hIndex` | `ADSHANDLE` | Handle do índice. |
+| `usOrder` | `UNSIGNED16` | Ordem (reservada). |
+| `p` | `UNSIGNED8*` | Buffer para receber o nome do arquivo. |
+| `l` | `UNSIGNED16*` | Ponteiro para o tamanho do buffer. Na saída, contém o comprimento. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetIndexFilename` retorna o caminho resolvido do sistema de arquivos do
-arquivo `.cdx` / `.ntx` / `.adi` que contém a determinada ordem de índice.
-O caminho é armazenado no `IndexBinding` no momento do registro do handle
-e é sempre preciso tanto para índices ativos quanto pendentes.
+`AdsGetIndexFilename` retorna o caminho completo do arquivo de índice.
 
 ## Exemplo
 
 ```c
-ADSHANDLE hIndex;
-char path[260];
-UNSIGNED16 len = sizeof(path);
-AdsGetIndexHandle(hTable, "lastname", &hIndex);
-AdsGetIndexFilename(hIndex, 0, (UNSIGNED8*)path, &len);
-printf("Index file: %s\n", path);
+UNSIGNED8 szFile[256];
+UNSIGNED16 usLen = sizeof(szFile);
+AdsGetIndexFilename(hIndex, 0, szFile, &usLen);
+// szFile contém o caminho do arquivo de índice
 ```
 
 ## Ver Também
 
+- [AdsGetIndexName]({{ site.baseurl }}/pt/funcoes/ads-get-index-name/)
 - [AdsGetIndexExpr]({{ site.baseurl }}/pt/funcoes/ads-get-index-expr/)
-- [AdsGetIndexCondition]({{ site.baseurl }}/pt/funcoes/ads-get-index-condition/)
 - [AdsOpenIndex]({{ site.baseurl }}/pt/funcoes/ads-open-index/)
 
 ---
 
-[← AdsGetIndexCondition]({{ site.baseurl }}/pt/funcoes/ads-get-index-condition/)
-[AdsGetIndexOrderByHandle →]({{ site.baseurl }}/pt/funcoes/ads-get-index-order-by-handle/)
+[AdsGetIndexHandleByOrder →]({{ site.baseurl }}/pt/funcoes/ads-get-index-handle-by-order/)

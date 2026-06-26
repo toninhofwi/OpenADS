@@ -8,12 +8,12 @@ permalink: /pt/funcoes/ads-get-table-char-type/
 
 # AdsGetTableCharType
 
-Retorna o tipo de caracteres de uma tabela (`ADS_ANSI` ou `ADS_OEM`).
+Retorna o tipo de caracteres da tabela.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetTableCharType(ADSHANDLE hTable, UNSIGNED16 *pusType);
+UNSIGNED32 AdsGetTableCharType(ADSHANDLE hTable, UNSIGNED16* p);
 ```
 
 ## Parâmetros
@@ -21,43 +21,30 @@ UNSIGNED32 AdsGetTableCharType(ADSHANDLE hTable, UNSIGNED16 *pusType);
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `pusType` | `UNSIGNED16*` | Saída — constante do tipo de caracteres. |
+| `p` | `UNSIGNED16*` | Ponteiro para receber o tipo de caracteres. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
-
-## Constantes de Tipo de Caracteres
-
-| Constante | Valor | Descrição |
-|-----------|-------|-----------|
-| `ADS_OEM` | 0 | Conjunto de caracteres OEM (compatibilidade binária). |
-| `ADS_ANSI` | 1 | Conjunto de caracteres ANSI (Windows). |
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetTableCharType` retorna se a tabela foi aberta com
-tradução de caracteres OEM ou ANSI. Isto afeta como os campos
-de caracteres são armazenados e comparados.
+`AdsGetTableCharType` retorna o tipo de caracteres da tabela. O OpenADS usa sempre ANSI.
 
 ## Exemplo
 
 ```c
-UNSIGNED16 charType = 0;
-AdsGetTableCharType(hTable, &charType);
-if (charType == ADS_ANSI)
-    printf("A tabela usa caracteres ANSI\n");
-else
-    printf("A tabela usa caracteres OEM\n");
+UNSIGNED16 usCharType;
+AdsGetTableCharType(hTable, &usCharType);
+// usCharType é ADS_ANSI
 ```
 
 ## Ver Também
 
-- [AdsOpenTable]({{ site.baseurl }}/pt/funcoes/ads-open-table/)
 - [AdsGetTableType]({{ site.baseurl }}/pt/funcoes/ads-get-table-type/)
 - [AdsGetTableAlias]({{ site.baseurl }}/pt/funcoes/ads-get-table-alias/)
+- [AdsSetCollation]({{ site.baseurl }}/pt/funcoes/ads-set-collation/)
 
 ---
 
-[← AdsGetTableConType]({{ site.baseurl }}/pt/funcoes/ads-get-table-con-type/)
-[AdsGetTableAlias →]({{ site.baseurl }}/pt/funcoes/ads-get-table-alias/)
+[AdsGetTableConType →]({{ site.baseurl }}/pt/funcoes/ads-get-table-con-type/)

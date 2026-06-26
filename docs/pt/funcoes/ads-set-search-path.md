@@ -8,39 +8,40 @@ permalink: /pt/funcoes/ads-set-search-path/
 
 # AdsSetSearchPath
 
-Define o caminho de pesquisa de tabelas registado para a sessão.
+Define o caminho de procura.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsSetSearchPath(UNSIGNED8 *pucPath);
+UNSIGNED32 AdsSetSearchPath(UNSIGNED8* pucPath);
 ```
 
 ## Parâmetros
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `pucPath` | `UNSIGNED8*` | Lista de diretórios separados por ponto e vírgula. Uma cadeia nula ou vazia limpa-a. |
+| `pucPath` | `UNSIGNED8*` | Caminho de procura. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0).
+`AE_SUCCESS` (0) sempre.
 
 ## Descrição
 
-`AdsSetSearchPath` regista um caminho de pesquisa que `AdsGetSearchPath` devolve. No ADS é a lista de diretórios pesquisados ao abrir uma tabela por nome simples. O OpenADS resolve os caminhos contra o caminho de dados da conexão, pelo que o valor é armazenado por paridade com a API ACE e faz round-trip com `AdsGetSearchPath`.
+`AdsSetSearchPath` define o caminho de procura para localização de tabelas.
 
 ## Exemplo
 
 ```c
-AdsSetSearchPath((UNSIGNED8 *)"C:\\DATA;C:\\SHARED");
+AdsSetSearchPath("/caminho/dados;/outro/caminho");
 ```
 
 ## Ver Também
 
 - [AdsGetSearchPath]({{ site.baseurl }}/pt/funcoes/ads-get-search-path/)
 - [AdsSetDefault]({{ site.baseurl }}/pt/funcoes/ads-set-default/)
+- [AdsGetDefault]({{ site.baseurl }}/pt/funcoes/ads-get-default/)
 
 ---
 
-[AdsGetSearchPath →]({{ site.baseurl }}/pt/funcoes/ads-get-search-path/)
+[AdsSetServerType →]({{ site.baseurl }}/pt/funcoes/ads-set-server-type/)

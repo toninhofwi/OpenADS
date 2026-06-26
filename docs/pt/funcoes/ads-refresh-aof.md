@@ -8,7 +8,7 @@ permalink: /pt/funcoes/ads-refresh-aof/
 
 # AdsRefreshAOF
 
-Reavalia o Advantage Optimized Filter ativo contra os dados atuais.
+Atualiza a AOF com base nos dados atuais.
 
 ## Sintaxe
 
@@ -20,30 +20,28 @@ UNSIGNED32 AdsRefreshAOF(ADSHANDLE hTable);
 
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
-| `hTable` | `ADSHANDLE` | Handle da tabela com um AOF ativo. |
+| `hTable` | `ADSHANDLE` | Handle da tabela. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso, incluindo quando não há AOF ativo (no-op). `AE_INTERNAL_ERROR` (5000) se o handle for desconhecido.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o handle for desconhecido.
 
 ## Descrição
 
-`AdsRefreshAOF` reavalia a expressão AOF instalada com `AdsSetAOF` contra o conteúdo atual da tabela e reinstala o bitmap resultante. Os registos adicionados ou cujos campos de chave mudaram desde que o filtro foi definido são reclassificados, de modo que o conjunto visível reflete os dados mais recentes.
+`AdsRefreshAOF` reavalia a expressão da AOF contra os dados atuais e reinstala o bitmap, garantindo que linhas alteradas desde `AdsSetAOF` sejam reclassificadas.
 
-Se não houver AOF ativo, ou o conjunto foi construído apenas via `AdsCustomizeAOF` (sem expressão armazenada), a chamada tem sucesso sem alterar nada. Para tabelas remotas o servidor mantém o AOF, pelo que a chamada é um no-op.
+Para tabelas remotas, a AOF é mantida no servidor.
 
 ## Exemplo
 
 ```c
-AdsSetAOF(hTable, "BALANCE > 0", 0);
-// ... os registos mudam ou são adicionados ...
-AdsRefreshAOF(hTable);   // o conjunto visível reflete os novos dados
+AdsRefreshAOF(hTable);
 ```
 
 ## Ver Também
 
 - [AdsSetAOF]({{ site.baseurl }}/pt/funcoes/ads-set-aof/)
-- [AdsCustomizeAOF]({{ site.baseurl }}/pt/funcoes/ads-customize-aof/)
+- [AdsGetAOF]({{ site.baseurl }}/pt/funcoes/ads-get-aof/)
 - [AdsClearAOF]({{ site.baseurl }}/pt/funcoes/ads-clear-aof/)
 
 ---

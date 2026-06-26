@@ -8,12 +8,12 @@ permalink: /pt/funcoes/ads-get-table-connection/
 
 # AdsGetTableConnection
 
-Retorna o handle de conexão associado a uma tabela.
+Retorna o handle da conexão da tabela.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetTableConnection(ADSHANDLE hTable, ADSHANDLE *phConnect);
+UNSIGNED32 AdsGetTableConnection(ADSHANDLE hTable, ADSHANDLE* p);
 ```
 
 ## Parâmetros
@@ -21,34 +21,30 @@ UNSIGNED32 AdsGetTableConnection(ADSHANDLE hTable, ADSHANDLE *phConnect);
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `phConnect` | `ADSHANDLE*` | Saída — handle de conexão da tabela. |
+| `p` | `ADSHANDLE*` | Ponteiro para receber o handle da conexão. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetTableConnection` recupera o handle de conexão que foi
-utilizado para abrir a tabela dada. Para tabelas locais, esta é
-a conexão do motor local integrada. Para tabelas remotas, é a
-conexão TCP/TLS com o servidor.
+`AdsGetTableConnection` retorna o handle da conexão associada à tabela.
 
 ## Exemplo
 
 ```c
-ADSHANDLE hConn = 0;
+ADSHANDLE hConn;
 AdsGetTableConnection(hTable, &hConn);
-printf("A tabela está na conexão: %p\n", (void *)hConn);
+// hConn contém o handle da conexão
 ```
 
 ## Ver Também
 
-- [AdsConnect60]({{ site.baseurl }}/pt/funcoes/ads-connect60/)
 - [AdsGetConnectionType]({{ site.baseurl }}/pt/funcoes/ads-get-connection-type/)
-- [AdsIsConnectionAlive]({{ site.baseurl }}/pt/funcoes/ads-is-connection-alive/)
+- [AdsGetTableType]({{ site.baseurl }}/pt/funcoes/ads-get-table-type/)
+- [AdsOpenTable]({{ site.baseurl }}/pt/funcoes/ads-open-table/)
 
 ---
 
-[← AdsGetTableAlias]({{ site.baseurl }}/pt/funcoes/ads-get-table-alias/)
 [AdsGetTableOpenOptions →]({{ site.baseurl }}/pt/funcoes/ads-get-table-open-options/)

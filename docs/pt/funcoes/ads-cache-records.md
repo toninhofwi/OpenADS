@@ -2,18 +2,19 @@
 title: AdsCacheRecords
 layout: default
 parent: Referência da API
-nav_order: 1
+nav_order: 9
 permalink: /pt/funcoes/ads-cache-records/
 ---
 
 # AdsCacheRecords
 
-Sugere quantos registos ler antecipadamente para uma tabela.
+Configura o cache de registros.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsCacheRecords(ADSHANDLE hTable, UNSIGNED16 usNumRecords);
+UNSIGNED32 ENTRYPOINT AdsCacheRecords(ADSHANDLE hTable,
+                                      UNSIGNED16 usRecCount);
 ```
 
 ## Parâmetros
@@ -21,27 +22,28 @@ UNSIGNED32 AdsCacheRecords(ADSHANDLE hTable, UNSIGNED16 usNumRecords);
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `usNumRecords` | `UNSIGNED16` | Número sugerido de registos a ler antecipadamente. |
+| `usRecCount` | `UNSIGNED16` | Número de registros a manter em cache. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o handle for desconhecido.
+`AE_SUCCESS` (0) em caso de sucesso. Código de erro se falhar.
 
 ## Descrição
 
-`AdsCacheRecords` é uma sugestão de leitura antecipada. O OpenADS não faz pré-cache de linhas, pelo que a chamada valida o handle da tabela e tem sucesso sem alterar o comportamento. É fornecida por compatibilidade com a API ACE para código que ajusta a cache do cliente.
+`AdsCacheRecords` define quantos registros o motor deve manter em cache para a tabela especificada. O cache de registros melhora o desempenho de navegação sequencial.
 
 ## Exemplo
 
 ```c
-AdsCacheRecords(hTable, 50);
+AdsCacheRecords(hTable, 100);
 ```
 
 ## Ver Também
 
-- [AdsCacheOpenTables]({{ site.baseurl }}/pt/funcoes/ads-cache-open-tables/)
 - [AdsCacheOpenCursors]({{ site.baseurl }}/pt/funcoes/ads-cache-open-cursors/)
+- [AdsCacheOpenTables]({{ site.baseurl }}/pt/funcoes/ads-cache-open-tables/)
+- [AdsCloseCachedTables]({{ site.baseurl }}/pt/funcoes/ads-close-cached-tables/)
 
 ---
 
-[AdsCacheOpenTables →]({{ site.baseurl }}/pt/funcoes/ads-cache-open-tables/)
+[AdsCloseCachedTables →]({{ site.baseurl }}/pt/funcoes/ads-close-cached-tables/)

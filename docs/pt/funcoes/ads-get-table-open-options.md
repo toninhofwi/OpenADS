@@ -8,12 +8,12 @@ permalink: /pt/funcoes/ads-get-table-open-options/
 
 # AdsGetTableOpenOptions
 
-Retorna as flags de modo de abertura de uma tabela.
+Retorna as opções de abertura da tabela.
 
 ## Sintaxe
 
 ```c
-UNSIGNED32 AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32 *pulOptions);
+UNSIGNED32 AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32* pulOptions);
 ```
 
 ## Parâmetros
@@ -21,34 +21,33 @@ UNSIGNED32 AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32 *pulOptions);
 | Parâmetro | Tipo | Descrição |
 |-----------|------|-----------|
 | `hTable` | `ADSHANDLE` | Handle da tabela. |
-| `pulOptions` | `UNSIGNED32*` | Saída — máscara de bits das flags de modo de abertura. |
+| `pulOptions` | `UNSIGNED32*` | Ponteiro para receber as opções. |
 
 ## Valor de Retorno
 
-`AE_SUCCESS` (0) em caso de sucesso.
+`AE_SUCCESS` (0) em caso de sucesso. `AE_INTERNAL_ERROR` (5000) se o ponteiro for nulo.
 
 ## Descrição
 
-`AdsGetTableOpenOptions` retorna a máscara de bits de flags
-utilizadas quando a tabela foi aberta. Estas flags incluem acesso
-de leitura/escrita, modo de partilha e outras opções a nível de
-tabela.
+`AdsGetTableOpenOptions` retorna as opções de abertura da tabela:
+- `ADS_READONLY` (1) - Apenas leitura
+- `ADS_SHARED` (2) - Partilhada
+- `ADS_EXCLUSIVE` (4) - Exclusiva
 
 ## Exemplo
 
 ```c
-unsigned long options = 0;
-AdsGetTableOpenOptions(hTable, &options);
-printf("Opções de abertura: 0x%08lX\n", options);
+UNSIGNED32 ulOptions;
+AdsGetTableOpenOptions(hTable, &ulOptions);
+// ulOptions contém as opções de abertura
 ```
 
 ## Ver Também
 
 - [AdsOpenTable]({{ site.baseurl }}/pt/funcoes/ads-open-table/)
 - [AdsGetTableType]({{ site.baseurl }}/pt/funcoes/ads-get-table-type/)
-- [AdsGetTableCharType]({{ site.baseurl }}/pt/funcoes/ads-get-table-char-type/)
+- [AdsGetTableAlias]({{ site.baseurl }}/pt/funcoes/ads-get-table-alias/)
 
 ---
 
-[← AdsGetTableFilename]({{ site.baseurl }}/pt/funcoes/ads-get-table-filename/)
-[AdsGetTableConnection →]({{ site.baseurl }}/pt/funcoes/ads-get-table-connection/)
+[AdsGetTableHandle25 →]({{ site.baseurl }}/pt/funcoes/ads-get-table-handle-25/)
