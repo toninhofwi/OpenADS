@@ -81,6 +81,8 @@ add_executable(openads_unit_tests
     unit/abi_record_count_filter_test.cpp
     unit/abi_reindex_test.cpp
     unit/abi_cdx_conditional_index_test.cpp
+    unit/abi_conditional_index_nav_test.cpp
+    unit/abi_conditional_index_refilter_test.cpp
     unit/ntx_multilevel_test.cpp
     unit/cdx_multilevel_test.cpp
     unit/cdx_multitag_2nd_test.cpp

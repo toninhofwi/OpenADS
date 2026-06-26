@@ -7380,7 +7380,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
 
 UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
                           UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
-                          UNSIGNED8* /*pucCondition*/, UNSIGNED32 /*ulOptions*/,
+                          UNSIGNED8* pucCondition, UNSIGNED32 /*ulOptions*/,
                           UNSIGNED16 /*usKeyType*/, ADSHANDLE* phIndex) {
     Table* t = get_table(hTable);
     if (!t || phIndex == nullptr) {
@@ -7389,6 +7389,13 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
     auto file = openads::abi::to_internal(pucFile, 0);
     auto tag  = openads::abi::to_internal(pucTag,  0);
     auto expr = openads::abi::to_internal(pucExpr, 0);
+    // A FOR condition makes this a conditional index: only matching rows get
+    // a key entry (mirrors AdsCreateIndex61's build loop). Ignoring pucCondition
+    // built a full index over every row, so AdsGetKeyCount, OrdKeyNo, SKIP and
+    // EOF all reflected ALL records instead of the matching subset.
+    std::string for_expr = pucCondition != nullptr
+        ? openads::abi::to_internal(pucCondition, 0)
+        : std::string{};
 
     // Resolve the field referenced by the expression to determine key length.
     std::int32_t fidx = t->field_index(expr);
@@ -7428,6 +7435,10 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
     for (std::uint32_t r = 1; r <= rec_count; ++r) {
         if (auto rr = t->goto_record(r); !rr) return fail(rr.error());
         if (t->is_deleted()) continue;
+        // FOR clause filters entries out at build time (DBFCDX semantics).
+        if (!for_expr.empty() &&
+            !openads::engine::evaluate_index_expr_truthy(*t, for_expr))
+            continue;
         auto v = t->read_field(static_cast<std::uint16_t>(fidx));
         if (!v) return fail(v.error());
         std::string padded = v.value().as_string;
