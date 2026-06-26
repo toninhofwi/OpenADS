@@ -1,8 +1,234 @@
 diff --git a/contrib/rddads/ads1.c b/contrib/rddads/ads1.c
-index 4c37b03a7a..12b8b1daf5 100644
+index 4c37b03..f5bc08d 100644
 --- a/contrib/rddads/ads1.c
 +++ b/contrib/rddads/ads1.c
-@@ -1112,14 +1112,30 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -432,6 +432,165 @@ static HB_ERRCODE hb_adsUpdateAreaFlags( ADSAREAP pArea )
+    return HB_SUCCESS;
+ }
+ 
++/* ── OpenADS Tier-2 FetchWhere fast-path ──────────────────────────────────
++ *
++ * A SET FILTER whose predicate the server cannot optimise with an index
++ * (AdsGetAOFOptLevel == NONE) forces the classic rddads scan to walk the
++ * table one record at a time, testing the filter client-side: one network
++ * round-trip per *raw* record — the remote bulk-scan bottleneck.
++ *
++ * When the table is remote and no index is active (natural order), we let
++ * the server evaluate the predicate and return every matching record number
++ * in a single call (AdsFetchWhere, maxRows = all). A forward scan then walks
++ * that list, AdsGotoRecord-ing the real cursor so RecNo()/field reads stay on
++ * the normal path. Any non-forward move (GOTO, GO BOTTOM, backward SKIP,
++ * write, index/filter change) drops the list and resumes the classic
++ * client-side filter walk — which is why, on the first prime, we also clear
++ * the server AOF/filter and let SUPER's local filter block drive the
++ * fallback (correct Clipper semantics).
++ *
++ * Additive and self-contained: no existing ACE export is modified; the
++ * AdsFetchWhere* result-set API lives in the OpenADS engine.
++ */
++
++#ifndef ADS_FW_WANT_RECNO
++#define ADS_FW_WANT_RECNO  0x01
++#endif
++
++static void hb_adsFwReset( ADSAREAP pArea )
++{
++   /* Drop the primed record-number list, keeping eligibility/expr so a later
++      GO TOP can re-prime. */
++   if( pArea->pFwRecNos )
++      hb_xfree( pArea->pFwRecNos );
++   pArea->pFwRecNos = NULL;
++   pArea->ulFwCount = 0;
++   pArea->ulFwPos   = 0;
++   pArea->fFwActive = HB_FALSE;
++}
++
++static void hb_adsFwDisable( ADSAREAP pArea )
++{
++   /* Fully disable the fast-path for this work area (filter cleared/changed,
++      table closed, or a non-remote probe). */
++   hb_adsFwReset( pArea );
++   if( pArea->szFwExpr )
++      hb_xfree( pArea->szFwExpr );
++   pArea->szFwExpr    = NULL;
++   pArea->fFwEligible = HB_FALSE;
++   pArea->fFwProbed   = HB_FALSE;
++}
++
++/* Position the work area on the EOF phantom (no more matches). Mirrors the
++   not-positioned bookkeeping in adsSkipFilter. */
++static void hb_adsFwSetEof( ADSAREAP pArea )
++{
++   HB_ULONG ulRecCount = 0;
++
++   pArea->area.fEof   = HB_TRUE;
++   pArea->area.fBof   = HB_FALSE;
++   pArea->area.fFound = HB_FALSE;
++   pArea->fPositioned = HB_FALSE;
++   SELF_RECCOUNT( &pArea->area, &ulRecCount );
++   pArea->ulRecNo     = ulRecCount + 1;
++}
++
++/* Move the real cursor onto pFwRecNos[ ulFwPos ] and advance. Sets EOF when
++   the list is exhausted. */
++static HB_ERRCODE hb_adsFwStep( ADSAREAP pArea )
++{
++   UNSIGNED32 u32RetVal;
++
++   if( pArea->ulFwPos >= pArea->ulFwCount )
++   {
++      hb_adsFwSetEof( pArea );
++      return HB_SUCCESS;
++   }
++
++   u32RetVal = AdsGotoRecord( pArea->hTable,
++                              ( UNSIGNED32 ) pArea->pFwRecNos[ pArea->ulFwPos ] );
++   if( u32RetVal != AE_SUCCESS )
++   {
++      commonError( pArea, EG_CORRUPTION, ( HB_ERRCODE ) u32RetVal, 0, NULL, EF_CANDEFAULT, NULL );
++      return HB_FAILURE;
++   }
++   pArea->ulFwPos++;
++   hb_adsUpdateAreaFlags( pArea );
++   pArea->area.fBof = HB_FALSE;
++
++   if( pArea->area.lpdbRelations )
++      SELF_SYNCCHILDREN( &pArea->area );
++
++   return HB_SUCCESS;
++}
++
++/* Materialise every matching record number from the top into pFwRecNos.
++   Returns HB_TRUE on success (list primed, fFwActive set) or HB_FALSE when the
++   fast-path is not applicable (local table, active index, or server refusal),
++   in which case the caller must use the classic path. On the first successful
++   prime it commits: clears the server AOF/filter so the classic fallback walks
++   via SUPER's local filter block. */
++static HB_BOOL hb_adsFwPrime( ADSAREAP pArea )
++{
++   ADSHANDLE  hRes = 0;
++   UNSIGNED32 u32RetVal, u32Rows = 0, i;
++
++   if( ! pArea->fFwEligible || pArea->szFwExpr == NULL )
++      return HB_FALSE;
++
++   /* Natural order only — AdsFetchWhere returns records in table order, so an
++      active index would scan out of sequence. */
++   if( pArea->hOrdCurrent != 0 )
++      return HB_FALSE;
++
++   if( AdsGotoTop( pArea->hTable ) != AE_SUCCESS )
++      return HB_FALSE;
++
++   u32RetVal = AdsFetchWhere( pArea->hTable,
++                              ( UNSIGNED8 * ) pArea->szFwExpr,
++                              NULL,             /* record numbers only, no column data */
++                              0xFFFFFFFFUL,     /* every match in one batch */
++                              ADS_FW_WANT_RECNO,
++                              &hRes );
++   if( u32RetVal != AE_SUCCESS )
++   {
++      /* Local table (AE_FUNCTION_NOT_AVAILABLE) or unsupported predicate —
++         disable and fall back to the classic client-side scan. */
++      hb_adsFwDisable( pArea );
++      return HB_FALSE;
++   }
++
++   if( ! pArea->fFwProbed )
++   {
++      /* First successful prime: commit. Drop the server AOF/filter so any
++         later non-forward navigation uses SUPER's local filter block. */
++      AdsClearAOF( pArea->hTable );
++      AdsClearFilter( pArea->hTable );
++      pArea->area.dbfi.fOptimized = HB_FALSE;
++      pArea->fFwProbed = HB_TRUE;
++   }
++
++   hb_adsFwReset( pArea );
++
++   AdsFetchWhereRows( hRes, &u32Rows );
++   if( u32Rows > 0 )
++   {
++      pArea->pFwRecNos = ( HB_ULONG * ) hb_xgrab( ( HB_SIZE ) u32Rows * sizeof( HB_ULONG ) );
++      for( i = 0; i < u32Rows; ++i )
++      {
++         UNSIGNED32 u32Rec = 0;
++         AdsFetchWhereRecno( hRes, i, &u32Rec );
++         pArea->pFwRecNos[ i ] = ( HB_ULONG ) u32Rec;
++      }
++      pArea->ulFwCount = ( HB_ULONG ) u32Rows;
++   }
++   AdsFetchWhereClose( hRes );
++
++   pArea->ulFwPos   = 0;
++   pArea->fFwActive = HB_TRUE;
++   return HB_TRUE;
++}
++
+ static HB_ERRCODE hb_adsCheckLock( ADSAREAP pArea )
+ {
+    if( hb_ads_bTestRecLocks && pArea->fShared && ! pArea->fFLocked )
+@@ -768,6 +927,9 @@ HB_ERRCODE hb_adsCloseCursor( ADSAREAP pArea )
+ 
+    HB_TRACE( HB_TR_DEBUG, ( "hb_adsCloseCursor(%p)", ( void * ) pArea ) );
+ 
++   /* OpenADS Tier-2 fast-path: free any primed state. */
++   hb_adsFwDisable( pArea );
++
+    pArea->hOrdCurrent = 0;
+    if( pArea->hTable )
+    {
+@@ -854,6 +1016,11 @@ static HB_ERRCODE adsGoBottom( ADSAREAP pArea )
+ 
+    HB_TRACE( HB_TR_DEBUG, ( "adsGoBottom(%p)", ( void * ) pArea ) );
+ 
++   /* OpenADS Tier-2 fast-path: reverse navigation is not served from the
++      forward list — drop it and use the classic path. */
++   if( pArea->fFwActive )
++      hb_adsFwReset( pArea );
++
+    /* reset any pending relations */
+    SELF_RESETREL( pArea );
+ 
+@@ -892,6 +1059,11 @@ static HB_ERRCODE adsGoTo( ADSAREAP pArea, HB_ULONG ulRecNo )
+ 
+    HB_TRACE( HB_TR_DEBUG, ( "adsGoTo(%p, %lu)", ( void * ) pArea, ulRecNo ) );
+ 
++   /* OpenADS Tier-2 fast-path: an explicit GOTO can land outside the filter —
++      drop the primed list and let the classic path take over. */
++   if( pArea->fFwActive )
++      hb_adsFwReset( pArea );
++
+    /* 2001-07-19 15:04, BH
+       The following call is a necessary workaround for ace32.dll
+       prior to 6.1.  There were bugs where
+@@ -990,6 +1162,25 @@ static HB_ERRCODE adsGoTop( ADSAREAP pArea )
+ 
+    HB_TRACE( HB_TR_DEBUG, ( "adsGoTop(%p)", ( void * ) pArea ) );
+ 
++   /* OpenADS Tier-2 fast-path: serve a non-AOF SET FILTER forward scan from a
++      server-materialised record-number list. */
++   if( pArea->fFwEligible )
++   {
++      SELF_RESETREL( pArea );
++      if( hb_adsFwPrime( pArea ) )
++      {
++         pArea->area.fTop = HB_TRUE;
++         pArea->area.fBottom = HB_FALSE;
++         if( pArea->ulFwCount == 0 )
++         {
++            hb_adsFwSetEof( pArea );
++            return HB_SUCCESS;
++         }
++         return hb_adsFwStep( pArea );   /* land on the first match */
++      }
++      /* not applicable (disabled inside prime) → classic GO TOP below */
++   }
++
+    /* reset any pending relations */
+    SELF_RESETREL( pArea );
+ 
+@@ -1112,14 +1303,23 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
                                 pszKey, u16KeyLen, u16KeyType, &u16Found );
        if( u32RetVal == AE_SUCCESS && bSoftSeek && ! u16Found )
        {
@@ -11,84 +237,89 @@ index 4c37b03a7a..12b8b1daf5 100644
 -            Clipper behavior, Druzus */
 -         u32RetVal = AdsSeek( pArea->hOrdCurrent, pszKey, u16KeyLen,
 -                              u16KeyType, u16SeekType, &u16Found );
--
--         if( u32RetVal == AE_SUCCESS )
--            u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
-+         /* OpenADS rddads-compat: DBFCDX bFindLast soft-seeks
-+            that miss every key stay at EOF; the original ADS
-+            retry-with-soft-then-skip-back path overshoots. Only
-+            run that path on ADS-side ASCENDING orders where
-+            AdsSeekLast really did position the cursor at EOF
-+            past the last duplicate (and hence the recovery
-+            walk-back is needed). For descending orders we just
-+            keep the EOF the SeekLast already gave us. */
++         /* DBFCDX / rddtst: bFindLast soft-seeks that miss every key
++            must stay at EOF.  The retry-then-Skip(-1) path is only
++            valid on ascending orders where SeekLast parked past the
++            last duplicate.  On descending tags keep EOF from
++            SeekLast.  Skip(-1) after a failed retry can walk to the
++            last physical record (Brian-Hays GOBOTTOM) — DBFCDX does
++            not do that. */
 +         UNSIGNED16 u16Desc = 0;
 +         AdsIsIndexDescending( pArea->hOrdCurrent, &u16Desc );
 +         if( ! u16Desc )
 +         {
 +            u32RetVal = AdsSeek( pArea->hOrdCurrent, pszKey, u16KeyLen,
 +                                 u16KeyType, u16SeekType, &u16Found );
-+
-+            /* OpenADS rddads-compat: only walk back if the soft
-+               retry actually landed on a record. If the retry
-+               also missed (search key past every key in the tag)
-+               the table is at EOF and AdsSkip(-1) would trigger
-+               its Brian-Hays GOBOTTOM, dragging us onto the last
-+               raw record — DBFCDX leaves the workarea at EOF. */
+ 
+-         if( u32RetVal == AE_SUCCESS )
+-            u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
 +            if( u32RetVal == AE_SUCCESS && u16Found )
 +               u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
 +         }
        }
     }
     else
-@@ -1142,7 +1158,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1142,7 +1342,10 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
        #if 0
        HB_ERRCODE errCode = SELF_GOTOP( &pArea->area );
        #endif
 -      pArea->area.fBof = HB_FALSE;
-+      /* OpenADS rddads-compat: SELF_GOTO(0) on an empty table
-+         leaves the workarea in Limbo (BOF+EOF both true); don't
-+         force fBof off afterwards, otherwise we lose the BOF half
-+         of Limbo. Only clear fBof when EOF didn't also end up set
-+         (i.e. we're on a non-phantom record or a non-Limbo EOF). */
++      /* Clipper Limbo on empty / filtered table: BOF and EOF both set.
++         Do not clear fBof when fEof is also true. */
 +      if( ! pArea->area.fEof )
 +         pArea->area.fBof = HB_FALSE;
  #if defined( ADS_USE_OEM_TRANSLATION ) && ADS_LIB_VERSION < 600
        if( pszKeyFree )
           hb_adsOemAnsiFree( ( char * ) pszKeyFree );
-@@ -1249,8 +1271,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
-     * Clipper clears BOF after seek - I found only one strange situation
+@@ -1250,7 +1453,9 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
      * when it doesn't but only sometimes. I've not been able to detect
      * the rule yet. Any how it's much safer to clear it, Druzus.
-+    *
-+    * OpenADS rddads-compat: an empty (or fully-filtered) table reports
-+    * BOTH BOF and EOF (Clipper "Limbo" phantom). Don't break the BOF
-+    * half of that — only clear when EOF is not also set.
      */
 -   pArea->area.fBof = HB_FALSE;
++   /* Preserve Limbo (BOF+EOF) — same rule as dbf1.c / rddtst.prg */
 +   if( ! pArea->area.fEof )
 +      pArea->area.fBof = HB_FALSE;
  
     if( pucSavedKey )
        hb_xfree( pucSavedKey );
-@@ -1323,6 +1350,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1272,6 +1477,22 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+    if( pArea->lpdbPendingRel )
+       SELF_FORCEREL( &pArea->area );
+ 
++   /* OpenADS Tier-2 fast-path: serve forward skips from the primed list. Any
++      non-forward move leaves the fast-path; the real cursor is already
++      correctly positioned, so the classic path resumes from here. */
++   if( pArea->fFwActive )
++   {
++      if( lToSkip > 0 && pArea->fPositioned )
++      {
++         HB_ERRCODE errCode = HB_SUCCESS;
++         pArea->area.fTop = pArea->area.fBottom = HB_FALSE;
++         while( errCode == HB_SUCCESS && ! pArea->area.fEof && lToSkip-- )
++            errCode = hb_adsFwStep( pArea );
++         return errCode;
++      }
++      hb_adsFwReset( pArea );
++   }
++
+    /* Brian Hays:
+ 
+       In ADS, if you GO 0 (as opposed to skipping past lastrec),
+@@ -1323,6 +1544,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
     {
        HB_ERRCODE errCode = HB_SUCCESS;
        HB_LONG lSkipper;
-+      HB_LONG lToSkipOrig = lToSkip;  /* preserve original direction */
++      HB_LONG lToSkipOrig = lToSkip;
  
        if( ! pArea->fPositioned && lToSkip < 0 )
        {
-@@ -1332,10 +1360,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1332,10 +1554,18 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
  
        if( ! pArea->fPositioned )
        {
 -         if( lToSkip > 0 )
-+         /* Match dbf1.c hb_dbfSkip semantics: skip past end clears
-+            the opposite-direction flag so callers can distinguish a
-+            true Bof / Eof from the freshly-opened Limbo state. Use
-+            ORIGINAL lToSkip direction since the GOBOTTOM-then-++
-+            path above may have zeroed lToSkip to 0. */
++         /* Match hb_dbfSkip(): distinguish Limbo, Bof-only, Eof-only.
++            Use original direction — GOBOTTOM-then-++ may zero lToSkip. */
 +         if( lToSkipOrig > 0 )
 +         {
              pArea->area.fEof = HB_TRUE;
@@ -103,40 +334,139 @@ index 4c37b03a7a..12b8b1daf5 100644
        }
        else if( lToSkip )
        {
+@@ -1478,6 +1708,10 @@ static HB_ERRCODE adsAppend( ADSAREAP pArea, HB_BOOL fUnLockAll )
+ 
+    HB_TRACE( HB_TR_DEBUG, ( "adsAppend(%p, %d)", ( void * ) pArea, ( int ) fUnLockAll ) );
+ 
++   /* OpenADS Tier-2 fast-path: a write changes the match set — drop the list. */
++   if( pArea->fFwActive )
++      hb_adsFwReset( pArea );
++
+    /* reset any pending relations */
+    SELF_RESETREL( pArea );
+ 
+@@ -2004,6 +2238,10 @@ static HB_ERRCODE adsDeleteRec( ADSAREAP pArea )
+ 
+    HB_TRACE( HB_TR_DEBUG, ( "adsDeleteRec(%p)", ( void * ) pArea ) );
+ 
++   /* OpenADS Tier-2 fast-path: a write changes the match set — drop the list. */
++   if( pArea->fFwActive )
++      hb_adsFwReset( pArea );
++
+    /* resolve any pending relations */
+    if( pArea->lpdbPendingRel )
+       SELF_FORCEREL( &pArea->area );
+@@ -2643,6 +2881,10 @@ static HB_ERRCODE adsPutValue( ADSAREAP pArea, HB_USHORT uiIndex, PHB_ITEM pItem
+    if( ! uiIndex || uiIndex > pArea->area.uiFieldCount )
+       return HB_FAILURE;
+ 
++   /* OpenADS Tier-2 fast-path: a write may change the match set — drop the list. */
++   if( pArea->fFwActive )
++      hb_adsFwReset( pArea );
++
+    /* 2003-10-30 15:54
+ 
+       ADS has Implicit Record locking that can mask programming errors.
+@@ -4117,6 +4359,11 @@ static HB_ERRCODE adsOrderListFocus( ADSAREAP pArea, LPDBORDERINFO pOrderInfo )
+ 
+    HB_TRACE( HB_TR_DEBUG, ( "adsOrderListFocus(%p, %p)", ( void * ) pArea, ( void * ) pOrderInfo ) );
+ 
++   /* OpenADS Tier-2 fast-path: changing the active order changes scan
++      sequence (the list is in natural order) — drop it. */
++   if( pArea->fFwActive )
++      hb_adsFwReset( pArea );
++
+    if( ! pArea->hOrdCurrent )
+    {
+       *pucTagName = '\0';
+@@ -4868,6 +5115,9 @@ static HB_ERRCODE adsClearFilter( ADSAREAP pArea )
+ {
+    HB_TRACE( HB_TR_DEBUG, ( "adsClearFilter(%p)", ( void * ) pArea ) );
+ 
++   /* OpenADS Tier-2 fast-path: the filter is gone — disable entirely. */
++   hb_adsFwDisable( pArea );
++
+    /* resolve any pending relations */
+    if( pArea->lpdbPendingRel )
+       SELF_FORCEREL( &pArea->area );
+@@ -4933,6 +5183,24 @@ static HB_ERRCODE adsSetFilter( ADSAREAP pArea, LPDBFILTERINFO pFilterInfo )
+ #endif
+       }     /* else let SUPER handle filtering */
+       pArea->area.dbfi.fOptimized = u32RetVal == AE_SUCCESS;
++
++      /* OpenADS Tier-2 fast-path eligibility: a valid predicate the server
++         cannot optimise with an index (AOF level NONE) — route forward bulk
++         scans through AdsFetchWhere. Applicability (remote table) is probed
++         lazily on the first GO TOP. */
++      hb_adsFwDisable( pArea );   /* drop any previous filter's state */
++      if( bValidExpr )
++      {
++         UNSIGNED16 u16Opt = ADS_OPTIMIZED_NONE;
++         AdsGetAOFOptLevel( pArea->hTable, &u16Opt, NULL, NULL );
++         if( u16Opt != ADS_OPTIMIZED_FULL && u16Opt != ADS_OPTIMIZED_PART )
++         {
++            HB_SIZE nLen = strlen( pucFilter );
++            pArea->szFwExpr = ( char * ) hb_xgrab( nLen + 1 );
++            memcpy( pArea->szFwExpr, pucFilter, nLen + 1 );
++            pArea->fFwEligible = HB_TRUE;
++         }
++      }
+       return HB_SUCCESS;
+    }
+ 
 diff --git a/contrib/rddads/rddads.h b/contrib/rddads/rddads.h
-index 001f393364..e1894d2074 100644
+index 001f393..4dcb6d9 100644
 --- a/contrib/rddads/rddads.h
 +++ b/contrib/rddads/rddads.h
-@@ -67,6 +67,31 @@
+@@ -67,6 +67,32 @@
  
  #include "ace.h"
  
-+/* M(rddads-compat) shim: SAP / older Harbour rddads expected a
-+   ADSFIELD( n ) helper that yields the n-th field's name in the
-+   CURRENT workarea as UNSIGNED8*. This Harbour build's sources
-+   use it but don't define it. Implement it as an inline that
-+   fetches the current workarea pointer. */
++/* ads1.c / adsfunc.c use ADSFIELD( n ) for the n-th field name as
++   UNSIGNED8* in the current workarea; define it when ACE headers do
++   not supply the macro. OpenADS' ace.h (included above) now provides
++   an ADSFIELD( n ) macro (field index encoded as a pointer, decoded
++   server-side by resolve_field_index), so this name-lookup fallback
++   is only compiled when ace.h did not define one. */
++#ifndef ADSFIELD
 +extern HB_EXPORT void * hb_rddGetCurrentWorkAreaPointer( void );
 +
 +static __inline UNSIGNED8 * ADSFIELD( UNSIGNED16 n )
 +{
-+    AREAP pCurArea = ( AREAP ) hb_rddGetCurrentWorkAreaPointer();
-+    if( pCurArea == NULL || n == 0 ||
-+        n > pCurArea->uiFieldCount ) return NULL;
-+    return ( UNSIGNED8 * ) hb_dynsymName(
-+        ( PHB_DYNS ) pCurArea->lpFields[ n - 1 ].sym );
++   AREAP pCurArea = ( AREAP ) hb_rddGetCurrentWorkAreaPointer();
++   if( pCurArea == NULL || n == 0 ||
++       n > pCurArea->uiFieldCount )
++      return NULL;
++   return ( UNSIGNED8 * ) hb_dynsymName(
++      ( PHB_DYNS ) pCurArea->lpFields[ n - 1 ].sym );
 +}
++#endif
 +
-+/* M(rddads-compat): Harbour's adsfunc.c re-#defines
-+   ADS_MAX_PARAMDEF_LEN to 2048 *after* including this header,
-+   colliding with ace.h's #ifndef-guarded 256 default and tripping
-+   -Wmacro-redefined. Pre-define the 2048 ceiling here so ace.h's
-+   guard is satisfied and adsfunc.c's later #define becomes an
-+   identical, warning-free redefine. */
++/* adsfunc.c sets ADS_MAX_PARAMDEF_LEN to 2048 after this include;
++   pre-define so ace.h's #ifndef guard accepts it without
++   -Wmacro-redefined. */
 +#undef  ADS_MAX_PARAMDEF_LEN
 +#define ADS_MAX_PARAMDEF_LEN 2048
 +
  /* Auto-detect ACE version. */
  #if   defined( ADS_ROOT_DD_ALIAS )
     #define _ADS_LIB_VERSION  1110 /* or upper */
-
+@@ -147,6 +173,18 @@ typedef struct _ADSAREA_
+    ADSHANDLE hOrdCurrent;
+    ADSHANDLE hStatement;
+    char *    szQuery;
++
++   /* OpenADS Tier-2 fast-path: route a non-AOF SET FILTER forward bulk scan
++      through the server-side FetchWhere op. One round-trip materialises every
++      matching record number, replacing one round-trip per raw record (the
++      remote-scan bottleneck). See adsSetFilter / adsGoTop / adsSkip in ads1.c. */
++   HB_BOOL    fFwEligible;   /* filter qualifies (valid expr, not index-optimized) */
++   HB_BOOL    fFwProbed;     /* remote applicability already committed */
++   HB_BOOL    fFwActive;     /* recno list primed; forward scan served from it */
++   char *     szFwExpr;      /* stored filter predicate for AdsFetchWhere */
++   HB_ULONG * pFwRecNos;     /* primed matching record numbers (table order) */
++   HB_ULONG   ulFwCount;     /* number of entries in pFwRecNos */
++   HB_ULONG   ulFwPos;       /* index of the NEXT record to serve */
+ } ADSAREA;
+ 
+ typedef ADSAREA * ADSAREAP;
