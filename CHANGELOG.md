@@ -52,6 +52,11 @@ the real ACE SDK.
 - **NTX empty-but-rooted leaf on PACK/reindex.** Fixes error 5004
   when reindexing an NTX that had empty leaves left by prior
   `erase()` calls. Pinned by `abi_ntx_pack_reindex_test`.
+- **Composite CDX key width not pinned to the 254-byte probe.**
+  Follow-up to the v1.2.3 character-key fix (PR #68): a composite
+  key expression no longer derives its on-disk width from the 254-byte
+  evaluation probe — it uses the actual key width, so composite tags
+  stay the right size and interoperate with native readers.
 
 ### Wire Protocol
 
@@ -99,6 +104,23 @@ the real ACE SDK.
 - **ADT companion stream count.** `AdsCreateTable(ADS_ADT)` now
   writes the correct ADT header companion-type count instead of a
   flat 1.
+
+### ABI
+
+- **Connection / handle introspection.** `AdsGetConnectionType`
+  reports `ADS_REMOTE_SERVER` for a remote handle (local otherwise);
+  `AdsGetHandleType` dispatches on the registry handle kind
+  (connection / table across all backends / statement);
+  `AdsGetIndexCondition` / `AdsGetIndexFilename` return real values
+  instead of empty stubs.
+
+### Build
+
+- **Strict-warning (`-Werror`) cleanups in `data_dict.cpp`.**
+  Explicit casts in `le16()` and the `\uXXXX` escape loop, and removal
+  of two dead static helpers (`trim`, `split_tabs`), so the data
+  dictionary compiles clean under clang/gcc `-Wconversion`/
+  `-Wsign-conversion` and MSVC `/WX` (C4505).
 
 ### Tests & Tooling
 
