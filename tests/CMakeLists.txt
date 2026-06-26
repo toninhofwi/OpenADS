@@ -242,6 +242,7 @@ if(OPENADS_WITH_FIREBIRD)
         unit/firebird_uri_test.cpp
         unit/firebird_connection_test.cpp
         unit/abi_plus_firebird_read_test.cpp
+        unit/abi_plus_firebird_write_test.cpp
     )
 endif()
 
