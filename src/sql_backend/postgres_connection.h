@@ -62,6 +62,16 @@ public:
     util::Result<void> flush_record(PostgresTable* tbl);
     util::Result<void> delete_record(PostgresTable* tbl);
 
+    // Record/file locking emulated with PostgreSQL session advisory locks
+    // (pg_try_advisory_lock / pg_advisory_unlock): cross-connection, held
+    // across statements, released by an explicit unlock — matching xBase
+    // rLock()/fLock() semantics. recno is the 1-based ACE record number
+    // (0 = current row). lock_record fails if another session holds it.
+    util::Result<void> lock_record(PostgresTable* tbl, std::uint32_t recno);
+    util::Result<void> unlock_record(PostgresTable* tbl, std::uint32_t recno);
+    util::Result<void> lock_table(PostgresTable* tbl);
+    util::Result<void> unlock_table(PostgresTable* tbl);
+
     const std::string& conninfo() const noexcept { return conninfo_; }
 
 private:

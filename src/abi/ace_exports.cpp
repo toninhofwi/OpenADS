@@ -6559,6 +6559,15 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->lock_record(pt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     // ulRecord == 0 → the current record (ACE convention). Resolving it
@@ -6576,6 +6585,15 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->unlock_record(pt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint32_t rec = (ulRecord == 0) ? t->recno() : ulRecord;
@@ -6590,6 +6608,15 @@ UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->lock_table(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t]() { return t->try_lock_table_excl(); });
@@ -6601,6 +6628,15 @@ UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->unlock_table(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->unlock_table();

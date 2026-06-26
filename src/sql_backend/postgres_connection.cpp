@@ -890,4 +890,112 @@ util::Result<void> PostgresConnection::delete_record(PostgresTable* tbl) {
 #endif
 }
 
+#if defined(OPENADS_WITH_POSTGRESQL)
+namespace {
+
+// Advisory-lock key: "R" + table + PK values for a record, "T" + table for the
+// whole table. Distinct prefixes keep a table lock from colliding with a record
+// lock that would otherwise hash to the same key.
+std::string advisory_record_key(const PostgresTable& tbl, std::size_t pos) {
+    std::string k = "R\x1f" + tbl.name;
+    if (pos < tbl.pk_snapshot.size()) {
+        for (const std::string& v : tbl.pk_snapshot[pos].values) k += "\x1f" + v;
+    }
+    return k;
+}
+
+// Runs SELECT pg_(try_)advisory_(un)lock(hashtextextended($1,0)); returns the
+// boolean the function yields ('t'). For unlock the result is informational.
+util::Result<bool> advisory_call(PGconn* conn, const char* fn,
+                                 const std::string& key) {
+    const std::string sql =
+        std::string("SELECT ") + fn + "(hashtextextended($1, 0))";
+    const char* params[1] = {key.c_str()};
+    PGresult* res = PQexecParams(conn, sql.c_str(), 1, nullptr, params,
+                                 nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        const char* msg = PQerrorMessage(conn);
+        PQclear(res);
+        return postgres_error("advisory lock", msg);
+    }
+    const bool got = (PQntuples(res) == 1 && PQgetvalue(res, 0, 0)[0] == 't');
+    PQclear(res);
+    return got;
+}
+
+} // namespace
+#endif
+
+util::Result<void> PostgresConnection::lock_record(PostgresTable* tbl,
+                                                   std::uint32_t recno) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres lock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->pk_snapshot.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    auto r = advisory_call(impl_->conn, "pg_try_advisory_lock",
+                           advisory_record_key(*tbl, pos));
+    if (!r) return r.error();
+    if (!r.value()) return util::Error{5035, 0, "record locked", ""};
+    return util::Result<void>{};
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::unlock_record(PostgresTable* tbl,
+                                                     std::uint32_t recno) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres unlock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->pk_snapshot.size()) return util::Result<void>{};
+    auto r = advisory_call(impl_->conn, "pg_advisory_unlock",
+                           advisory_record_key(*tbl, pos));
+    if (!r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::lock_table(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres lock", ""};
+    }
+    auto r = advisory_call(impl_->conn, "pg_try_advisory_lock",
+                           "T\x1f" + tbl->name);
+    if (!r) return r.error();
+    if (!r.value()) return util::Error{5035, 0, "table locked", ""};
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::unlock_table(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres unlock", ""};
+    }
+    auto r = advisory_call(impl_->conn, "pg_advisory_unlock",
+                           "T\x1f" + tbl->name);
+    if (!r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
 } // namespace openads::sql_backend
