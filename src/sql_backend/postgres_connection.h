@@ -51,6 +51,17 @@ public:
                                   bool soft,
                                   bool last_key);
 
+    // Write surface (mirrors FirebirdConnection): append_blank stages a fresh
+    // blank row, set_field stages one column value, flush_record turns the
+    // staged row into an INSERT (pending_append) or a PK-keyed UPDATE, and
+    // delete_record removes the positioned row by its PK.
+    util::Result<void> append_blank(PostgresTable* tbl);
+    util::Result<void> set_field(PostgresTable* tbl,
+                                 const std::string& field_name,
+                                 const std::string& value);
+    util::Result<void> flush_record(PostgresTable* tbl);
+    util::Result<void> delete_record(PostgresTable* tbl);
+
     const std::string& conninfo() const noexcept { return conninfo_; }
 
 private:

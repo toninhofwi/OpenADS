@@ -41,6 +41,14 @@ struct PostgresTable {
     std::size_t              pos              = 0;
     bool                     positioned       = false;
     bool                     last_seek_found  = false;
+
+    // Write staging (mirrors the FirebirdTable model): append_blank/set_field
+    // stage column values here; flush_record turns them into an INSERT (when
+    // pending_append) or an UPDATE keyed by the positioned row's PK.
+    std::vector<std::string> staging_row;
+    std::vector<bool>        staging_nulls;
+    bool                     pending_append = false;
+    bool                     row_dirty      = false;
 };
 
 } // namespace openads::sql_backend
