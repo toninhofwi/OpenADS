@@ -257,3 +257,52 @@ TEST_CASE("openads ODBC driver: scrollable cursor (SQLFetchScroll)") {
     SQLFreeHandle(SQL_HANDLE_DBC, dbc);
     SQLFreeHandle(SQL_HANDLE_ENV, env);
 }
+
+TEST_CASE("openads ODBC driver: SQLBindParameter (positional ?)") {
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    connect_fresh("openads_odbc_param", &env, &dbc);
+
+    exec_ok(dbc, "CREATE TABLE pp (ID Numeric(4,0), NM Character(10))");
+
+    // Parameterised INSERT: prepare once, bind, execute twice with new values
+    // (the bound buffers are read at execute time).
+    SQLHSTMT st = SQL_NULL_HSTMT;
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &st) == SQL_SUCCESS);
+    REQUIRE(SQLPrepare(st,
+            reinterpret_cast<SQLCHAR*>(const_cast<char*>(
+                "INSERT INTO pp (ID, NM) VALUES (?, ?)")), SQL_NTS) == SQL_SUCCESS);
+
+    SQLINTEGER id = 7;
+    SQLCHAR    nm[16] = "hello";
+    SQLLEN     nmind = SQL_NTS;
+    REQUIRE(SQLBindParameter(st, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER,
+                             0, 0, &id, 0, nullptr) == SQL_SUCCESS);
+    REQUIRE(SQLBindParameter(st, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR,
+                             10, 0, nm, sizeof(nm), &nmind) == SQL_SUCCESS);
+    REQUIRE(SQLExecute(st) == SQL_SUCCESS);
+
+    id = 9;
+    std::strcpy(reinterpret_cast<char*>(nm), "world");
+    REQUIRE(SQLExecute(st) == SQL_SUCCESS);
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+
+    // Parameterised SELECT ... WHERE ID = ? returns only the matching row.
+    SQLHSTMT q = SQL_NULL_HSTMT;
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &q) == SQL_SUCCESS);
+    REQUIRE(SQLPrepare(q,
+            reinterpret_cast<SQLCHAR*>(const_cast<char*>(
+                "SELECT NM FROM pp WHERE ID = ?")), SQL_NTS) == SQL_SUCCESS);
+    SQLINTEGER want = 9;
+    REQUIRE(SQLBindParameter(q, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER,
+                             0, 0, &want, 0, nullptr) == SQL_SUCCESS);
+    REQUIRE(SQLExecute(q) == SQL_SUCCESS);
+    REQUIRE(SQLFetch(q) == SQL_SUCCESS);
+    CHECK(get_str1(q) == "world");
+    CHECK(SQLFetch(q) == SQL_NO_DATA);
+    SQLFreeHandle(SQL_HANDLE_STMT, q);
+
+    REQUIRE(SQLDisconnect(dbc) == SQL_SUCCESS);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
+}

@@ -36,6 +36,14 @@ struct DbcH {
     std::string   err;
 };
 
+// A deferred parameter binding: the app's buffer is read at execute time.
+struct ParamBind {
+    SQLSMALLINT c_type = 0;     // SQL_C_* of the application buffer
+    SQLPOINTER  buf    = nullptr;
+    SQLLEN      buflen = 0;
+    SQLLEN*     ind    = nullptr;
+};
+
 struct StmtH {
     HKind         kind = HKind::Stmt;
     DbcH*         dbc  = nullptr;
@@ -48,6 +56,8 @@ struct StmtH {
     long                                  spos = 0;   // synth: 0 = before first row
     // engine cursor row position: 0 = before first, 1..N = on row, -1 = after last
     long                                  epos = 0;
+    // Deferred parameter bindings, 1-based (params[n-1] is parameter n).
+    std::vector<ParamBind>                params;
 };
 
 HKind kind_of(SQLHANDLE h) { return *reinterpret_cast<HKind*>(h); }
@@ -194,6 +204,86 @@ std::string cell(openads_stmt* q, int col) {
     return trim(v);
 }
 
+// Rewrite positional '?' markers to named :p1, :p2, ... (skipping single-quoted
+// string literals, where '' is an escaped quote). The engine substitutes
+// parameters by name, so this lets ODBC's positional binding ride on it.
+std::string rewrite_params(const std::string& sql, int* out_n) {
+    std::string out;
+    out.reserve(sql.size() + 16);
+    int n = 0;
+    bool in_str = false;
+    for (size_t i = 0; i < sql.size(); ++i) {
+        char c = sql[i];
+        if (in_str) {
+            out += c;
+            if (c == '\'') {
+                if (i + 1 < sql.size() && sql[i + 1] == '\'') out += sql[++i];
+                else in_str = false;
+            }
+        } else if (c == '\'') {
+            in_str = true;
+            out += c;
+        } else if (c == '?') {
+            ++n;
+            out += ":p";
+            out += std::to_string(n);
+        } else {
+            out += c;
+        }
+    }
+    if (out_n) *out_n = n;
+    return out;
+}
+
+// Bind every recorded parameter by reading its application buffer now and
+// routing the value through the thin SQL API's named binders (:p1, :p2, ...).
+bool bind_params(StmtH* s) {
+    for (size_t k = 0; k < s->params.size(); ++k) {
+        const ParamBind& p = s->params[k];
+        if (!p.buf) continue;
+        std::string name = "p" + std::to_string(k + 1);
+        int rc = OPENADS_OK;
+        switch (p.c_type) {
+            case SQL_C_SHORT:
+            case SQL_C_SSHORT:
+            case SQL_C_USHORT:
+                rc = openads_bind_int64(s->st, name.c_str(),
+                                        *reinterpret_cast<SQLSMALLINT*>(p.buf));
+                break;
+            case SQL_C_LONG:
+            case SQL_C_SLONG:
+            case SQL_C_ULONG:
+                rc = openads_bind_int64(s->st, name.c_str(),
+                                        *reinterpret_cast<SQLINTEGER*>(p.buf));
+                break;
+            case SQL_C_SBIGINT:
+            case SQL_C_UBIGINT:
+                rc = openads_bind_int64(s->st, name.c_str(),
+                                        *reinterpret_cast<SQLBIGINT*>(p.buf));
+                break;
+            case SQL_C_FLOAT:
+                rc = openads_bind_double(s->st, name.c_str(),
+                                         *reinterpret_cast<SQLREAL*>(p.buf));
+                break;
+            case SQL_C_DOUBLE:
+                rc = openads_bind_double(s->st, name.c_str(),
+                                         *reinterpret_cast<SQLDOUBLE*>(p.buf));
+                break;
+            case SQL_C_CHAR:
+            default: {
+                const char* cs = reinterpret_cast<const char*>(p.buf);
+                std::string v = (p.ind && *p.ind != SQL_NTS)
+                                    ? std::string(cs, static_cast<size_t>(*p.ind))
+                                    : std::string(cs);
+                rc = openads_bind_str(s->st, name.c_str(), v.c_str());
+                break;
+            }
+        }
+        if (rc != OPENADS_OK) return false;
+    }
+    return true;
+}
+
 // Collect the table names visible on a connection: the data directory's free
 // tables (.dbf / .adt) plus any dictionary-managed tables (system.tables),
 // deduplicated case-insensitively.
@@ -324,6 +414,21 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT hstmt, SQLCHAR* sql, SQLINTEGER len) {
     if (!s->dbc || !s->dbc->conn) return SQL_ERROR;
     reset_result(s);
     std::string q = to_string(sql, len);
+    // With bound parameters, prepare the rewritten SQL, bind, then execute.
+    if (!s->params.empty()) {
+        std::string pq = rewrite_params(q, nullptr);
+        openads_stmt* st = nullptr;
+        if (openads_prepare(s->dbc->conn, pq.c_str(), &st) != OPENADS_OK) {
+            s->err = "prepare failed";
+            return SQL_ERROR;
+        }
+        s->st = st;
+        if (!bind_params(s) || openads_execute(s->st) != OPENADS_OK) {
+            s->err = "exec failed";
+            return SQL_ERROR;
+        }
+        return SQL_SUCCESS;
+    }
     openads_stmt* st = nullptr;
     if (openads_exec_direct(s->dbc->conn, q.c_str(), &st) != OPENADS_OK) {
         s->err = "exec failed";
@@ -338,7 +443,8 @@ SQLRETURN SQL_API SQLPrepare(SQLHSTMT hstmt, SQLCHAR* sql, SQLINTEGER len) {
     auto* s = reinterpret_cast<StmtH*>(hstmt);
     if (!s->dbc || !s->dbc->conn) return SQL_ERROR;
     reset_result(s);
-    std::string q = to_string(sql, len);
+    // Rewrite positional ? to named :pN so SQLBindParameter can bind by name.
+    std::string q = rewrite_params(to_string(sql, len), nullptr);
     openads_stmt* st = nullptr;
     if (openads_prepare(s->dbc->conn, q.c_str(), &st) != OPENADS_OK) {
         s->err = "prepare failed";
@@ -352,7 +458,20 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT hstmt) {
     if (!hstmt) return SQL_ERROR;
     auto* s = reinterpret_cast<StmtH*>(hstmt);
     if (!s->st) return SQL_ERROR;
+    if (!bind_params(s)) { s->err = "param bind failed"; return SQL_ERROR; }
     return openads_execute(s->st) == OPENADS_OK ? SQL_SUCCESS : SQL_ERROR;
+}
+
+SQLRETURN SQL_API SQLBindParameter(SQLHSTMT hstmt, SQLUSMALLINT pnum,
+                                   SQLSMALLINT /*io_type*/, SQLSMALLINT ctype,
+                                   SQLSMALLINT /*sql_type*/, SQLULEN /*col_size*/,
+                                   SQLSMALLINT /*dec_digits*/, SQLPOINTER valptr,
+                                   SQLLEN buflen, SQLLEN* ind) {
+    if (!hstmt || pnum < 1) return SQL_ERROR;
+    auto* s = reinterpret_cast<StmtH*>(hstmt);
+    if (s->params.size() < pnum) s->params.resize(pnum);
+    s->params[pnum - 1] = ParamBind{ctype, valptr, buflen, ind};
+    return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLNumResultCols(SQLHSTMT hstmt, SQLSMALLINT* count) {
@@ -656,8 +775,10 @@ SQLRETURN SQL_API SQLEndTran(SQLSMALLINT, SQLHANDLE, SQLSMALLINT) {
 SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT hstmt, SQLUSMALLINT option) {
     if (!hstmt) return SQL_ERROR;
     auto* s = reinterpret_cast<StmtH*>(hstmt);
-    if (option == SQL_CLOSE || option == SQL_UNBIND || option == SQL_RESET_PARAMS)
+    if (option == SQL_CLOSE || option == SQL_UNBIND)
         reset_result(s);
+    if (option == SQL_RESET_PARAMS)
+        s->params.clear();
     return SQL_SUCCESS;
 }
 

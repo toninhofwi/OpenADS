@@ -15,6 +15,7 @@ EXPORTS
     SQLExecDirect
     SQLPrepare
     SQLExecute
+    SQLBindParameter
     SQLNumResultCols
     SQLDescribeCol
     SQLColAttribute
