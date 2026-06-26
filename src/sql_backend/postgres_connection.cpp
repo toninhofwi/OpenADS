@@ -627,4 +627,375 @@ util::Result<bool> PostgresConnection::seek_index(
 #endif
 }
 
+#if defined(OPENADS_WITH_POSTGRESQL)
+namespace {
+
+// Re-run the PK snapshot SELECT (same shape as open_table) so RECCOUNT and row
+// ordering reflect a just-committed INSERT/DELETE. libpq autocommits each
+// statement, so the committed change is visible to this fresh SELECT.
+util::Result<void> reload_pk_snapshot(PGconn* conn, PostgresTable* tbl) {
+    const std::string sel = pk_select_list(*tbl);
+    const std::string sql = "SELECT " + sel + " FROM " +
+                            quote_ident(tbl->name) + " ORDER BY " + sel;
+    PGresult* res = PQexec(conn, sql.c_str());
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        const char* msg = PQerrorMessage(conn);
+        PQclear(res);
+        return postgres_error("pk snapshot", msg);
+    }
+    const int rows    = PQntuples(res);
+    const int pk_cols = PQnfields(res);
+    tbl->pk_snapshot.clear();
+    tbl->pk_snapshot.reserve(static_cast<std::size_t>(rows));
+    for (int r = 0; r < rows; ++r) {
+        PostgresTable::PkRow pk_row;
+        pk_row.values.resize(static_cast<std::size_t>(pk_cols));
+        for (int c = 0; c < pk_cols; ++c) {
+            pk_row.values[static_cast<std::size_t>(c)] =
+                PQgetisnull(res, r, c) ? std::string{} : PQgetvalue(res, r, c);
+        }
+        tbl->pk_snapshot.push_back(std::move(pk_row));
+    }
+    PQclear(res);
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
+    tbl->rec_count_cached = true;
+    return util::Result<void>{};
+}
+
+} // namespace
+#endif
+
+util::Result<void> PostgresConnection::append_blank(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres append", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_table_impl(impl_->conn, tbl); !d) return d.error();
+    }
+    tbl->staging_row.assign(tbl->fields.size(), std::string{});
+    tbl->staging_nulls.assign(tbl->fields.size(), true);
+    tbl->pending_append = true;
+    tbl->row_dirty      = true;
+    tbl->row_valid      = true;
+    tbl->positioned     = true;
+    tbl->current_recno  = 0;
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::set_field(
+    PostgresTable* tbl, const std::string& field_name,
+    const std::string& value) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres set_field", ""};
+    }
+    if (!tbl->row_valid && !tbl->pending_append) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    if (!tbl->fields_cached) {
+        return util::Error{5001, 0, "schema not cached", ""};
+    }
+    const std::size_t idx = field_index_ci(*tbl, field_name);
+    if (idx == static_cast<std::size_t>(-1)) {
+        return util::Error{5063, 0, "column not found", field_name};
+    }
+    // For an UPDATE (not an append) seed the staging buffer from the current
+    // row so columns the caller leaves untouched keep their existing values.
+    if (!tbl->row_dirty && !tbl->pending_append) {
+        tbl->staging_row   = tbl->current_row;
+        tbl->staging_nulls = tbl->current_nulls;
+    }
+    if (tbl->staging_row.size() < tbl->fields.size()) {
+        tbl->staging_row.resize(tbl->fields.size());
+        tbl->staging_nulls.resize(tbl->fields.size(), true);
+    }
+    tbl->staging_row[idx]   = value;
+    tbl->staging_nulls[idx] = false;
+    tbl->row_dirty          = true;
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    (void)field_name;
+    (void)value;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::flush_record(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres flush", ""};
+    }
+    if (!tbl->row_dirty && !tbl->pending_append) return util::Result<void>{};
+    if (!tbl->fields_cached) {
+        return util::Error{5001, 0, "schema not cached", ""};
+    }
+    PGconn* conn = impl_->conn;
+
+    // Which fields are part of the primary key (skipped in an UPDATE SET).
+    std::vector<bool> is_pk(tbl->fields.size(), false);
+    for (const std::string& pkc : tbl->pk_columns) {
+        const std::size_t fi = field_index_ci(*tbl, pkc);
+        if (fi != static_cast<std::size_t>(-1)) is_pk[fi] = true;
+    }
+
+    if (tbl->pending_append) {
+        std::string cols, ph;
+        std::vector<std::string> store;     // stable backing for c_str()
+        std::vector<bool>        store_null;
+        bool any = false;
+        for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+            if (i < tbl->staging_nulls.size() && tbl->staging_nulls[i]) continue;
+            if (any) { cols += ", "; ph += ", "; }
+            cols += quote_ident(tbl->fields[i].name);
+            store.push_back(tbl->staging_row[i]);
+            store_null.push_back(false);
+            ph += "$" + std::to_string(store.size());
+            any = true;
+        }
+        if (!any) return util::Error{5001, 0, "insert has no columns", tbl->name};
+        const std::string sql = "INSERT INTO " + quote_ident(tbl->name) +
+                                " (" + cols + ") VALUES (" + ph + ")";
+        std::vector<const char*> params(store.size());
+        for (std::size_t i = 0; i < store.size(); ++i) {
+            params[i] = store_null[i] ? nullptr : store[i].c_str();
+        }
+        PGresult* res = PQexecParams(conn, sql.c_str(),
+                                     static_cast<int>(params.size()), nullptr,
+                                     params.data(), nullptr, nullptr, 0);
+        if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+            const char* msg = PQerrorMessage(conn);
+            PQclear(res);
+            return postgres_error("insert", msg);
+        }
+        PQclear(res);
+
+        // Capture this row's PK from staging so we can reposition on it.
+        PostgresTable::PkRow pk;
+        pk.values.resize(tbl->pk_columns.size());
+        bool pk_ready = true;
+        for (std::size_t i = 0; i < tbl->pk_columns.size(); ++i) {
+            const std::size_t fi = field_index_ci(*tbl, tbl->pk_columns[i]);
+            if (fi == static_cast<std::size_t>(-1) ||
+                (fi < tbl->staging_nulls.size() && tbl->staging_nulls[fi])) {
+                pk_ready = false;
+                break;
+            }
+            pk.values[i] = tbl->staging_row[fi];
+        }
+        tbl->pending_append = false;
+        tbl->row_dirty      = false;
+        if (auto s = reload_pk_snapshot(conn, tbl); !s) return s.error();
+        if (pk_ready) {
+            for (std::size_t i = 0; i < tbl->pk_snapshot.size(); ++i) {
+                if (tbl->pk_snapshot[i].values == pk.values) {
+                    tbl->pos        = i;
+                    tbl->positioned = true;
+                    return load_current_row(conn, tbl);
+                }
+            }
+        }
+        return util::Result<void>{};
+    }
+
+    // UPDATE the positioned row by its PK.
+    if (tbl->pos >= tbl->pk_snapshot.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    const PostgresTable::PkRow current_pk = tbl->pk_snapshot[tbl->pos];
+    std::string set_clause;
+    std::vector<std::string> store;
+    std::vector<bool>        store_null;
+    bool any = false;
+    for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+        if (is_pk[i]) continue;
+        if (i >= tbl->staging_row.size()) continue;
+        if (any) set_clause += ", ";
+        const bool isn = (i < tbl->staging_nulls.size()) && tbl->staging_nulls[i];
+        store.push_back(isn ? std::string{} : tbl->staging_row[i]);
+        store_null.push_back(isn);
+        set_clause += quote_ident(tbl->fields[i].name) + " = $" +
+                      std::to_string(store.size());
+        any = true;
+    }
+    if (!any) { tbl->row_dirty = false; return util::Result<void>{}; }
+    std::string sql = "UPDATE " + quote_ident(tbl->name) + " SET " +
+                      set_clause + " WHERE ";
+    for (std::size_t i = 0; i < tbl->pk_columns.size(); ++i) {
+        if (i > 0) sql += " AND ";
+        store.push_back(current_pk.values[i]);
+        store_null.push_back(false);
+        sql += quote_ident(tbl->pk_columns[i]) + " = $" +
+               std::to_string(store.size());
+    }
+    std::vector<const char*> params(store.size());
+    for (std::size_t i = 0; i < store.size(); ++i) {
+        params[i] = store_null[i] ? nullptr : store[i].c_str();
+    }
+    PGresult* res = PQexecParams(conn, sql.c_str(),
+                                 static_cast<int>(params.size()), nullptr,
+                                 params.data(), nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        const char* msg = PQerrorMessage(conn);
+        PQclear(res);
+        return postgres_error("update", msg);
+    }
+    PQclear(res);
+    tbl->row_dirty = false;
+    return load_current_row(conn, tbl);
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::delete_record(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres delete", ""};
+    }
+    if (tbl->pending_append || tbl->pos >= tbl->pk_snapshot.size() ||
+        !tbl->positioned) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    PGconn* conn = impl_->conn;
+    const std::string sql = "DELETE FROM " + quote_ident(tbl->name) +
+                            " WHERE " + pk_where_clause(*tbl);
+    const PostgresTable::PkRow& pk = tbl->pk_snapshot[tbl->pos];
+    std::vector<const char*> params;
+    params.reserve(pk.values.size());
+    for (const std::string& v : pk.values) params.push_back(v.c_str());
+    PGresult* res = PQexecParams(conn, sql.c_str(),
+                                 static_cast<int>(params.size()), nullptr,
+                                 params.data(), nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        const char* msg = PQerrorMessage(conn);
+        PQclear(res);
+        return postgres_error("delete", msg);
+    }
+    PQclear(res);
+    tbl->positioned     = false;
+    tbl->row_valid      = false;
+    tbl->row_dirty      = false;
+    tbl->pending_append = false;
+    return reload_pk_snapshot(conn, tbl);
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+#if defined(OPENADS_WITH_POSTGRESQL)
+namespace {
+
+// Advisory-lock key: "R" + table + PK values for a record, "T" + table for the
+// whole table. Distinct prefixes keep a table lock from colliding with a record
+// lock that would otherwise hash to the same key.
+std::string advisory_record_key(const PostgresTable& tbl, std::size_t pos) {
+    std::string k = "R\x1f" + tbl.name;
+    if (pos < tbl.pk_snapshot.size()) {
+        for (const std::string& v : tbl.pk_snapshot[pos].values) k += "\x1f" + v;
+    }
+    return k;
+}
+
+// Runs SELECT pg_(try_)advisory_(un)lock(hashtextextended($1,0)); returns the
+// boolean the function yields ('t'). For unlock the result is informational.
+util::Result<bool> advisory_call(PGconn* conn, const char* fn,
+                                 const std::string& key) {
+    const std::string sql =
+        std::string("SELECT ") + fn + "(hashtextextended($1, 0))";
+    const char* params[1] = {key.c_str()};
+    PGresult* res = PQexecParams(conn, sql.c_str(), 1, nullptr, params,
+                                 nullptr, nullptr, 0);
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        const char* msg = PQerrorMessage(conn);
+        PQclear(res);
+        return postgres_error("advisory lock", msg);
+    }
+    const bool got = (PQntuples(res) == 1 && PQgetvalue(res, 0, 0)[0] == 't');
+    PQclear(res);
+    return got;
+}
+
+} // namespace
+#endif
+
+util::Result<void> PostgresConnection::lock_record(PostgresTable* tbl,
+                                                   std::uint32_t recno) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres lock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->pk_snapshot.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    auto r = advisory_call(impl_->conn, "pg_try_advisory_lock",
+                           advisory_record_key(*tbl, pos));
+    if (!r) return r.error();
+    if (!r.value()) return util::Error{5035, 0, "record locked", ""};
+    return util::Result<void>{};
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::unlock_record(PostgresTable* tbl,
+                                                     std::uint32_t recno) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres unlock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->pk_snapshot.size()) return util::Result<void>{};
+    auto r = advisory_call(impl_->conn, "pg_advisory_unlock",
+                           advisory_record_key(*tbl, pos));
+    if (!r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::lock_table(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres lock", ""};
+    }
+    auto r = advisory_call(impl_->conn, "pg_try_advisory_lock",
+                           "T\x1f" + tbl->name);
+    if (!r) return r.error();
+    if (!r.value()) return util::Error{5035, 0, "table locked", ""};
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
+util::Result<void> PostgresConnection::unlock_table(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres unlock", ""};
+    }
+    auto r = advisory_call(impl_->conn, "pg_advisory_unlock",
+                           "T\x1f" + tbl->name);
+    if (!r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
 } // namespace openads::sql_backend

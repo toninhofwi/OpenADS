@@ -51,6 +51,27 @@ public:
                                   bool soft,
                                   bool last_key);
 
+    // Write surface (mirrors FirebirdConnection): append_blank stages a fresh
+    // blank row, set_field stages one column value, flush_record turns the
+    // staged row into an INSERT (pending_append) or a PK-keyed UPDATE, and
+    // delete_record removes the positioned row by its PK.
+    util::Result<void> append_blank(PostgresTable* tbl);
+    util::Result<void> set_field(PostgresTable* tbl,
+                                 const std::string& field_name,
+                                 const std::string& value);
+    util::Result<void> flush_record(PostgresTable* tbl);
+    util::Result<void> delete_record(PostgresTable* tbl);
+
+    // Record/file locking emulated with PostgreSQL session advisory locks
+    // (pg_try_advisory_lock / pg_advisory_unlock): cross-connection, held
+    // across statements, released by an explicit unlock — matching xBase
+    // rLock()/fLock() semantics. recno is the 1-based ACE record number
+    // (0 = current row). lock_record fails if another session holds it.
+    util::Result<void> lock_record(PostgresTable* tbl, std::uint32_t recno);
+    util::Result<void> unlock_record(PostgresTable* tbl, std::uint32_t recno);
+    util::Result<void> lock_table(PostgresTable* tbl);
+    util::Result<void> unlock_table(PostgresTable* tbl);
+
     const std::string& conninfo() const noexcept { return conninfo_; }
 
 private:

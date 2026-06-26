@@ -5775,6 +5775,42 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->append_blank(ft);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->append_blank(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->append_blank(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->append_blank(ot);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     if (get_mssql_table(hTable)) {
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
@@ -5802,6 +5838,42 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->flush_record(ft);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->flush_record(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->flush_record(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->flush_table(ot);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     if (get_mssql_table(hTable)) {
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
@@ -5866,6 +5938,42 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->delete_record(ft);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->delete_record(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->delete_record(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->delete_record(ot);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     if (get_mssql_table(hTable)) {
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
@@ -5979,6 +6087,62 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0)
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        auto r = ft->conn->set_field(ft, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0)
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        auto r = pt->conn->set_field(pt, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0)
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        auto r = mt->conn->set_field(mt, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0)
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        auto r = ot->conn->set_field(ot, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
@@ -6407,6 +6571,33 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->lock_record(ft, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->lock_record(pt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->lock_record(mt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     // ulRecord == 0 → the current record (ACE convention). Resolving it
@@ -6424,6 +6615,33 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->unlock_record(ft, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->unlock_record(pt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->unlock_record(mt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint32_t rec = (ulRecord == 0) ? t->recno() : ulRecord;
@@ -6438,6 +6656,33 @@ UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->lock_table(ft);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->lock_table(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->lock_table(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t]() { return t->try_lock_table_excl(); });
@@ -6449,6 +6694,33 @@ UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->unlock_table(ft);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hTable)) {
+        if (pt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = pt->conn->unlock_table(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->unlock_table(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->unlock_table();
