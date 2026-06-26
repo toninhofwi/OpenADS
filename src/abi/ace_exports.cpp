@@ -8308,8 +8308,50 @@ UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
     UNSIGNED16 cap = *pusLen;
     if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
 
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(
+            std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+
     auto* dd = (c != nullptr && c->has_dd()) ? c->dd() : nullptr;
-    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    if (dd == nullptr) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+        // No Advantage Data Dictionary on this connection: a SQL backend with a
+        // live catalog (PostgreSQL information_schema) can still answer REQUIRED
+        // (=> nullable) and DEFAULT per field. The value uses the same encoding as
+        // the dictionary path ("T"/"F" for REQUIRED, the literal for DEFAULT) so
+        // the caller need not know which source provided it.
+        if (usProp == ADS_DD_FIELD_REQUIRED || usProp == ADS_DD_FIELD_DEFAULT) {
+            if (auto* pc = state().registry
+                    .lookup<openads::sql_backend::PostgresConnection>(
+                        hConn, HandleKind::PostgresConnection)) {
+                openads::sql_backend::PostgresTable probe;
+                probe.name = openads::abi::to_internal(pucTable, 0);
+                auto fr = pc->describe_table(&probe);
+                if (fr) {
+                    const auto want = openads::abi::to_internal(pucField, 0);
+                    for (const auto& fd2 : fr.value()) {
+                        if (fd2.name.size() == want.size() &&
+                            std::equal(fd2.name.begin(), fd2.name.end(),
+                                       want.begin(), [](char a, char b) {
+                                           return std::toupper((unsigned char) a) ==
+                                                  std::toupper((unsigned char) b);
+                                       })) {
+                            return usProp == ADS_DD_FIELD_REQUIRED
+                                ? put_str(fd2.nullable ? "F" : "T")
+                                : put_str(fd2.default_value);
+                        }
+                    }
+                }
+            }
+        }
+#endif
+        *pusLen = 0;
+        return ok();
+    }
 
     auto alias  = openads::abi::to_internal(pucTable, 0);
     auto field  = openads::abi::to_internal(pucField, 0);
@@ -8318,13 +8360,6 @@ UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
         return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND), alias.c_str());
     }
 
-    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
-        UNSIGNED16 n = static_cast<UNSIGNED16>(
-            std::min<std::size_t>(s.size(), cap));
-        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
-        *pusLen = static_cast<UNSIGNED16>(s.size());
-        return ok();
-    };
     auto put_u16 = [&](std::uint16_t v) -> UNSIGNED32 {
         if (pBuf != nullptr && cap >= 2) {
             auto* b = static_cast<std::uint8_t*>(pBuf);
