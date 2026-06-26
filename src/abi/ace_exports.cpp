@@ -6747,6 +6747,15 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->lock_record(ot, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     // ulRecord == 0 → the current record (ACE convention). Resolving it
@@ -6787,6 +6796,15 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = mt->conn->unlock_record(mt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->unlock_record(ot, ulRecord);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -6832,6 +6850,15 @@ UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->lock_table(ot);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t]() { return t->try_lock_table_excl(); });
@@ -6866,6 +6893,15 @@ UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = mt->conn->unlock_table(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->unlock_table(ot);
         if (!r) return fail(r.error());
         return ok();
     }
