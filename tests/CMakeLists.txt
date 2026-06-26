@@ -235,6 +235,7 @@ endif()
 if(OPENADS_WITH_MARIADB)
     target_sources(openads_unit_tests PRIVATE
         unit/maria_uri_test.cpp
+        unit/abi_plus_mariadb_write_test.cpp
     )
 endif()
 
