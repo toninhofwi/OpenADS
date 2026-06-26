@@ -4,10 +4,16 @@
 // (include/openads/ace.h). It owns no engine state of its own — every call
 // delegates to an Ads* entry point. Opaque handles wrap the ACE handles so
 // callers never touch them directly.
+//
+// Boundary hygiene: this is an extern "C" surface, so no C++ exception may
+// escape — allocations use nothrow new and clean up the ACE handle on
+// failure. String getters always NUL-terminate and never report a length
+// past the caller's buffer.
 #include "openads/openads_sql.h"
 #include "openads/ace.h"
 
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -25,19 +31,26 @@ struct openads_stmt {
 namespace {
 
 // NUL-terminated mutable byte buffer from a C string (ACE takes UNSIGNED8*).
+// A null input yields an empty, NUL-terminated buffer (avoids forming a
+// pointer from nullptr, which is undefined behaviour).
 std::vector<UNSIGNED8> cbuf(const char* s) {
-    std::vector<UNSIGNED8> v;
-    std::size_t n = s ? std::strlen(s) : 0;
-    v.assign(s, s + n);
-    v.push_back(0);
+    if (!s) return std::vector<UNSIGNED8>{0};
+    std::size_t n = std::strlen(s);
+    std::vector<UNSIGNED8> v(n + 1, 0);
+    if (n) std::memcpy(v.data(), s, n);
     return v;
 }
 
-// Resolve a 1-based column ordinal to its field name on a cursor.
+// Resolve a 1-based column ordinal to its NUL-terminated field name on a
+// cursor. Reserves one byte for the terminator so the name is always usable
+// by the ACE functions that consume it.
 bool col_field_name(ADSHANDLE cur, int col, UNSIGNED8* out, UNSIGNED16 cap) {
-    if (col < 1) return false;
-    UNSIGNED16 len = cap;
-    return AdsGetFieldName(cur, static_cast<UNSIGNED16>(col), out, &len) == 0;
+    if (col < 1 || cap == 0) return false;
+    UNSIGNED16 len = static_cast<UNSIGNED16>(cap - 1);
+    if (AdsGetFieldName(cur, static_cast<UNSIGNED16>(col), out, &len) != 0)
+        return false;
+    out[len] = '\0';
+    return true;
 }
 
 } // namespace
@@ -65,7 +78,9 @@ int openads_connect(const char* path, const char* server_type,
                      0, &h) != 0)
         return OPENADS_ERROR;
 
-    *out_conn = new openads_conn{h};
+    auto* c = new (std::nothrow) openads_conn{h};
+    if (!c) { AdsDisconnect(h); return OPENADS_ERROR; }
+    *out_conn = c;
     return OPENADS_OK;
 }
 
@@ -90,7 +105,13 @@ int openads_exec_direct(openads_conn* conn, const char* sql,
         AdsCloseSQLStatement(stmt);
         return OPENADS_ERROR;
     }
-    *out_stmt = new openads_stmt{conn->h, stmt, cur, 0};
+    auto* s = new (std::nothrow) openads_stmt{conn->h, stmt, cur, 0};
+    if (!s) {
+        if (cur) AdsCloseTable(cur);
+        AdsCloseSQLStatement(stmt);
+        return OPENADS_ERROR;
+    }
+    *out_stmt = s;
     return OPENADS_OK;
 }
 
@@ -107,7 +128,12 @@ int openads_prepare(openads_conn* conn, const char* sql,
         AdsCloseSQLStatement(stmt);
         return OPENADS_ERROR;
     }
-    *out_stmt = new openads_stmt{conn->h, stmt, 0, 0};
+    auto* s = new (std::nothrow) openads_stmt{conn->h, stmt, 0, 0};
+    if (!s) {
+        AdsCloseSQLStatement(stmt);
+        return OPENADS_ERROR;
+    }
+    *out_stmt = s;
     return OPENADS_OK;
 }
 
@@ -161,12 +187,12 @@ int openads_num_cols(openads_stmt* stmt, int* out_count) {
 int openads_col_name(openads_stmt* stmt, int col, char* buf, size_t buflen) {
     if (!stmt || !stmt->cursor || !buf || buflen == 0 || col < 1)
         return OPENADS_ERROR;
-    UNSIGNED16 len = static_cast<UNSIGNED16>(
-        buflen > 0xFFFF ? 0xFFFF : buflen);
+    UNSIGNED16 cap = static_cast<UNSIGNED16>(buflen > 0xFFFF ? 0xFFFF : buflen);
+    UNSIGNED16 len = static_cast<UNSIGNED16>(cap - 1);
     if (AdsGetFieldName(stmt->cursor, static_cast<UNSIGNED16>(col),
                         reinterpret_cast<UNSIGNED8*>(buf), &len) != 0)
         return OPENADS_ERROR;
-    if (len < buflen) buf[len] = '\0';
+    buf[len] = '\0';
     return OPENADS_OK;
 }
 
@@ -193,12 +219,15 @@ int openads_fetch_first(openads_stmt* stmt) {
 
 int openads_fetch_next(openads_stmt* stmt) {
     if (!stmt || !stmt->cursor) return OPENADS_ERROR;
+    UNSIGNED16 eof = 0;
     if (stmt->pos == 0) {
         if (AdsGotoTop(stmt->cursor) != 0) return OPENADS_ERROR;
     } else {
+        // Already past the end? Don't skip again — report no data idempotently.
+        if (AdsAtEOF(stmt->cursor, &eof) != 0) return OPENADS_ERROR;
+        if (eof) return OPENADS_NO_DATA;
         if (AdsSkip(stmt->cursor, 1) != 0) return OPENADS_ERROR;
     }
-    UNSIGNED16 eof = 0;
     if (AdsAtEOF(stmt->cursor, &eof) != 0) return OPENADS_ERROR;
     if (eof) return OPENADS_NO_DATA;
     stmt->pos += 1;
@@ -237,8 +266,13 @@ int openads_get_str(openads_stmt* stmt, int col, char* buf, size_t buflen,
     if (AdsGetString(stmt->cursor, name,
                      reinterpret_cast<UNSIGNED8*>(buf), &len, 0) != 0)
         return OPENADS_ERROR;
-    if (out_len) *out_len = static_cast<size_t>(len);
-    if (len < buflen) buf[len] = '\0';
+    // AdsGetString already NUL-terminates buf at min(buflen-1, value-size) and
+    // reports the FULL value length in len. Clamp the length we hand back to
+    // what actually fits so a caller reading buf[0..out_len) never overreads.
+    if (out_len)
+        *out_len = (static_cast<size_t>(len) < buflen)
+                       ? static_cast<size_t>(len)
+                       : buflen - 1;
     return OPENADS_OK;
 }
 
@@ -260,10 +294,11 @@ int openads_finalize(openads_stmt* stmt) {
 int openads_last_error(openads_conn* /*conn*/, int* out_code,
                        char* buf, size_t buflen) {
     UNSIGNED32 code = 0;
-    UNSIGNED16 len = static_cast<UNSIGNED16>(buflen > 0xFFFF ? 0xFFFF : buflen);
+    UNSIGNED16 cap = static_cast<UNSIGNED16>(buflen > 0xFFFF ? 0xFFFF : buflen);
+    UNSIGNED16 len = cap;
     AdsGetLastError(&code, reinterpret_cast<UNSIGNED8*>(buf), &len);
     if (out_code) *out_code = static_cast<int>(code);
-    if (buf && len < buflen) buf[len] = '\0';
+    // AdsGetLastError NUL-terminates within cap; nothing more to do.
     return OPENADS_OK;
 }
 

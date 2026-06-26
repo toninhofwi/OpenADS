@@ -95,6 +95,19 @@ TEST_CASE("openads_sql: connect, exec, describe, fetch, bind") {
         st = nullptr;
     }
 
+    SUBCASE("get_str truncates safely into a small buffer") {
+        REQUIRE(openads_exec_direct(conn, "SELECT NAME FROM people", &st)
+                == OPENADS_OK);
+        REQUIRE(openads_fetch_next(st) == OPENADS_OK);
+        char tiny[4] = {0};            // room for 3 chars + NUL
+        size_t n = 999;
+        REQUIRE(openads_get_str(st, 1, tiny, sizeof(tiny), &n) == OPENADS_OK);
+        CHECK(n <= sizeof(tiny) - 1);  // reported length never exceeds capacity
+        CHECK(tiny[n] == '\0');        // always NUL-terminated
+        openads_finalize(st);
+        st = nullptr;
+    }
+
     SUBCASE("prepared statement with a named numeric bind") {
         REQUIRE(openads_prepare(
             conn, "SELECT NAME, AGE FROM people WHERE AGE = :a", &st)
