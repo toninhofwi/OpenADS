@@ -15,10 +15,12 @@ EXPORTS
     SQLExecDirect
     SQLPrepare
     SQLExecute
+    SQLBindParameter
     SQLNumResultCols
     SQLDescribeCol
     SQLColAttribute
     SQLFetch
+    SQLFetchScroll
     SQLGetData
     SQLRowCount
     SQLMoreResults
