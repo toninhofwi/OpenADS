@@ -7217,7 +7217,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         tags = std::move(r).value();
     } else if (is_adi) {
-        auto r = openads::drivers::adi::AdiIndex::list_tags(path);
+        auto r = openads::drivers::adi::AdiIndex::list_tags(path, t->path());
         if (!r) return fail(r.error());
         tags = std::move(r).value();
     }
@@ -7262,7 +7262,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             auto idx = std::make_unique<openads::drivers::adi::AdiIndex>();
             if (auto r = idx->open_named(path,
                               openads::drivers::IndexOpenMode::Shared,
-                              name); !r) {
+                              name, t->path()); !r) {
                 return fail(r.error());
             }
             sub = std::move(idx);
@@ -7693,7 +7693,8 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         klen = is_char_key ? fd.length : 8;
 
         if (exists) {
-            auto tags = openads::drivers::adi::AdiIndex::list_tags(p.string());
+            auto tags = openads::drivers::adi::AdiIndex::list_tags(
+                p.string(), t->path());
             bool have_tag = false;
             if (tags) {
                 for (const auto& tn : tags.value()) {
@@ -7715,7 +7716,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                 openads::drivers::adi::AdiIndex existing;
                 auto reopen = existing.open_named(
                     p.string(), openads::drivers::IndexOpenMode::Shared,
-                    fd.name);
+                    fd.name, t->path());
                 if (!reopen) return fail(reopen.error());
                 if (auto cl = existing.clear_data(); !cl) return fail(cl.error());
                 idx_owner = std::make_unique<

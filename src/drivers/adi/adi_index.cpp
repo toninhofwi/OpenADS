@@ -607,7 +607,8 @@ util::Result<void> AdiIndex::open(const std::string& path, IndexOpenMode mode) {
 
 util::Result<void> AdiIndex::open_named(const std::string& adi_path,
                                         IndexOpenMode       mode,
-                                        const std::string&  field_name) {
+                                        const std::string&  field_name,
+                                        const std::string&  adt_path) {
     mode_ = mode;
     auto fi = platform::File::open(adi_path, map_open_mode(mode));
     if (!fi) return fi.error();
@@ -617,7 +618,7 @@ util::Result<void> AdiIndex::open_named(const std::string& adi_path,
     auto tags = scan_tagdir(adi_file_);
     if (!tags) return tags.error();
 
-    std::string adt_p = adt_path_for(adi_path);
+    std::string adt_p = adt_path.empty() ? adt_path_for(adi_path) : adt_path;
     auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
     if (!fa) return fa.error();
     adt_file_ = std::move(fa).value();
@@ -658,7 +659,7 @@ util::Result<void> AdiIndex::open_named(const std::string& adi_path,
 
 // static
 util::Result<std::vector<std::string>>
-AdiIndex::list_tags(const std::string& adi_path) {
+AdiIndex::list_tags(const std::string& adi_path, const std::string& adt_path) {
     auto fi = platform::File::open(adi_path, platform::OpenMode::ReadOnly);
     if (!fi) return fi.error();
     platform::File adi_f = std::move(fi).value();
@@ -666,7 +667,7 @@ AdiIndex::list_tags(const std::string& adi_path) {
     auto tags = scan_tagdir(adi_f);
     if (!tags) return tags.error();
 
-    std::string adt_p = adt_path_for(adi_path);
+    std::string adt_p = adt_path.empty() ? adt_path_for(adi_path) : adt_path;
     auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
     if (!fa) return fa.error();
     platform::File adt_f = std::move(fa).value();
