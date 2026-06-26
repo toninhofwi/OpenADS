@@ -173,4 +173,43 @@ TEST_CASE("ABI: mariadb AdsLockRecord is cross-connection (named lock)") {
     REQUIRE(AdsDisconnect(hConnB) == 0);
 }
 
+TEST_CASE("ABI: mariadb AdsLockTable is cross-connection (named lock)") {
+    const char* uri_cstr = test_maria_uri();
+    MYSQL* seed = connect_seed(uri_cstr);
+    if (seed == nullptr) {
+        MESSAGE("MariaDB not reachable; skipping live table-lock test");
+        return;
+    }
+    seed_fixture(seed);
+    mysql_close(seed);
+
+    const std::string uri = uri_cstr;
+    auto open_clientes = [&](ADSHANDLE& hConn) -> ADSHANDLE {
+        std::vector<UNSIGNED8> srv(uri.size() + 1);
+        std::memcpy(srv.data(), uri.c_str(), uri.size() + 1);
+        REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER,
+                             nullptr, nullptr, 0, &hConn) == 0);
+        UNSIGNED8 tbl_name[32] = "clientes";
+        ADSHANDLE hTable = 0;
+        REQUIRE(AdsOpenTable(hConn, tbl_name, tbl_name,
+                             ADS_DEFAULT, 0, 0, 0, ADS_DEFAULT, &hTable) == 0);
+        return hTable;
+    };
+
+    ADSHANDLE hConnA = 0, hConnB = 0;
+    ADSHANDLE hA = open_clientes(hConnA);   // two distinct MariaDB sessions
+    ADSHANDLE hB = open_clientes(hConnB);
+
+    CHECK(AdsLockTable(hA) == 0);
+    CHECK(AdsLockTable(hB) != 0);           // refused: A holds the table lock
+    CHECK(AdsUnlockTable(hA) == 0);
+    CHECK(AdsLockTable(hB) == 0);           // now free
+    CHECK(AdsUnlockTable(hB) == 0);
+
+    REQUIRE(AdsCloseTable(hA) == 0);
+    REQUIRE(AdsCloseTable(hB) == 0);
+    REQUIRE(AdsDisconnect(hConnA) == 0);
+    REQUIRE(AdsDisconnect(hConnB) == 0);
+}
+
 #endif
