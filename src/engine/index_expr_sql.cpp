@@ -94,6 +94,27 @@ struct Emitter {
         }
         std::string lhs = emit_value();
         skip_ws();
+
+        // xBase '$' (substring / "contains"): `needle $ haystack` -> SQL
+        // `haystack LIKE '%needle%'`. Only when the needle is a plain string
+        // literal with no LIKE wildcard (% _ \) — otherwise decline, since a
+        // field needle or an embedded wildcard would change which rows match.
+        if (i < s.size() && s[i] == '$') {
+            ++i;
+            std::string rhs = emit_value();
+            if (!ok) return "";
+            if (lhs.size() >= 2 && lhs.front() == '\'' && lhs.back() == '\'') {
+                std::string inner = lhs.substr(1, lhs.size() - 2);
+                if (inner.find('%')  == std::string::npos &&
+                    inner.find('_')  == std::string::npos &&
+                    inner.find('\\') == std::string::npos) {
+                    return rhs + " LIKE '%" + inner + "%'";
+                }
+            }
+            ok = false;
+            return "";
+        }
+
         std::string op;
         auto try_op = [&](const char* tok, const char* sqlop) {
             std::size_t L = std::strlen(tok);
@@ -215,6 +236,8 @@ struct Emitter {
             if (args.size() >= 3) r += ", " + args[2];
             return r + ")";
         }
+        if (fn == "LEFT" && args.size() >= 2)
+            return d.substr_fn + "(" + args[0] + ", 1, " + args[1] + ")";
         // RECNO / DELETED / STR / VAL / DTOS / CTOD / IIF / unknown → decline.
         ok = false;
         return "";

@@ -50,6 +50,17 @@ TEST_CASE("SQL push-down: scalar functions") {
     CHECK(emit("UPPER(ALLTRIM(NM)) = 'X'") == "UPPER(TRIM(NM)) = 'X'");
 }
 
+TEST_CASE("SQL push-down: '$' contains operator maps to LIKE") {
+    CHECK(emit("'abc' $ NM")        == "NM LIKE '%abc%'");
+    CHECK(emit("\"O'Brien\" $ NM")  == "NM LIKE '%O''Brien%'");  // quote escaped
+    // Combined with other predicates.
+    CHECK(emit("'x' $ NM .AND. QTY > 0") == "(NM LIKE '%x%' AND QTY > 0)");
+}
+
+TEST_CASE("SQL push-down: LEFT maps to SUBSTR") {
+    CHECK(emit("LEFT(NM, 3) = 'abc'") == "SUBSTR(NM, 1, 3) = 'abc'");
+}
+
 TEST_CASE("SQL push-down: string literals are re-quoted and escaped") {
     // Double-quoted xBase string with an embedded single quote -> SQL
     // single-quoted with the quote doubled.
@@ -90,8 +101,10 @@ TEST_CASE("SQL push-down: untranslatable predicates decline to nullopt") {
     CHECK_FALSE(try_emit_sql_where("DTOS(DT) = '20260101'").has_value());
     // Unknown function.
     CHECK_FALSE(try_emit_sql_where("FOO(X) = 1").has_value());
-    // '$' (contains) operator is outside the modelled grammar.
-    CHECK_FALSE(try_emit_sql_where("'a' $ NM").has_value());
+    // '$' with a non-literal needle (field) can't be safely pushed.
+    CHECK_FALSE(try_emit_sql_where("NM $ DESC").has_value());
+    // '$' with a LIKE wildcard in the needle would change matching -> decline.
+    CHECK_FALSE(try_emit_sql_where("'a%b' $ NM").has_value());
     // A bare scalar with no comparison can't be coerced to a SQL boolean.
     CHECK_FALSE(try_emit_sql_where("QTY").has_value());
     // Empty / whitespace.
