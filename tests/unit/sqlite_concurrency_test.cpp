@@ -19,9 +19,8 @@ using openads::sql_backend::parse_sqlite_uri;
 namespace {
 
 std::string sqlite_uri_for(const std::filesystem::path& p) {
-    std::string s = p.string();
-    for (auto& c : s) if (c == '\\') c = '/';   // URIs use forward slashes
-    return "sqlite://" + s;
+    // generic_string() yields '/' separators on every platform.
+    return "sqlite://" + p.generic_string();
 }
 
 SqliteConnection open_or_fail(const std::string& uri) {
@@ -45,15 +44,28 @@ std::string scalar(SqliteConnection& conn, const std::string& sql,
     return buf;
 }
 
+// Removes a SQLite db file plus its -wal/-shm sidecars on construction and
+// destruction, so a failed CHECK/REQUIRE can never leak temp files behind it.
+struct DbFileGuard {
+    std::filesystem::path path;
+    explicit DbFileGuard(std::filesystem::path p) : path(std::move(p)) { clean(); }
+    ~DbFileGuard() { clean(); }
+    DbFileGuard(const DbFileGuard&) = delete;
+    DbFileGuard& operator=(const DbFileGuard&) = delete;
+    void clean() const {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        std::filesystem::remove(std::filesystem::path(path) += "-wal", ec);
+        std::filesystem::remove(std::filesystem::path(path) += "-shm", ec);
+    }
+};
+
 }  // namespace
 
 TEST_CASE("sqlite open applies a busy timeout and WAL journal mode") {
     namespace fs = std::filesystem;
     auto path = fs::temp_directory_path() / "openads_sqlite_pragmas.db";
-    std::error_code ec;
-    fs::remove(path, ec);
-    fs::remove(fs::path(path) += "-wal", ec);
-    fs::remove(fs::path(path) += "-shm", ec);
+    DbFileGuard guard(path);   // cleans now + on scope exit (even if an assert fails)
 
     auto conn = open_or_fail(sqlite_uri_for(path));
 
@@ -65,18 +77,12 @@ TEST_CASE("sqlite open applies a busy timeout and WAL journal mode") {
     CHECK(jm == "wal");
 
     conn.disconnect();
-    fs::remove(path, ec);
-    fs::remove(fs::path(path) += "-wal", ec);
-    fs::remove(fs::path(path) += "-shm", ec);
 }
 
 TEST_CASE("concurrent writers don't shed inserts to SQLITE_BUSY (5001)") {
     namespace fs = std::filesystem;
     auto path = fs::temp_directory_path() / "openads_sqlite_concwrite.db";
-    std::error_code ec;
-    fs::remove(path, ec);
-    fs::remove(fs::path(path) += "-wal", ec);
-    fs::remove(fs::path(path) += "-shm", ec);
+    DbFileGuard guard(path);   // cleans now + on scope exit (even if an assert fails)
 
     {
         auto setup = open_or_fail(sqlite_uri_for(path));
@@ -122,10 +128,6 @@ TEST_CASE("concurrent writers don't shed inserts to SQLITE_BUSY (5001)") {
     CHECK(std::stoi(scalar(verify, "SELECT COUNT(*) AS c FROM t", "c"))
           == kThreads * kPerThread);
     verify.disconnect();
-
-    fs::remove(path, ec);
-    fs::remove(fs::path(path) += "-wal", ec);
-    fs::remove(fs::path(path) += "-shm", ec);
 }
 
 #endif  // OPENADS_WITH_SQLITE
