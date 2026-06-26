@@ -839,6 +839,17 @@ UNSIGNED32 sqlite_goto_top(ADSHANDLE hTable) {
     return ok();
 }
 
+UNSIGNED32 sqlite_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
+    auto* st = get_sqlite_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    std::string where =
+        pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
+    auto r = st->conn->set_filter(st, where);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 sqlite_goto_bottom(ADSHANDLE hTable) {
     auto* st = get_sqlite_table(hTable);
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -1045,6 +1056,7 @@ const openads::abi::BackendTableOps* sqlite_table_ops() {
         o.is_record_deleted = &sqlite_is_record_deleted;
         o.open_index        = &sqlite_open_index;
         o.is_found          = &sqlite_is_found;
+        o.set_filter        = &sqlite_set_filter;
         return o;
     }();
     return &ops;
@@ -10621,6 +10633,30 @@ UNSIGNED32 AdsZapTable_DEFERRED(ADSHANDLE /*hTable*/) {
                 "AdsZapTable lands in M4 alongside memo store");
 }
 
+// Tier-2 SQL push-down: for a SQL-backend table, translate a Clipper filter
+// predicate into a SQL WHERE and install it on the backend so it filters
+// server-side. Returns true when handled here (backend table); `rc` then holds
+// the ABI return: ok() on a pushed filter, or a "not available" failure when
+// the predicate can't be translated — so the caller never assumes a filter we
+// did not actually apply and filters client-side instead.
+static bool backend_try_push_filter(ADSHANDLE hTable,
+                                    const std::string& clipper_pred,
+                                    UNSIGNED32& rc) {
+    auto* ops = openads::abi::backend_table_ops_for(hTable);
+    if (ops == nullptr || ops->set_filter == nullptr) return false;
+    openads::engine::SqlDialect dialect;   // defaults suit SQLite / ANSI
+    auto where = openads::engine::try_emit_sql_where(clipper_pred, dialect);
+    if (where) {
+        rc = ops->set_filter(
+            hTable, reinterpret_cast<UNSIGNED8*>(const_cast<char*>(where->c_str())));
+    } else {
+        ops->set_filter(hTable, nullptr);   // drop any stale backend filter
+        rc = fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                  "filter not pushable to SQL backend; caller filters client-side");
+    }
+    return true;
+}
+
 // M-AOF.3 — wire AdsSetAOF / AdsClearAOF to the
 // engine::aof::evaluate full-scan bitmap evaluator and install the
 // resulting per-record bitmap as the table-level filter predicate.
@@ -10645,6 +10681,10 @@ UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
         auto r = rt->conn->set_aof(rt->id, cond);
         if (!r) return fail(r.error());
         return ok();
+    }
+    if (UNSIGNED32 rc = 0;
+        backend_try_push_filter(hTable, openads::abi::to_internal(pucCondition, 0), rc)) {
+        return rc;
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -10707,6 +10747,10 @@ UNSIGNED32 AdsClearAOF(ADSHANDLE hTable) {
         auto r = rt->conn->clear_aof(rt->id);
         if (!r) return fail(r.error());
         return ok();
+    }
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable);
+        ops && ops->set_filter) {
+        return ops->set_filter(hTable, nullptr);   // clear backend filter
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -11814,6 +11858,107 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         std::vector<std::vector<std::string>> rows;
         for (const auto& e : dd->indexes())
             rows.push_back({e.table_alias, e.index_path, e.comment});
+        return build(cols, rows);
+    }
+    if (sys_name == "primarykeys") {
+        // SAP ADS-style system.primarykeys: one row per primary-key column.
+        // The DD records only the PK tag NAME (property 202); the column list
+        // lives in the tag's key expression, which we read from the table's
+        // CDX bag(s) without activating any order. A composite key made of a
+        // simple field list ("F1+F2") expands to one row per field in order;
+        // a calculated expression (a function, or any operator other than
+        // '+') degrades to zero rows rather than report a guessed column.
+        const std::vector<Col> cols = {
+            {"TABLE_NAME",  'C', 200, 0},
+            {"COLUMN_NAME", 'C', 200, 0},
+            {"KEY_SEQ",     'N',   5, 0},
+            {"PK_NAME",     'C', 200, 0},
+        };
+
+        // Split a key expression into an ordered list of plain field names.
+        // Returns empty if any term is not a bare identifier (degrade safely).
+        auto parse_simple_fields =
+            [](const std::string& expr) -> std::vector<std::string> {
+            std::vector<std::string> out;
+            std::size_t start = 0;
+            while (true) {
+                std::size_t plus = expr.find('+', start);
+                std::string term = expr.substr(
+                    start, plus == std::string::npos ? std::string::npos
+                                                     : plus - start);
+                std::size_t b = term.find_first_not_of(' ');
+                std::size_t e = term.find_last_not_of(' ');
+                if (b == std::string::npos) return {};  // empty term → bail
+                term = term.substr(b, e - b + 1);
+                bool okid = std::isalpha(static_cast<unsigned char>(term[0])) ||
+                            term[0] == '_';
+                for (std::size_t i = 1; okid && i < term.size(); ++i) {
+                    const char ch = term[i];
+                    if (!(std::isalnum(static_cast<unsigned char>(ch)) ||
+                          ch == '_'))
+                        okid = false;
+                }
+                if (!okid) return {};
+                out.push_back(term);
+                if (plus == std::string::npos) break;
+                start = plus + 1;
+            }
+            return out;
+        };
+
+        // Resolve a tag name to its key expression by reading a CDX bag,
+        // without activating the order. Tries DD-registered bags first, then
+        // the structural CDX next to the table. Returns empty if no CDX bag
+        // carries the tag.
+        auto expr_for_tag = [&](const std::string& table_rel,
+                                const std::string& alias,
+                                const std::string& tag) -> std::string {
+            std::vector<std::string> bags;
+            for (const auto& ie : dd->indexes())
+                if (ie.table_alias == alias) bags.push_back(ie.index_path);
+            {
+                fs::path tp(table_rel);
+                std::string ext = tp.extension().string();
+                for (auto& ch : ext)
+                    ch = static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(ch)));
+                if (ext != ".adt")  // ADT keys live in .adi — not read here
+                    bags.push_back(tp.replace_extension(".cdx").string());
+            }
+            for (const auto& bag : bags) {
+                fs::path full(bag);
+                if (!full.is_absolute())
+                    full = fs::path(c->data_dir()) / bag;
+                std::string fe = full.extension().string();
+                for (auto& ch : fe)
+                    ch = static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(ch)));
+                if (fe != ".cdx") continue;  // only CDX understood here
+                openads::drivers::cdx::CdxIndex idx;
+                if (idx.open_named(full.string(),
+                                   openads::drivers::IndexOpenMode::ReadOnly,
+                                   tag))
+                    return idx.expression();
+            }
+            return {};
+        };
+
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->tables()) {
+            const std::string& alias = kv.first;
+            const std::string& rel   = kv.second;
+            std::string tag = dd->get_table_property(alias, 202);
+            if (tag.empty()) continue;
+            std::string expr = expr_for_tag(rel, alias, tag);
+            if (expr.empty()) continue;
+            std::vector<std::string> fields = parse_simple_fields(expr);
+            if (fields.empty()) continue;  // calculated/complex → no rows
+            int seq = 1;
+            for (const auto& f : fields) {
+                rows.push_back({alias, f, std::to_string(seq), tag});
+                ++seq;
+            }
+        }
         return build(cols, rows);
     }
     if (sys_name == "users") {
@@ -18317,6 +18462,15 @@ namespace {
 
 std::string g_date_format = "yyyy-mm-dd";
 
+// Connection-wide settings stored so their Set/Get pairs round-trip.
+// AdsSetDefault / AdsGetDefault, AdsSetSearchPath / AdsGetSearchPath and
+// AdsSetDecimals (queried by STR-style formatting callers via their own
+// getter when present). OpenADS resolves paths against the connection's
+// own data path, so g_default_path is recorded for API parity.
+std::string   g_default_path;
+std::string   g_search_path;
+std::uint16_t g_set_decimals = 2;
+
 // Render (y, m, d) through an ACE-style format string. Recognised,
 // case-insensitively: CCYY / YYYY → 4-digit year, YY → 2-digit year,
 // MM → 2-digit month, DD → 2-digit day. Every other character is
@@ -18425,7 +18579,12 @@ UNSIGNED32 AdsClearCallbackFunction(void) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsClearProgressCallback(void) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCacheOpenCursors(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCacheOpenTables(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsCacheRecords(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsCacheRecords(ADSHANDLE hTable, UNSIGNED16 /*usNumRecords*/) {
+    // Read-ahead hint. OpenADS does not pre-cache rows, so this is a no-op
+    // beyond validating the table handle.
+    if (get_remote_table(hTable) || get_table(hTable) != nullptr) return ok();
+    return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+}
 UNSIGNED32 AdsCloseCachedTables(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
     Table* src = get_table(hSrc);
@@ -18526,8 +18685,11 @@ UNSIGNED32 AdsGetDateFormat(UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     copy_ace_string(g_date_format, pucBuf, pusLen);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l)
-    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l) {
+    if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    openads::abi::copy_to_caller(p, l, g_default_path);
+    return ok();
+}
 UNSIGNED32 AdsGetDeleted(UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // show_deleted()==true means "show deleted records" which is
@@ -19012,8 +19174,11 @@ UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
     return ok();
 }
-UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l)
-    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; } return openads::AE_SUCCESS; }
+UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l) {
+    if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    openads::abi::copy_to_caller(p, l, g_search_path);
+    return ok();
+}
 UNSIGNED32 AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -19157,7 +19322,24 @@ UNSIGNED32 AdsIsTableLocked(ADSHANDLE hTable, UNSIGNED16* p) {
     *p = t->is_table_locked() ? 1 : 0;
     return ok();
 }
-UNSIGNED32 AdsRefreshAOF(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsRefreshAOF(ADSHANDLE hTable) {
+    // Remote AOFs are maintained server-side; nothing to do client-side.
+    if (get_remote_table(hTable)) return ok();
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (!t->aof_active()) return ok();          // no AOF to refresh
+    const std::string cond = t->aof_expr();
+    if (cond.empty()) return ok();              // AdsCustomizeAOF-only set
+    // Re-evaluate the stored AOF expression against current data and
+    // reinstall the bitmap, so rows that changed since AdsSetAOF are
+    // re-classified.
+    auto ast = openads::engine::aof::parse(cond);
+    if (!ast) return ok();
+    auto rep = openads::engine::aof::evaluate_optimised(*ast.value(), *t);
+    if (!rep) return fail(rep.error());
+    t->install_aof_bitmap(std::move(rep.value().bm));
+    return ok();
+}
 UNSIGNED32 AdsRegisterCallbackFunction(void*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsRegisterProgressCallback(void*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsSetDateFormat(UNSIGNED8* pucFormat) {
@@ -19165,8 +19347,15 @@ UNSIGNED32 AdsSetDateFormat(UNSIGNED8* pucFormat) {
         g_date_format.assign(reinterpret_cast<const char*>(pucFormat));
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsSetDecimals(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsSetDefault(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetDecimals(UNSIGNED16 usDecimals) {
+    g_set_decimals = usDecimals;
+    return openads::AE_SUCCESS;
+}
+UNSIGNED32 AdsSetDefault(UNSIGNED8* pucPath) {
+    g_default_path = pucPath
+        ? openads::abi::to_internal(pucPath, 0) : std::string();
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsSetEpoch(UNSIGNED16 us) {
     openads::engine::set_epoch(us);
     return openads::AE_SUCCESS;
@@ -19181,6 +19370,10 @@ UNSIGNED32 AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
         // Remote: store the filter expression for later retrieval.
         rt->filter_expr = openads::abi::to_internal(pucFilter, 0);
         return ok();
+    }
+    if (UNSIGNED32 rc = 0;
+        backend_try_push_filter(hTable, openads::abi::to_internal(pucFilter, 0), rc)) {
+        return rc;
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
@@ -19284,7 +19477,11 @@ UNSIGNED32 AdsSetScopedRelation(ADSHANDLE hParent, ADSHANDLE hChild,
                                 UNSIGNED8* pucExpr) {
     return set_relation_impl(hParent, hChild, pucExpr, /*scoped=*/true);
 }
-UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsSetSearchPath(UNSIGNED8* pucPath) {
+    g_search_path = pucPath
+        ? openads::abi::to_internal(pucPath, 0) : std::string();
+    return openads::AE_SUCCESS;
+}
 // Caller's preferred server-type mask (ADS_LOCAL_SERVER / ADS_REMOTE_SERVER
 // / ADS_AIS_SERVER). OpenADS serves both local and remote connections
 // regardless, so this is recorded for ACE API parity; nothing consults it
@@ -19333,7 +19530,12 @@ UNSIGNED32 AdsStmtSetTableType(ADSHANDLE h, UNSIGNED16 us) {
 }
 UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
     { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsTestRecLocks(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsTestRecLocks(ADSHANDLE hTable) {
+    // Diagnostic hook. Validate the handle and report success — OpenADS
+    // has no separate lock-table consistency check to run.
+    if (get_remote_table(hTable) || get_table(hTable) != nullptr) return ok();
+    return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+}
 UNSIGNED32 AdsWriteAllRecords(void) { return openads::AE_SUCCESS; }
 
 // This file is largely one big `extern "C"` block; the mgmt helpers
@@ -20422,6 +20624,251 @@ UNSIGNED32 AdsDDFindClose(ADSHANDLE /*hObject*/, ADSHANDLE /*hFindHandle*/) {
     return ok();
 }
 
-} // extern "C"
+} // extern "C"  — close stub block (opened at line 17925)
+} // extern "C"  — close ACE API exports block (opened at line 12394)
 
-} // extern "C"
+// ── Task 2: AdsFetchWhere result-set registry + exports ───────────────────────
+//
+// Process-local registry that maps opaque result handles to the
+// FetchWhereBatch returned by the wire call.  Handles live in the
+// high range (top bit set) to avoid collisions with the sequential
+// handles that HandleRegistry issues (which start at 1 and count up).
+
+namespace {
+
+// Stores the batch received from fetch_where plus the column list that
+// was requested, so AdsFetchWhereField can look up values by name.
+struct FetchWhereResult {
+    openads::network::FetchWhereBatch batch;
+    std::vector<std::string>          cols; // same order as batch.rows[r]
+};
+
+std::mutex& fw_mu() {
+    static std::mutex m;
+    return m;
+}
+
+std::unordered_map<ADSHANDLE, FetchWhereResult>& fw_results() {
+    static std::unordered_map<ADSHANDLE, FetchWhereResult> m;
+    return m;
+}
+
+// Must be called while holding fw_mu().
+ADSHANDLE fw_next_handle() {
+    static std::uint64_t n = 0x8000000000000001ULL;
+    return static_cast<ADSHANDLE>(n++);
+}
+
+// Parse a comma-separated column list (e.g. "NM,QTD") into a vector.
+// Returns an empty vector when pszCols is null or an empty string, which
+// tells the server to return no column data (count / locate mode).
+std::vector<std::string> fw_split_cols(const UNSIGNED8* pszCols) {
+    std::vector<std::string> out;
+    if (pszCols == nullptr) return out;
+    const char* p = reinterpret_cast<const char*>(pszCols);
+    if (*p == '\0') return out;
+    while (true) {
+        const char* comma = std::strchr(p, ',');
+        if (comma == nullptr) {
+            out.emplace_back(p);
+            break;
+        }
+        out.emplace_back(p, static_cast<std::size_t>(comma - p));
+        p = comma + 1;
+    }
+    return out;
+}
+
+} // namespace
+
+extern "C" {  // reopen for AdsFetchWhere* exports
+
+// ─ AdsFetchWhere ─────────────────────────────────────────────────────────────
+// Send a server-side filtered scan request over the wire and store the
+// resulting batch under a fresh opaque handle in *phResult.
+// Returns AE_FUNCTION_NOT_AVAILABLE for local (non-remote) tables so the
+// caller can fall back to the classic client-side scan path.
+UNSIGNED32 AdsFetchWhere(ADSHANDLE hTbl, UNSIGNED8* pszExpr, UNSIGNED8* pszCols,
+                         UNSIGNED32 ulMaxRows, UNSIGNED32 ulFlags,
+                         ADSHANDLE* phResult) {
+    if (phResult == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhere: null phResult");
+    *phResult = 0;
+    auto* rt = get_remote_table(hTbl);
+    if (rt == nullptr)
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsFetchWhere: not applicable on a local table");
+    std::string expr;
+    if (pszExpr != nullptr)
+        expr = openads::abi::to_internal(pszExpr, 0);
+    auto cols = fw_split_cols(pszCols);
+    const std::uint8_t wire_flags =
+        (ulFlags & 0x01u) ? openads::network::FetchWhereFlags::WANT_RECNO : 0u;
+    auto r = rt->conn->fetch_where(rt->id, ulMaxRows, expr, cols, wire_flags);
+    if (!r) return fail(r.error());
+    std::lock_guard<std::mutex> lk(fw_mu());
+    ADSHANDLE h = fw_next_handle();
+    fw_results().emplace(h, FetchWhereResult{std::move(r).value(), std::move(cols)});
+    *phResult = h;
+    return ok();
+}
+
+// ─ AdsFetchWhereRows ─────────────────────────────────────────────────────────
+UNSIGNED32 AdsFetchWhereRows(ADSHANDLE hRes, UNSIGNED32* pulRows) {
+    if (pulRows == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRows: null");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRows: invalid handle");
+    *pulRows = static_cast<UNSIGNED32>(it->second.batch.rows.size());
+    return ok();
+}
+
+// ─ AdsFetchWhereRecno ────────────────────────────────────────────────────────
+// ulRow is 0-based.  Recnos are populated only when WANT_RECNO (0x01) was
+// set in ulFlags at AdsFetchWhere call time.
+UNSIGNED32 AdsFetchWhereRecno(ADSHANDLE hRes, UNSIGNED32 ulRow,
+                               UNSIGNED32* pulRec) {
+    if (pulRec == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRecno: null");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRecno: invalid handle");
+    const auto& recnos = it->second.batch.recnos;
+    if (ulRow >= static_cast<UNSIGNED32>(recnos.size()))
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRecno: row out of range");
+    *pulRec = recnos[ulRow];
+    return ok();
+}
+
+// ─ AdsFetchWhereField ────────────────────────────────────────────────────────
+// Copy the value of column `pszCol` at result row `ulRow` into `pucBuf`.
+// Column lookup is case-insensitive.  *pusLen is in/out (capacity in,
+// written byte count out), following the same truncation idiom as AdsGetField.
+// ulRow is 0-based.
+UNSIGNED32 AdsFetchWhereField(ADSHANDLE hRes, UNSIGNED32 ulRow,
+                               UNSIGNED8* pszCol,
+                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    if (pucBuf == nullptr || pusLen == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: null buf/len");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: invalid handle");
+    const auto& res  = it->second;
+    const auto& rows = res.batch.rows;
+    if (ulRow >= static_cast<UNSIGNED32>(rows.size()))
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: row out of range");
+    // Case-insensitive column name lookup in the stored column list.
+    std::size_t col_idx = std::numeric_limits<std::size_t>::max();
+    if (pszCol != nullptr) {
+        std::string want = openads::abi::to_internal(pszCol, 0);
+        for (auto& c : want)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (std::size_t i = 0; i < res.cols.size(); ++i) {
+            std::string n = res.cols[i];
+            for (auto& c : n)
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (n == want) { col_idx = i; break; }
+        }
+    }
+    if (col_idx == std::numeric_limits<std::size_t>::max())
+        return fail(openads::AE_COLUMN_NOT_FOUND, "AdsFetchWhereField: column not found");
+    const auto& row = rows[ulRow];
+    if (col_idx >= row.size())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: col idx out of range");
+    openads::abi::copy_to_caller(pucBuf, pusLen, row[col_idx]);
+    return ok();
+}
+
+// ─ AdsFetchWhereEof ──────────────────────────────────────────────────────────
+// *pbEof is set to 1 when the server exhausted the table during the scan
+// (no more rows remain past the last matched record), 0 when ulMaxRows was
+// hit before EOF.
+UNSIGNED32 AdsFetchWhereEof(ADSHANDLE hRes, UNSIGNED16* pbEof) {
+    if (pbEof == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereEof: null");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereEof: invalid handle");
+    *pbEof = it->second.batch.eof ? 1u : 0u;
+    return ok();
+}
+
+// ─ AdsFetchWhereClose ────────────────────────────────────────────────────────
+// Release the result batch and invalidate the handle.  Calling any other
+// AdsFetchWhere* accessor with this handle after Close returns an error.
+UNSIGNED32 AdsFetchWhereClose(ADSHANDLE hRes) {
+    std::lock_guard<std::mutex> lk(fw_mu());
+    fw_results().erase(hRes);
+    return ok();
+}
+
+// ─ AdsFetchWhereApplyRow ──────────────────────────────────────────────────────
+// Load batch row `ulRow` (its recno + field values) into hTbl's RemoteTable
+// row cache, so AdsGetField / AdsGetRecordNum / AdsIsRecordDeleted / AdsAtEOF
+// serve that row with NO extra round-trip. This lets a forward filter scan
+// (rddads V2) walk the matched rows entirely from a batched AdsFetchWhere
+// result — one round-trip per batch instead of an AdsGotoRecord per match.
+//
+// The batch must have been fetched with WANT_RECNO. Values are matched to the
+// table's fields by column name (case-insensitive); columns the batch did not
+// request read back empty. Not applicable on local tables.
+UNSIGNED32 AdsFetchWhereApplyRow(ADSHANDLE hRes, UNSIGNED32 ulRow, ADSHANDLE hTbl) {
+    auto* rt = get_remote_table(hTbl);
+    if (rt == nullptr)
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsFetchWhereApplyRow: not applicable on a local table");
+
+    // Ensure the field schema is cached so we can map columns → field indices.
+    // (One wire round-trip the first time only; rddads has it cached already.)
+    if (!rt->fields_cached) {
+        auto d = rt->conn->describe_table(rt->id);
+        if (!d) return fail(d.error());
+        rt->fields = std::move(d).value();
+        rt->fields_cached = true;
+    }
+
+    auto upper = [](std::string s) {
+        for (auto& c : s)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsFetchWhereApplyRow: invalid handle");
+    const auto& res = it->second;
+    if (ulRow >= res.batch.rows.size())
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsFetchWhereApplyRow: row out of range");
+    if (ulRow >= res.batch.recnos.size())
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsFetchWhereApplyRow: batch has no recnos (need WANT_RECNO)");
+
+    const auto& vals = res.batch.rows[ulRow];
+    std::vector<std::string> row(rt->fields.size());
+    for (std::size_t j = 0; j < res.cols.size() && j < vals.size(); ++j) {
+        std::string want = upper(res.cols[j]);
+        for (std::size_t i = 0; i < rt->fields.size(); ++i) {
+            if (upper(rt->fields[i].name) == want) { row[i] = vals[j]; break; }
+        }
+    }
+
+    rt->current_row       = std::move(row);
+    rt->row_valid         = true;
+    rt->current_recno     = res.batch.recnos[ulRow];
+    rt->current_deleted   = false;        // FetchWhere skip(1) honours SET DELETED
+    rt->found_cached      = true;
+    rt->current_found     = false;        // a scan move clears Found()
+    rt->prefetch_queue.clear();           // the cursor is driven by FetchWhere now
+    rt->prefetch_consumed = 0;
+    return ok();
+}
+
+} // extern "C"  — AdsFetchWhere* export block

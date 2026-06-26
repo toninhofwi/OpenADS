@@ -447,14 +447,32 @@ SQLRETURN SQL_API SQLColumns(SQLHSTMT hstmt, SQLCHAR*, SQLSMALLINT, SQLCHAR*,
 }
 
 SQLRETURN SQL_API SQLPrimaryKeys(SQLHSTMT hstmt, SQLCHAR*, SQLSMALLINT,
-                                 SQLCHAR*, SQLSMALLINT, SQLCHAR*, SQLSMALLINT) {
+                                 SQLCHAR*, SQLSMALLINT,
+                                 SQLCHAR* table, SQLSMALLINT tablelen) {
     if (!hstmt) return SQL_ERROR;
     auto* s = reinterpret_cast<StmtH*>(hstmt);
+    if (!s->dbc || !s->dbc->conn) return SQL_ERROR;
     reset_result(s);
     s->synth = true;
     s->scols = {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME",
                 "KEY_SEQ", "PK_NAME"};
-    return SQL_SUCCESS;   // empty set (PK reporting is a later slice)
+    // The engine's system.primarykeys catalog already resolves each PK tag to
+    // its ordered column list. Map its rows onto the ODBC column set; filter
+    // by the requested table client-side. An engine without the catalog (or a
+    // connection with no dictionary) simply yields an empty set.
+    std::string want = trim(to_string(table, tablelen));
+    openads_stmt* q = nullptr;
+    if (openads_exec_direct(s->dbc->conn,
+            "SELECT TABLE_NAME, COLUMN_NAME, KEY_SEQ, PK_NAME "
+            "FROM system.primarykeys", &q) == OPENADS_OK) {
+        while (openads_fetch_next(q) == OPENADS_OK) {
+            std::string tn = cell(q, 1);
+            if (!want.empty() && lower(tn) != lower(want)) continue;
+            s->srows.push_back({"", "", tn, cell(q, 2), cell(q, 3), cell(q, 4)});
+        }
+        openads_finalize(q);
+    }
+    return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT hstmt, SQLSMALLINT) {

@@ -795,7 +795,7 @@ TEST_CASE("Tier-2 FetchWhere filters rows server-side in one round-trip") {
     // matching rows cross the wire — in a SINGLE round-trip.
     auto rows_r = rc.fetch_where(tid, 100, "TAG > 'CCCC'", {"TAG"});
     REQUIRE(rows_r.has_value());
-    auto rows = rows_r.value();
+    auto rows = rows_r.value().rows;
     REQUIRE(rows.size() == 4);
     CHECK(trim(rows[0][0]) == "DDDD");
     CHECK(trim(rows[1][0]) == "EEEE");
@@ -806,7 +806,7 @@ TEST_CASE("Tier-2 FetchWhere filters rows server-side in one round-trip") {
     REQUIRE(rc.goto_top(tid).has_value());
     auto none_r = rc.fetch_where(tid, 100, "TAG = 'ZZZZ'", {"TAG"});
     REQUIRE(none_r.has_value());
-    CHECK(none_r.value().empty());
+    CHECK(none_r.value().rows.empty());
 
     REQUIRE(rc.close_table(tid).has_value());
     rc.disconnect();
@@ -843,20 +843,20 @@ TEST_CASE("Tier-2 FetchWhere caps each batch at max_rows matches and resumes") {
     // signals EOF — while every non-matching row is skipped server-side.
     auto b1 = rc.fetch_where(tid, 2, "TAG >= 'CCCC'", {"TAG"});
     REQUIRE(b1.has_value());
-    REQUIRE(b1.value().size() == 2);
-    CHECK(trim(b1.value()[0][0]) == "CCCC");
-    CHECK(trim(b1.value()[1][0]) == "DDDD");
+    REQUIRE(b1.value().rows.size() == 2);
+    CHECK(trim(b1.value().rows[0][0]) == "CCCC");
+    CHECK(trim(b1.value().rows[1][0]) == "DDDD");
 
     auto b2 = rc.fetch_where(tid, 2, "TAG >= 'CCCC'", {"TAG"});
     REQUIRE(b2.has_value());
-    REQUIRE(b2.value().size() == 2);
-    CHECK(trim(b2.value()[0][0]) == "EEEE");
-    CHECK(trim(b2.value()[1][0]) == "FFFF");
+    REQUIRE(b2.value().rows.size() == 2);
+    CHECK(trim(b2.value().rows[0][0]) == "EEEE");
+    CHECK(trim(b2.value().rows[1][0]) == "FFFF");
 
     auto b3 = rc.fetch_where(tid, 2, "TAG >= 'CCCC'", {"TAG"});
     REQUIRE(b3.has_value());
-    REQUIRE(b3.value().size() == 1);     // short batch ⇒ EOF
-    CHECK(trim(b3.value()[0][0]) == "GGGG");
+    REQUIRE(b3.value().rows.size() == 1);     // short batch ⇒ EOF
+    CHECK(trim(b3.value().rows[0][0]) == "GGGG");
 
     REQUIRE(rc.close_table(tid).has_value());
     rc.disconnect();
@@ -891,7 +891,7 @@ TEST_CASE("Tier-2 FetchWhere honours a boolean (.OR.) predicate") {
     auto rows_r = rc.fetch_where(
         tid, 100, "TAG = 'AAAA' .OR. TAG = 'GGGG'", {"TAG"});
     REQUIRE(rows_r.has_value());
-    auto rows = rows_r.value();
+    auto rows = rows_r.value().rows;
     REQUIRE(rows.size() == 2);
     CHECK(trim(rows[0][0]) == "AAAA");
     CHECK(trim(rows[1][0]) == "GGGG");
@@ -958,6 +958,7 @@ TEST_CASE("Tier-2 FetchWhere reply carries the trailing EOF flag + rejects bad i
         req.opcode = Opcode::FetchWhere;
         m12_write_u32(req.payload, id);
         m12_write_u32(req.payload, maxr);
+        req.payload.push_back(0x00u);   // flags = 0 (backward compat)
         req.payload.push_back(
             static_cast<std::uint8_t>( expr.size()       & 0xFFu));
         req.payload.push_back(
@@ -1044,8 +1045,8 @@ TEST_CASE("Tier-2 FetchWhere filters a large table server-side at scale") {
     REQUIRE(rc.goto_top(tid).has_value());
     auto all_r = rc.fetch_where(tid, 100000, "TAG = 'KEEP'", {"TAG"});
     REQUIRE(all_r.has_value());
-    REQUIRE(all_r.value().size() == 500);
-    for (auto& row : all_r.value()) CHECK(trim(row[0]) == "KEEP");
+    REQUIRE(all_r.value().rows.size() == 500);
+    for (auto& row : all_r.value().rows) CHECK(trim(row[0]) == "KEEP");
 
     // Batched: 250 per call ⇒ exactly 2 batches (250 + 250), the second
     // short of nothing here so a 3rd call returns 0 at EOF. Every
@@ -1057,12 +1058,46 @@ TEST_CASE("Tier-2 FetchWhere filters a large table server-side at scale") {
         auto b = rc.fetch_where(tid, 250, "TAG = 'KEEP'", {"TAG"});
         REQUIRE(b.has_value());
         ++calls;
-        total += b.value().size();
-        if (b.value().size() < 250) break;   // short batch ⇒ EOF
-        REQUIRE(calls < 10);                  // guard against a runaway loop
+        total += b.value().rows.size();
+        if (b.value().rows.size() < 250) break;  // short batch ⇒ EOF
+        REQUIRE(calls < 10);                       // guard against runaway loop
     }
     CHECK(total == 500);
     CHECK(calls == 3);                        // 250 + 250 + 0(EOF)
+
+    REQUIRE(rc.close_table(tid).has_value());
+    rc.disconnect();
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Tier-2 FetchWhere returns recno per row when WANT_RECNO is set") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_t2_fetchwhere_recno";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA","BBBB","CCCC"}); // recnos 1,2,3
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    openads::network::RemoteConnection rc;
+    REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
+    auto tid_r = rc.open_table("data.dbf");
+    REQUIRE(tid_r.has_value());
+    std::uint32_t tid = tid_r.value();
+    REQUIRE(rc.goto_top(tid).has_value());
+
+    // TAG >= 'BBBB' matches BBBB (recno 2) and CCCC (recno 3)
+    auto r = rc.fetch_where(tid, 10, "TAG >= 'BBBB'", {"TAG"},
+                            openads::network::FetchWhereFlags::WANT_RECNO);
+    REQUIRE(r.has_value());
+    CHECK(r.value().rows.size()     == 2u);   // BBBB, CCCC
+    REQUIRE(r.value().recnos.size() == 2u);
+    CHECK(r.value().recnos[0]       == 2u);   // BBBB is recno 2
+    CHECK(r.value().recnos[1]       == 3u);   // CCCC is recno 3
+    CHECK(r.value().eof             == true);
 
     REQUIRE(rc.close_table(tid).has_value());
     rc.disconnect();

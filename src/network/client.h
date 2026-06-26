@@ -15,6 +15,17 @@
 
 namespace openads::network {
 
+// Result type for RemoteConnection::fetch_where. `rows` carries the
+// matched column values (row-major); `recnos` is populated iff
+// FetchWhereFlags::WANT_RECNO was set in the request flags (one entry
+// per row, same order as rows). `eof` is true when the server walked
+// to the end of the table during this call.
+struct FetchWhereBatch {
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::uint32_t>            recnos;   // 1 per row iff WANT_RECNO
+    bool                                  eof = false;
+};
+
 struct RemoteTable;
 
 // M12.5 — wire client used by ace64.dll's dual-mode dispatch.
@@ -170,11 +181,16 @@ public:
     // tables only — a SQL cursor already filters via its WHERE clause.
     // Callers continue the walk like fetch_batch: a batch returning
     // fewer than `max_rows` rows has reached EOF.
-    util::Result<std::vector<std::vector<std::string>>>
+    // `flags`: FetchWhereFlags::WANT_RECNO (0x01) causes the server to
+    // include each matching row's recno in the reply; the recnos are
+    // stored in FetchWhereBatch::recnos (same order as rows). flags=0
+    // (default) is byte-identical to the v1.4.0 request/reply.
+    util::Result<FetchWhereBatch>
         fetch_where(std::uint32_t                   id,
                     std::uint32_t                   max_rows,
                     const std::string&              where_expr,
-                    const std::vector<std::string>& columns);
+                    const std::vector<std::string>& columns,
+                    std::uint8_t                    flags = 0);
 
 private:
     util::Result<Frame> request(const Frame& f);

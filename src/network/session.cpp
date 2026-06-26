@@ -1666,28 +1666,30 @@ DispatchResult Session::dispatch(const Frame& f) {
         }
             case Opcode::FetchWhere: {
                 // Tier-2 server-side filtered scan. Payload:
-                //   [u32 tid][u32 max_rows][u16 exprlen][expr]
+                //   [u32 tid][u32 max_rows][u8 flags][u16 exprlen][expr]
                 //   [u8 ncols][u8 nlen][name]...
                 // Reply (FetchWhereAck):
                 //   [u32 nrows][u8 ncols]
-                //   [per row, per col: u16 vlen][val]
+                //   [per row: (u32 recno IF WANT_RECNO)(per col: u16 vlen,val)]
                 //   [u8 eof]
+                // flags=0 reply is byte-identical to v1.4.0 (backward compat).
                 // The server walks the table from the cursor's current
                 // position, evaluating `expr` (Clipper-style FOR
                 // predicate) per row, and emits only the matching rows'
                 // requested columns until `max_rows` matches or EOF.
                 // The cursor is left positioned past the last examined
                 // row so a follow-up FetchWhere resumes the scan.
-                if (f.payload.size() < 11) {
+                if (f.payload.size() < 12) {
                     reply = err("FetchWhere: bad payload"); break;
                 }
                 std::uint32_t id      = read_u32_le(f.payload.data());
                 std::uint32_t maxrows = read_u32_le(f.payload.data() + 4);
+                std::uint8_t  flags   = f.payload[8];
                 std::uint16_t elen    =
                     static_cast<std::uint16_t>(
-                        static_cast<std::uint32_t>(f.payload[8]) |
-                        (static_cast<std::uint32_t>(f.payload[9]) << 8));
-                std::size_t p = 10;
+                        static_cast<std::uint32_t>(f.payload[9]) |
+                        (static_cast<std::uint32_t>(f.payload[10]) << 8));
+                std::size_t p = 11;
                 if (p + elen > f.payload.size()) {
                     reply = err("FetchWhere: truncated expr"); break;
                 }
@@ -1748,6 +1750,9 @@ DispatchResult Session::dispatch(const Frame& f) {
                 while (!tbl->eof() && nrows_out < maxrows) {
                     if (openads::engine::evaluate_index_expr_truthy(
                             *tbl, expr)) {
+                        if (flags & FetchWhereFlags::WANT_RECNO) {
+                            write_u32_le(tbl->recno(), rowbuf);
+                        }
                         for (auto& cn : cols) {
                             std::int32_t fi = tbl->field_index(cn);
                             std::string val;

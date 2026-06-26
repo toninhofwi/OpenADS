@@ -1813,6 +1813,46 @@ UNSIGNED32 ENTRYPOINT AdsSetTimeStamp     (ADSHANDLE hObj, UNSIGNED8* pucFldId,
 UNSIGNED32 ENTRYPOINT AdsGetDate          (ADSHANDLE hObj, UNSIGNED8* pucFldId,
                                            UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
 
+// ── Task 2: AdsFetchWhere result-set API ─────────────────────────────────────
+// Server-side filtered scan over the wire.  `AdsFetchWhere` sends `pszExpr`
+// (a Clipper-style FOR predicate) to the server and receives back a snapshot
+// batch of all matching rows, up to `ulMaxRows`.
+//
+// `pszCols`: comma-separated column names to include in each row
+//   (e.g. "NM,QTD").  NULL or empty string → no column data is returned
+//   (count / locate mode; use `AdsFetchWhereRows` for the match count).
+//
+// `ulFlags`: bit 0x01 (WANT_RECNO) → include per-row record numbers in the
+//   batch; retrieve them with `AdsFetchWhereRecno`.
+//
+// Returns an opaque result handle in `*phResult` on success.  The handle is
+// valid until `AdsFetchWhereClose` is called.  Row indices (`ulRow`) are
+// 0-based throughout.
+//
+// Non-remote (local) tables return AE_FUNCTION_NOT_AVAILABLE (5004) — the
+// caller should fall back to the classic client-side scan path.
+UNSIGNED32 ENTRYPOINT AdsFetchWhere      (ADSHANDLE  hTbl,
+                                          UNSIGNED8* pszExpr,
+                                          UNSIGNED8* pszCols,
+                                          UNSIGNED32 ulMaxRows,
+                                          UNSIGNED32 ulFlags,
+                                          ADSHANDLE* phResult);
+UNSIGNED32 ENTRYPOINT AdsFetchWhereRows  (ADSHANDLE hRes, UNSIGNED32* pulRows);
+UNSIGNED32 ENTRYPOINT AdsFetchWhereRecno (ADSHANDLE hRes, UNSIGNED32 ulRow,
+                                          UNSIGNED32* pulRec);
+UNSIGNED32 ENTRYPOINT AdsFetchWhereField (ADSHANDLE  hRes,
+                                          UNSIGNED32 ulRow,
+                                          UNSIGNED8* pszCol,
+                                          UNSIGNED8* pucBuf,
+                                          UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsFetchWhereEof   (ADSHANDLE hRes, UNSIGNED16* pbEof);
+UNSIGNED32 ENTRYPOINT AdsFetchWhereClose (ADSHANDLE hRes);
+// V2: load a batch row's recno + fields into hTbl's row cache so
+// AdsGetField / AdsGetRecordNum / AdsAtEOF serve it with no round-trip
+// (forward filter scan walks matches from the batch, no AdsGotoRecord).
+UNSIGNED32 ENTRYPOINT AdsFetchWhereApplyRow(ADSHANDLE hRes, UNSIGNED32 ulRow,
+                                          ADSHANDLE hTbl);
+
 #ifdef __cplusplus
 }
 #endif

@@ -67,11 +67,13 @@ add_executable(openads_unit_tests
     unit/sql_parser_test.cpp
     unit/abi_sql_smoke_test.cpp
     unit/abi_plus_sqlite_read_test.cpp
+    unit/abi_plus_sqlite_filter_test.cpp
     unit/abi_plus_sqlite_seek_test.cpp
     unit/abi_plus_sqlite_passthrough_test.cpp
     unit/abi_plus_sqlcipher_read_test.cpp
     unit/lsn_map_test.cpp
     unit/index_expr_test.cpp
+    unit/index_expr_sql_test.cpp
     unit/abi_m92_real_test.cpp
     unit/abi_create_table_test.cpp
     unit/abi_refresh_extract_test.cpp
@@ -143,6 +145,7 @@ add_executable(openads_unit_tests
     unit/abi_get_set_record_test.cpp
     unit/abi_set_relation_test.cpp
     unit/abi_record_crc_aof_test.cpp
+    unit/abi_settings_refreshaof_test.cpp
     unit/abi_dd_persistence_test.cpp
     unit/dbf_vfp_test.cpp
     unit/abi_sql_or_test.cpp
@@ -194,6 +197,7 @@ add_executable(openads_unit_tests
     unit/abi_dd_trigger_fire_test.cpp
     unit/abi_dd_proc_view_test.cpp
     unit/abi_sql_system_tables_test.cpp
+    unit/abi_sql_system_primarykeys_test.cpp
     unit/abi_sql_dd_sql_test.cpp
     unit/abi_no_current_record_test.cpp
     unit/codepage_test.cpp
@@ -208,6 +212,7 @@ add_executable(openads_unit_tests
     unit/dll_test.cpp
     unit/network_client_test.cpp
     unit/abi_dd_invoicing_test.cpp
+    unit/abi_fetch_where_test.cpp
 )
 
 # OpenADS ODBC driver (provider) test — drives the driver's SQL* exports
@@ -215,6 +220,7 @@ add_executable(openads_unit_tests
 if(WIN32)
     target_sources(openads_unit_tests PRIVATE
         unit/odbc_driver_test.cpp
+        unit/odbc_driver_pk_test.cpp
         ${CMAKE_SOURCE_DIR}/bindings/odbc/openads_odbc.cpp)
 endif()
 
