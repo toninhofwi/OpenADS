@@ -53,7 +53,10 @@ add_library(openads_core STATIC
     drivers/dbt/dbt_memo.cpp
     drivers/fpt/fpt_memo.cpp
     network/wire.cpp
+    network/frame_reader.cpp
     network/server.cpp
+    network/session.cpp
+    network/worker_pool.cpp
     network/client.cpp
     mgmt/mg_collector.cpp
     network/mg_wire.cpp

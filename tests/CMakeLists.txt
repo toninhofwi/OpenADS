@@ -160,6 +160,8 @@ add_executable(openads_unit_tests
     unit/abi_collation_codepage_test.cpp
     unit/network_socket_test.cpp
     unit/network_server_test.cpp
+    unit/network_pool_test.cpp
+    unit/network_frame_reader_test.cpp
     unit/abi_adt_smoke_test.cpp
     unit/abi_adt_create_test.cpp
     unit/abi_adi_create_test.cpp

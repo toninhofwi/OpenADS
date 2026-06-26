@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -16,6 +17,8 @@
 #include <vector>
 
 namespace openads::network {
+
+class WorkerPool;   // enterprise step 3 — sharded reactor (network/worker_pool.h)
 
 // M12.3 — Phase 2 server skeleton. Spawns an accept thread that
 // hands each connection to a dedicated session thread. The session
@@ -30,8 +33,17 @@ namespace openads::network {
 // this dispatcher in M12.4.
 
 class Server {
+    // SLICE 3a — Session reaches the shared session registry helpers
+    // (register_session, install/erase_session_socket, unregister,
+    // set_session_user, add_session_table, build_mg_snapshot,
+    // kill_session_by_conn_no), creds_, data_dir_, require_auth().
+    friend class Session;
+
 public:
-    Server() = default;
+    // Out-of-line ctor/dtor: the unique_ptr<WorkerPool> member is an
+    // incomplete type in this header, so the special members that would
+    // destroy it must be defined in server.cpp (which sees the full type).
+    Server();
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
     ~Server();
@@ -106,6 +118,10 @@ private:
     std::unordered_map<std::uint64_t, std::thread> session_threads_;
     std::vector<std::uint64_t>                     finished_threads_;
     std::atomic<std::uint64_t>                     thread_seq_{1};
+    // Enterprise step 3 — when the sharded-reactor pool is enabled
+    // (OPENADS_SERVER_POOL), accept_loop hands each accepted socket to this
+    // pool instead of spawning a per-connection thread. Null = legacy path.
+    std::unique_ptr<WorkerPool>                    pool_;
     // Enterprise limits resolved at start() (0 = unlimited). The override lets
     // tests inject a small cap without touching the env-loaded singleton.
     std::uint32_t                                  max_sessions_ = 0;

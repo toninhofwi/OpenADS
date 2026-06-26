@@ -62,6 +62,9 @@ Current release: **v1.1.0**.
   Windows "ordinal NNN not found" loader error when an app's
   import table references SAP-style ordinals.
 - **[Known issues](../known-issues/)** — current open items.
+- **[API Reference](api-reference/)** — complete reference
+  for all 357 `Ads*` exported functions, organized by category
+  with implementation status.
 
 ## Other languages
 
