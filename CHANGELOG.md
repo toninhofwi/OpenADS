@@ -5,6 +5,114 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.4.0 — 2026-06-26
+
+### ADS Dialect Compatibility (ERP Harbour/FiveWin)
+
+- **N-way comma join (3+ tables).** `FROM a, b, c, d, e` now
+  parses and executes with an arbitrary number of tables (was limited
+  to exactly 2). Left-deep execution plan with hash-join on composite
+  keys. Filter pushdown pushes WHERE residuals to the deepest join
+  level. Pinned by `sql_parser_test` and `abi_cdx_conditional_index_test`.
+- **`<alias>.*` wildcard projection.** `SELECT line.*` expands to
+  all columns of the aliased table, matching ADS behaviour.
+- **`UPPER(col)` scalar function in WHERE.** Parsed and mapped to
+  a case-insensitive comparison, so `WHERE UPPER(name) = 'SMITH'`
+  now works end-to-end.
+- **`FROM t AS a` table alias on the base table.** Previously only
+  consumed for derived tables; now accepted on plain table names.
+- **Brackets `[file.dat]` for free-table names in FROM.** The
+  `read_identifier_or_filename()` parser now handles `[...]` syntax,
+  matching ADS canonical free-table references.
+- **`WHERE 1 = 1` constant folding.** Always-true predicates are
+  folded at parse time, eliminating unnecessary runtime evaluation.
+- **ODBC temporal literals.** `{d 'YYYY-MM-DD'}`, `{ts ...}`,
+  `{t ...}` are now parsed and accepted in SQL.
+
+### CDX Index Engine
+
+- **Bulk-load index builder (`build_bulk`).** New bottom-up
+  B+tree construction path for `CREATE INDEX` — approximately 10×
+  faster than record-by-record `insert()` on large tables. The
+  builder sorts keys in-memory and emits a complete B+tree in a
+  single pass.
+- **O(1) browse position cache.** `ordered_recnos_cached()` and
+  `pos_of_recno_cached()` on `CdxIndex` cache the key↔recno
+  mapping so `AdsGetRelKeyPos` / `AdsGetKeyNum` answer from an
+  in-memory vector instead of walking the index.
+- **CDX conditional (FOR) index predicates — persist + apply.**
+  `CREATE INDEX ... FOR <condition>` now persists the condition in
+  the CDX sub-tag header and applies it at insert time — only
+  records satisfying the FOR clause get indexed. Full round-trip
+  through reopen. Pinned by `abi_cdx_conditional_index_test`.
+- **CDX flush-skip for read-only.** Opening and closing a CDX
+  file no longer triggers a flush when no page is dirty.
+- **CDX FOR-clause hardening.** Fails loud instead of silently
+  dropping or truncating unparseable FOR clauses.
+- **NTX empty-but-rooted leaf on PACK/reindex.** Fixes error 5004
+  when reindexing an NTX that had empty leaves left by prior
+  `erase()` calls. Pinned by `abi_ntx_pack_reindex_test`.
+
+### Wire Protocol
+
+- **Server-side filtered scan (`FetchWhere`).** New `FetchWhere`
+  opcode (`0xA4`) lets the client send a Clipper-style FOR predicate
+  and receive only matching rows — reducing round-trips and bandwidth
+  for non-AOF predicates. Evaluated with the same engine evaluator
+  used for CDX FOR index conditions. Documented in
+  `docs/wire-protocol.md` §5.22.
+
+### Enterprise Server
+
+- **Sharded-reactor connection pool (`WorkerPool`).** New
+  `WorkerPool` class multiplexes many client connections over a
+  fixed pool of worker threads (default OFF via
+  `OPENADS_SERVER_POOL=ON`). Includes `FrameReader` for
+  non-blocking partial-frame buffering and `Session` class extracted
+  from `server.cpp`. Stress harnesses: `tools/stress/remote_random_main.cpp`
+  and `tools/stress/remote_concurrency_main.cpp`.
+- **`EnterpriseConfig` singleton.** Environment-driven tunables:
+  `OPENADS_SERVER_POOL` (enable pool), `OPENADS_SERVER_POOL_WORKERS`
+  (thread count), `OPENADS_SERVER_MAX_SESSIONS` (connection cap),
+  pool toggles for ODBC/SQLite/OLEDB backends.
+- **Session reaping + max-sessions cap.** Abandoned connections are
+  reaped after a timeout; a hard cap prevents thread exhaustion
+  under load. Deadlock-free `stop()` lifecycle.
+
+### SQL Backend Improvements
+
+- **PostgreSQL column metadata via information schema.**
+  `AdsDDGetFieldProperty` for PostgreSQL tables now exposes
+  `IS_NULLABLE` and `COLUMN_DEFAULT` via `information_schema.columns`.
+- **SQL concurrency safety — stmt_map serialisation.** Concurrent
+  SQL statement execution no longer corrupts the internal statement
+  map; access is serialised.
+- **SQLite busy-timeout + WAL mode.** Contended SQLite writes no
+  longer fail with `SQLITE_BUSY`; a busy-timeout and WAL journal
+  mode are enabled at connection time.
+- **SQL CREATE TABLE honours statement table type.** `CREATE TABLE`
+  and `CREATE TABLE ... AS` now respect the type specified in the
+  statement (e.g. `ADS_ADT`).
+
+### ADT
+
+- **ADT companion stream count.** `AdsCreateTable(ADS_ADT)` now
+  writes the correct ADT header companion-type count instead of a
+  flat 1.
+
+### Tests & Tooling
+
+- **xBase++ smoke test.** New `tests/xpp/` directory with a
+  raw-ACE smoke test via `DllPrepareCall`, plus translations (ES,
+  PT). Runner: `tests/xpp/run.sh`.
+- **FiveWin ORM cookbook.** New `cookbook/orm/fivewin/` with a
+  `grid_orm.prg` example, FiveWin build script, and README.
+- **CDX empty-table key-width edge test.** Verifies correct key
+  width for composite expressions on an empty table.
+- **Concurrent SQL + SQLite contention tests.**
+  `abi_sql_stmt_concurrency_test` and `sqlite_concurrency_test`
+  validate thread-safety under contention.
+
 ## 1.3.0 — 2026-06-25
 
 - **CDX index direction fix for Harbour rddads (FiveWin).** `AdsCreateIndex61`

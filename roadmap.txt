@@ -1,6 +1,6 @@
 OpenADS — Roadmap Status
-As of: 2026-06-25
-Current release: v1.2.3 (2026-06-25)
+As of: 2026-06-26
+Current release: v1.4.0 (2026-06-26)
 
 ================================================================================
 PHASES COMPLETED
@@ -127,10 +127,13 @@ Currently at: v1.0.0-rc29. The 1.0.x milestone defined in the roadmap requires:
 2. Connection multiplexing / session hardening
    - Current server: one thread per client connection, simple per-session
      state. Needs:
-     a. Connection pool / multiplexing so many short-lived Studio or
-        PHP client connections don't exhaust threads.
-     b. Graceful timeout and cleanup for abandoned sessions.
-     c. Load testing / stress: many concurrent clients, large result sets.
+   a. Connection pool / multiplexing so many short-lived Studio or
+      PHP client connections don't exhaust threads. [DONE — WorkerPool
+      sharded-reactor pool (v1.4.0, default OFF via OPENADS_SERVER_POOL)]
+   b. Graceful timeout and cleanup for abandoned sessions. [DONE —
+      session reaping + max-sessions cap (v1.4.0)]
+   c. Load testing / stress: many concurrent clients, large result sets.
+      [DONE — tools/stress/remote_random_main.cpp + remote_concurrency_main.cpp]
 
 3. Compatibility test matrix against Advantage 11.x + 12.x
    - Steps:
