@@ -5790,6 +5790,15 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->append_blank(ot);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     if (get_mssql_table(hTable)) {
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
@@ -5840,6 +5849,15 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = mt->conn->flush_record(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->flush_table(ot);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -5931,6 +5949,15 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = mt->conn->delete_record(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ot->conn->delete_record(ot);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -6086,6 +6113,20 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (pucValue != nullptr && ulLen > 0)
             val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
         auto r = mt->conn->set_field(mt, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (ot->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0)
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        auto r = ot->conn->set_field(ot, fname, val);
         if (!r) return fail(r.error());
         return ok();
     }
