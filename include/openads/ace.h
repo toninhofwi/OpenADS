@@ -1847,6 +1847,11 @@ UNSIGNED32 ENTRYPOINT AdsFetchWhereField (ADSHANDLE  hRes,
                                           UNSIGNED16* pusLen);
 UNSIGNED32 ENTRYPOINT AdsFetchWhereEof   (ADSHANDLE hRes, UNSIGNED16* pbEof);
 UNSIGNED32 ENTRYPOINT AdsFetchWhereClose (ADSHANDLE hRes);
+// V2: load a batch row's recno + fields into hTbl's row cache so
+// AdsGetField / AdsGetRecordNum / AdsAtEOF serve it with no round-trip
+// (forward filter scan walks matches from the batch, no AdsGotoRecord).
+UNSIGNED32 ENTRYPOINT AdsFetchWhereApplyRow(ADSHANDLE hRes, UNSIGNED32 ulRow,
+                                          ADSHANDLE hTbl);
 
 #ifdef __cplusplus
 }

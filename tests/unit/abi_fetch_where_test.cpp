@@ -426,3 +426,64 @@ TEST_CASE("AdsFetchWhere orchestration: scan batching covers matches exactly no 
     fix.close();
 }
 
+// ── 7. V2: ApplyRow loads a batch row into the table row cache (no goto) ──────
+// Contract: after AdsFetchWhereApplyRow(hRes, row, hTbl), AdsGetRecordNum /
+// AdsGetField / AdsAtEOF serve that row from the client-side cache without an
+// AdsGotoRecord round-trip. This is the rddads V2 forward-scan path: walk the
+// matched rows entirely from the batch.
+TEST_CASE("AdsFetchWhereApplyRow serves recno + fields from cache without a goto") {
+    fw_wipe();
+    auto dir = fw_tmp_dir();
+    seed_nm_fixture(dir);
+
+    RemoteFixture fix;
+    fix.open(dir, "fw.dbf");
+    REQUIRE(AdsGotoTop(fix.hTable) == AE_SUCCESS);
+
+    // Fetch NM >= 'B' with the column + per-row recnos (rddads requests all
+    // fields in field order; here the table has the single field NM).
+    UNSIGNED8 expr[] = "NM >= 'B'";
+    UNSIGNED8 cols[] = "NM";
+    ADSHANDLE hRes = 0;
+    REQUIRE(AdsFetchWhere(fix.hTable, expr, cols, 100, 0x01u, &hRes) == AE_SUCCESS);
+    UNSIGNED32 nrows = 0;
+    REQUIRE(AdsFetchWhereRows(hRes, &nrows) == AE_SUCCESS);
+    REQUIRE(nrows == 2u);
+
+    // Park the *server* cursor on a NON-matching record (recno 1, "A"). If
+    // ApplyRow leaked the server position instead of serving from cache, the
+    // assertions below would see recno 1 / "A".
+    REQUIRE(AdsGotoRecord(fix.hTable, 1) == AE_SUCCESS);
+
+    UNSIGNED8  nm_fld[] = "NM";
+    UNSIGNED8  buf[32]{};
+    UNSIGNED32 blen = 0;
+    UNSIGNED32 rec  = 0;
+    UNSIGNED16 eoff = 1;
+
+    // Row 0 → "B", recno 2.
+    REQUIRE(AdsFetchWhereApplyRow(hRes, 0, fix.hTable) == AE_SUCCESS);
+    REQUIRE(AdsGetRecordNum(fix.hTable, 0, &rec) == AE_SUCCESS);
+    CHECK(rec == 2u);
+    blen = sizeof(buf); std::memset(buf, 0, sizeof(buf));
+    REQUIRE(AdsGetField(fix.hTable, nm_fld, buf, &blen, 0) == AE_SUCCESS);
+    CHECK(trim_right(std::string(reinterpret_cast<char*>(buf), blen)) == "B");
+    REQUIRE(AdsAtEOF(fix.hTable, &eoff) == AE_SUCCESS);
+    CHECK(eoff == 0);
+
+    // Row 1 → "C", recno 3.
+    REQUIRE(AdsFetchWhereApplyRow(hRes, 1, fix.hTable) == AE_SUCCESS);
+    REQUIRE(AdsGetRecordNum(fix.hTable, 0, &rec) == AE_SUCCESS);
+    CHECK(rec == 3u);
+    blen = sizeof(buf); std::memset(buf, 0, sizeof(buf));
+    REQUIRE(AdsGetField(fix.hTable, nm_fld, buf, &blen, 0) == AE_SUCCESS);
+    CHECK(trim_right(std::string(reinterpret_cast<char*>(buf), blen)) == "C");
+
+    // Out-of-range row and invalid result handle must fail cleanly.
+    CHECK(AdsFetchWhereApplyRow(hRes, 99, fix.hTable) != AE_SUCCESS);
+    CHECK(AdsFetchWhereApplyRow(0,    0,  fix.hTable) != AE_SUCCESS);
+
+    REQUIRE(AdsFetchWhereClose(hRes) == AE_SUCCESS);
+    fix.close();
+}
+
