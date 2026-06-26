@@ -46,3 +46,24 @@ install and the DLL folder from the environment / arguments — no baked-in path
 > (**hb_orm2**, MIT) is at <https://github.com/Admnwk/hb_orm2>.
 
 Data is invented (a tiny `clientes` list). No real records.
+
+## Full app — multi-backend (menu / browse / CRUD)
+
+[`app/`](app/) goes further: a complete **MDI application** driven by a menu,
+running the **same code** over **SQLite / DBF / ADT / MariaDB** — the only thing
+that changes is the connection URI. It shows browse (xBrowse), CRUD dialogs,
+search, relations (`hasMany` / eager `belongsTo`) and soft-delete.
+
+```cmd
+set OADS_ORM_SRC=C:\path\to\hb_orm2\src
+set OPENADS_INCDIR=C:\path\to\OpenADS\include
+set FWDIR64=C:\path\to\FWH
+app\build_app.cmd  C:\path\to\folder-with-the-DLL
+app\orm_app.exe            :: GUI
+app\orm_app.exe /selftest  :: head-less data smoke (no window)
+```
+
+SQLite and DBF run fully; ADT runs (creates `.adt`, with a known decimal
+limitation on NUMERIC fields); MariaDB needs a running server via the
+`HBORM_MARIA_URI` environment variable, otherwise it degrades gracefully.
+No FiveWin sources are included here — the build only references `FWDIR64`.
