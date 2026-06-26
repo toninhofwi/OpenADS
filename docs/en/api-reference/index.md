@@ -24,6 +24,39 @@ ACE error code on failure) unless noted otherwise.
 
 ---
 
+## Table of Contents
+
+| # | Category | Functions |
+|---|----------|-----------|
+| 1 | [Connection Management](#1-connection-management) | 10 |
+| 2 | [Table Operations](#2-table-operations) | 15 |
+| 3 | [Record Navigation](#3-record-navigation) | 14 |
+| 4 | [Field Read](#4-field-read-by-type) | 21 |
+| 5 | [Field Write](#5-field-write) | 17 |
+| 6 | [Record Operations](#6-record-operations) | 10 |
+| 7 | [Locking](#7-locking) | 12 |
+| 8 | [Index Operations](#8-index-operations) | 26 |
+| 9 | [Seek & Scope](#9-seek--scope) | 13 |
+| 10 | [Filter & AOF](#10-filter--aof-rushmore) | 11 |
+| 11 | [SQL](#11-sql) | 17 |
+| 12 | [Transaction (TPS)](#12-transaction-tps) | 8 |
+| 13 | [Memo / Binary](#13-memo--binary) | 8 |
+| 14 | [Table Maintenance](#14-table-maintenance) | 10 |
+| 15 | [Encryption](#15-encryption) | 10 |
+| 16 | [Data Dictionary (DD)](#16-data-dictionary-dd) | 42 |
+| 17 | [Expression Evaluation](#17-expression-evaluation) | 5 |
+| 18 | [Server Telemetry (AdsMg*)](#18-server-telemetry-adsmg) | 17 |
+| 19 | [Full-Text Search](#19-full-text-search) | 3 |
+| 20 | [Miscellaneous](#20-miscellaneous) | 30 |
+| 21 | [Callbacks & Caching](#21-callbacks--caching-stubs) | 11 |
+| 22 | [RI & Enforcement Toggles](#22-ri--enforcement-toggles) | 7 |
+| 23 | [Deferred Flush](#23-deferred-flush) | 2 |
+| 24 | [Relation (Stubs)](#24-relation-stubs) | 3 |
+| 25 | [Legacy / Lookup](#25-legacy--lookup) | 6 |
+| | [Summary](#summary) | **357** |
+
+---
+
 ## 1. Connection Management
 
 | Function | Status | Description |
@@ -37,11 +70,6 @@ ACE error code on failure) unless noted otherwise.
 | `AdsFindConnection` | 🔴 | `AE_FUNCTION_NOT_AVAILABLE` — lookup by server path |
 | `AdsFindConnection25` | 🔴 | Versioned overload (X# compat) |
 | `AdsTestLogin` | ⚠️ | Accept-and-ignore |
-
-### Versioned Overloads (X# / rddads compat)
-
-| Function | Status | Description |
-|----------|--------|-------------|
 | `AdsConnect26` | ➡️ | Forwards to `AdsConnect60` |
 | `AdsDisableLocalConnections` | ⚠️ | No-op, returns success |
 
@@ -66,11 +94,6 @@ ACE error code on failure) unless noted otherwise.
 | `AdsCheckExistence` | ✅ | Test if a file exists on disk |
 | `AdsDeleteFile` | ✅ | Delete a file from the data directory |
 | `AdsGetNumOpenTables` | ✅ | Returns count of open tables |
-
-### Versioned Overloads
-
-| Function | Status | Description |
-|----------|--------|-------------|
 | `AdsOpenTable90` | ➡️ | Forwards to `AdsOpenTable` |
 | `AdsCreateTable71` | ➡️ | Forwards to `AdsCreateTable` |
 | `AdsCreateTable90` | ➡️ | Forwards to `AdsCreateTable` |
@@ -94,11 +117,6 @@ ACE error code on failure) unless noted otherwise.
 | `AdsGetRecordNum` | ✅ | Returns current recno |
 | `AdsGetRecordCount` | ✅ | Returns total record count |
 | `AdsIsRecordVisible` | ✅ | Test if record passes current filter/AOF |
-
-### Bookmark Operations
-
-| Function | Status | Description |
-|----------|--------|-------------|
 | `AdsGetBookmark` | ✅ | Get current position bookmark (handle) |
 | `AdsGetBookmark60` | ✅ | Get bookmark as byte array |
 | `AdsGotoBookmark60` | ✅ | Restore position from byte-array bookmark |
@@ -222,11 +240,6 @@ ACE error code on failure) unless noted otherwise.
 | `AdsDeleteCustomKey` | ✅ | Remove a custom key |
 | `AdsExtractKey` | ✅ | Extract the key for the current record |
 | `AdsCreateFTSIndex` | ✅ | Create a full-text search index |
-
-### Versioned Overloads
-
-| Function | Status | Description |
-|----------|--------|-------------|
 | `AdsCreateIndex90` | ➡️ | Forwards to `AdsCreateIndex61` |
 | `AdsReindex61` | ➡️ | Forwards to `AdsReindex` |
 
@@ -258,7 +271,7 @@ ACE error code on failure) unless noted otherwise.
 |----------|--------|-------------|
 | `AdsSetAOF` | ✅ | Install a Rushmore-style optimized filter |
 | `AdsGetAOFOptLevel` | ✅ | Get optimization level (FULL/PART/NONE) |
-| `AdsClearAOF` | � | Remove installed AOF |
+| `AdsClearAOF` | ✅ | Remove installed AOF |
 | `AdsRefreshAOF` | ⚠️ | No-op, returns success |
 | `AdsEvalAOF` | ✅ | Evaluate AOF expression, report opt level |
 | `AdsGetAOF` | ✅ | Get current AOF source string |
@@ -284,11 +297,6 @@ ACE error code on failure) unless noted otherwise.
 | `AdsVerifySQL` | ✅ | Validate SQL syntax without executing |
 | `AdsClearSQLParams` | ⚠️ | No-op, returns success |
 | `AdsClearSQLAbortFunc` | ⚠️ | No-op, returns success |
-
-### Statement Configuration
-
-| Function | Status | Description |
-|----------|--------|-------------|
 | `AdsStmtSetTableLockType` | ✅ | Set lock type for statement |
 | `AdsStmtSetTablePassword` | ✅ | Set per-table password |
 | `AdsStmtSetTableReadOnly` | ✅ | Set read-only mode |
@@ -627,7 +635,7 @@ effect in OpenADS:
 
 ---
 
-## 25. Legacy / Lookup (Stubs)
+## 25. Legacy / Lookup
 
 | Function | Status | Description |
 |----------|--------|-------------|
@@ -642,19 +650,19 @@ effect in OpenADS:
 
 ## Summary
 
-| Category | Total | ✅ Implemented | ⚠️ Stub/No-op | 🔴 Unavailable |
-|----------|------:|---------------:|---------------:|----------------:|
-| Connection | 8 | 5 | 2 | 1 |
-| Table | 15 | 13 | 2 | 0 |
-| Navigation | 12 | 12 | 0 | 0 |
+| Category | Total | ✅ | ⚠️ | 🔴 |
+|----------|------:|----:|----:|----:|
+| Connection | 11 | 7 | 2 | 2 |
+| Table | 20 | 15 | 2 | 3 |
+| Navigation | 14 | 14 | 0 | 0 |
 | Field Read | 21 | 21 | 0 | 0 |
 | Field Write | 17 | 17 | 0 | 0 |
 | Record | 10 | 8 | 2 | 0 |
 | Locking | 12 | 10 | 2 | 0 |
-| Index | 26 | 24 | 2 | 0 |
+| Index | 27 | 25 | 0 | 2 |
 | Seek & Scope | 13 | 12 | 1 | 0 |
-| Filter & AOF | 11 | 8 | 3 | 0 |
-| SQL | 17 | 12 | 5 | 0 |
+| Filter & AOF | 12 | 8 | 4 | 0 |
+| SQL | 18 | 12 | 6 | 0 |
 | Transaction | 8 | 8 | 0 | 0 |
 | Memo/Binary | 8 | 8 | 0 | 0 |
 | Maintenance | 10 | 8 | 2 | 0 |
@@ -663,10 +671,18 @@ effect in OpenADS:
 | Expression Eval | 5 | 4 | 1 | 0 |
 | Telemetry | 17 | 17 | 0 | 0 |
 | FTS | 3 | 2 | 1 | 0 |
-| Miscellaneous | 30 | 18 | 12 | 0 |
-| **TOTAL** | **357** | **~328** | **~29** | **~1** |
+| Miscellaneous | 31 | 18 | 11 | 2 |
+| Callbacks & Caching | 11 | 0 | 11 | 0 |
+| RI Toggles | 7 | 0 | 7 | 0 |
+| Deferred Flush | 2 | 2 | 0 | 0 |
+| Relation | 3 | 0 | 2 | 1 |
+| Legacy / Lookup | 6 | 4 | 0 | 2 |
+| **TOTAL** | **357** | **~250** | **~56** | **~12** |
 
-The single genuinely unimplemented function is `AdsSetRelation`
-(no-op returning `AE_FUNCTION_NOT_AVAILABLE`). All other stubs
-return `AE_SUCCESS` so that calling applications do not fail —
-they are accepted but have no effect.
+The genuinely unimplemented functions (`AE_FUNCTION_NOT_AVAILABLE`)
+are: `AdsSetRelation`, `AdsFindConnection`, `AdsFindConnection25`,
+`AdsGetTableHandle25`, `AdsSetRecord`, `AdsSetMilliseconds`,
+`AdsCreateIndex90` (forward only), `AdsReindex61` (forward only),
+`AdsDDCreateRefIntegrity62` (forward only), `AdsFindFirstTable62`
+(forward only), `AdsFindNextTable62` (forward only). All other
+stubs return `AE_SUCCESS` so calling applications do not fail.
