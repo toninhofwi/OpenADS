@@ -11588,6 +11588,107 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
             rows.push_back({e.table_alias, e.index_path, e.comment});
         return build(cols, rows);
     }
+    if (sys_name == "primarykeys") {
+        // SAP ADS-style system.primarykeys: one row per primary-key column.
+        // The DD records only the PK tag NAME (property 202); the column list
+        // lives in the tag's key expression, which we read from the table's
+        // CDX bag(s) without activating any order. A composite key made of a
+        // simple field list ("F1+F2") expands to one row per field in order;
+        // a calculated expression (a function, or any operator other than
+        // '+') degrades to zero rows rather than report a guessed column.
+        const std::vector<Col> cols = {
+            {"TABLE_NAME",  'C', 200, 0},
+            {"COLUMN_NAME", 'C', 200, 0},
+            {"KEY_SEQ",     'N',   5, 0},
+            {"PK_NAME",     'C', 200, 0},
+        };
+
+        // Split a key expression into an ordered list of plain field names.
+        // Returns empty if any term is not a bare identifier (degrade safely).
+        auto parse_simple_fields =
+            [](const std::string& expr) -> std::vector<std::string> {
+            std::vector<std::string> out;
+            std::size_t start = 0;
+            while (true) {
+                std::size_t plus = expr.find('+', start);
+                std::string term = expr.substr(
+                    start, plus == std::string::npos ? std::string::npos
+                                                     : plus - start);
+                std::size_t b = term.find_first_not_of(' ');
+                std::size_t e = term.find_last_not_of(' ');
+                if (b == std::string::npos) return {};  // empty term → bail
+                term = term.substr(b, e - b + 1);
+                bool okid = std::isalpha(static_cast<unsigned char>(term[0])) ||
+                            term[0] == '_';
+                for (std::size_t i = 1; okid && i < term.size(); ++i) {
+                    const char ch = term[i];
+                    if (!(std::isalnum(static_cast<unsigned char>(ch)) ||
+                          ch == '_'))
+                        okid = false;
+                }
+                if (!okid) return {};
+                out.push_back(term);
+                if (plus == std::string::npos) break;
+                start = plus + 1;
+            }
+            return out;
+        };
+
+        // Resolve a tag name to its key expression by reading a CDX bag,
+        // without activating the order. Tries DD-registered bags first, then
+        // the structural CDX next to the table. Returns empty if no CDX bag
+        // carries the tag.
+        auto expr_for_tag = [&](const std::string& table_rel,
+                                const std::string& alias,
+                                const std::string& tag) -> std::string {
+            std::vector<std::string> bags;
+            for (const auto& ie : dd->indexes())
+                if (ie.table_alias == alias) bags.push_back(ie.index_path);
+            {
+                fs::path tp(table_rel);
+                std::string ext = tp.extension().string();
+                for (auto& ch : ext)
+                    ch = static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(ch)));
+                if (ext != ".adt")  // ADT keys live in .adi — not read here
+                    bags.push_back(tp.replace_extension(".cdx").string());
+            }
+            for (const auto& bag : bags) {
+                fs::path full(bag);
+                if (!full.is_absolute())
+                    full = fs::path(c->data_dir()) / bag;
+                std::string fe = full.extension().string();
+                for (auto& ch : fe)
+                    ch = static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(ch)));
+                if (fe != ".cdx") continue;  // only CDX understood here
+                openads::drivers::cdx::CdxIndex idx;
+                if (idx.open_named(full.string(),
+                                   openads::drivers::IndexOpenMode::ReadOnly,
+                                   tag))
+                    return idx.expression();
+            }
+            return {};
+        };
+
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->tables()) {
+            const std::string& alias = kv.first;
+            const std::string& rel   = kv.second;
+            std::string tag = dd->get_table_property(alias, 202);
+            if (tag.empty()) continue;
+            std::string expr = expr_for_tag(rel, alias, tag);
+            if (expr.empty()) continue;
+            std::vector<std::string> fields = parse_simple_fields(expr);
+            if (fields.empty()) continue;  // calculated/complex → no rows
+            int seq = 1;
+            for (const auto& f : fields) {
+                rows.push_back({alias, f, std::to_string(seq), tag});
+                ++seq;
+            }
+        }
+        return build(cols, rows);
+    }
     if (sys_name == "users") {
         const std::vector<Col> cols = {{"USER_NAME", 'C', 200, 0}};
         std::vector<std::vector<std::string>> rows;
