@@ -21,6 +21,8 @@ add_executable(openads_unit_tests
     unit/util_result_test.cpp
     unit/util_span_test.cpp
     unit/util_log_test.cpp
+    unit/serverd_config_ini_test.cpp
+    ${CMAKE_SOURCE_DIR}/tools/serverd/config_ini.cpp
     unit/platform_file_test.cpp
     unit/platform_lock_test.cpp
     unit/platform_mmap_test.cpp
@@ -253,6 +255,7 @@ target_include_directories(openads_unit_tests SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/doctest
 )
 target_include_directories(openads_unit_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
 )
 
