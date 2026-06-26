@@ -1866,19 +1866,36 @@ DispatchResult Session::dispatch(const Frame& f) {
                 std::vector<std::int32_t> fidx;
                 accs.reserve(specs.size());
                 fidx.reserve(specs.size());
+                // Validate every spec before touching the table: an unknown
+                // field name (field_index -> -1) must be rejected, never folded
+                // as COUNT(*) -- that would silently return the row count for a
+                // typo'd or injected field. Only COUNT may omit the field.
+                bool specs_ok = true;
                 for (const auto& s : specs) {
-                    std::int32_t fi =
-                        s.field.empty() ? -1 : tbl->field_index(s.field);
-                    bool numeric = false;
-                    if (fi >= 0) {
-                        const auto& fd = tbl->field_descriptor(
-                            static_cast<std::uint16_t>(fi));
-                        numeric = field_is_numeric(fd.type);
+                    const auto fn = static_cast<openads::engine::AggFn>(s.fn);
+                    if (s.field.empty()) {
+                        if (fn != openads::engine::AggFn::Count) {
+                            reply = err("Aggregate: empty field only valid for "
+                                        "COUNT");
+                            specs_ok = false;
+                            break;
+                        }
+                        fidx.push_back(-1);
+                        accs.emplace_back(fn, false);
+                        continue;
                     }
-                    accs.emplace_back(
-                        static_cast<openads::engine::AggFn>(s.fn), numeric);
+                    std::int32_t fi = tbl->field_index(s.field);
+                    if (fi < 0) {
+                        reply = err("Aggregate: unknown field " + s.field);
+                        specs_ok = false;
+                        break;
+                    }
+                    const auto& fd =
+                        tbl->field_descriptor(static_cast<std::uint16_t>(fi));
+                    accs.emplace_back(fn, field_is_numeric(fd.type));
                     fidx.push_back(fi);
                 }
+                if (!specs_ok) break;
 
                 // Scan the whole table once, restoring the cursor afterwards.
                 std::uint32_t saved   = tbl->recno();

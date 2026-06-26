@@ -893,11 +893,29 @@ UNSIGNED32 sqlite_aggregate(
         return false;
     };
 
+    // Resolve a spec's field to its canonical, schema-validated column name.
+    // An unknown name must be rejected, never concatenated into the SQL: a
+    // double-quoted token that is not a real column is silently treated as a
+    // string literal by SQLite (TOTAL("NOPE") -> 0), and a quote in the name
+    // would break out of the identifier. Empty field is valid only for COUNT.
+    auto resolve_col = [&](const openads::engine::AggSpec& s,
+                           std::string& col) -> bool {
+        if (s.field.empty())
+            return s.fn == openads::engine::AggFn::Count;
+        for (const auto& f : st->fields) {
+            if (iequal(f.name, s.field)) { col = "\"" + f.name + "\""; return true; }
+        }
+        return false;
+    };
+
     std::string sql = "SELECT ";
     for (std::size_t i = 0; i < specs->size(); ++i) {
         if (i) sql += ", ";
         const auto& s   = (*specs)[i];
-        const std::string col = "\"" + s.field + "\"";
+        std::string col;
+        if (!resolve_col(s, col))
+            return fail(openads::AE_INTERNAL_ERROR,
+                        ("sqlite_aggregate: invalid field " + s.field).c_str());
         switch (s.fn) {
             case openads::engine::AggFn::Count:
                 sql += s.field.empty() ? "COUNT(*)" : ("COUNT(" + col + ")");

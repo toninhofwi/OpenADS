@@ -133,6 +133,31 @@ TEST_CASE("Tier-3 push-down: PostgreSQL untranslatable FOR declines") {
     CHECK(hRes == 0);
 }
 
+// Regression for the Tier-3 review (#113): the field name must be validated
+// against the cached schema before it is concatenated into the SQL, otherwise
+// a typo'd or injection-shaped field reaches PostgreSQL raw.
+TEST_CASE("Tier-3 push-down: PostgreSQL rejects an unknown aggregate field") {
+    PgFixture fx;
+    fx.open();
+
+    UNSIGNED8 forc[] = "";
+    UNSIGNED8 spec[] = "SUM:NOPE";
+    ADSHANDLE hRes   = 0;
+    CHECK(AdsAggregate(fx.hTable, forc, spec, &hRes) != AE_SUCCESS);
+    CHECK(hRes == 0);
+}
+
+TEST_CASE("Tier-3 push-down: PostgreSQL rejects empty field for non-COUNT") {
+    PgFixture fx;
+    fx.open();
+
+    UNSIGNED8 forc[] = "";
+    UNSIGNED8 spec[] = "SUM:";
+    ADSHANDLE hRes   = 0;
+    CHECK(AdsAggregate(fx.hTable, forc, spec, &hRes) != AE_SUCCESS);
+    CHECK(hRes == 0);
+}
+
 #else
 
 TEST_CASE("Tier-3 aggregate push-down: postgresql backend disabled at compile time") {
