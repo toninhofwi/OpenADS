@@ -839,6 +839,17 @@ UNSIGNED32 sqlite_goto_top(ADSHANDLE hTable) {
     return ok();
 }
 
+UNSIGNED32 sqlite_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
+    auto* st = get_sqlite_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    std::string where =
+        pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
+    auto r = st->conn->set_filter(st, where);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 sqlite_goto_bottom(ADSHANDLE hTable) {
     auto* st = get_sqlite_table(hTable);
     if (st->conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -1045,6 +1056,7 @@ const openads::abi::BackendTableOps* sqlite_table_ops() {
         o.is_record_deleted = &sqlite_is_record_deleted;
         o.open_index        = &sqlite_open_index;
         o.is_found          = &sqlite_is_found;
+        o.set_filter        = &sqlite_set_filter;
         return o;
     }();
     return &ops;
@@ -10349,6 +10361,30 @@ UNSIGNED32 AdsZapTable_DEFERRED(ADSHANDLE /*hTable*/) {
                 "AdsZapTable lands in M4 alongside memo store");
 }
 
+// Tier-2 SQL push-down: for a SQL-backend table, translate a Clipper filter
+// predicate into a SQL WHERE and install it on the backend so it filters
+// server-side. Returns true when handled here (backend table); `rc` then holds
+// the ABI return: ok() on a pushed filter, or a "not available" failure when
+// the predicate can't be translated — so the caller never assumes a filter we
+// did not actually apply and filters client-side instead.
+static bool backend_try_push_filter(ADSHANDLE hTable,
+                                    const std::string& clipper_pred,
+                                    UNSIGNED32& rc) {
+    auto* ops = openads::abi::backend_table_ops_for(hTable);
+    if (ops == nullptr || ops->set_filter == nullptr) return false;
+    openads::engine::SqlDialect dialect;   // defaults suit SQLite / ANSI
+    auto where = openads::engine::try_emit_sql_where(clipper_pred, dialect);
+    if (where) {
+        rc = ops->set_filter(
+            hTable, reinterpret_cast<UNSIGNED8*>(const_cast<char*>(where->c_str())));
+    } else {
+        ops->set_filter(hTable, nullptr);   // drop any stale backend filter
+        rc = fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                  "filter not pushable to SQL backend; caller filters client-side");
+    }
+    return true;
+}
+
 // M-AOF.3 — wire AdsSetAOF / AdsClearAOF to the
 // engine::aof::evaluate full-scan bitmap evaluator and install the
 // resulting per-record bitmap as the table-level filter predicate.
@@ -10373,6 +10409,10 @@ UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
         auto r = rt->conn->set_aof(rt->id, cond);
         if (!r) return fail(r.error());
         return ok();
+    }
+    if (UNSIGNED32 rc = 0;
+        backend_try_push_filter(hTable, openads::abi::to_internal(pucCondition, 0), rc)) {
+        return rc;
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -10435,6 +10475,10 @@ UNSIGNED32 AdsClearAOF(ADSHANDLE hTable) {
         auto r = rt->conn->clear_aof(rt->id);
         if (!r) return fail(r.error());
         return ok();
+    }
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable);
+        ops && ops->set_filter) {
+        return ops->set_filter(hTable, nullptr);   // clear backend filter
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -18909,6 +18953,10 @@ UNSIGNED32 AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
         // Remote: store the filter expression for later retrieval.
         rt->filter_expr = openads::abi::to_internal(pucFilter, 0);
         return ok();
+    }
+    if (UNSIGNED32 rc = 0;
+        backend_try_push_filter(hTable, openads::abi::to_internal(pucFilter, 0), rc)) {
+        return rc;
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
