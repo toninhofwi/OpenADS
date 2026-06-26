@@ -232,6 +232,7 @@ if(OPENADS_WITH_POSTGRESQL)
     unit/abi_plus_mariadb_read_test.cpp
     unit/abi_plus_odbc_read_test.cpp
     unit/abi_plus_odbc_seek_test.cpp
+    unit/abi_plus_odbc_write_test.cpp
     unit/odbc_uri_test.cpp
         unit/abi_plus_postgres_seek_test.cpp
     unit/abi_plus_mariadb_seek_test.cpp
