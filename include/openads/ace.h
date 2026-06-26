@@ -702,7 +702,8 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_CHECKRIGHTS     1
 #define ADS_OPTIMIZED_FULL  1
 #define ADS_OPTIMIZED_PART  2
-#define ADS_AOF_ADD_RECORD  1
+#define ADS_AOF_ADD_RECORD     1
+#define ADS_AOF_REMOVE_RECORD  2
 
 // Handle classification (AdsGetHandleType).
 #define ADS_NONE              0

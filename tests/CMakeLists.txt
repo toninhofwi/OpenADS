@@ -141,6 +141,7 @@ add_executable(openads_unit_tests
     unit/abi_append_autolock_test.cpp
     unit/abi_get_set_record_test.cpp
     unit/abi_set_relation_test.cpp
+    unit/abi_record_crc_aof_test.cpp
     unit/abi_dd_persistence_test.cpp
     unit/dbf_vfp_test.cpp
     unit/abi_sql_or_test.cpp

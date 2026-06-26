@@ -18162,8 +18162,26 @@ UNSIGNED32 AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
     if (auto fl = dst->flush(); !fl) return fail(fl.error());
     return ok();
 }
-UNSIGNED32 AdsCustomizeAOF(ADSHANDLE, UNSIGNED32, UNSIGNED32*, UNSIGNED16)
-    { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsCustomizeAOF(ADSHANDLE hTable, UNSIGNED32 ulNumRecords,
+                           UNSIGNED32* pulRecords, UNSIGNED16 usOption) {
+    if (get_remote_table(hTable))
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsCustomizeAOF: not available for remote tables");
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (!t->aof_active())
+        return fail(openads::AE_INTERNAL_ERROR, "no active AOF on table");
+    bool include;
+    switch (usOption) {
+        case ADS_AOF_ADD_RECORD:    include = true;  break;
+        case ADS_AOF_REMOVE_RECORD: include = false; break;
+        default: return fail(openads::AE_INTERNAL_ERROR, "invalid AOF option");
+    }
+    if (pulRecords == nullptr || ulNumRecords == 0) return ok();
+    for (UNSIGNED32 i = 0; i < ulNumRecords; ++i)
+        (void)t->customize_aof_record(pulRecords[i], include);
+    return ok();
+}
 UNSIGNED32 AdsData(UNSIGNED16, void*) { ADS_STUB(openads::AE_SUCCESS); }
 // SAP / rddads signature: AdsEvalAOF(hTable, pucExpr, *pusOptLevel).
 // Returns the optimisation level (ADS_OPTIMIZED_NONE / PART / FULL)
@@ -18971,7 +18989,18 @@ UNSIGNED32 AdsSetScopedRelation(ADSHANDLE hParent, ADSHANDLE hChild,
     return set_relation_impl(hParent, hChild, pucExpr, /*scoped=*/true);
 }
 UNSIGNED32 AdsSetSearchPath(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsSetServerType(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+// Caller's preferred server-type mask (ADS_LOCAL_SERVER / ADS_REMOTE_SERVER
+// / ADS_AIS_SERVER). OpenADS serves both local and remote connections
+// regardless, so this is recorded for ACE API parity; nothing consults it
+// in a way that would block an otherwise-valid connection.
+std::uint16_t& server_type_mask() {
+    static std::uint16_t m = ADS_LOCAL_SERVER | ADS_REMOTE_SERVER;
+    return m;
+}
+UNSIGNED32 AdsSetServerType(UNSIGNED16 usServerOptions) {
+    server_type_mask() = usServerOptions;
+    return openads::AE_SUCCESS;
+}
 UNSIGNED32 AdsShowDeleted(UNSIGNED16 us) {
     openads::engine::set_show_deleted(us != 0);
     return openads::AE_SUCCESS;
@@ -19933,8 +19962,31 @@ UNSIGNED32 AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile) {
     }
     return ok();
 }
-UNSIGNED32 AdsGetRecordCRC(ADSHANDLE, UNSIGNED32* p, UNSIGNED32)
-    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsGetRecordCRC(ADSHANDLE hTable, UNSIGNED32* pulCRC,
+                           UNSIGNED32 /*ulOption*/) {
+    if (pulCRC == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pulCRC = 0;
+    if (get_remote_table(hTable))
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsGetRecordCRC: not available for remote tables");
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (!t->positioned())
+        return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
+    // Standard IEEE CRC-32 (reflected, poly 0xEDB88320) over the raw record
+    // image — the same bytes AdsGetRecord returns, deletion flag included.
+    const auto& buf = t->record_buffer();
+    std::uint32_t crc = 0xFFFFFFFFu;
+    for (std::uint8_t b : buf) {
+        crc ^= b;
+        for (int i = 0; i < 8; ++i) {
+            std::uint32_t mask = 0u - (crc & 1u);
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    *pulCRC = ~crc;
+    return ok();
+}
 UNSIGNED32 AdsInitRawKey(ADSHANDLE) { return ok(); }
 UNSIGNED32 AdsMgDumpInternalTables(ADSHANDLE h) {
     return lookup_mg(h) ? openads::AE_SUCCESS

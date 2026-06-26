@@ -260,6 +260,7 @@ public:
         if (aof_active_) clear_recno_sequence();
         aof_active_ = false;
         aof_opt_level_ = 0;
+        aof_bitmap_.clear();
     }
     bool has_filter() const noexcept   { return static_cast<bool>(filter_); }
 
@@ -276,6 +277,9 @@ public:
         // owns it from this point on.
         aof_active_ = true;
         auto p = std::make_shared<std::vector<bool>>(std::move(bm));
+        // Keep a retained copy so AdsCustomizeAOF can flip individual
+        // record bits and reinstall without re-evaluating the filter.
+        aof_bitmap_ = *p;
         filter_ = [p](Table& t) -> bool {
             std::uint32_t r = t.recno();
             if (r == 0 || r > p->size()) return false;
@@ -297,6 +301,21 @@ public:
         set_recno_sequence(std::move(seq));
     }
     bool aof_active() const noexcept   { return aof_active_; }
+
+    // AdsCustomizeAOF — force a single record into (`include=true`) or out
+    // of (`include=false`) the active AOF result set. Flips its bit in the
+    // retained bitmap and reinstalls so the predicate and the sparse recno
+    // sequence stay consistent. Returns false if no AOF is active or the
+    // recno is invalid.
+    bool customize_aof_record(std::uint32_t recno, bool include) {
+        if (!aof_active_ || recno < 1) return false;
+        if (recno > record_count()) return false;
+        if (aof_bitmap_.size() < recno) aof_bitmap_.resize(recno, false);
+        aof_bitmap_[recno - 1] = include;
+        install_aof_bitmap(aof_bitmap_);   // rebuilds predicate + seq
+        return true;
+    }
+
     void set_aof_expr(const std::string& e) { aof_expr_ = e; }
     const std::string& aof_expr() const noexcept { return aof_expr_; }
 
@@ -421,6 +440,7 @@ private:
     int                                           aof_opt_level_   = 0;
     std::string                                   filter_expr_;    // source filter expression string
     std::string                                   aof_expr_;       // source AOF expression string
+    std::vector<bool>                             aof_bitmap_;     // retained AOF set for AdsCustomizeAOF
 
     // M10.6 recno-sequence cursor — empty means "natural order".
     std::vector<std::uint32_t>                    recno_sequence_;
