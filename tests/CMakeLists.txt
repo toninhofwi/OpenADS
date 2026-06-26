@@ -194,6 +194,7 @@ add_executable(openads_unit_tests
     unit/abi_dd_trigger_fire_test.cpp
     unit/abi_dd_proc_view_test.cpp
     unit/abi_sql_system_tables_test.cpp
+    unit/abi_sql_system_primarykeys_test.cpp
     unit/abi_sql_dd_sql_test.cpp
     unit/abi_no_current_record_test.cpp
     unit/codepage_test.cpp
@@ -216,6 +217,7 @@ add_executable(openads_unit_tests
 if(WIN32)
     target_sources(openads_unit_tests PRIVATE
         unit/odbc_driver_test.cpp
+        unit/odbc_driver_pk_test.cpp
         ${CMAKE_SOURCE_DIR}/bindings/odbc/openads_odbc.cpp)
 endif()
 
