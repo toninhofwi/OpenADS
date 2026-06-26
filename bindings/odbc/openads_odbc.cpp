@@ -44,6 +44,17 @@ struct ParamBind {
     SQLLEN*     ind    = nullptr;
 };
 
+// A column binding set by SQLBindCol: each fetched row copies the column into
+// this buffer. bound=false is an unbound slot. MSDASQL / ADO / Excel drive the
+// result set this way (bind + SQLFetch) rather than per-cell SQLGetData.
+struct ColBind {
+    bool        bound  = false;
+    SQLSMALLINT c_type = 0;
+    SQLPOINTER  buf    = nullptr;
+    SQLLEN      buflen = 0;
+    SQLLEN*     ind    = nullptr;
+};
+
 struct StmtH {
     HKind         kind = HKind::Stmt;
     DbcH*         dbc  = nullptr;
@@ -58,6 +69,13 @@ struct StmtH {
     long                                  epos = 0;
     // Deferred parameter bindings, 1-based (params[n-1] is parameter n).
     std::vector<ParamBind>                params;
+    // Column bindings, 1-based (cols[n-1] is column n).
+    std::vector<ColBind>                  cols;
+    // Opaque per-statement descriptor handles (APP_ROW / APP_PARAM / IMP_ROW /
+    // IMP_PARAM). The driver has no descriptor API, but a conformant 3.x driver
+    // MUST hand the Driver Manager non-null implicit-descriptor handles via
+    // SQLGetStmtAttr; returning null makes the DM dereference garbage and crash.
+    char                                  desc[4] = {0, 0, 0, 0};
 };
 
 HKind kind_of(SQLHANDLE h) { return *reinterpret_cast<HKind*>(h); }
@@ -143,6 +161,15 @@ SQLSMALLINT ads_to_sql_type(int col_type) {
 SQLRETURN put_typed(const std::string& v, SQLSMALLINT ctype,
                     SQLPOINTER buf, SQLLEN buflen, SQLLEN* ind) {
     switch (ctype) {
+        case SQL_C_BIT: {
+            // xBase logical arrives as "T"/"F" (or "1"/"0"); map to a 0/1 byte.
+            const char c0 = v.empty() ? '0' : v[0];
+            *reinterpret_cast<unsigned char*>(buf) =
+                (c0 == 'T' || c0 == 't' || c0 == 'Y' || c0 == 'y' || c0 == '1')
+                    ? 1 : 0;
+            if (ind) *ind = 1;
+            return SQL_SUCCESS;
+        }
         case SQL_C_SHORT:
         case SQL_C_SSHORT:
         case SQL_C_USHORT:
@@ -182,6 +209,47 @@ SQLRETURN put_typed(const std::string& v, SQLSMALLINT ctype,
             if (ind) *ind = static_cast<SQLLEN>(n);
             return SQL_SUCCESS;
         }
+    }
+}
+
+// Read column `col` of the current row into the caller's typed buffer. Shared
+// by SQLGetData (pull model) and the bound-column fill on SQLFetch (push model).
+SQLRETURN read_column(StmtH* s, SQLUSMALLINT col, SQLSMALLINT ctype,
+                      SQLPOINTER buf, SQLLEN buflen, SQLLEN* ind) {
+    if (!buf || buflen <= 0) return SQL_ERROR;
+    if (s->synth) {
+        if (s->spos < 1 || static_cast<size_t>(s->spos) > s->srows.size())
+            return SQL_ERROR;
+        if (col < 1 || static_cast<size_t>(col) > s->scols.size()) return SQL_ERROR;
+        return put_typed(s->srows[static_cast<size_t>(s->spos) - 1]
+                                 [static_cast<size_t>(col) - 1],
+                         ctype, buf, buflen, ind);
+    }
+    if (!s->st) return SQL_ERROR;
+    if (ctype == SQL_C_CHAR) {
+        size_t n = 0;
+        if (openads_get_str(s->st, static_cast<int>(col),
+                            reinterpret_cast<char*>(buf),
+                            static_cast<size_t>(buflen), &n) != OPENADS_OK)
+            return SQL_ERROR;
+        if (ind) *ind = static_cast<SQLLEN>(n);
+        return SQL_SUCCESS;
+    }
+    char tmp[256];
+    size_t n = 0;
+    if (openads_get_str(s->st, static_cast<int>(col), tmp, sizeof(tmp), &n)
+        != OPENADS_OK)
+        return SQL_ERROR;
+    return put_typed(std::string(tmp, n), ctype, buf, buflen, ind);
+}
+
+// Copy every bound column of the current row into its application buffer.
+void fill_bound_cols(StmtH* s) {
+    for (size_t i = 0; i < s->cols.size(); ++i) {
+        const ColBind& c = s->cols[i];
+        if (c.bound && c.buf)
+            read_column(s, static_cast<SQLUSMALLINT>(i + 1), c.c_type,
+                        c.buf, c.buflen, c.ind);
     }
 }
 
@@ -361,12 +429,27 @@ SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC, SQLINTEGER, SQLPOINTER, SQLINTEGER,
     if (out) *out = 0;
     return SQL_SUCCESS;
 }
-SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT, SQLINTEGER, SQLPOINTER, SQLINTEGER) {
+SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT, SQLINTEGER a, SQLPOINTER, SQLINTEGER) {
     return SQL_SUCCESS;
 }
-SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT, SQLINTEGER, SQLPOINTER, SQLINTEGER,
-                                 SQLINTEGER* out) {
-    if (out) *out = 0;
+SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT hstmt, SQLINTEGER a, SQLPOINTER val,
+                                 SQLINTEGER, SQLINTEGER*) {
+    if (!val) return SQL_SUCCESS;
+    auto* s = reinterpret_cast<StmtH*>(hstmt);
+    switch (a) {
+        // Implicit descriptor handles: hand back stable non-null handles. The
+        // value goes in ValuePtr (not StringLengthPtr), as a handle-sized write.
+        case SQL_ATTR_APP_ROW_DESC:
+            *reinterpret_cast<SQLHANDLE*>(val) = s ? &s->desc[0] : nullptr; break;
+        case SQL_ATTR_APP_PARAM_DESC:
+            *reinterpret_cast<SQLHANDLE*>(val) = s ? &s->desc[1] : nullptr; break;
+        case SQL_ATTR_IMP_ROW_DESC:
+            *reinterpret_cast<SQLHANDLE*>(val) = s ? &s->desc[2] : nullptr; break;
+        case SQL_ATTR_IMP_PARAM_DESC:
+            *reinterpret_cast<SQLHANDLE*>(val) = s ? &s->desc[3] : nullptr; break;
+        default:
+            *reinterpret_cast<SQLULEN*>(val) = 0; break;
+    }
     return SQL_SUCCESS;
 }
 
@@ -559,11 +642,13 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) {
     if (s->synth) {
         if (static_cast<size_t>(s->spos) >= s->srows.size()) return SQL_NO_DATA;
         s->spos += 1;
+        fill_bound_cols(s);
         return SQL_SUCCESS;
     }
     if (!s->st) return SQL_ERROR;
     int rc = openads_fetch_next(s->st);
     if (rc == OPENADS_OK) { s->epos = (s->epos < 0 ? s->epos : s->epos + 1);
+                            fill_bound_cols(s);
                             return SQL_SUCCESS; }
     if (rc == OPENADS_NO_DATA) { s->epos = -1; return SQL_NO_DATA; }
     return SQL_ERROR;
@@ -616,6 +701,19 @@ SQLRETURN SQL_API SQLFetchScroll(SQLHSTMT hstmt, SQLSMALLINT orient,
                                  return SQL_SUCCESS; }
     if (rc == OPENADS_NO_DATA) { s->epos = -1; return SQL_NO_DATA; }
     return SQL_ERROR;
+}
+
+SQLRETURN SQL_API SQLBindCol(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT ctype,
+                             SQLPOINTER buf, SQLLEN buflen, SQLLEN* ind) {
+    if (!hstmt) return SQL_ERROR;
+    if (col == 0) return SQL_SUCCESS;          // bookmark column: not supported
+    auto* s = reinterpret_cast<StmtH*>(hstmt);
+    if (s->cols.size() < col) s->cols.resize(col);
+    ColBind& cb = s->cols[col - 1];
+    if (buf == nullptr) { cb = ColBind{}; return SQL_SUCCESS; }   // unbind
+    cb.bound = true; cb.c_type = ctype; cb.buf = buf;
+    cb.buflen = buflen; cb.ind = ind;
+    return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT ctype,
