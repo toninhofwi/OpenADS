@@ -1,5 +1,6 @@
 #include "doctest.h"
 #include "openads/ace.h"
+#include "engine/data_dict.h"
 #include "network/client.h"
 #include "network/server.h"
 #include "network/socket.h"
@@ -1200,7 +1201,11 @@ TEST_CASE("Enterprise pool: Data Dictionary connection + DD-resolved SQL over th
     };
 
     // 1. Build a DD with a table + 2 rows via a LOCAL connection.
-    { std::ofstream f(add_path); f << "# OpenADS Data Dictionary v1\n"; }
+    //    Seed a real OpenADS-format DD via DataDict::create — a hand-written
+    //    "# OpenADS Data Dictionary v1" text stub is not a valid DD signature
+    //    (DataDict::load_ rejects it as "unrecognised signature"), which made
+    //    the LOCAL AdsConnect60 below fail. Mirrors abi_dd_persistence_test.
+    REQUIRE(openads::engine::DataDict::create(add_path).has_value());
     UNSIGNED8 lpath[256];
     std::memcpy(lpath, add_path.c_str(), add_path.size() + 1);
     ADSHANDLE hLocal = 0;
