@@ -123,6 +123,11 @@ public:
         std::uint32_t adt_hdr_len = 0;   // ADT header length (bytes 32..35)
         std::uint32_t adt_rec_len = 0;   // ADT record length
         bool          unique      = false;
+        // Full path of the ADT table this index belongs to. Required for a
+        // NON-STRUCTURAL bag, whose .adi stem differs from the table's (the
+        // `INDEX ON ... TAG ... TO <other path>` form). When empty, the
+        // companion ADT path is derived from the .adi stem (structural bag).
+        std::string   adt_path;
     };
 
     // Build a fresh 7-page .adi matching the legacy single-tag layout

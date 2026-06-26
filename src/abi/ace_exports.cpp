@@ -7563,6 +7563,10 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         cp.adt_hdr_len = t->driver()->header_length();
         cp.adt_rec_len = t->driver()->record_length();
         cp.unique      = unique;
+        // Pass the real table path so a non-structural bag (its .adi stem
+        // differs from the table's) opens the correct companion ADT instead
+        // of deriving "<bag>.adt" from the index file name.
+        cp.adt_path    = t->path();
 
         const bool is_char_key =
             cp.adt_type == openads::drivers::adi::ADT_TYPE_CHAR ||
