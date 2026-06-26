@@ -132,6 +132,28 @@ FUNCTION NavInsert( oConn, cTable, hAttrs, cPk )
    hbo_TableClose( nTbl )
    RETURN iif( lOk, xPk, NIL )
 
+/* INSERT navegacional CRU: grava EXATAMENTE os campos de hRow, sem injetar PK.
+   Para materializacao de result-set (o NavInsert injeta um id autoinc quando
+   ausente, o que aqui seria errado). Assume que as chaves de hRow sao campos
+   reais da tabela (result-set homogeneo). */
+FUNCTION NavInsertRaw( oConn, cTable, hRow )
+   LOCAL cTab := TORMGrammar():New():QuoteIdent( cTable )
+   LOCAL nTbl, cK, lOk := .T.
+   nTbl := hbo_OpenTable( oConn:Handle(), cTab )
+   IF nTbl == 0
+      RETURN .F.
+   ENDIF
+   hbo_OpenIdxBag( nTbl )                              // mantem indice(s) no append
+   IF ! hbo_Append( nTbl )
+      hbo_TableClose( nTbl ) ; RETURN .F.
+   ENDIF
+   FOR EACH cK IN hb_HKeys( hRow )
+      lOk := NavSetField( nTbl, Upper( cK ), hRow[ cK ] ) .AND. lOk
+   NEXT
+   lOk := hbo_WriteRec( nTbl ) .AND. lOk
+   hbo_TableClose( nTbl )
+   RETURN lOk
+
 /* proximo id = (maior id atual) + 1; 1 em tabela vazia. Scan simples. */
 STATIC FUNCTION NavNextId( oConn, cTable, cPk )
    LOCAL nTbl, nMax := 0, xV
