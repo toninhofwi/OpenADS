@@ -20150,6 +20150,187 @@ UNSIGNED32 AdsDDFindClose(ADSHANDLE /*hObject*/, ADSHANDLE /*hFindHandle*/) {
     return ok();
 }
 
-} // extern "C"
+} // extern "C"  — close stub block (opened at line 17925)
+} // extern "C"  — close ACE API exports block (opened at line 12394)
 
-} // extern "C"
+// ── Task 2: AdsFetchWhere result-set registry + exports ───────────────────────
+//
+// Process-local registry that maps opaque result handles to the
+// FetchWhereBatch returned by the wire call.  Handles live in the
+// high range (top bit set) to avoid collisions with the sequential
+// handles that HandleRegistry issues (which start at 1 and count up).
+
+namespace {
+
+// Stores the batch received from fetch_where plus the column list that
+// was requested, so AdsFetchWhereField can look up values by name.
+struct FetchWhereResult {
+    openads::network::FetchWhereBatch batch;
+    std::vector<std::string>          cols; // same order as batch.rows[r]
+};
+
+std::mutex& fw_mu() {
+    static std::mutex m;
+    return m;
+}
+
+std::unordered_map<ADSHANDLE, FetchWhereResult>& fw_results() {
+    static std::unordered_map<ADSHANDLE, FetchWhereResult> m;
+    return m;
+}
+
+// Must be called while holding fw_mu().
+ADSHANDLE fw_next_handle() {
+    static std::uint64_t n = 0x8000000000000001ULL;
+    return static_cast<ADSHANDLE>(n++);
+}
+
+// Parse a comma-separated column list (e.g. "NM,QTD") into a vector.
+// Returns an empty vector when pszCols is null or an empty string, which
+// tells the server to return no column data (count / locate mode).
+std::vector<std::string> fw_split_cols(const UNSIGNED8* pszCols) {
+    std::vector<std::string> out;
+    if (pszCols == nullptr) return out;
+    const char* p = reinterpret_cast<const char*>(pszCols);
+    if (*p == '\0') return out;
+    while (true) {
+        const char* comma = std::strchr(p, ',');
+        if (comma == nullptr) {
+            out.emplace_back(p);
+            break;
+        }
+        out.emplace_back(p, static_cast<std::size_t>(comma - p));
+        p = comma + 1;
+    }
+    return out;
+}
+
+} // namespace
+
+extern "C" {  // reopen for AdsFetchWhere* exports
+
+// ─ AdsFetchWhere ─────────────────────────────────────────────────────────────
+// Send a server-side filtered scan request over the wire and store the
+// resulting batch under a fresh opaque handle in *phResult.
+// Returns AE_FUNCTION_NOT_AVAILABLE for local (non-remote) tables so the
+// caller can fall back to the classic client-side scan path.
+UNSIGNED32 AdsFetchWhere(ADSHANDLE hTbl, UNSIGNED8* pszExpr, UNSIGNED8* pszCols,
+                         UNSIGNED32 ulMaxRows, UNSIGNED32 ulFlags,
+                         ADSHANDLE* phResult) {
+    if (phResult == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhere: null phResult");
+    *phResult = 0;
+    auto* rt = get_remote_table(hTbl);
+    if (rt == nullptr)
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsFetchWhere: not applicable on a local table");
+    std::string expr;
+    if (pszExpr != nullptr)
+        expr = openads::abi::to_internal(pszExpr, 0);
+    auto cols = fw_split_cols(pszCols);
+    const std::uint8_t wire_flags =
+        (ulFlags & 0x01u) ? openads::network::FetchWhereFlags::WANT_RECNO : 0u;
+    auto r = rt->conn->fetch_where(rt->id, ulMaxRows, expr, cols, wire_flags);
+    if (!r) return fail(r.error());
+    std::lock_guard<std::mutex> lk(fw_mu());
+    ADSHANDLE h = fw_next_handle();
+    fw_results().emplace(h, FetchWhereResult{std::move(r).value(), std::move(cols)});
+    *phResult = h;
+    return ok();
+}
+
+// ─ AdsFetchWhereRows ─────────────────────────────────────────────────────────
+UNSIGNED32 AdsFetchWhereRows(ADSHANDLE hRes, UNSIGNED32* pulRows) {
+    if (pulRows == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRows: null");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRows: invalid handle");
+    *pulRows = static_cast<UNSIGNED32>(it->second.batch.rows.size());
+    return ok();
+}
+
+// ─ AdsFetchWhereRecno ────────────────────────────────────────────────────────
+// ulRow is 0-based.  Recnos are populated only when WANT_RECNO (0x01) was
+// set in ulFlags at AdsFetchWhere call time.
+UNSIGNED32 AdsFetchWhereRecno(ADSHANDLE hRes, UNSIGNED32 ulRow,
+                               UNSIGNED32* pulRec) {
+    if (pulRec == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRecno: null");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRecno: invalid handle");
+    const auto& recnos = it->second.batch.recnos;
+    if (ulRow >= static_cast<UNSIGNED32>(recnos.size()))
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRecno: row out of range");
+    *pulRec = recnos[ulRow];
+    return ok();
+}
+
+// ─ AdsFetchWhereField ────────────────────────────────────────────────────────
+// Copy the value of column `pszCol` at result row `ulRow` into `pucBuf`.
+// Column lookup is case-insensitive.  *pusLen is in/out (capacity in,
+// written byte count out), following the same truncation idiom as AdsGetField.
+// ulRow is 0-based.
+UNSIGNED32 AdsFetchWhereField(ADSHANDLE hRes, UNSIGNED32 ulRow,
+                               UNSIGNED8* pszCol,
+                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    if (pucBuf == nullptr || pusLen == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: null buf/len");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: invalid handle");
+    const auto& res  = it->second;
+    const auto& rows = res.batch.rows;
+    if (ulRow >= static_cast<UNSIGNED32>(rows.size()))
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: row out of range");
+    // Case-insensitive column name lookup in the stored column list.
+    std::size_t col_idx = std::numeric_limits<std::size_t>::max();
+    if (pszCol != nullptr) {
+        std::string want = openads::abi::to_internal(pszCol, 0);
+        for (auto& c : want)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (std::size_t i = 0; i < res.cols.size(); ++i) {
+            std::string n = res.cols[i];
+            for (auto& c : n)
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (n == want) { col_idx = i; break; }
+        }
+    }
+    if (col_idx == std::numeric_limits<std::size_t>::max())
+        return fail(openads::AE_COLUMN_NOT_FOUND, "AdsFetchWhereField: column not found");
+    const auto& row = rows[ulRow];
+    if (col_idx >= row.size())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereField: col idx out of range");
+    openads::abi::copy_to_caller(pucBuf, pusLen, row[col_idx]);
+    return ok();
+}
+
+// ─ AdsFetchWhereEof ──────────────────────────────────────────────────────────
+// *pbEof is set to 1 when the server exhausted the table during the scan
+// (no more rows remain past the last matched record), 0 when ulMaxRows was
+// hit before EOF.
+UNSIGNED32 AdsFetchWhereEof(ADSHANDLE hRes, UNSIGNED16* pbEof) {
+    if (pbEof == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereEof: null");
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereEof: invalid handle");
+    *pbEof = it->second.batch.eof ? 1u : 0u;
+    return ok();
+}
+
+// ─ AdsFetchWhereClose ────────────────────────────────────────────────────────
+// Release the result batch and invalidate the handle.  Calling any other
+// AdsFetchWhere* accessor with this handle after Close returns an error.
+UNSIGNED32 AdsFetchWhereClose(ADSHANDLE hRes) {
+    std::lock_guard<std::mutex> lk(fw_mu());
+    fw_results().erase(hRes);
+    return ok();
+}
+
+} // extern "C"  — AdsFetchWhere* export block

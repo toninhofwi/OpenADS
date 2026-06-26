@@ -208,6 +208,7 @@ add_executable(openads_unit_tests
     unit/dll_test.cpp
     unit/network_client_test.cpp
     unit/abi_dd_invoicing_test.cpp
+    unit/abi_fetch_where_test.cpp
 )
 
 # OpenADS ODBC driver (provider) test — drives the driver's SQL* exports
