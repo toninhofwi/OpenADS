@@ -64,16 +64,19 @@ record (the remote bulk-scan bottleneck, ~135 s / 1M rows).
 
 When the table is remote and no index is active, `adsSetFilter` marks
 the work area eligible and `adsGoTop` primes it: the server evaluates
-the predicate and returns every matching record number in a single
-`AdsFetchWhere` call (`maxRows = all`, `WANT_RECNO`). A forward scan
-then walks that record-number list, `AdsGotoRecord`-ing the real
-cursor so `RecNo()` / field reads stay on the normal path. On the
-first prime the server AOF/filter is cleared so any non-forward move
-(GOTO, GO BOTTOM, backward SKIP, write, index/filter change) drops the
-list and resumes the classic client-side walk via SUPER's local filter
-block — correct Clipper semantics, and it also sidesteps the AOF
-bitmap-navigation edge cases. The `AdsFetchWhere*` result-set API is
-an additive OpenADS engine export; no existing ACE function is
+the predicate and returns matching rows — record number **and every
+field value** — in batches via `AdsFetchWhere` (`WANT_RECNO`). A
+forward scan walks those rows straight from the client row cache via
+`AdsFetchWhereApplyRow`, so `RecNo()` / field reads serve from cache
+with **no `AdsGotoRecord` per match** — the whole scan costs
+`ceil(matches / batch)` round-trips. On the first prime the server
+AOF/filter is cleared so any non-forward move (GOTO, GO BOTTOM,
+backward SKIP, write, index/filter change) resyncs the real server
+cursor onto the last visited record and resumes the classic
+client-side walk via SUPER's local filter block — correct Clipper
+semantics, and it also sidesteps the AOF bitmap-navigation edge cases.
+The `AdsFetchWhere*` result-set API (including `AdsFetchWhereApplyRow`)
+is an additive OpenADS engine export; no existing ACE function is
 touched.
 
 Validated end-to-end against a live `openads_serverd` over `tcp://`

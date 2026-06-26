@@ -1,8 +1,8 @@
 diff --git a/contrib/rddads/ads1.c b/contrib/rddads/ads1.c
-index 4c37b03..f5bc08d 100644
+index 4c37b03..8b9e9ed 100644
 --- a/contrib/rddads/ads1.c
 +++ b/contrib/rddads/ads1.c
-@@ -432,6 +432,165 @@ static HB_ERRCODE hb_adsUpdateAreaFlags( ADSAREAP pArea )
+@@ -432,6 +432,261 @@ static HB_ERRCODE hb_adsUpdateAreaFlags( ADSAREAP pArea )
     return HB_SUCCESS;
  }
  
@@ -13,15 +13,17 @@ index 4c37b03..f5bc08d 100644
 + * table one record at a time, testing the filter client-side: one network
 + * round-trip per *raw* record — the remote bulk-scan bottleneck.
 + *
-+ * When the table is remote and no index is active (natural order), we let
-+ * the server evaluate the predicate and return every matching record number
-+ * in a single call (AdsFetchWhere, maxRows = all). A forward scan then walks
-+ * that list, AdsGotoRecord-ing the real cursor so RecNo()/field reads stay on
-+ * the normal path. Any non-forward move (GOTO, GO BOTTOM, backward SKIP,
-+ * write, index/filter change) drops the list and resumes the classic
-+ * client-side filter walk — which is why, on the first prime, we also clear
-+ * the server AOF/filter and let SUPER's local filter block drive the
-+ * fallback (correct Clipper semantics).
++ * When the table is remote and no index is active (natural order), the server
++ * evaluates the predicate and returns matching rows (recno + every field) in
++ * batches (AdsFetchWhere). A forward scan walks those rows from the client row
++ * cache via AdsFetchWhereApplyRow — RecNo()/field reads serve from cache with
++ * NO AdsGotoRecord per match, so the whole scan costs ceil(matches/batch)
++ * round-trips. Any non-forward move (GOTO, GO BOTTOM, backward SKIP, write,
++ * index/filter change) drops the batch, resyncs the real server cursor onto
++ * the last visited record, and resumes the classic client-side filter walk —
++ * which is why, on the first prime, we also clear the server AOF/filter and
++ * let SUPER's local filter block drive the fallback (correct Clipper
++ * semantics).
 + *
 + * Additive and self-contained: no existing ACE export is modified; the
 + * AdsFetchWhere* result-set API lives in the OpenADS engine.
@@ -30,29 +32,91 @@ index 4c37b03..f5bc08d 100644
 +#ifndef ADS_FW_WANT_RECNO
 +#define ADS_FW_WANT_RECNO  0x01
 +#endif
++#ifndef ADS_FW_BATCH
++#define ADS_FW_BATCH  64       /* matches fetched per AdsFetchWhere round-trip */
++#endif
 +
-+static void hb_adsFwReset( ADSAREAP pArea )
++/* Close the live batch handle and drop the fast-path scan state. When
++   fSyncCursor is set, first move the real server cursor onto the last applied
++   record so a follow-up classic op (backward skip, write, ...) continues from
++   the right place — the fast path never AdsGotoRecord's, so the server cursor
++   otherwise lags at "past the last examined row". */
++static void hb_adsFwClearBatch( ADSAREAP pArea, HB_BOOL fSyncCursor )
 +{
-+   /* Drop the primed record-number list, keeping eligibility/expr so a later
-+      GO TOP can re-prime. */
-+   if( pArea->pFwRecNos )
-+      hb_xfree( pArea->pFwRecNos );
-+   pArea->pFwRecNos = NULL;
-+   pArea->ulFwCount = 0;
-+   pArea->ulFwPos   = 0;
-+   pArea->fFwActive = HB_FALSE;
++   if( fSyncCursor && pArea->fFwActive && pArea->ulFwRecNo != 0 )
++      AdsGotoRecord( pArea->hTable, ( UNSIGNED32 ) pArea->ulFwRecNo );
++   if( pArea->hFwRes )
++   {
++      AdsFetchWhereClose( pArea->hFwRes );
++      pArea->hFwRes = 0;
++   }
++   pArea->ulFwBatchRows = 0;
++   pArea->ulFwRow       = 0;
++   pArea->fFwBatchEof   = HB_FALSE;
++   pArea->fFwActive     = HB_FALSE;
 +}
 +
++/* Invalidate the primed scan and resync the server cursor (back to classic). */
++static void hb_adsFwReset( ADSAREAP pArea )
++{
++   hb_adsFwClearBatch( pArea, HB_TRUE );
++}
++
++/* Fully disable the fast-path for this work area (filter cleared/changed,
++   table closed, or a non-remote probe). No resync — the filter is going away,
++   not continuing. */
 +static void hb_adsFwDisable( ADSAREAP pArea )
 +{
-+   /* Fully disable the fast-path for this work area (filter cleared/changed,
-+      table closed, or a non-remote probe). */
-+   hb_adsFwReset( pArea );
++   hb_adsFwClearBatch( pArea, HB_FALSE );
 +   if( pArea->szFwExpr )
++   {
 +      hb_xfree( pArea->szFwExpr );
-+   pArea->szFwExpr    = NULL;
++      pArea->szFwExpr = NULL;
++   }
++   if( pArea->szFwCols )
++   {
++      hb_xfree( pArea->szFwCols );
++      pArea->szFwCols = NULL;
++   }
 +   pArea->fFwEligible = HB_FALSE;
 +   pArea->fFwProbed   = HB_FALSE;
++}
++
++/* Build the comma-separated list of ALL field names in field order, so each
++   batch row maps 1:1 onto the table columns and AdsFetchWhereApplyRow can
++   populate the row cache that AdsGetField / AdsGetRecordNum read. */
++static HB_BOOL hb_adsFwBuildCols( ADSAREAP pArea )
++{
++   HB_USHORT uiCount = pArea->area.uiFieldCount, ui;
++   HB_SIZE   nLen = 0;
++   char *    sz;
++   char *    p;
++
++   if( uiCount == 0 )
++      return HB_FALSE;
++
++   for( ui = 0; ui < uiCount; ++ui )
++   {
++      const char * name = ( const char * )
++         hb_dynsymName( ( PHB_DYNS ) pArea->area.lpFields[ ui ].sym );
++      nLen += strlen( name ) + 1;       /* name + separator/terminator */
++   }
++
++   sz = ( char * ) hb_xgrab( nLen + 1 );
++   p  = sz;
++   for( ui = 0; ui < uiCount; ++ui )
++   {
++      const char * name = ( const char * )
++         hb_dynsymName( ( PHB_DYNS ) pArea->area.lpFields[ ui ].sym );
++      HB_SIZE l = strlen( name );
++      if( ui > 0 )
++         *p++ = ',';
++      memcpy( p, name, l );
++      p += l;
++   }
++   *p = '\0';
++   pArea->szFwCols = sz;
++   return HB_TRUE;
 +}
 +
 +/* Position the work area on the EOF phantom (no more matches). Mirrors the
@@ -69,27 +133,75 @@ index 4c37b03..f5bc08d 100644
 +   pArea->ulRecNo     = ulRecCount + 1;
 +}
 +
-+/* Move the real cursor onto pFwRecNos[ ulFwPos ] and advance. Sets EOF when
-+   the list is exhausted. */
++/* Fetch the next batch of matches into a fresh result handle. The server scan
++   cursor resumes from where the previous batch left off (the fast path never
++   moves it). Returns HB_FALSE only when AdsFetchWhere itself fails (e.g. a
++   non-remote table); an empty-but-successful result returns HB_TRUE with
++   ulFwBatchRows == 0. */
++static HB_BOOL hb_adsFwFetchBatch( ADSAREAP pArea )
++{
++   ADSHANDLE  hRes    = 0;
++   UNSIGNED32 u32Rows = 0;
++   UNSIGNED16 u16Eof  = 0;
++
++   if( pArea->hFwRes )
++   {
++      AdsFetchWhereClose( pArea->hFwRes );
++      pArea->hFwRes = 0;
++   }
++   if( AdsFetchWhere( pArea->hTable, ( UNSIGNED8 * ) pArea->szFwExpr,
++                      ( UNSIGNED8 * ) pArea->szFwCols, ADS_FW_BATCH,
++                      ADS_FW_WANT_RECNO, &hRes ) != AE_SUCCESS )
++      return HB_FALSE;
++
++   pArea->hFwRes        = hRes;
++   AdsFetchWhereRows( hRes, &u32Rows );
++   AdsFetchWhereEof( hRes, &u16Eof );
++   pArea->ulFwBatchRows = ( HB_ULONG ) u32Rows;
++   pArea->ulFwRow       = 0;
++   pArea->fFwBatchEof   = ( u16Eof != 0 );
++   return HB_TRUE;
++}
++
++/* Advance onto the next matched record, refilling the batch as needed, and
++   load it into the row cache via AdsFetchWhereApplyRow (no AdsGotoRecord).
++   Sets EOF when the matches are exhausted. */
 +static HB_ERRCODE hb_adsFwStep( ADSAREAP pArea )
 +{
-+   UNSIGNED32 u32RetVal;
++   UNSIGNED32 u32Rec = 0;
 +
-+   if( pArea->ulFwPos >= pArea->ulFwCount )
++   while( pArea->ulFwRow >= pArea->ulFwBatchRows )
 +   {
-+      hb_adsFwSetEof( pArea );
-+      return HB_SUCCESS;
++      if( pArea->fFwBatchEof )             /* no more batches */
++      {
++         hb_adsFwSetEof( pArea );
++         return HB_SUCCESS;
++      }
++      if( ! hb_adsFwFetchBatch( pArea ) )  /* fetch error → give up the fast path */
++      {
++         hb_adsFwReset( pArea );
++         hb_adsFwSetEof( pArea );
++         return HB_SUCCESS;
++      }
 +   }
 +
-+   u32RetVal = AdsGotoRecord( pArea->hTable,
-+                              ( UNSIGNED32 ) pArea->pFwRecNos[ pArea->ulFwPos ] );
-+   if( u32RetVal != AE_SUCCESS )
++   AdsFetchWhereRecno( pArea->hFwRes, ( UNSIGNED32 ) pArea->ulFwRow, &u32Rec );
++   if( AdsFetchWhereApplyRow( pArea->hFwRes, ( UNSIGNED32 ) pArea->ulFwRow,
++                              pArea->hTable ) != AE_SUCCESS )
 +   {
-+      commonError( pArea, EG_CORRUPTION, ( HB_ERRCODE ) u32RetVal, 0, NULL, EF_CANDEFAULT, NULL );
-+      return HB_FAILURE;
++      /* Could not serve from cache — fall back to a real positioning move so
++         the result stays correct (one round-trip for this row only). */
++      UNSIGNED32 u32RetVal = AdsGotoRecord( pArea->hTable, u32Rec );
++      if( u32RetVal != AE_SUCCESS )
++      {
++         commonError( pArea, EG_CORRUPTION, ( HB_ERRCODE ) u32RetVal, 0, NULL, EF_CANDEFAULT, NULL );
++         return HB_FAILURE;
++      }
 +   }
-+   pArea->ulFwPos++;
-+   hb_adsUpdateAreaFlags( pArea );
++   pArea->ulFwRow++;
++   pArea->ulFwRecNo = ( HB_ULONG ) u32Rec;
++   pArea->ulRecNo   = ( HB_ULONG ) u32Rec;
++   hb_adsUpdateAreaFlags( pArea );         /* served from the row cache: 0 RTT */
 +   pArea->area.fBof = HB_FALSE;
 +
 +   if( pArea->area.lpdbRelations )
@@ -98,17 +210,13 @@ index 4c37b03..f5bc08d 100644
 +   return HB_SUCCESS;
 +}
 +
-+/* Materialise every matching record number from the top into pFwRecNos.
-+   Returns HB_TRUE on success (list primed, fFwActive set) or HB_FALSE when the
-+   fast-path is not applicable (local table, active index, or server refusal),
-+   in which case the caller must use the classic path. On the first successful
-+   prime it commits: clears the server AOF/filter so the classic fallback walks
-+   via SUPER's local filter block. */
++/* Prime the fast path from the top of the table. Returns HB_TRUE with the
++   first batch fetched (fFwActive set), or HB_FALSE when not applicable (local
++   table, active index, or server refusal) — caller uses the classic path. On
++   the first successful prime it commits: clears the server AOF/filter so the
++   classic fallback walks via SUPER's local filter block. */
 +static HB_BOOL hb_adsFwPrime( ADSAREAP pArea )
 +{
-+   ADSHANDLE  hRes = 0;
-+   UNSIGNED32 u32RetVal, u32Rows = 0, i;
-+
 +   if( ! pArea->fFwEligible || pArea->szFwExpr == NULL )
 +      return HB_FALSE;
 +
@@ -117,19 +225,24 @@ index 4c37b03..f5bc08d 100644
 +   if( pArea->hOrdCurrent != 0 )
 +      return HB_FALSE;
 +
++   if( pArea->szFwCols == NULL && ! hb_adsFwBuildCols( pArea ) )
++      return HB_FALSE;
++
 +   if( AdsGotoTop( pArea->hTable ) != AE_SUCCESS )
 +      return HB_FALSE;
 +
-+   u32RetVal = AdsFetchWhere( pArea->hTable,
-+                              ( UNSIGNED8 * ) pArea->szFwExpr,
-+                              NULL,             /* record numbers only, no column data */
-+                              0xFFFFFFFFUL,     /* every match in one batch */
-+                              ADS_FW_WANT_RECNO,
-+                              &hRes );
-+   if( u32RetVal != AE_SUCCESS )
++   if( pArea->hFwRes )                     /* drop any stale handle before re-prime */
 +   {
-+      /* Local table (AE_FUNCTION_NOT_AVAILABLE) or unsupported predicate —
-+         disable and fall back to the classic client-side scan. */
++      AdsFetchWhereClose( pArea->hFwRes );
++      pArea->hFwRes = 0;
++   }
++   pArea->ulFwBatchRows = 0;
++   pArea->ulFwRow       = 0;
++   pArea->fFwBatchEof   = HB_FALSE;
++   pArea->ulFwRecNo     = 0;
++
++   if( ! hb_adsFwFetchBatch( pArea ) )     /* probe: fails on local / unsupported */
++   {
 +      hb_adsFwDisable( pArea );
 +      return HB_FALSE;
 +   }
@@ -144,23 +257,6 @@ index 4c37b03..f5bc08d 100644
 +      pArea->fFwProbed = HB_TRUE;
 +   }
 +
-+   hb_adsFwReset( pArea );
-+
-+   AdsFetchWhereRows( hRes, &u32Rows );
-+   if( u32Rows > 0 )
-+   {
-+      pArea->pFwRecNos = ( HB_ULONG * ) hb_xgrab( ( HB_SIZE ) u32Rows * sizeof( HB_ULONG ) );
-+      for( i = 0; i < u32Rows; ++i )
-+      {
-+         UNSIGNED32 u32Rec = 0;
-+         AdsFetchWhereRecno( hRes, i, &u32Rec );
-+         pArea->pFwRecNos[ i ] = ( HB_ULONG ) u32Rec;
-+      }
-+      pArea->ulFwCount = ( HB_ULONG ) u32Rows;
-+   }
-+   AdsFetchWhereClose( hRes );
-+
-+   pArea->ulFwPos   = 0;
 +   pArea->fFwActive = HB_TRUE;
 +   return HB_TRUE;
 +}
@@ -168,7 +264,7 @@ index 4c37b03..f5bc08d 100644
  static HB_ERRCODE hb_adsCheckLock( ADSAREAP pArea )
  {
     if( hb_ads_bTestRecLocks && pArea->fShared && ! pArea->fFLocked )
-@@ -768,6 +927,9 @@ HB_ERRCODE hb_adsCloseCursor( ADSAREAP pArea )
+@@ -768,6 +1023,9 @@ HB_ERRCODE hb_adsCloseCursor( ADSAREAP pArea )
  
     HB_TRACE( HB_TR_DEBUG, ( "hb_adsCloseCursor(%p)", ( void * ) pArea ) );
  
@@ -178,7 +274,7 @@ index 4c37b03..f5bc08d 100644
     pArea->hOrdCurrent = 0;
     if( pArea->hTable )
     {
-@@ -854,6 +1016,11 @@ static HB_ERRCODE adsGoBottom( ADSAREAP pArea )
+@@ -854,6 +1112,11 @@ static HB_ERRCODE adsGoBottom( ADSAREAP pArea )
  
     HB_TRACE( HB_TR_DEBUG, ( "adsGoBottom(%p)", ( void * ) pArea ) );
  
@@ -190,7 +286,7 @@ index 4c37b03..f5bc08d 100644
     /* reset any pending relations */
     SELF_RESETREL( pArea );
  
-@@ -892,6 +1059,11 @@ static HB_ERRCODE adsGoTo( ADSAREAP pArea, HB_ULONG ulRecNo )
+@@ -892,6 +1155,11 @@ static HB_ERRCODE adsGoTo( ADSAREAP pArea, HB_ULONG ulRecNo )
  
     HB_TRACE( HB_TR_DEBUG, ( "adsGoTo(%p, %lu)", ( void * ) pArea, ulRecNo ) );
  
@@ -202,7 +298,7 @@ index 4c37b03..f5bc08d 100644
     /* 2001-07-19 15:04, BH
        The following call is a necessary workaround for ace32.dll
        prior to 6.1.  There were bugs where
-@@ -990,6 +1162,25 @@ static HB_ERRCODE adsGoTop( ADSAREAP pArea )
+@@ -990,6 +1258,20 @@ static HB_ERRCODE adsGoTop( ADSAREAP pArea )
  
     HB_TRACE( HB_TR_DEBUG, ( "adsGoTop(%p)", ( void * ) pArea ) );
  
@@ -215,12 +311,7 @@ index 4c37b03..f5bc08d 100644
 +      {
 +         pArea->area.fTop = HB_TRUE;
 +         pArea->area.fBottom = HB_FALSE;
-+         if( pArea->ulFwCount == 0 )
-+         {
-+            hb_adsFwSetEof( pArea );
-+            return HB_SUCCESS;
-+         }
-+         return hb_adsFwStep( pArea );   /* land on the first match */
++         return hb_adsFwStep( pArea );   /* land on the first match (or EOF if none) */
 +      }
 +      /* not applicable (disabled inside prime) → classic GO TOP below */
 +   }
@@ -228,7 +319,7 @@ index 4c37b03..f5bc08d 100644
     /* reset any pending relations */
     SELF_RESETREL( pArea );
  
-@@ -1112,14 +1303,23 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1112,14 +1394,23 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
                                 pszKey, u16KeyLen, u16KeyType, &u16Found );
        if( u32RetVal == AE_SUCCESS && bSoftSeek && ! u16Found )
        {
@@ -259,7 +350,7 @@ index 4c37b03..f5bc08d 100644
        }
     }
     else
-@@ -1142,7 +1342,10 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1142,7 +1433,10 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
        #if 0
        HB_ERRCODE errCode = SELF_GOTOP( &pArea->area );
        #endif
@@ -271,7 +362,7 @@ index 4c37b03..f5bc08d 100644
  #if defined( ADS_USE_OEM_TRANSLATION ) && ADS_LIB_VERSION < 600
        if( pszKeyFree )
           hb_adsOemAnsiFree( ( char * ) pszKeyFree );
-@@ -1250,7 +1453,9 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1250,7 +1544,9 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
      * when it doesn't but only sometimes. I've not been able to detect
      * the rule yet. Any how it's much safer to clear it, Druzus.
      */
@@ -282,7 +373,7 @@ index 4c37b03..f5bc08d 100644
  
     if( pucSavedKey )
        hb_xfree( pucSavedKey );
-@@ -1272,6 +1477,22 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1272,6 +1568,22 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
     if( pArea->lpdbPendingRel )
        SELF_FORCEREL( &pArea->area );
  
@@ -305,7 +396,7 @@ index 4c37b03..f5bc08d 100644
     /* Brian Hays:
  
        In ADS, if you GO 0 (as opposed to skipping past lastrec),
-@@ -1323,6 +1544,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1323,6 +1635,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
     {
        HB_ERRCODE errCode = HB_SUCCESS;
        HB_LONG lSkipper;
@@ -313,7 +404,7 @@ index 4c37b03..f5bc08d 100644
  
        if( ! pArea->fPositioned && lToSkip < 0 )
        {
-@@ -1332,10 +1554,18 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1332,10 +1645,18 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
  
        if( ! pArea->fPositioned )
        {
@@ -334,7 +425,7 @@ index 4c37b03..f5bc08d 100644
        }
        else if( lToSkip )
        {
-@@ -1478,6 +1708,10 @@ static HB_ERRCODE adsAppend( ADSAREAP pArea, HB_BOOL fUnLockAll )
+@@ -1478,6 +1799,10 @@ static HB_ERRCODE adsAppend( ADSAREAP pArea, HB_BOOL fUnLockAll )
  
     HB_TRACE( HB_TR_DEBUG, ( "adsAppend(%p, %d)", ( void * ) pArea, ( int ) fUnLockAll ) );
  
@@ -345,7 +436,7 @@ index 4c37b03..f5bc08d 100644
     /* reset any pending relations */
     SELF_RESETREL( pArea );
  
-@@ -2004,6 +2238,10 @@ static HB_ERRCODE adsDeleteRec( ADSAREAP pArea )
+@@ -2004,6 +2329,10 @@ static HB_ERRCODE adsDeleteRec( ADSAREAP pArea )
  
     HB_TRACE( HB_TR_DEBUG, ( "adsDeleteRec(%p)", ( void * ) pArea ) );
  
@@ -356,7 +447,7 @@ index 4c37b03..f5bc08d 100644
     /* resolve any pending relations */
     if( pArea->lpdbPendingRel )
        SELF_FORCEREL( &pArea->area );
-@@ -2643,6 +2881,10 @@ static HB_ERRCODE adsPutValue( ADSAREAP pArea, HB_USHORT uiIndex, PHB_ITEM pItem
+@@ -2643,6 +2972,10 @@ static HB_ERRCODE adsPutValue( ADSAREAP pArea, HB_USHORT uiIndex, PHB_ITEM pItem
     if( ! uiIndex || uiIndex > pArea->area.uiFieldCount )
        return HB_FAILURE;
  
@@ -367,7 +458,7 @@ index 4c37b03..f5bc08d 100644
     /* 2003-10-30 15:54
  
        ADS has Implicit Record locking that can mask programming errors.
-@@ -4117,6 +4359,11 @@ static HB_ERRCODE adsOrderListFocus( ADSAREAP pArea, LPDBORDERINFO pOrderInfo )
+@@ -4117,6 +4450,11 @@ static HB_ERRCODE adsOrderListFocus( ADSAREAP pArea, LPDBORDERINFO pOrderInfo )
  
     HB_TRACE( HB_TR_DEBUG, ( "adsOrderListFocus(%p, %p)", ( void * ) pArea, ( void * ) pOrderInfo ) );
  
@@ -379,7 +470,7 @@ index 4c37b03..f5bc08d 100644
     if( ! pArea->hOrdCurrent )
     {
        *pucTagName = '\0';
-@@ -4868,6 +5115,9 @@ static HB_ERRCODE adsClearFilter( ADSAREAP pArea )
+@@ -4868,6 +5206,9 @@ static HB_ERRCODE adsClearFilter( ADSAREAP pArea )
  {
     HB_TRACE( HB_TR_DEBUG, ( "adsClearFilter(%p)", ( void * ) pArea ) );
  
@@ -389,7 +480,7 @@ index 4c37b03..f5bc08d 100644
     /* resolve any pending relations */
     if( pArea->lpdbPendingRel )
        SELF_FORCEREL( &pArea->area );
-@@ -4933,6 +5183,24 @@ static HB_ERRCODE adsSetFilter( ADSAREAP pArea, LPDBFILTERINFO pFilterInfo )
+@@ -4933,6 +5274,24 @@ static HB_ERRCODE adsSetFilter( ADSAREAP pArea, LPDBFILTERINFO pFilterInfo )
  #endif
        }     /* else let SUPER handle filtering */
        pArea->area.dbfi.fOptimized = u32RetVal == AE_SUCCESS;
@@ -415,7 +506,7 @@ index 4c37b03..f5bc08d 100644
     }
  
 diff --git a/contrib/rddads/rddads.h b/contrib/rddads/rddads.h
-index 001f393..4dcb6d9 100644
+index 001f393..74328fc 100644
 --- a/contrib/rddads/rddads.h
 +++ b/contrib/rddads/rddads.h
 @@ -67,6 +67,32 @@
@@ -451,22 +542,27 @@ index 001f393..4dcb6d9 100644
  /* Auto-detect ACE version. */
  #if   defined( ADS_ROOT_DD_ALIAS )
     #define _ADS_LIB_VERSION  1110 /* or upper */
-@@ -147,6 +173,18 @@ typedef struct _ADSAREA_
+@@ -147,6 +173,23 @@ typedef struct _ADSAREA_
     ADSHANDLE hOrdCurrent;
     ADSHANDLE hStatement;
     char *    szQuery;
 +
 +   /* OpenADS Tier-2 fast-path: route a non-AOF SET FILTER forward bulk scan
-+      through the server-side FetchWhere op. One round-trip materialises every
-+      matching record number, replacing one round-trip per raw record (the
-+      remote-scan bottleneck). See adsSetFilter / adsGoTop / adsSkip in ads1.c. */
-+   HB_BOOL    fFwEligible;   /* filter qualifies (valid expr, not index-optimized) */
-+   HB_BOOL    fFwProbed;     /* remote applicability already committed */
-+   HB_BOOL    fFwActive;     /* recno list primed; forward scan served from it */
-+   char *     szFwExpr;      /* stored filter predicate for AdsFetchWhere */
-+   HB_ULONG * pFwRecNos;     /* primed matching record numbers (table order) */
-+   HB_ULONG   ulFwCount;     /* number of entries in pFwRecNos */
-+   HB_ULONG   ulFwPos;       /* index of the NEXT record to serve */
++      through the server-side FetchWhere op. The server evaluates the predicate
++      and returns matching rows (recno + field values) in batches; the scan
++      walks them from the client row cache via AdsFetchWhereApplyRow, so a
++      forward scan costs ceil(matches/batch) round-trips with NO AdsGotoRecord
++      per match. See adsSetFilter / adsGoTop / adsSkip in ads1.c. */
++   HB_BOOL    fFwEligible;    /* filter qualifies (valid expr, not index-optimized) */
++   HB_BOOL    fFwProbed;      /* remote applicability already committed */
++   HB_BOOL    fFwActive;      /* scan primed; forward scan served from batches */
++   HB_BOOL    fFwBatchEof;    /* current batch reached table EOF (no more batches) */
++   char *     szFwExpr;       /* stored filter predicate for AdsFetchWhere */
++   char *     szFwCols;       /* comma list of ALL fields (field order) for the batch */
++   ADSHANDLE  hFwRes;         /* live AdsFetchWhere result-set handle (0 = none) */
++   HB_ULONG   ulFwBatchRows;  /* rows in the current batch */
++   HB_ULONG   ulFwRow;        /* index of the NEXT row in the batch to serve */
++   HB_ULONG   ulFwRecNo;      /* recno of the last applied row (server-cursor sync) */
  } ADSAREA;
  
  typedef ADSAREA * ADSAREAP;

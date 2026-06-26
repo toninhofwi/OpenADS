@@ -408,4 +408,5 @@ EXPORTS
     AdsFetchWhereField
     AdsFetchWhereEof
     AdsFetchWhereClose
+    AdsFetchWhereApplyRow
 

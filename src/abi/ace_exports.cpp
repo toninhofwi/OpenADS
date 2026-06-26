@@ -20333,4 +20333,68 @@ UNSIGNED32 AdsFetchWhereClose(ADSHANDLE hRes) {
     return ok();
 }
 
+// ─ AdsFetchWhereApplyRow ──────────────────────────────────────────────────────
+// Load batch row `ulRow` (its recno + field values) into hTbl's RemoteTable
+// row cache, so AdsGetField / AdsGetRecordNum / AdsIsRecordDeleted / AdsAtEOF
+// serve that row with NO extra round-trip. This lets a forward filter scan
+// (rddads V2) walk the matched rows entirely from a batched AdsFetchWhere
+// result — one round-trip per batch instead of an AdsGotoRecord per match.
+//
+// The batch must have been fetched with WANT_RECNO. Values are matched to the
+// table's fields by column name (case-insensitive); columns the batch did not
+// request read back empty. Not applicable on local tables.
+UNSIGNED32 AdsFetchWhereApplyRow(ADSHANDLE hRes, UNSIGNED32 ulRow, ADSHANDLE hTbl) {
+    auto* rt = get_remote_table(hTbl);
+    if (rt == nullptr)
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsFetchWhereApplyRow: not applicable on a local table");
+
+    // Ensure the field schema is cached so we can map columns → field indices.
+    // (One wire round-trip the first time only; rddads has it cached already.)
+    if (!rt->fields_cached) {
+        auto d = rt->conn->describe_table(rt->id);
+        if (!d) return fail(d.error());
+        rt->fields = std::move(d).value();
+        rt->fields_cached = true;
+    }
+
+    auto upper = [](std::string s) {
+        for (auto& c : s)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    std::lock_guard<std::mutex> lk(fw_mu());
+    auto it = fw_results().find(hRes);
+    if (it == fw_results().end())
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsFetchWhereApplyRow: invalid handle");
+    const auto& res = it->second;
+    if (ulRow >= res.batch.rows.size())
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsFetchWhereApplyRow: row out of range");
+    if (ulRow >= res.batch.recnos.size())
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsFetchWhereApplyRow: batch has no recnos (need WANT_RECNO)");
+
+    const auto& vals = res.batch.rows[ulRow];
+    std::vector<std::string> row(rt->fields.size());
+    for (std::size_t j = 0; j < res.cols.size() && j < vals.size(); ++j) {
+        std::string want = upper(res.cols[j]);
+        for (std::size_t i = 0; i < rt->fields.size(); ++i) {
+            if (upper(rt->fields[i].name) == want) { row[i] = vals[j]; break; }
+        }
+    }
+
+    rt->current_row       = std::move(row);
+    rt->row_valid         = true;
+    rt->current_recno     = res.batch.recnos[ulRow];
+    rt->current_deleted   = false;        // FetchWhere skip(1) honours SET DELETED
+    rt->found_cached      = true;
+    rt->current_found     = false;        // a scan move clears Found()
+    rt->prefetch_queue.clear();           // the cursor is driven by FetchWhere now
+    rt->prefetch_consumed = 0;
+    return ok();
+}
+
 } // extern "C"  — AdsFetchWhere* export block
