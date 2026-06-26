@@ -22,6 +22,17 @@ namespace openads::engine {
 static std::atomic<bool> g_show_deleted{true};
 bool show_deleted() noexcept { return g_show_deleted.load(); }
 void set_show_deleted(bool v) noexcept { g_show_deleted.store(v); }
+
+// Global SET EXACT flag. Default false = Clipper SET EXACT OFF.
+static std::atomic<bool> g_set_exact{false};
+bool set_exact() noexcept { return g_set_exact.load(); }
+void set_set_exact(bool v) noexcept { g_set_exact.store(v); }
+
+// Global epoch (pivot year for 2-digit dates). Default 1900.
+static std::atomic<std::uint16_t> g_epoch{1900};
+std::uint16_t epoch() noexcept { return g_epoch.load(); }
+void set_epoch(std::uint16_t v) noexcept { g_epoch.store(v); }
+
 } // namespace openads::engine
 
 namespace openads::abi { inline bool show_deleted() noexcept {

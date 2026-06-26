@@ -68,5 +68,5 @@ AdsDisconnect(hConn);
 
 ---
 
-[← AdsGetDateFormat]({{ site.baseurl }}/en/functions/ads-get-date-format/)
-[AdsGetDefault →]({{ site.baseurl }}/en/functions/ads-get-default/)
+[← AdsGetAOF]({{ site.baseurl }}/en/functions/ads-get-aof/)
+[AdsGetDeleted →]({{ site.baseurl }}/en/functions/ads-get-deleted/)

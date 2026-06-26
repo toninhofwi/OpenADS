@@ -64,4 +64,4 @@ else
 ---
 
 [← AdsGetKeyLength]({{ site.baseurl }}/en/functions/ads-get-key-length/)
-[AdsGetLastTableUpdate →]({{ site.baseurl }}/en/functions/ads-get-last-table-update/)
+[AdsGetNumActiveLinks →]({{ site.baseurl }}/en/functions/ads-get-num-active-links/)

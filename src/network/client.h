@@ -238,6 +238,11 @@ struct RemoteTable {
     // gates the fast path: when false, AdsIsFound asks the server.
     bool found_cached  = false;
     bool current_found = false;
+    // Filter / AOF expression strings (stored for AdsGetFilter / AdsGetAOF).
+    std::string filter_expr;
+    std::string aof_expr;
+    // Table alias (stored for AdsGetTableAlias).
+    std::string alias;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag
