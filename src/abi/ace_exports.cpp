@@ -6559,6 +6559,15 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->lock_record(ft, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hTable)) {
         if (pt->conn == nullptr)
@@ -6594,6 +6603,15 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->unlock_record(ft, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hTable)) {
         if (pt->conn == nullptr)
@@ -6626,6 +6644,15 @@ UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->lock_table(ft);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hTable)) {
         if (pt->conn == nullptr)
@@ -6655,6 +6682,15 @@ UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         return ok();
     }
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hTable)) {
+        if (ft->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = ft->conn->unlock_table(ft);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hTable)) {
         if (pt->conn == nullptr)

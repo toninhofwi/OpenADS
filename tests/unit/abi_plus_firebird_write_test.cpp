@@ -96,4 +96,36 @@ TEST_CASE("ABI: firebird AdsAppendRecord + AdsSetString + AdsWriteRecord + AdsDe
     REQUIRE(AdsDisconnect(hConn) == 0);
 }
 
+TEST_CASE("ABI: firebird AdsLockRecord is cross-connection (lock table)") {
+    const char* db = test_firebird_db();
+    if (db == nullptr) {
+        MESSAGE("OPENADS_TEST_FIREBIRD_DB not set; skipping live Firebird lock test");
+        return;
+    }
+
+    auto open_clientes = [&](ADSHANDLE& hConn) -> ADSHANDLE {
+        hConn = connect_firebird(db);
+        UNSIGNED8 tbl_name[32] = "clientes";
+        ADSHANDLE hTable = 0;
+        REQUIRE(AdsOpenTable(hConn, tbl_name, tbl_name,
+                             ADS_DEFAULT, 0, 0, 0, ADS_DEFAULT, &hTable) == 0);
+        return hTable;
+    };
+
+    ADSHANDLE hConnA = 0, hConnB = 0;
+    ADSHANDLE hA = open_clientes(hConnA);   // two distinct embedded attachments
+    ADSHANDLE hB = open_clientes(hConnB);
+
+    CHECK(AdsLockRecord(hA, 1) == 0);
+    CHECK(AdsLockRecord(hB, 1) != 0);       // refused: A holds it
+    CHECK(AdsUnlockRecord(hA, 1) == 0);
+    CHECK(AdsLockRecord(hB, 1) == 0);       // now free
+    CHECK(AdsUnlockRecord(hB, 1) == 0);
+
+    REQUIRE(AdsCloseTable(hA) == 0);
+    REQUIRE(AdsCloseTable(hB) == 0);
+    REQUIRE(AdsDisconnect(hConnA) == 0);
+    REQUIRE(AdsDisconnect(hConnB) == 0);
+}
+
 #endif
