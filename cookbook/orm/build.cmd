@@ -42,11 +42,11 @@ rem  point OADS_ORM_SRC at: the stable ORM (a handful of files) or the newer
 rem  hb_orm2 (more files: casts/relations/navexec/scopes/observers/...).
 rem  (hb_orm2 ships an hbo_ace_stub.prg that is empty unless -dHBORM_NO_ENGINE,
 rem   so globbing it here is harmless -- no duplicate symbols.)
-for %%P in ("%OADS_ORM_SRC%\*.prg") do >>"%HBP%" echo %%~fP
->>"%HBP%" echo -I%OADS_ORM_SRC%\..\include
->>"%HBP%" echo -I%OPENADS_INCDIR%
+for %%P in ("%OADS_ORM_SRC%\*.prg") do >>"%HBP%" echo "%%~fP"
+>>"%HBP%" echo "-I%OADS_ORM_SRC%\..\include"
+>>"%HBP%" echo "-I%OPENADS_INCDIR%"
 >>"%HBP%" echo -lrddads
->>"%HBP%" echo -L%OPENADS_LIB%
+>>"%HBP%" echo "-L%OPENADS_LIB%"
 >>"%HBP%" echo -l%OPENADS_ACELIB%
 rem  hb_orm2 carries an in-process SQLite direct driver (hbo_direto/conn_direto);
 rem  globbing those pulls sqlite3_* symbols, so link the Harbour sqlite3 contrib.

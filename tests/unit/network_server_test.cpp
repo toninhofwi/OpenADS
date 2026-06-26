@@ -124,7 +124,15 @@ void m12_write_dbf(const std::filesystem::path& path,
     std::vector<std::uint8_t> file;
     std::array<std::uint8_t, 32> hdr{};
     hdr[0]  = 0x03;
-    hdr[4]  = static_cast<std::uint8_t>(tags.size());
+    // Record count is a 32-bit LE field at bytes 4..7 — write all four
+    // so the fixture stays valid past 255 rows (scale tests).
+    {
+        auto n = static_cast<std::uint32_t>(tags.size());
+        hdr[4] = static_cast<std::uint8_t>( n        & 0xFFu);
+        hdr[5] = static_cast<std::uint8_t>((n >>  8) & 0xFFu);
+        hdr[6] = static_cast<std::uint8_t>((n >> 16) & 0xFFu);
+        hdr[7] = static_cast<std::uint8_t>((n >> 24) & 0xFFu);
+    }
     hdr[8]  = 32 + 32 + 1;
     hdr[10] = 1 + 4;
     file.insert(file.end(), hdr.begin(), hdr.end());
@@ -752,6 +760,314 @@ TEST_CASE("M12.11 batch fetch returns multiple rows in one frame") {
     fs::remove_all(dir, ec);
 }
 
+// =====================================================================
+// Tier-2 — server-side filtered scan (FetchWhere, 0xA4 / 0xA5).
+// =====================================================================
+
+TEST_CASE("Tier-2 FetchWhere filters rows server-side in one round-trip") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_t2_fetchwhere";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf",
+                  {"AAAA","BBBB","CCCC","DDDD","EEEE","FFFF","GGGG"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    openads::network::RemoteConnection rc;
+    REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
+    auto tid_r = rc.open_table("data.dbf");
+    REQUIRE(tid_r.has_value());
+    std::uint32_t tid = tid_r.value();
+    REQUIRE(rc.goto_top(tid).has_value());
+
+    auto trim = [](std::string s) {
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        return s;
+    };
+
+    // A predicate the AOF subset can't index-optimise on a plain DBF:
+    // the whole 7-row table is scanned server-side and only the 4
+    // matching rows cross the wire — in a SINGLE round-trip.
+    auto rows_r = rc.fetch_where(tid, 100, "TAG > 'CCCC'", {"TAG"});
+    REQUIRE(rows_r.has_value());
+    auto rows = rows_r.value();
+    REQUIRE(rows.size() == 4);
+    CHECK(trim(rows[0][0]) == "DDDD");
+    CHECK(trim(rows[1][0]) == "EEEE");
+    CHECK(trim(rows[2][0]) == "FFFF");
+    CHECK(trim(rows[3][0]) == "GGGG");
+
+    // A predicate matching nothing returns an empty set (still one RTT).
+    REQUIRE(rc.goto_top(tid).has_value());
+    auto none_r = rc.fetch_where(tid, 100, "TAG = 'ZZZZ'", {"TAG"});
+    REQUIRE(none_r.has_value());
+    CHECK(none_r.value().empty());
+
+    REQUIRE(rc.close_table(tid).has_value());
+    rc.disconnect();
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Tier-2 FetchWhere caps each batch at max_rows matches and resumes") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_t2_fetchwhere_batch";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf",
+                  {"AAAA","BBBB","CCCC","DDDD","EEEE","FFFF","GGGG"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    openads::network::RemoteConnection rc;
+    REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
+    auto tid_r = rc.open_table("data.dbf");
+    REQUIRE(tid_r.has_value());
+    std::uint32_t tid = tid_r.value();
+    REQUIRE(rc.goto_top(tid).has_value());
+
+    auto trim = [](std::string s) {
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        return s;
+    };
+
+    // 5 rows match `TAG >= 'CCCC'` (CCCC..GGGG). With max_rows=2 the scan
+    // returns them across 3 batches (2, 2, 1) — the final short batch
+    // signals EOF — while every non-matching row is skipped server-side.
+    auto b1 = rc.fetch_where(tid, 2, "TAG >= 'CCCC'", {"TAG"});
+    REQUIRE(b1.has_value());
+    REQUIRE(b1.value().size() == 2);
+    CHECK(trim(b1.value()[0][0]) == "CCCC");
+    CHECK(trim(b1.value()[1][0]) == "DDDD");
+
+    auto b2 = rc.fetch_where(tid, 2, "TAG >= 'CCCC'", {"TAG"});
+    REQUIRE(b2.has_value());
+    REQUIRE(b2.value().size() == 2);
+    CHECK(trim(b2.value()[0][0]) == "EEEE");
+    CHECK(trim(b2.value()[1][0]) == "FFFF");
+
+    auto b3 = rc.fetch_where(tid, 2, "TAG >= 'CCCC'", {"TAG"});
+    REQUIRE(b3.has_value());
+    REQUIRE(b3.value().size() == 1);     // short batch ⇒ EOF
+    CHECK(trim(b3.value()[0][0]) == "GGGG");
+
+    REQUIRE(rc.close_table(tid).has_value());
+    rc.disconnect();
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Tier-2 FetchWhere honours a boolean (.OR.) predicate") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_t2_fetchwhere_bool";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf",
+                  {"AAAA","BBBB","CCCC","DDDD","EEEE","FFFF","GGGG"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    openads::network::RemoteConnection rc;
+    REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
+    auto tid_r = rc.open_table("data.dbf");
+    REQUIRE(tid_r.has_value());
+    std::uint32_t tid = tid_r.value();
+    REQUIRE(rc.goto_top(tid).has_value());
+
+    auto trim = [](std::string s) {
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        return s;
+    };
+
+    auto rows_r = rc.fetch_where(
+        tid, 100, "TAG = 'AAAA' .OR. TAG = 'GGGG'", {"TAG"});
+    REQUIRE(rows_r.has_value());
+    auto rows = rows_r.value();
+    REQUIRE(rows.size() == 2);
+    CHECK(trim(rows[0][0]) == "AAAA");
+    CHECK(trim(rows[1][0]) == "GGGG");
+
+    REQUIRE(rc.close_table(tid).has_value());
+    rc.disconnect();
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Tier-2 FetchWhere reply carries the trailing EOF flag + rejects bad id") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_t2_fetchwhere_raw";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA","BBBB"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    auto cli = connect_tcp("127.0.0.1", srv.port());
+    REQUIRE(cli.has_value());
+    Socket cs = cli.value();
+
+    // Connect.
+    {
+        Frame req;
+        req.opcode = Opcode::Connect;
+        std::string ds = dir.string();
+        auto pushlen = [](std::vector<std::uint8_t>& out, std::uint16_t n) {
+            out.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
+            out.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
+        };
+        pushlen(req.payload, static_cast<std::uint16_t>(ds.size()));
+        req.payload.insert(req.payload.end(), ds.begin(), ds.end());
+        pushlen(req.payload, 0);
+        pushlen(req.payload, 0);
+        REQUIRE(write_frame(cs, req).has_value());
+        REQUIRE(read_frame(cs).has_value());
+    }
+
+    // OpenTable.
+    std::uint32_t tid = 0;
+    {
+        Frame req;
+        req.opcode = Opcode::OpenTable;
+        std::string leaf = "data.dbf";
+        req.payload.assign(leaf.begin(), leaf.end());
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::OpenTableAck);
+        tid = static_cast<std::uint32_t>(rep.value().payload[0]) |
+              (static_cast<std::uint32_t>(rep.value().payload[1]) <<  8) |
+              (static_cast<std::uint32_t>(rep.value().payload[2]) << 16) |
+              (static_cast<std::uint32_t>(rep.value().payload[3]) << 24);
+    }
+
+    auto build_fw = [&](std::uint32_t id, std::uint32_t maxr,
+                        const std::string& expr,
+                        const std::vector<std::string>& cols) {
+        Frame req;
+        req.opcode = Opcode::FetchWhere;
+        m12_write_u32(req.payload, id);
+        m12_write_u32(req.payload, maxr);
+        req.payload.push_back(
+            static_cast<std::uint8_t>( expr.size()       & 0xFFu));
+        req.payload.push_back(
+            static_cast<std::uint8_t>((expr.size() >> 8) & 0xFFu));
+        req.payload.insert(req.payload.end(), expr.begin(), expr.end());
+        req.payload.push_back(static_cast<std::uint8_t>(cols.size()));
+        for (auto& c : cols) {
+            req.payload.push_back(static_cast<std::uint8_t>(c.size()));
+            req.payload.insert(req.payload.end(), c.begin(), c.end());
+        }
+        return req;
+    };
+
+    // Match-all over 2 rows: reply ends with eof == 1.
+    {
+        REQUIRE(write_frame(cs, build_fw(tid, 100, "TAG > 'AAA'", {"TAG"}))
+                    .has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::FetchWhereAck);
+        const auto& pl = rep.value().payload;
+        REQUIRE(pl.size() >= 6);
+        std::uint32_t nrows = static_cast<std::uint32_t>(pl[0]) |
+            (static_cast<std::uint32_t>(pl[1]) <<  8) |
+            (static_cast<std::uint32_t>(pl[2]) << 16) |
+            (static_cast<std::uint32_t>(pl[3]) << 24);
+        CHECK(nrows == 2);
+        CHECK(pl.back() == 1);                 // scan reached EOF
+    }
+
+    // Bad table id ⇒ Error frame, not a malformed ack.
+    {
+        REQUIRE(write_frame(cs, build_fw(0xDEADBEEF, 10, "TAG > 'A'", {"TAG"}))
+                    .has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        CHECK(rep.value().opcode == Opcode::Error);
+    }
+
+    sock_close(cs);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Tier-2 FetchWhere filters a large table server-side at scale") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_t2_fetchwhere_scale";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // 2000 rows, of which exactly 500 carry TAG = "KEEP" (every 4th),
+    // interleaved with non-matching "SKIP" rows. A navigational client
+    // would read all 2000 over the wire to find the 500; FetchWhere
+    // walks them server-side and returns only the matches.
+    std::vector<std::string> tags;
+    tags.reserve(2000);
+    const int kTotal = 2000;
+    const int kEvery = 4;            // 1 in 4 matches ⇒ 500 matches
+    int expected_matches = 0;
+    for (int i = 0; i < kTotal; ++i) {
+        if (i % kEvery == 0) { tags.emplace_back("KEEP"); ++expected_matches; }
+        else                   tags.emplace_back("SKIP");
+    }
+    REQUIRE(expected_matches == 500);
+    m12_write_dbf(dir / "data.dbf", tags);
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    openads::network::RemoteConnection rc;
+    REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
+    auto tid_r = rc.open_table("data.dbf");
+    REQUIRE(tid_r.has_value());
+    std::uint32_t tid = tid_r.value();
+
+    auto trim = [](std::string s) {
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        return s;
+    };
+
+    // One call, large cap: the whole 2000-row table is scanned
+    // server-side and exactly the 500 matches come back.
+    REQUIRE(rc.goto_top(tid).has_value());
+    auto all_r = rc.fetch_where(tid, 100000, "TAG = 'KEEP'", {"TAG"});
+    REQUIRE(all_r.has_value());
+    REQUIRE(all_r.value().size() == 500);
+    for (auto& row : all_r.value()) CHECK(trim(row[0]) == "KEEP");
+
+    // Batched: 250 per call ⇒ exactly 2 batches (250 + 250), the second
+    // short of nothing here so a 3rd call returns 0 at EOF. Every
+    // batch is bounded by matches, not by rows scanned.
+    REQUIRE(rc.goto_top(tid).has_value());
+    std::size_t total = 0;
+    int calls = 0;
+    for (;;) {
+        auto b = rc.fetch_where(tid, 250, "TAG = 'KEEP'", {"TAG"});
+        REQUIRE(b.has_value());
+        ++calls;
+        total += b.value().size();
+        if (b.value().size() < 250) break;   // short batch ⇒ EOF
+        REQUIRE(calls < 10);                  // guard against a runaway loop
+    }
+    CHECK(total == 500);
+    CHECK(calls == 3);                        // 250 + 250 + 0(EOF)
+
+    REQUIRE(rc.close_table(tid).has_value());
+    rc.disconnect();
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M12.13 PlainTransport round-trips frames identically to raw Socket") {
     using openads::network::PlainTransport;
     using openads::network::make_plain_transport;
@@ -855,6 +1171,76 @@ TEST_CASE("M12.3 server stop() drops in-flight connection cleanly") {
     srv.stop();
     sock_close(cs);
     CHECK_FALSE(srv.running());
+}
+
+TEST_CASE("Enterprise: server_max_sessions caps concurrent sessions") {
+    Server srv;
+    srv.set_max_sessions(2);
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    auto port = srv.port();
+
+    auto hello = [&](Socket cs) {
+        Frame req; req.opcode = Opcode::Hello;
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        return rep.has_value() && rep.value().opcode == Opcode::HelloAck;
+    };
+
+    // Two sessions, each held open (their threads block on the next read),
+    // so the server sits at capacity.
+    auto c1 = connect_tcp("127.0.0.1", port); REQUIRE(c1.has_value());
+    CHECK(hello(c1.value()));
+    auto c2 = connect_tcp("127.0.0.1", port); REQUIRE(c2.has_value());
+    CHECK(hello(c2.value()));
+
+    // A third connection must be refused (server closes it before it serves).
+    auto c3 = connect_tcp("127.0.0.1", port); REQUIRE(c3.has_value());
+    bool rejected = false;
+    for (int i = 0; i < 300 && !rejected; ++i) {
+        if (srv.rejected_sessions() >= 1) { rejected = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(rejected);
+    CHECK(srv.active_session_threads() <= 2);
+
+    sock_close(c1.value());
+    sock_close(c2.value());
+    sock_close(c3.value());
+    srv.stop();
+}
+
+TEST_CASE("Enterprise: finished session threads are reaped (no unbounded growth)") {
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    auto port = srv.port();
+
+    // Connect / Hello / disconnect many times. Without reaping the server's
+    // thread set would grow to ~N; with reaping it stays tiny because each
+    // accept first joins+drops the threads whose loop already returned.
+    const int N = 30;
+    for (int i = 0; i < N; ++i) {
+        auto c = connect_tcp("127.0.0.1", port);
+        REQUIRE(c.has_value());
+        Frame req; req.opcode = Opcode::Hello;
+        REQUIRE(write_frame(c.value(), req).has_value());
+        auto rep = read_frame(c.value());
+        CHECK(rep.has_value());
+        sock_close(c.value());
+    }
+
+    // Drive a few more accept iterations so the tail gets reaped, and assert
+    // the live set stabilises at a small number — not N.
+    std::uint32_t active = static_cast<std::uint32_t>(N);
+    for (int i = 0; i < 300; ++i) {
+        auto c = connect_tcp("127.0.0.1", port);   // each accept reaps first
+        if (c.has_value()) sock_close(c.value());
+        active = srv.active_session_threads();
+        if (active <= 3) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(active <= 3);
+
+    srv.stop();
 }
 
 TEST_CASE("Server::build_mg_snapshot counts live sessions") {

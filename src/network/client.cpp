@@ -576,6 +576,78 @@ RemoteConnection::fetch_batch(std::uint32_t id,
     return rows;
 }
 
+util::Result<std::vector<std::vector<std::string>>>
+RemoteConnection::fetch_where(std::uint32_t id,
+                              std::uint32_t max_rows,
+                              const std::string& where_expr,
+                              const std::vector<std::string>& columns) {
+    if (columns.size() > 0xFFu) {
+        return util::Error{5000, 0,
+            "FetchWhere: too many columns (max 255)", ""};
+    }
+    if (where_expr.size() > 0xFFFFu) {
+        return util::Error{5000, 0,
+            "FetchWhere: predicate too long (max 65535)", ""};
+    }
+    Frame req;
+    req.opcode = Opcode::FetchWhere;
+    write_u32_le(id, req.payload);
+    write_u32_le(max_rows, req.payload);
+    req.payload.push_back(
+        static_cast<std::uint8_t>( where_expr.size()       & 0xFFu));
+    req.payload.push_back(
+        static_cast<std::uint8_t>((where_expr.size() >> 8) & 0xFFu));
+    req.payload.insert(req.payload.end(),
+                       where_expr.begin(), where_expr.end());
+    req.payload.push_back(static_cast<std::uint8_t>(columns.size()));
+    for (auto& c : columns) {
+        if (c.size() > 0xFFu) {
+            return util::Error{5000, 0,
+                "FetchWhere: column name too long (max 255)", c};
+        }
+        req.payload.push_back(static_cast<std::uint8_t>(c.size()));
+        req.payload.insert(req.payload.end(), c.begin(), c.end());
+    }
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::FetchWhereAck ||
+        rep.value().payload.size() < 5) {
+        return util::Error{5000, 0, "FetchWhere: server error", ""};
+    }
+    const auto& pl = rep.value().payload;
+    std::size_t   p = 0;
+    std::uint32_t nrows = read_u32_le(pl.data() + p); p += 4;
+    std::uint8_t  ncols = pl[p++];
+    std::vector<std::vector<std::string>> rows;
+    rows.reserve(nrows);
+    for (std::uint32_t r = 0; r < nrows; ++r) {
+        std::vector<std::string> row;
+        row.reserve(ncols);
+        for (std::uint8_t c = 0; c < ncols; ++c) {
+            if (p + 2 > pl.size()) {
+                return util::Error{5000, 0,
+                    "FetchWhere: truncated payload (vlen)", ""};
+            }
+            std::uint16_t vlen = static_cast<std::uint16_t>(
+                static_cast<std::uint32_t>(pl[p]) |
+                (static_cast<std::uint32_t>(pl[p + 1]) << 8));
+            p += 2;
+            if (p + vlen > pl.size()) {
+                return util::Error{5000, 0,
+                    "FetchWhere: truncated payload (val)", ""};
+            }
+            row.emplace_back(reinterpret_cast<const char*>(pl.data() + p),
+                             vlen);
+            p += vlen;
+        }
+        rows.push_back(std::move(row));
+    }
+    // A trailing [u8 eof] byte follows the matrix (1 = scan reached
+    // EOF). Slice-1 callers use the rows.size() < max_rows invariant to
+    // detect end-of-scan, so the flag is simply tolerated here.
+    return rows;
+}
+
 util::Result<std::uint32_t>
 RemoteConnection::execute_sql(const std::string& sql) {
     Frame req;

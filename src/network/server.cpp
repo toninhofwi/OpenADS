@@ -2,6 +2,7 @@
 
 #include "engine/aof_eval.h"
 #include "engine/aof_expr.h"
+#include "engine/index_expr.h"
 #include "engine/table.h"
 #include "mgmt/mg_collector.h"
 #include "mgmt/mg_stats.h"
@@ -10,6 +11,7 @@
 #include "openads/ace.h"
 #include "openads/error.h"
 #include "session/connection.h"
+#include "sql_backend/enterprise_config.h"
 
 #include <cstring>
 #include <filesystem>
@@ -149,7 +151,7 @@ mgmt::MgSnapshot Server::build_mg_snapshot() const {
     {
         std::lock_guard<std::mutex> g(sessions_mu_);
         snap.worker_threads =
-            static_cast<std::uint32_t>(sessions_.size());
+            static_cast<std::uint32_t>(session_threads_.size());
     }
 
     std::uint32_t conn_no = 1;
@@ -263,9 +265,16 @@ bool Server::kill_session_by_conn_no(std::uint16_t conn_no) {
 util::Result<void> Server::start(const std::string& host,
                                  std::uint16_t port) {
     if (running_.load()) return {};
+    // Resolve enterprise limits once at start. A test/embedder override wins;
+    // otherwise take the env-loaded EnterpriseConfig (OPENADS_SERVER_*).
+    const auto& ecfg = openads::sql_backend::enterprise_config();
+    max_sessions_ = (max_sessions_override_ != 0)
+                        ? max_sessions_override_
+                        : ecfg.server_max_sessions;
     ListenerOptions opts;
     opts.host = host;
     opts.port = port;
+    opts.backlog = static_cast<int>(ecfg.server_listen_backlog);
     auto l = listen_tcp(opts);
     if (!l) return l.error();
     listener_ = l.value();
@@ -297,11 +306,32 @@ void Server::stop() noexcept {
     }
     sock_close(listener_);
     if (accept_thread_.joinable()) accept_thread_.join();
-    std::lock_guard<std::mutex> lk(sessions_mu_);
-    for (auto& t : sessions_) {
-        if (t.joinable()) t.join();
+    // Wake any session thread blocked in recv() by closing its socket from the
+    // outside (same mechanism kill_session uses). Without this, a client that
+    // connected but never sent another frame leaves its session thread parked
+    // in read_frame forever, and the join() below would hang on it.
+    {
+        std::lock_guard<std::mutex> lk(info_mu_);
+        for (auto& kv : sockets_) {
+            Socket s = kv.second;
+            sock_close(s);
+        }
+        sockets_.clear();
     }
-    sessions_.clear();
+    // Move the session-thread set out UNDER sessions_mu_, then join with the
+    // lock RELEASED. A session thread, right after session_loop returns, takes
+    // sessions_mu_ to record itself in finished_threads_; joining it while we
+    // still hold sessions_mu_ would deadlock (it blocks on the mutex, we block
+    // on the join).
+    std::unordered_map<std::uint64_t, std::thread> to_join;
+    {
+        std::lock_guard<std::mutex> lk(sessions_mu_);
+        to_join.swap(session_threads_);
+        finished_threads_.clear();
+    }
+    for (auto& kv : to_join) {
+        if (kv.second.joinable()) kv.second.join();
+    }
 }
 
 void Server::accept_loop() {
@@ -321,11 +351,59 @@ void Server::accept_loop() {
             break;
         }
         Socket s = cli.value();
-        std::lock_guard<std::mutex> lk(sessions_mu_);
-        sessions_.emplace_back([this, s]() mutable {
-            this->session_loop(s);
-        });
+        // Reap threads whose session_loop already returned so the live set
+        // stays bounded on a long-running server.
+        reap_finished_threads_();
+        {
+            std::lock_guard<std::mutex> lk(sessions_mu_);
+            if (max_sessions_ != 0 &&
+                session_threads_.size() >= max_sessions_) {
+                // At capacity: refuse this connection instead of spawning an
+                // unbounded number of threads. The client sees a dropped
+                // connection (a future milestone can send a "busy" frame).
+                rejected_sessions_.fetch_add(1);
+                sock_close(s);
+                continue;
+            }
+            std::uint64_t tid = thread_seq_.fetch_add(1);
+            // The session records its own id in finished_threads_ when its loop
+            // returns; the next reap joins and drops it. The push takes
+            // sessions_mu_, which this scope holds during emplace, so the id is
+            // in the map before the thread can mark itself finished.
+            session_threads_.emplace(tid,
+                std::thread([this, s, tid]() mutable {
+                    this->session_loop(s);
+                    std::lock_guard<std::mutex> lk2(sessions_mu_);
+                    finished_threads_.push_back(tid);
+                }));
+        }
     }
+}
+
+void Server::reap_finished_threads_() {
+    // Collect the finished threads UNDER sessions_mu_, then join them with the
+    // lock RELEASED. Joining under the lock would block accept_loop and other
+    // exiting session threads (which need sessions_mu_ to register themselves)
+    // for the duration of every join — a latency spike under load.
+    std::vector<std::thread> to_join;
+    {
+        std::lock_guard<std::mutex> lk(sessions_mu_);
+        for (std::uint64_t id : finished_threads_) {
+            auto it = session_threads_.find(id);
+            if (it == session_threads_.end()) continue;
+            to_join.push_back(std::move(it->second));
+            session_threads_.erase(it);
+        }
+        finished_threads_.clear();
+    }
+    for (auto& t : to_join) {
+        if (t.joinable()) t.join();
+    }
+}
+
+std::uint32_t Server::active_session_threads() const {
+    std::lock_guard<std::mutex> lk(sessions_mu_);
+    return static_cast<std::uint32_t>(session_threads_.size());
 }
 
 namespace {
@@ -1994,6 +2072,117 @@ void Server::session_loop(Socket s) {
                 reply.payload.push_back(ncols);
                 reply.payload.insert(reply.payload.end(),
                                      rowbuf.begin(), rowbuf.end());
+                break;
+            }
+            case Opcode::FetchWhere: {
+                // Tier-2 server-side filtered scan. Payload:
+                //   [u32 tid][u32 max_rows][u16 exprlen][expr]
+                //   [u8 ncols][u8 nlen][name]...
+                // Reply (FetchWhereAck):
+                //   [u32 nrows][u8 ncols]
+                //   [per row, per col: u16 vlen][val]
+                //   [u8 eof]
+                // The server walks the table from the cursor's current
+                // position, evaluating `expr` (Clipper-style FOR
+                // predicate) per row, and emits only the matching rows'
+                // requested columns until `max_rows` matches or EOF.
+                // The cursor is left positioned past the last examined
+                // row so a follow-up FetchWhere resumes the scan.
+                if (f.payload.size() < 11) {
+                    reply = err("FetchWhere: bad payload"); break;
+                }
+                std::uint32_t id      = read_u32_le(f.payload.data());
+                std::uint32_t maxrows = read_u32_le(f.payload.data() + 4);
+                std::uint16_t elen    =
+                    static_cast<std::uint16_t>(
+                        static_cast<std::uint32_t>(f.payload[8]) |
+                        (static_cast<std::uint32_t>(f.payload[9]) << 8));
+                std::size_t p = 10;
+                if (p + elen > f.payload.size()) {
+                    reply = err("FetchWhere: truncated expr"); break;
+                }
+                std::string expr(
+                    reinterpret_cast<const char*>(f.payload.data() + p),
+                    elen);
+                p += elen;
+                if (p + 1 > f.payload.size()) {
+                    reply = err("FetchWhere: missing ncols"); break;
+                }
+                std::uint8_t ncols = f.payload[p++];
+                std::vector<std::string> cols;
+                cols.reserve(ncols);
+                bool parse_ok = true;
+                for (std::uint8_t c = 0; c < ncols && parse_ok; ++c) {
+                    if (p + 1 > f.payload.size()) {
+                        reply = err("FetchWhere: truncated col header");
+                        parse_ok = false; break;
+                    }
+                    std::uint8_t nlen = f.payload[p++];
+                    if (p + nlen > f.payload.size()) {
+                        reply = err("FetchWhere: truncated col name");
+                        parse_ok = false; break;
+                    }
+                    cols.emplace_back(
+                        reinterpret_cast<const char*>(f.payload.data() + p),
+                        nlen);
+                    p += nlen;
+                }
+                if (!parse_ok) break;
+
+                auto write_u16_le = [](std::vector<std::uint8_t>& out,
+                                       std::uint16_t v) {
+                    out.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+                    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+                };
+
+                // Slice 1 is base-table only: a SQL cursor already
+                // filters server-side via its WHERE clause, and the
+                // FOR-predicate evaluator needs an engine Table to read
+                // the current record. Reject cursor ids with a clear
+                // error rather than silently mis-filtering.
+                if (cursor_tbls.find(id) != cursor_tbls.end()) {
+                    reply = err("FetchWhere: not supported on SQL "
+                                "cursors (use SQL WHERE)");
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("FetchWhere: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("FetchWhere: lookup failed"); break; }
+
+                reply.opcode = Opcode::FetchWhereAck;
+                std::vector<std::uint8_t> rowbuf;
+                std::uint32_t nrows_out = 0;
+                while (!tbl->eof() && nrows_out < maxrows) {
+                    if (openads::engine::evaluate_index_expr_truthy(
+                            *tbl, expr)) {
+                        for (auto& cn : cols) {
+                            std::int32_t fi = tbl->field_index(cn);
+                            std::string val;
+                            if (fi >= 0) {
+                                auto v = tbl->read_field(
+                                    static_cast<std::uint16_t>(fi));
+                                if (v) val = v.value().as_string;
+                            }
+                            write_u16_le(rowbuf,
+                                static_cast<std::uint16_t>(val.size()));
+                            rowbuf.insert(rowbuf.end(),
+                                          val.begin(), val.end());
+                        }
+                        ++nrows_out;
+                    }
+                    auto sk = tbl->skip(1);
+                    if (!sk) break;
+                }
+
+                write_u32_le(nrows_out, reply.payload);
+                reply.payload.push_back(ncols);
+                reply.payload.insert(reply.payload.end(),
+                                     rowbuf.begin(), rowbuf.end());
+                reply.payload.push_back(
+                    static_cast<std::uint8_t>(tbl->eof() ? 1 : 0));
                 break;
             }
             case Opcode::Reindex: {
