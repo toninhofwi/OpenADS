@@ -15,6 +15,7 @@
 #include "network/server.h"
 #include "platform/dll.h"
 #include "tools/serverd/config_ini.h"
+#include "tools/serverd/setup_wizard.h"
 #if defined(OPENADS_WITH_HTTP)
 #include "tools/serverd/http_server.h"
 #endif
@@ -57,6 +58,8 @@ void usage(const char* argv0) {
         "               (repeatable; if none given, console is open)\n"
         "  --config     read settings from an openads.ini file (CLI flags\n"
         "               given after it still win); see openads.ini.sample\n"
+        "  --setup      interactive first-run wizard: asks port/path/etc,\n"
+        "               writes an openads.ini and (optionally) a service\n"
         "  --version    print version + exit\n"
 #if defined(_WIN32)
         "  --install-service [extra-flags...]   register Windows Service\n"
@@ -145,6 +148,20 @@ bool load_config_and_args(int argc, char** argv, Args& out) {
     }
     // Second pass: CLI flags overlay the file.
     return parse_args(argc, argv, out);
+}
+
+// Best-effort absolute path to this executable, for embedding in a generated
+// systemd/launchd unit. Falls back to argv0 if it cannot be resolved.
+std::string current_exe_path(const char* argv0) {
+#if defined(_WIN32)
+    char buf[MAX_PATH];
+    DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) return std::string(buf, n);
+#else
+    char buf[4096];
+    if (char* r = realpath(argv0, buf)) return std::string(r);
+#endif
+    return argv0 ? std::string(argv0) : std::string("openads_serverd");
 }
 
 // Probe the local ACE DLL landscape and print a one-line report.
@@ -433,6 +450,23 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (a1 == "-h" || a1 == "--help") { usage(argv[0]); return 0; }
+        if (a1 == "--setup") {
+            openads::serverd::SetupResult sr;
+            if (!openads::serverd::run_setup_wizard(
+                    current_exe_path(argv[0]), sr)) {
+                return 1;
+            }
+#if defined(_WIN32)
+            if (sr.want_service) {
+                // Reuse install_service(): it bakes everything after argv[1]
+                // into the registered binPath, so pass --config <ini>.
+                const char* svc_argv[] = {argv[0], "--install-service",
+                                          "--config", sr.ini_path.c_str()};
+                return install_service(4, const_cast<char**>(svc_argv));
+            }
+#endif
+            return 0;
+        }
 #if defined(_WIN32)
         if (a1 == "--install-service") {
             return install_service(argc, argv);
