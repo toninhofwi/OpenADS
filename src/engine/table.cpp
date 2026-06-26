@@ -870,6 +870,26 @@ util::Result<void> Table::apply_tx_rollback(std::uint32_t recno,
     return sync_all_indexes_(snap);
 }
 
+util::Result<void> Table::set_record_raw(const std::uint8_t* bytes,
+                                         std::size_t len) {
+    if (state_ != State::Positioned) {
+        // rddads special-cases 5068 to blank out at BOF/EOF; see writeback_.
+        return util::Error{5068, 0, "no record positioned", ""};
+    }
+    if (mode_ == OpenMode::Read) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (bytes == nullptr) {
+        return util::Error{5000, 0, "null record buffer", ""};
+    }
+    auto snap = snapshot_index_keys_();
+    const std::size_t rl = driver_->record_length();
+    const std::size_t n  = (len < rl) ? len : rl;
+    std::memcpy(record_buf_.data(), bytes, n);
+    if (auto wb = writeback_record_(); !wb) return wb.error();
+    return sync_all_indexes_(snap);
+}
+
 util::Result<void> Table::apply_tx_rollback_append(std::uint32_t recno) {
     if (driver_ == nullptr) {
         return util::Error{5000, 0, "no driver", ""};

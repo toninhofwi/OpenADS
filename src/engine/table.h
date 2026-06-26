@@ -146,6 +146,23 @@ public:
     util::Result<void> recall_deleted();
     bool               is_deleted() const noexcept;
 
+    // True only when a concrete record is loaded (not BOF/EOF/Limbo).
+    bool positioned() const noexcept { return state_ == State::Positioned; }
+
+    // Raw physical record image of the current row, including the leading
+    // deletion-flag byte. Valid only while positioned(); empty otherwise.
+    // Backs AdsGetRecord.
+    const std::vector<std::uint8_t>& record_buffer() const noexcept {
+        return record_buf_;
+    }
+
+    // Overwrite the current record with a raw physical image (deletion flag
+    // + field bytes), then write back and re-sync every bound index. Copies
+    // min(len, record_length) bytes — a short buffer leaves the tail intact,
+    // matching ACE's tolerant AdsSetRecord. Backs AdsSetRecord.
+    util::Result<void> set_record_raw(const std::uint8_t* bytes,
+                                      std::size_t len);
+
     // Transaction rollback helpers (M5). Restore a before-image or undo
     // an append directly on disk and re-sync every bound index. Bypasses
     // the active Tx journal — caller is rolling back the tx itself.

@@ -139,6 +139,7 @@ add_executable(openads_unit_tests
     unit/abi_remote_overloads_test.cpp
     unit/abi_remote_prefetch_test.cpp
     unit/abi_append_autolock_test.cpp
+    unit/abi_get_set_record_test.cpp
     unit/abi_dd_persistence_test.cpp
     unit/dbf_vfp_test.cpp
     unit/abi_sql_or_test.cpp

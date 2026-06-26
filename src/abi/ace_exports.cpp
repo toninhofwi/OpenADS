@@ -18316,8 +18316,32 @@ UNSIGNED32 AdsGetNumOpenTables(UNSIGNED16* p) {
     *p = count;
     return ok();
 }
-UNSIGNED32 AdsGetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32* p)
-    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsGetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
+                        UNSIGNED32* pulLen) {
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (get_remote_table(hTable))
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsGetRecord: not available for remote tables");
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (!t->positioned()) {
+        *pulLen = 0;
+        return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
+    }
+    const auto& buf = t->record_buffer();
+    const std::uint32_t need = static_cast<std::uint32_t>(buf.size());
+    // Null buffer (or zero length in) is a size query: report the record
+    // length so the caller can allocate, then ask again.
+    if (pucRecord == nullptr || *pulLen == 0) { *pulLen = need; return ok(); }
+    if (*pulLen < need) {
+        *pulLen = need;
+        return fail(openads::AE_INSUFFICIENT_BUFFER, "record buffer too small");
+    }
+    // Raw binary image — copy verbatim, no NUL terminator.
+    std::memcpy(pucRecord, buf.data(), need);
+    *pulLen = need;
+    return ok();
+}
 UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0.0;
@@ -18657,7 +18681,18 @@ UNSIGNED32 AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
 }
 // AdsSetJulian, AdsSetLongLong already defined elsewhere in this file.
 UNSIGNED32 AdsSetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
-UNSIGNED32 AdsSetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
+                        UNSIGNED32 ulLen) {
+    if (pucRecord == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null record");
+    if (get_remote_table(hTable))
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsSetRecord: not available for remote tables");
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    auto r = t->set_record_raw(pucRecord, static_cast<std::size_t>(ulLen));
+    if (!r) return fail(r.error());
+    return ok();
+}
 UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE h, double pos) {
     Table* t = get_table(h);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");

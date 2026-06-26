@@ -27,6 +27,7 @@
 #undef AE_UNIQUE_INDEX_VIOLATION
 #undef AE_INVALID_WORKAREA
 #undef AE_NO_CURRENT_RECORD
+#undef AE_INSUFFICIENT_BUFFER
 
 namespace openads {
 
@@ -60,7 +61,12 @@ enum : std::uint32_t {
     // 5068 = AE_NO_CURRENT_RECORD (SAP SDK). Harbour rddads special-cases
     // this exact code to return blank-typed values at BOF/EOF; any other
     // error code causes a hard runtime error in the caller.
-    AE_NO_CURRENT_RECORD        = 5068
+    AE_NO_CURRENT_RECORD        = 5068,
+    // 5051 = AE_INSUFFICIENT_BUFFER (SAP SDK). Returned by AdsGetRecord and
+    // peers when the caller's buffer is smaller than the data; the required
+    // size is written back through the length out-parameter so the caller
+    // can resize and retry.
+    AE_INSUFFICIENT_BUFFER      = 5051
 };
 
 } // namespace openads
