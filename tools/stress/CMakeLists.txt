@@ -22,3 +22,13 @@ if(NOT WIN32)
     target_link_libraries(openads_concurrency_stress
         PRIVATE Threads::Threads)
 endif()
+
+# Concurrent multi-client load harness for the TCP wire server.
+add_executable(openads_remote_stress remote_concurrency_main.cpp)
+target_link_libraries(openads_remote_stress PRIVATE openads_core)
+target_include_directories(openads_remote_stress PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+if(NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(openads_remote_stress PRIVATE Threads::Threads)
+endif()
