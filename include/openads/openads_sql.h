@@ -59,10 +59,38 @@ int openads_bind_int64(openads_stmt* stmt, const char* name, long long val);
 int openads_num_params(openads_stmt* stmt, int* out_count);
 int openads_execute(openads_stmt* stmt);
 
+/* Column type codes reported by openads_col_type(). They mirror the engine's
+ * stable field-type codes, named here so callers (drivers/bindings) can map to
+ * their own type systems without depending on the internal ACE headers. */
+#define OPENADS_COLTYPE_LOGICAL      1
+#define OPENADS_COLTYPE_NUMERIC      2
+#define OPENADS_COLTYPE_DATE         3
+#define OPENADS_COLTYPE_STRING       4
+#define OPENADS_COLTYPE_MEMO         5
+#define OPENADS_COLTYPE_BINARY       6
+#define OPENADS_COLTYPE_IMAGE        7
+#define OPENADS_COLTYPE_DOUBLE      10
+#define OPENADS_COLTYPE_INTEGER     11
+#define OPENADS_COLTYPE_SHORTINT    12
+#define OPENADS_COLTYPE_TIME        13
+#define OPENADS_COLTYPE_TIMESTAMP   14
+#define OPENADS_COLTYPE_AUTOINC     15
+#define OPENADS_COLTYPE_RAW         16
+#define OPENADS_COLTYPE_CURDOUBLE   17
+#define OPENADS_COLTYPE_MONEY       18
+#define OPENADS_COLTYPE_LONGLONG    19
+#define OPENADS_COLTYPE_COMPACTDATE 20
+#define OPENADS_COLTYPE_ROWVERSION  21
+#define OPENADS_COLTYPE_MODTIME     22
+#define OPENADS_COLTYPE_VARCHAR     23
+#define OPENADS_COLTYPE_VARBINARY   24
+#define OPENADS_COLTYPE_CISTRING    25
+
 /* --- result-set metadata (describe) --------------------------------------- */
 int openads_num_cols(openads_stmt* stmt, int* out_count);
 int openads_col_name(openads_stmt* stmt, int col /*1-based*/,
                      char* buf, size_t buflen);
+/* out_type receives an OPENADS_COLTYPE_* code. */
 int openads_col_type(openads_stmt* stmt, int col /*1-based*/, int* out_type);
 
 /* --- navigation (scrollable) ----------------------------------------------

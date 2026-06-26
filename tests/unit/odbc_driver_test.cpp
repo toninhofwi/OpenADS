@@ -125,3 +125,73 @@ TEST_CASE("openads ODBC driver: SELECT round-trip") {
     SQLFreeHandle(SQL_HANDLE_DBC, dbc);
     SQLFreeHandle(SQL_HANDLE_ENV, env);
 }
+
+// Connect helper for the typed/scroll cases: returns a live env+dbc on a fresh
+// data dir. Mirrors the round-trip case's connect sequence.
+static void connect_fresh(const char* sub, SQLHENV* env, SQLHDBC* dbc) {
+    auto dir = fs::temp_directory_path() / sub;
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, env) == SQL_SUCCESS);
+    REQUIRE(SQLSetEnvAttr(*env, SQL_ATTR_ODBC_VERSION,
+                          reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), 0)
+            == SQL_SUCCESS);
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_DBC, *env, dbc) == SQL_SUCCESS);
+    std::string cs = "DRIVER={OpenADS};DataDir=" + dir.string()
+                   + ";ServerType=local";
+    REQUIRE(SQLDriverConnect(*dbc, nullptr,
+                             reinterpret_cast<SQLCHAR*>(const_cast<char*>(cs.c_str())),
+                             SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT)
+            == SQL_SUCCESS);
+}
+
+TEST_CASE("openads ODBC driver: typed describe + typed SQLGetData") {
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    connect_fresh("openads_odbc_typed", &env, &dbc);
+
+    exec_ok(dbc, "CREATE TABLE nums (NAME Character(20), AGE Numeric(3,0))");
+    exec_ok(dbc, "INSERT INTO nums (NAME, AGE) VALUES ('alice', 30)");
+    exec_ok(dbc, "INSERT INTO nums (NAME, AGE) VALUES ('bob', 41)");
+
+    SQLHSTMT st = SQL_NULL_HSTMT;
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &st) == SQL_SUCCESS);
+    REQUIRE(SQLExecDirect(st,
+            reinterpret_cast<SQLCHAR*>(const_cast<char*>("SELECT NAME, AGE FROM nums")),
+            SQL_NTS) == SQL_SUCCESS);
+
+    // AGE describes as a numeric SQL type, not the everything-is-char default.
+    SQLCHAR cn[64] = {0};
+    SQLSMALLINT nlen = 0, dtype = 0, ddec = 0, dnull = 0;
+    SQLULEN dsize = 0;
+    REQUIRE(SQLDescribeCol(st, 2, cn, sizeof(cn), &nlen,
+                           &dtype, &dsize, &ddec, &dnull) == SQL_SUCCESS);
+    CHECK(std::string(reinterpret_cast<char*>(cn)) == "AGE");
+    CHECK(dtype == SQL_NUMERIC);
+
+    // NAME still describes as a character type.
+    SQLSMALLINT ntype = 0;
+    REQUIRE(SQLDescribeCol(st, 1, cn, sizeof(cn), &nlen,
+                           &ntype, &dsize, &ddec, &dnull) == SQL_SUCCESS);
+    CHECK(ntype == SQL_VARCHAR);
+
+    // First row: AGE retrieved as a real integer via SQL_C_LONG.
+    REQUIRE(SQLFetch(st) == SQL_SUCCESS);
+    SQLINTEGER age = 0;
+    SQLLEN ind = 0;
+    REQUIRE(SQLGetData(st, 2, SQL_C_LONG, &age, sizeof(age), &ind) == SQL_SUCCESS);
+    CHECK(age == 30);
+    CHECK(ind == static_cast<SQLLEN>(sizeof(SQLINTEGER)));
+
+    // Char retrieval on the same row still works.
+    SQLCHAR nm[32] = {0};
+    REQUIRE(SQLGetData(st, 1, SQL_C_CHAR, nm, sizeof(nm), &ind) == SQL_SUCCESS);
+    CHECK(std::string(reinterpret_cast<char*>(nm)) == "alice");
+
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+    REQUIRE(SQLDisconnect(dbc) == SQL_SUCCESS);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
+}

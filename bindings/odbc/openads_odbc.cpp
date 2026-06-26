@@ -17,6 +17,7 @@
 #include <sqlext.h>
 
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <new>
@@ -92,6 +93,83 @@ void copy_out(SQLCHAR* dst, SQLSMALLINT cap, const std::string& src,
         if (out_len) *out_len = static_cast<SQLSMALLINT>(n);
     } else if (out_len) {
         *out_len = 0;
+    }
+}
+
+// Map an openads_sql column type code (OPENADS_COLTYPE_*) to the closest ODBC
+// SQL type. Unknown/character types fall back to SQL_VARCHAR.
+SQLSMALLINT ads_to_sql_type(int col_type) {
+    switch (col_type) {
+        case OPENADS_COLTYPE_LOGICAL:           return SQL_BIT;
+        case OPENADS_COLTYPE_NUMERIC:           return SQL_NUMERIC;
+        case OPENADS_COLTYPE_DOUBLE:
+        case OPENADS_COLTYPE_CURDOUBLE:
+        case OPENADS_COLTYPE_MONEY:             return SQL_DOUBLE;
+        case OPENADS_COLTYPE_INTEGER:
+        case OPENADS_COLTYPE_AUTOINC:
+        case OPENADS_COLTYPE_ROWVERSION:        return SQL_INTEGER;
+        case OPENADS_COLTYPE_SHORTINT:          return SQL_SMALLINT;
+        case OPENADS_COLTYPE_LONGLONG:          return SQL_BIGINT;
+        case OPENADS_COLTYPE_DATE:
+        case OPENADS_COLTYPE_COMPACTDATE:       return SQL_TYPE_DATE;
+        case OPENADS_COLTYPE_TIME:              return SQL_TYPE_TIME;
+        case OPENADS_COLTYPE_TIMESTAMP:
+        case OPENADS_COLTYPE_MODTIME:           return SQL_TYPE_TIMESTAMP;
+        case OPENADS_COLTYPE_MEMO:              return SQL_LONGVARCHAR;
+        case OPENADS_COLTYPE_BINARY:
+        case OPENADS_COLTYPE_VARBINARY:         return SQL_VARBINARY;
+        case OPENADS_COLTYPE_IMAGE:
+        case OPENADS_COLTYPE_RAW:               return SQL_LONGVARBINARY;
+        default:                                return SQL_VARCHAR;
+    }
+}
+
+// Convert a column value already materialised as a string into the C buffer the
+// caller asked for (SQLGetData's TargetType). SQL_C_CHAR keeps the textual form;
+// the numeric C types parse the string. For fixed-size C types the indicator is
+// the type's byte size (per the ODBC contract).
+SQLRETURN put_typed(const std::string& v, SQLSMALLINT ctype,
+                    SQLPOINTER buf, SQLLEN buflen, SQLLEN* ind) {
+    switch (ctype) {
+        case SQL_C_SHORT:
+        case SQL_C_SSHORT:
+        case SQL_C_USHORT:
+            *reinterpret_cast<SQLSMALLINT*>(buf) =
+                static_cast<SQLSMALLINT>(std::strtol(v.c_str(), nullptr, 10));
+            if (ind) *ind = static_cast<SQLLEN>(sizeof(SQLSMALLINT));
+            return SQL_SUCCESS;
+        case SQL_C_LONG:
+        case SQL_C_SLONG:
+        case SQL_C_ULONG:
+            *reinterpret_cast<SQLINTEGER*>(buf) =
+                static_cast<SQLINTEGER>(std::strtol(v.c_str(), nullptr, 10));
+            if (ind) *ind = static_cast<SQLLEN>(sizeof(SQLINTEGER));
+            return SQL_SUCCESS;
+        case SQL_C_SBIGINT:
+        case SQL_C_UBIGINT:
+            *reinterpret_cast<SQLBIGINT*>(buf) =
+                static_cast<SQLBIGINT>(std::strtoll(v.c_str(), nullptr, 10));
+            if (ind) *ind = static_cast<SQLLEN>(sizeof(SQLBIGINT));
+            return SQL_SUCCESS;
+        case SQL_C_FLOAT:
+            *reinterpret_cast<SQLREAL*>(buf) =
+                static_cast<SQLREAL>(std::strtod(v.c_str(), nullptr));
+            if (ind) *ind = static_cast<SQLLEN>(sizeof(SQLREAL));
+            return SQL_SUCCESS;
+        case SQL_C_DOUBLE:
+            *reinterpret_cast<SQLDOUBLE*>(buf) =
+                static_cast<SQLDOUBLE>(std::strtod(v.c_str(), nullptr));
+            if (ind) *ind = static_cast<SQLLEN>(sizeof(SQLDOUBLE));
+            return SQL_SUCCESS;
+        case SQL_C_CHAR:
+        default: {
+            SQLSMALLINT n = 0;
+            copy_out(reinterpret_cast<SQLCHAR*>(buf),
+                     static_cast<SQLSMALLINT>(buflen > 0x7FFF ? 0x7FFF : buflen),
+                     v, &n);
+            if (ind) *ind = static_cast<SQLLEN>(n);
+            return SQL_SUCCESS;
+        }
     }
 }
 
@@ -305,7 +383,13 @@ SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT hstmt, SQLUSMALLINT col, SQLCHAR* name
                     std::strlen(reinterpret_cast<char*>(name)));
         } else if (namelen) *namelen = 0;
     }
-    if (dtype) *dtype = SQL_VARCHAR;   // slice: every column surfaced as char
+    SQLSMALLINT sqltype = SQL_VARCHAR;   // catalog (synth) columns stay char
+    if (!s->synth && s->st) {
+        int at = 0;
+        if (openads_col_type(s->st, static_cast<int>(col), &at) == OPENADS_OK)
+            sqltype = ads_to_sql_type(at);
+    }
+    if (dtype) *dtype = sqltype;
     if (dsize) *dsize = 255;
     if (ddec)  *ddec  = 0;
     if (dnull) *dnull = SQL_NULLABLE_UNKNOWN;
@@ -324,9 +408,17 @@ SQLRETURN SQL_API SQLColAttribute(SQLHSTMT hstmt, SQLUSMALLINT col,
                                   reinterpret_cast<SQLCHAR*>(charattr), bufmax,
                                   strlen, nullptr, nullptr, nullptr, nullptr);
         case SQL_DESC_TYPE:
-        case SQL_DESC_CONCISE_TYPE:
-            if (numattr) *numattr = SQL_VARCHAR;
+        case SQL_DESC_CONCISE_TYPE: {
+            SQLSMALLINT sqltype = SQL_VARCHAR;
+            auto* s = reinterpret_cast<StmtH*>(hstmt);
+            if (!s->synth && s->st) {
+                int at = 0;
+                if (openads_col_type(s->st, static_cast<int>(col), &at) == OPENADS_OK)
+                    sqltype = ads_to_sql_type(at);
+            }
+            if (numattr) *numattr = sqltype;
             return SQL_SUCCESS;
+        }
         case SQL_DESC_LENGTH:
         case SQL_DESC_OCTET_LENGTH:
         case SQL_DESC_DISPLAY_SIZE:
@@ -354,7 +446,7 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT hstmt) {
     return SQL_ERROR;
 }
 
-SQLRETURN SQL_API SQLGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT,
+SQLRETURN SQL_API SQLGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT ctype,
                              SQLPOINTER buf, SQLLEN buflen, SQLLEN* ind) {
     if (!hstmt || !buf || buflen <= 0) return SQL_ERROR;
     auto* s = reinterpret_cast<StmtH*>(hstmt);
@@ -364,20 +456,27 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT,
         if (col < 1 || static_cast<size_t>(col) > s->scols.size()) return SQL_ERROR;
         const std::string& v = s->srows[static_cast<size_t>(s->spos) - 1]
                                        [static_cast<size_t>(col) - 1];
-        SQLSMALLINT n = 0;
-        copy_out(reinterpret_cast<SQLCHAR*>(buf),
-                 static_cast<SQLSMALLINT>(buflen > 0x7FFF ? 0x7FFF : buflen), v, &n);
+        return put_typed(v, ctype, buf, buflen, ind);
+    }
+    if (!s->st) return SQL_ERROR;
+    // Character target: read straight into the caller's buffer so large values
+    // keep their truncation semantics.
+    if (ctype == SQL_C_CHAR) {
+        size_t n = 0;
+        if (openads_get_str(s->st, static_cast<int>(col),
+                            reinterpret_cast<char*>(buf),
+                            static_cast<size_t>(buflen), &n) != OPENADS_OK)
+            return SQL_ERROR;
         if (ind) *ind = static_cast<SQLLEN>(n);
         return SQL_SUCCESS;
     }
-    if (!s->st) return SQL_ERROR;
+    // Typed target: materialise the value as text, then convert.
+    char tmp[256];
     size_t n = 0;
-    if (openads_get_str(s->st, static_cast<int>(col),
-                        reinterpret_cast<char*>(buf),
-                        static_cast<size_t>(buflen), &n) != OPENADS_OK)
+    if (openads_get_str(s->st, static_cast<int>(col), tmp, sizeof(tmp), &n)
+        != OPENADS_OK)
         return SQL_ERROR;
-    if (ind) *ind = static_cast<SQLLEN>(n);
-    return SQL_SUCCESS;
+    return put_typed(std::string(tmp, n), ctype, buf, buflen, ind);
 }
 
 SQLRETURN SQL_API SQLRowCount(SQLHSTMT hstmt, SQLLEN* count) {
