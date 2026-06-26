@@ -1853,6 +1853,33 @@ UNSIGNED32 ENTRYPOINT AdsFetchWhereClose (ADSHANDLE hRes);
 UNSIGNED32 ENTRYPOINT AdsFetchWhereApplyRow(ADSHANDLE hRes, UNSIGNED32 ulRow,
                                           ADSHANDLE hTbl);
 
+// ── Tier-3: AdsAggregate result API ──────────────────────────────────────────
+// Server-side aggregation.  `pszForCond` is an xBase-style FOR predicate
+// (empty = all rows).  `pszAggSpec` is a ';'-separated list of "FN:FIELD"
+// items, where FN is COUNT|SUM|AVG|MIN|MAX and FIELD is the column to fold
+// (empty for COUNT(*)), e.g. "COUNT:;SUM:QTY;MIN:NM".  Returns one scalar per
+// item, in order; the handle is valid until `AdsAggregateClose`.
+//   - Remote (tcp://) table: the server scans + folds once (opcode 0xA6).
+//   - SQL-backed (sqlite://, etc.) table: pushed down as one
+//     `SELECT COUNT/SUM/AVG/MIN/MAX ... WHERE`; a FOR that can't translate to
+//     SQL returns AE_FUNCTION_NOT_AVAILABLE (caller falls back).
+//   - Local in-process DBF: AE_FUNCTION_NOT_AVAILABLE (5004) — caller falls
+//     back to a client-side totalling loop.
+UNSIGNED32 ENTRYPOINT AdsAggregate      (ADSHANDLE  hTbl,
+                                         UNSIGNED8* pszForCond,
+                                         UNSIGNED8* pszAggSpec,
+                                         ADSHANDLE* phResult);
+UNSIGNED32 ENTRYPOINT AdsAggregateCount (ADSHANDLE hRes, UNSIGNED32* pulCount);
+// ulIndex is 0-based.  *pusType: 0=empty/null, 1=numeric (ASCII decimal,
+// parse with VAL()), 2=string (raw field bytes).  *pusLen is in/out
+// (capacity in, written byte count out), same truncation idiom as AdsGetField.
+UNSIGNED32 ENTRYPOINT AdsAggregateValue (ADSHANDLE   hRes,
+                                         UNSIGNED32  ulIndex,
+                                         UNSIGNED16* pusType,
+                                         UNSIGNED8*  pucBuf,
+                                         UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsAggregateClose (ADSHANDLE hRes);
+
 #ifdef __cplusplus
 }
 #endif

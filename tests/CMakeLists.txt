@@ -50,6 +50,8 @@ add_executable(openads_unit_tests
     unit/engine_scope_test.cpp
     unit/abi_index_smoke_test.cpp
     unit/aof_expr_test.cpp
+    unit/aggregate_test.cpp
+    unit/abi_aggregate_test.cpp
     unit/aof_eval_test.cpp
     unit/abi_aof_test.cpp
     unit/aes_test.cpp
@@ -68,6 +70,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_smoke_test.cpp
     unit/abi_plus_sqlite_read_test.cpp
     unit/abi_plus_sqlite_filter_test.cpp
+    unit/abi_aggregate_sqlite_test.cpp
     unit/abi_plus_sqlite_seek_test.cpp
     unit/abi_plus_sqlite_passthrough_test.cpp
     unit/abi_plus_sqlcipher_read_test.cpp
@@ -230,6 +233,7 @@ if(OPENADS_WITH_POSTGRESQL)
         unit/abi_plus_postgres_read_test.cpp
         unit/abi_plus_postgres_write_test.cpp
         unit/abi_plus_postgres_filter_test.cpp
+        unit/abi_aggregate_postgres_test.cpp
     unit/abi_plus_mariadb_read_test.cpp
     unit/abi_plus_odbc_read_test.cpp
     unit/abi_plus_odbc_seek_test.cpp
