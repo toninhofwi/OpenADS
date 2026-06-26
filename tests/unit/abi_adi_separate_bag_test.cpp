@@ -93,3 +93,65 @@ TEST_CASE("ADI separate (non-structural) bag on ADT: create + ordered walk") {
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
 }
+
+TEST_CASE("ADI separate (non-structural) bag on ADT: reopen and navigate") {
+    fs::path tmp = fs::temp_directory_path() / "openads_adi_sepbag_reopen";
+    { std::error_code ec; fs::remove_all(tmp, ec); fs::create_directories(tmp, ec); }
+
+    UNSIGNED8 srv[260]{};
+    std::memcpy(srv, tmp.string().c_str(), tmp.string().size());
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn)
+            == AE_SUCCESS);
+
+    UNSIGNED8 tbl[]    = "articulo.adt";
+    UNSIGNED8 flddef[] = "Name,Character,20";
+    ADSHANDLE hTable   = 0;
+    REQUIRE(AdsCreateTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI, 0, 0, 0,
+                           flddef, &hTable) == AE_SUCCESS);
+    append_name(hTable, "Carol");
+    append_name(hTable, "Alice");
+    append_name(hTable, "Bob");
+
+    UNSIGNED8 idxfile[] = "sepbag.adi";
+    UNSIGNED8 idxname[] = "NOMTAG";
+    UNSIGNED8 expr[]    = "Name";
+    ADSHANDLE hIdx = 0;
+    REQUIRE(AdsCreateIndex61(hTable, idxfile, idxname, expr,
+                             nullptr, nullptr, 0, 0, &hIdx) == AE_SUCCESS);
+
+    // Close everything — drop the in-memory index built at create time.
+    REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
+
+    // Reopen the table and the SEPARATE bag in a fresh handle. The reopen path
+    // (list_tags/open_named) must locate the right companion ADT (articulo.adt),
+    // not "<bag>.adt".
+    ADSHANDLE hTable2 = 0;
+    REQUIRE(AdsOpenTable(hConn, tbl, tbl, ADS_ADT, ADS_ANSI, ADS_DEFAULT,
+                         ADS_DEFAULT, 0, &hTable2) == AE_SUCCESS);
+
+    ADSHANDLE ah[8] = {0};
+    UNSIGNED16 n = 8;
+    REQUIRE(AdsOpenIndex(hTable2, idxfile, ah, &n) == AE_SUCCESS);
+
+    REQUIRE(AdsGotoTop(hTable2) == AE_SUCCESS);
+    std::vector<std::string> seen;
+    for (;;) {
+        UNSIGNED16 at_eof = 0;
+        REQUIRE(AdsAtEOF(hTable2, &at_eof) == AE_SUCCESS);
+        if (at_eof) break;
+        UNSIGNED8 buf[64]{};
+        UNSIGNED32 len = sizeof(buf);
+        REQUIRE(AdsGetString(hTable2, (UNSIGNED8*)"Name", buf, &len, 0)
+                == AE_SUCCESS);
+        seen.push_back(rtrim(std::string(reinterpret_cast<char*>(buf), len)));
+        REQUIRE(AdsSkip(hTable2, 1) == AE_SUCCESS);
+    }
+    REQUIRE(seen.size() == 3u);
+    CHECK(seen[0] == "Alice");
+    CHECK(seen[1] == "Bob");
+    CHECK(seen[2] == "Carol");
+
+    REQUIRE(AdsCloseTable(hTable2) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
+}

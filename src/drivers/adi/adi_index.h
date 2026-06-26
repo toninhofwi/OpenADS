@@ -146,13 +146,17 @@ public:
     // CREATE INDEX overwrite can rebuild from scratch.
     util::Result<void> clear_data();
 
-    // Multi-tag API (mirrors CdxIndex)
+    // Multi-tag API (mirrors CdxIndex). adt_path is the owning table's path;
+    // when empty the companion ADT is derived from the .adi stem (structural
+    // bag), otherwise it is used as-is (non-structural / separate bag).
     static util::Result<std::vector<std::string>>
-        list_tags(const std::string& adi_path);
+        list_tags(const std::string& adi_path,
+                  const std::string& adt_path = {});
 
     util::Result<void> open_named(const std::string& adi_path,
                                   IndexOpenMode       mode,
-                                  const std::string&  field_name);
+                                  const std::string&  field_name,
+                                  const std::string&  adt_path = {});
 
     // Create a new ADI file with one tag (expression = comma-separated column names).
     // On return the AdiIndex is positioned on that tag and ready for inserts.
