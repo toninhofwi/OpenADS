@@ -44,16 +44,18 @@ static fs::path pmsys_fixture() {
            / "fixtures" / "adi" / "pmsys.add";
 }
 
-TEST_CASE("DataDict open — SAP ADS binary .add — rejected with error") {
-    // The SAP binary .add format is no longer supported.  Verify that open()
-    // returns an error instead of crashing or loading garbage data.
+TEST_CASE("DataDict open — SAP ADS binary .add — loads with sap_permissions flag") {
+    // SAP binary .add files are readable by DataDict::open() (needed by the
+    // import tool).  They must load successfully and report has_sap_permissions()
+    // so that AdsConnect60 can block normal connections to them.
     auto fixture = pmsys_fixture();
     if (!fs::exists(fixture)) {
-        WARN("pmsys.add fixture not found, skipping SAP-rejection test");
+        WARN("pmsys.add fixture not found, skipping SAP-binary test");
         return;
     }
     auto opened = DataDict::open(fixture.string());
-    CHECK_FALSE(opened.has_value());
+    REQUIRE(opened.has_value());
+    CHECK(opened.value().has_sap_permissions());
 }
 
 // -------------------------------------------------------------------------
