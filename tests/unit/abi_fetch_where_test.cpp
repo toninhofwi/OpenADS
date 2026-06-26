@@ -1,20 +1,27 @@
 // tests/unit/abi_fetch_where_test.cpp
 // Task 2 ABI verification: AdsFetchWhere* result-set exports.
+// Task 3 ABI orchestration contract: COUNT / LOCATE / multi-batch scan.
 //
 // Test cases:
 //   1. Local table → AdsFetchWhere returns non-zero (not applicable; caller
 //      falls back to the classic client-side scan path).
 //   2. Remote wire: filtered batch with field values and per-row recnos.
 //   3. Remote wire: count-only (pszCols = nullptr → no column data).
+//   4. FetchWhere orchestration: COUNT via maxRows=UINT32_MAX + no cols.
+//   5. FetchWhere orchestration: LOCATE via maxRows=1 + WANT_RECNO + AdsGotoRecord.
+//   6. FetchWhere orchestration: scan batching covers matches exactly, no gaps/dups.
 //
 // Row indices passed to the accessor functions are 0-based.
+// Orchestration tests (4-6) encode the sequence the patched ads1.c will drive.
 #include "doctest.h"
 #include "network/server.h"
 #include "openads/ace.h"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -225,3 +232,197 @@ TEST_CASE("AdsFetchWhere remote wire: count-only (no columns, flags=0)") {
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
     srv.stop();
 }
+
+// ── Shared helper: open a remote table over a fresh server ───────────────────
+namespace {
+
+struct RemoteFixture {
+    openads::network::Server srv;
+    ADSHANDLE hConn  = 0;
+    ADSHANDLE hTable = 0;
+
+    // Returns false if setup failed (REQUIRE inside — propagates to doctest).
+    bool open(const fs::path& dir, const char* tname_str) {
+        REQUIRE(srv.start("127.0.0.1", 0).has_value());
+        char uri[512];
+        std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u/%s",
+                      static_cast<unsigned>(srv.port()), dir.string().c_str());
+        UNSIGNED8 srvbuf[512]{};
+        std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+        REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER, nullptr, nullptr, 0, &hConn)
+                == AE_SUCCESS);
+        UNSIGNED8 tname[64]{};
+        std::memcpy(tname, tname_str, std::strlen(tname_str));
+        REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI, ADS_SHARED,
+                             ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
+                == AE_SUCCESS);
+        return true;
+    }
+
+    void close() {
+        if (hTable) AdsCloseTable(hTable);
+        if (hConn)  AdsDisconnect(hConn);
+        srv.stop();
+    }
+};
+
+} // namespace
+
+// ── 4. Orchestration: COUNT ──────────────────────────────────────────────────
+// Contract: AdsFetchWhere(maxRows=UINT32_MAX, pszCols=NULL, flags=0) followed
+// by AdsFetchWhereRows yields the exact match count.  This is the rddads
+// COUNT-FOR code path.  Server must exhaust the table (eof=1).
+TEST_CASE("AdsFetchWhere orchestration: COUNT via maxRows=UINT32_MAX no cols") {
+    fw_wipe();
+    auto dir = fw_tmp_dir();
+    seed_nm_fixture(dir);
+
+    RemoteFixture fix;
+    fix.open(dir, "fw.dbf");
+
+    // Position at top to guarantee a full scan.
+    REQUIRE(AdsGotoTop(fix.hTable) == AE_SUCCESS);
+
+    UNSIGNED8  expr[] = "NM >= 'B'";
+    ADSHANDLE  hRes   = 0;
+    // maxRows = 0xFFFFFFFF → collect everything; pszCols = NULL → count-only mode.
+    REQUIRE(AdsFetchWhere(fix.hTable, expr, nullptr,
+                          0xFFFFFFFFu, /*flags*/ 0, &hRes) == AE_SUCCESS);
+    CHECK(hRes != 0);
+
+    // AdsFetchWhereRows must equal the true match count (2 out of 3 records).
+    UNSIGNED32 nrows = 0;
+    REQUIRE(AdsFetchWhereRows(hRes, &nrows) == AE_SUCCESS);
+    CHECK(nrows == 2u);
+
+    // Server must have reached EOF (all records examined).
+    UNSIGNED16 eof_flag = 0;
+    REQUIRE(AdsFetchWhereEof(hRes, &eof_flag) == AE_SUCCESS);
+    CHECK(eof_flag != 0);
+
+    REQUIRE(AdsFetchWhereClose(hRes) == AE_SUCCESS);
+    // Post-close: any accessor must fail.
+    UNSIGNED32 dummy = 0;
+    CHECK(AdsFetchWhereRows(hRes, &dummy) != AE_SUCCESS);
+
+    fix.close();
+}
+
+// ── 5. Orchestration: LOCATE ─────────────────────────────────────────────────
+// Contract: AdsFetchWhere(maxRows=1, pszCols=NULL, WANT_RECNO) yields the
+// first matching record's recno in AdsFetchWhereRecno(0), and AdsGotoRecord
+// to that recno positions on a row satisfying the predicate.
+TEST_CASE("AdsFetchWhere orchestration: LOCATE via maxRows=1 WANT_RECNO AdsGotoRecord") {
+    fw_wipe();
+    auto dir = fw_tmp_dir();
+    seed_nm_fixture(dir);
+
+    RemoteFixture fix;
+    fix.open(dir, "fw.dbf");
+
+    REQUIRE(AdsGotoTop(fix.hTable) == AE_SUCCESS);
+
+    UNSIGNED8 expr[] = "NM >= 'B'";
+    ADSHANDLE hRes   = 0;
+    // maxRows=1 → stop at first match; WANT_RECNO → include recno in reply.
+    REQUIRE(AdsFetchWhere(fix.hTable, expr, nullptr,
+                          1u, /*flags WANT_RECNO*/ 0x01u, &hRes) == AE_SUCCESS);
+    CHECK(hRes != 0);
+
+    UNSIGNED32 nrows = 0;
+    REQUIRE(AdsFetchWhereRows(hRes, &nrows) == AE_SUCCESS);
+    CHECK(nrows == 1u);   // maxRows=1 capped the result to one row
+
+    // AdsFetchWhereRecno(0) is the first match's 1-based DBF recno.
+    UNSIGNED32 rec = 0;
+    REQUIRE(AdsFetchWhereRecno(hRes, 0, &rec) == AE_SUCCESS);
+    CHECK(rec == 2u);     // "B" is at recno 2
+
+    REQUIRE(AdsFetchWhereClose(hRes) == AE_SUCCESS);
+
+    // Reposition to that recno and confirm the row satisfies "NM >= 'B'".
+    REQUIRE(AdsGotoRecord(fix.hTable, rec) == AE_SUCCESS);
+    UNSIGNED8  fld[]  = "NM";
+    UNSIGNED8  buf[32]{};
+    UNSIGNED32 blen   = sizeof(buf);
+    REQUIRE(AdsGetString(fix.hTable, fld, buf, &blen, 0) == AE_SUCCESS);
+    // Value must be >= 'B' (confirming the predicate holds on the repositioned row).
+    CHECK(trim_right(std::string(reinterpret_cast<char*>(buf), blen)) >= "B");
+
+    fix.close();
+}
+
+// ── 6. Orchestration: scan batching ──────────────────────────────────────────
+// Contract: repeated AdsFetchWhere(maxRows=1, all cols, WANT_RECNO) calls,
+// each resuming the server-side cursor from where the prior call left off,
+// must cover EXACTLY the matching records with no duplicates and no gaps.
+// This models the rddads forward-scan batch read-ahead path.
+TEST_CASE("AdsFetchWhere orchestration: scan batching covers matches exactly no dups") {
+    fw_wipe();
+    auto dir = fw_tmp_dir();
+    seed_nm_fixture(dir);
+
+    RemoteFixture fix;
+    fix.open(dir, "fw.dbf");
+
+    REQUIRE(AdsGotoTop(fix.hTable) == AE_SUCCESS);
+
+    UNSIGNED8 expr[] = "NM >= 'B'";
+    UNSIGNED8 cols[] = "NM";
+
+    // Collect (recno, NM-value) pairs across all batches of size 1.
+    // The server cursor is stateful per-session: after each AdsFetchWhere call
+    // the cursor is left past the last examined record, so the next call resumes.
+    std::vector<std::uint32_t> all_recnos;
+    std::vector<std::string>   all_nms;
+
+    for (;;) {
+        ADSHANDLE  hRes  = 0;
+        UNSIGNED32 rc    = AdsFetchWhere(fix.hTable, expr, cols,
+                                         /*maxRows*/ 1u,
+                                         /*flags WANT_RECNO*/ 0x01u,
+                                         &hRes);
+        REQUIRE(rc == AE_SUCCESS);
+        CHECK(hRes != 0);
+
+        UNSIGNED32 nrows = 0;
+        REQUIRE(AdsFetchWhereRows(hRes, &nrows) == AE_SUCCESS);
+
+        if (nrows > 0) {
+            UNSIGNED32 rec = 0;
+            REQUIRE(AdsFetchWhereRecno(hRes, 0, &rec) == AE_SUCCESS);
+            all_recnos.push_back(rec);
+
+            UNSIGNED8  nm_fld[] = "NM";
+            UNSIGNED8  buf[32]{};
+            UNSIGNED16 blen = sizeof(buf);
+            REQUIRE(AdsFetchWhereField(hRes, 0, nm_fld, buf, &blen) == AE_SUCCESS);
+            all_nms.push_back(trim_right(
+                std::string(reinterpret_cast<char*>(buf), blen)));
+        }
+
+        UNSIGNED16 eof_flag = 0;
+        REQUIRE(AdsFetchWhereEof(hRes, &eof_flag) == AE_SUCCESS);
+        REQUIRE(AdsFetchWhereClose(hRes) == AE_SUCCESS);
+
+        if (eof_flag || nrows == 0) break;
+    }
+
+    // Exactly 2 matches: recno 2 ("B") and recno 3 ("C"), in order.
+    REQUIRE(all_recnos.size() == 2u);
+    CHECK(all_recnos[0] == 2u);
+    CHECK(all_recnos[1] == 3u);
+
+    REQUIRE(all_nms.size() == 2u);
+    CHECK(all_nms[0] == "B");
+    CHECK(all_nms[1] == "C");
+
+    // No duplicates (each recno appears exactly once).
+    std::vector<std::uint32_t> sorted = all_recnos;
+    std::sort(sorted.begin(), sorted.end());
+    auto last = std::unique(sorted.begin(), sorted.end());
+    CHECK(last == sorted.end());  // no duplicates
+
+    fix.close();
+}
+
