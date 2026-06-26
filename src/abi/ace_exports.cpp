@@ -6990,30 +6990,32 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                        : ntx_numeric_key ? ntx_num_width
                        : 0;
     if (!cdx_numeric_key && !ntx_numeric_key) {
-        // A character key is fixed-width on disk. For a bare character field
-        // the width is the declared field length; deriving it from the
+        // A character key is fixed-width on disk. For a BARE character field
+        // the width is the declared field length: deriving it from the
         // *trimmed* value of the first record truncates every later key that
         // shares a prefix beyond that width (a short first row collapses
         // longer rows onto the same key), corrupting ordering and seeks in
-        // both the index itself and native FoxPro/Clipper readers. Prefer the
-        // field width; fall back to the untrimmed first-record key width for a
-        // composite expression; keep the 32-char default only for an empty
-        // table with nothing to probe.
+        // both the index itself and native FoxPro/Clipper readers.
         const std::string bare = openads::engine::strip_alias_qualifiers(expr);
         std::int32_t fi = t->field_index(bare);
         if (fi >= 0) {
             klen = t->field_descriptor(static_cast<std::uint16_t>(fi)).length;
         } else if (t->record_count() > 0) {
+            // Composite expression: probe the first record's key. Note
+            // evaluate_index_expr right-pads its result to the probe width, so
+            // trim the padding back off — otherwise every composite key would
+            // be pinned to the 254-byte probe length.
             if (auto g = t->goto_record(1); g) {
                 if (auto k = openads::engine::evaluate_index_expr(*t, expr, 254)) {
-                    std::size_t n = std::move(k).value().size();  // untrimmed
-                    if (n > 0)
+                    std::string s = std::move(k).value();
+                    while (!s.empty() && s.back() == ' ') s.pop_back();
+                    if (!s.empty())
                         klen = static_cast<std::uint16_t>(
-                            std::min<std::size_t>(n, 254));
+                            std::min<std::size_t>(s.size(), 254));
                 }
             }
         }
-        if (klen == 0) klen = 32;
+        if (klen == 0) klen = 32;  // empty table, composite expression
     }
 
     std::unique_ptr<openads::drivers::IIndex> idx_owner;
