@@ -6568,6 +6568,15 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->lock_record(mt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     // ulRecord == 0 → the current record (ACE convention). Resolving it
@@ -6590,6 +6599,15 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (pt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = pt->conn->unlock_record(pt, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->unlock_record(mt, ulRecord);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -6617,6 +6635,15 @@ UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->lock_table(mt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t]() { return t->try_lock_table_excl(); });
@@ -6633,6 +6660,15 @@ UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
         if (pt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = pt->conn->unlock_table(pt);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->unlock_table(mt);
         if (!r) return fail(r.error());
         return ok();
     }

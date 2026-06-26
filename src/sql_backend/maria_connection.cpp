@@ -809,4 +809,109 @@ util::Result<void> MariaConnection::delete_record(MariaTable* tbl) {
 #endif
 }
 
+#if defined(OPENADS_WITH_MARIADB)
+namespace {
+
+std::string lock_record_key(const MariaTable& tbl, std::size_t pos) {
+    std::string k = "R\x1f" + tbl.name;
+    if (pos < tbl.pk_snapshot.size()) {
+        for (const std::string& v : tbl.pk_snapshot[pos].values) k += "\x1f" + v;
+    }
+    return k;
+}
+
+// Runs SELECT fn(MD5('key')[, 0]) and returns its integer result (1 = got the
+// lock / released). MD5 keeps the name within MariaDB's 64-char lock-name limit.
+util::Result<long long> lock_call(MYSQL* conn, const std::string& expr) {
+    if (mysql_query(conn, expr.c_str()) != 0) {
+        return maria_error("named lock", mysql_error(conn));
+    }
+    MYSQL_RES* res = mysql_store_result(conn);
+    if (res == nullptr) return maria_error("named lock", mysql_error(conn));
+    long long val = 0;
+    MYSQL_ROW row = mysql_fetch_row(res);
+    if (row != nullptr && row[0] != nullptr) val = std::atoll(row[0]);
+    mysql_free_result(res);
+    return val;
+}
+
+} // namespace
+#endif
+
+util::Result<void> MariaConnection::lock_record(MariaTable* tbl,
+                                                std::uint32_t recno) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid maria lock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->pk_snapshot.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    const std::string sql = "SELECT GET_LOCK(MD5(" +
+        escape_literal(impl_->conn, lock_record_key(*tbl, pos)) + "), 0)";
+    auto r = lock_call(impl_->conn, sql);
+    if (!r) return r.error();
+    if (r.value() != 1) return util::Error{5035, 0, "record locked", ""};
+    return util::Result<void>{};
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
+util::Result<void> MariaConnection::unlock_record(MariaTable* tbl,
+                                                  std::uint32_t recno) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid maria unlock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->pk_snapshot.size()) return util::Result<void>{};
+    const std::string sql = "SELECT RELEASE_LOCK(MD5(" +
+        escape_literal(impl_->conn, lock_record_key(*tbl, pos)) + "))";
+    auto r = lock_call(impl_->conn, sql);
+    if (!r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
+util::Result<void> MariaConnection::lock_table(MariaTable* tbl) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid maria lock", ""};
+    }
+    const std::string sql = "SELECT GET_LOCK(MD5(" +
+        escape_literal(impl_->conn, "T\x1f" + tbl->name) + "), 0)";
+    auto r = lock_call(impl_->conn, sql);
+    if (!r) return r.error();
+    if (r.value() != 1) return util::Error{5035, 0, "table locked", ""};
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
+util::Result<void> MariaConnection::unlock_table(MariaTable* tbl) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid maria unlock", ""};
+    }
+    const std::string sql = "SELECT RELEASE_LOCK(MD5(" +
+        escape_literal(impl_->conn, "T\x1f" + tbl->name) + "))";
+    auto r = lock_call(impl_->conn, sql);
+    if (!r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
 } // namespace openads::sql_backend
