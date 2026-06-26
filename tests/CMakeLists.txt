@@ -181,6 +181,7 @@ add_executable(openads_unit_tests
     unit/codepage_test.cpp
     unit/adm_memo_test.cpp
     unit/sqlite_uri_test.cpp
+    unit/abi_sql_stmt_concurrency_test.cpp
     unit/proc_test.cpp
     unit/sql_common_test.cpp
     unit/legacy_crt_shims_test.cpp
