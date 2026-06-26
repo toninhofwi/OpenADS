@@ -209,6 +209,14 @@ add_executable(openads_unit_tests
     unit/abi_dd_invoicing_test.cpp
 )
 
+# OpenADS ODBC driver (provider) test — drives the driver's SQL* exports
+# directly. Windows only: relies on the MSVC SDK ODBC headers/types.
+if(WIN32)
+    target_sources(openads_unit_tests PRIVATE
+        unit/odbc_driver_test.cpp
+        ${CMAKE_SOURCE_DIR}/bindings/odbc/openads_odbc.cpp)
+endif()
+
 if(OPENADS_WITH_POSTGRESQL)
     target_sources(openads_unit_tests PRIVATE
         unit/abi_plus_postgres_read_test.cpp
