@@ -180,6 +180,7 @@ add_executable(openads_unit_tests
     unit/abi_adt_smoke_test.cpp
     unit/abi_adt_create_test.cpp
     unit/abi_adi_create_test.cpp
+    unit/abi_adi_separate_bag_test.cpp
     unit/abi_adi_types_test.cpp
     unit/abi_adi_multilevel_build_test.cpp
     unit/abi_adt_scope_validation_test.cpp

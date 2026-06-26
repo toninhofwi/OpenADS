@@ -1611,7 +1611,11 @@ util::Result<AdiIndex> AdiIndex::create(const std::string& adi_path,
     ix.adi_path_ = adi_path;
     ix.mode_     = IndexOpenMode::Shared;
 
-    std::string adt_p = adt_path_for(adi_path);
+    // A non-structural bag's .adi stem differs from the table's, so the
+    // companion ADT path cannot be derived from the .adi name — use the
+    // caller-supplied table path when present, else the structural default.
+    std::string adt_p = params.adt_path.empty()
+        ? adt_path_for(adi_path) : params.adt_path;
     auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
     if (!fa) return fa.error();
     ix.adt_file_ = std::move(fa).value();
@@ -1773,7 +1777,9 @@ util::Result<AdiIndex> AdiIndex::add_tag(const std::string& adi_path,
     ix.adi_path_ = adi_path;
     ix.mode_     = IndexOpenMode::Shared;
 
-    std::string adt_p = adt_path_for(adi_path);
+    // See AdiIndex::create — a non-structural bag needs the real table path.
+    std::string adt_p = params.adt_path.empty()
+        ? adt_path_for(adi_path) : params.adt_path;
     auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
     if (!fa) return fa.error();
     ix.adt_file_ = std::move(fa).value();
