@@ -1,6 +1,6 @@
 // tests/unit/index_expr_sql_test.cpp
 // Tier-2 SQL push-down spike: try_emit_sql_where() translates the
-// safely-translatable subset of a Clipper FOR / SET FILTER predicate into a
+// safely-translatable subset of an xBase FOR / SET FILTER predicate into a
 // SQL WHERE fragment, and returns nullopt for anything it can't model (so the
 // caller falls back to the row interpreter — push-down never changes results).
 #include "doctest.h"
@@ -25,7 +25,7 @@ TEST_CASE("SQL push-down: simple comparisons map to SQL operators") {
     CHECK(emit("QTY > 5")           == "QTY > 5");
     CHECK(emit("X == 'a'")          == "X = 'a'");      // == -> =
     CHECK(emit("X = 'a'")           == "X = 'a'");
-    CHECK(emit("QTY # 5")           == "QTY <> 5");     // Clipper # -> <>
+    CHECK(emit("QTY # 5")           == "QTY <> 5");     // xBase # -> <>
     CHECK(emit("QTY != 5")          == "QTY <> 5");     // xHarbour != -> <>
     CHECK(emit("QTY <> 5")          == "QTY <> 5");
     CHECK(emit("QTY <= 9")          == "QTY <= 9");
@@ -51,7 +51,7 @@ TEST_CASE("SQL push-down: scalar functions") {
 }
 
 TEST_CASE("SQL push-down: string literals are re-quoted and escaped") {
-    // Double-quoted Clipper string with an embedded single quote -> SQL
+    // Double-quoted xBase string with an embedded single quote -> SQL
     // single-quoted with the quote doubled.
     CHECK(emit("NM = \"O'Brien\"") == "NM = 'O''Brien'");
     CHECK(emit("NM = 'plain'")     == "NM = 'plain'");

@@ -72,18 +72,18 @@ std::string strip_alias_qualifiers(const std::string& expr);
 
 // ── Tier-2 SQL push-down (spike) ──────────────────────────────────────────
 //
-// Per-backend knobs for translating a Clipper predicate into SQL. Defaults
+// Per-backend knobs for translating an xBase predicate into SQL. Defaults
 // target SQLite / PostgreSQL / Firebird (ANSI-ish). MySQL needs CONCAT() and
 // SUBSTRING().
 struct SqlDialect {
-    std::string concat_op     = "||";       // Clipper string '+'  (MySQL: CONCAT)
+    std::string concat_op     = "||";       // xBase string '+'  (MySQL: CONCAT)
     bool        use_concat_fn = false;       // a + b -> CONCAT(a, b)
     std::string substr_fn     = "SUBSTR";    // SUBSTR(s, start [, len])
     std::string alltrim_open  = "TRIM(";     // ALLTRIM(x) -> TRIM(x)
     std::string alltrim_close = ")";
 };
 
-// Translate a Clipper-style FOR / SET FILTER predicate into an equivalent SQL
+// Translate an xBase-style FOR / SET FILTER predicate into an equivalent SQL
 // boolean expression (a WHERE fragment), for tables backed by a SQL engine —
 // so the backend filters server-side instead of the engine scanning every row
 // and evaluating evaluate_index_expr_truthy() per record.

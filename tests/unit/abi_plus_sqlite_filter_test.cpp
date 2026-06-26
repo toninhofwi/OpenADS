@@ -1,6 +1,6 @@
 // tests/unit/abi_plus_sqlite_filter_test.cpp
 // Tier-2 SQL push-down (fase 2): AdsSetAOF / AdsSetFilter on a SQLite-backed
-// table translate the Clipper predicate to a SQL WHERE and push it to the
+// table translate the xBase predicate to a SQL WHERE and push it to the
 // backend, so navigation (GotoTop / Skip / GetRecordCount) walks only matching
 // rows. A predicate that can't be translated returns a failure and leaves the
 // table unfiltered (the caller then filters client-side) — never silently
