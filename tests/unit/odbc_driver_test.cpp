@@ -11,6 +11,7 @@
 #include <sql.h>
 #include <sqlext.h>
 
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -81,6 +82,45 @@ TEST_CASE("openads ODBC driver: SELECT round-trip") {
     CHECK(SQLFetch(st) == SQL_NO_DATA);
 
     SQLFreeHandle(SQL_HANDLE_STMT, st);
+
+    // --- catalog: SQLTables lists our table ---
+    SQLHSTMT cat = SQL_NULL_HSTMT;
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &cat) == SQL_SUCCESS);
+    REQUIRE(SQLTables(cat, nullptr, 0, nullptr, 0, nullptr, 0, nullptr, 0)
+            == SQL_SUCCESS);
+    bool found_people = false;
+    while (SQLFetch(cat) == SQL_SUCCESS) {
+        SQLCHAR tn[128] = {0};
+        SQLLEN ind = 0;
+        REQUIRE(SQLGetData(cat, 3, SQL_C_CHAR, tn, sizeof(tn), &ind)
+                == SQL_SUCCESS);
+        std::string name(reinterpret_cast<char*>(tn));
+        for (char& c : name) c = static_cast<char>(std::tolower((unsigned char)c));
+        if (name.find("people") != std::string::npos) found_people = true;
+    }
+    CHECK(found_people);
+    SQLFreeHandle(SQL_HANDLE_STMT, cat);
+
+    // --- catalog: SQLColumns lists NAME and AGE for 'people' ---
+    SQLHSTMT colh = SQL_NULL_HSTMT;
+    REQUIRE(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &colh) == SQL_SUCCESS);
+    REQUIRE(SQLColumns(colh, nullptr, 0, nullptr, 0,
+                       reinterpret_cast<SQLCHAR*>(const_cast<char*>("people")),
+                       SQL_NTS, nullptr, 0) == SQL_SUCCESS);
+    int colcount = 0;
+    bool has_name = false;
+    while (SQLFetch(colh) == SQL_SUCCESS) {
+        SQLCHAR cn[128] = {0};
+        SQLLEN ind = 0;
+        REQUIRE(SQLGetData(colh, 4, SQL_C_CHAR, cn, sizeof(cn), &ind)
+                == SQL_SUCCESS);
+        if (std::string(reinterpret_cast<char*>(cn)) == "NAME") has_name = true;
+        ++colcount;
+    }
+    CHECK(colcount == 2);
+    CHECK(has_name);
+    SQLFreeHandle(SQL_HANDLE_STMT, colh);
+
     REQUIRE(SQLDisconnect(dbc) == SQL_SUCCESS);
     SQLFreeHandle(SQL_HANDLE_DBC, dbc);
     SQLFreeHandle(SQL_HANDLE_ENV, env);

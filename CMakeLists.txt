@@ -77,6 +77,9 @@ option(OPENADS_WITH_POSTGRESQL "Enable PostgreSQL-backed table driver (libpq)" O
 option(OPENADS_WITH_MARIADB "Enable MariaDB-backed table driver (libmariadb)" OFF)
 # Optional generic ODBC table driver (system ODBC driver manager). OFF by default.
 option(OPENADS_WITH_ODBC "Enable ODBC-backed table driver (system ODBC driver manager)" OFF)
+# Build the OpenADS ODBC *driver* (provider) DLL so external ODBC clients
+# (pyodbc, PDO_ODBC, Power BI, Excel, ...) can connect TO OpenADS. Windows only.
+option(OPENADS_BUILD_ODBC_DRIVER "Build the OpenADS ODBC driver DLL (Windows)" OFF)
 # Native MS SQL Server / TDS 7.4 backend. Requires OPENADS_WITH_TLS=ON
 # (uses mbedtls for the TLS layer that SQL Server mandates on port 1433
 # since MSSQL 2022 / Azure SQL). No external library is downloaded beyond
@@ -337,6 +340,9 @@ else()
 endif()
 
 add_subdirectory(src)
+if(OPENADS_BUILD_ODBC_DRIVER AND WIN32)
+    add_subdirectory(bindings/odbc)
+endif()
 add_subdirectory(tools/serverd)
 add_subdirectory(tools/bench)
 add_subdirectory(tools/stress)
