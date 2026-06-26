@@ -169,6 +169,15 @@ enum class Opcode : std::uint8_t {
     Error              = 0xFF,
 };
 
+// Request flags for FetchWhere (Opcode::FetchWhere = 0xA4).
+// Set WANT_RECNO in the flags byte to make the server emit a u32 LE
+// record number before each row's column data in the FetchWhereAck
+// payload. A flags value of 0 produces a reply byte-identical to the
+// v1.4.0 wire (no recno field) — full backward compatibility.
+namespace FetchWhereFlags {
+    constexpr std::uint8_t WANT_RECNO = 0x01;
+}
+
 // Inbound cap — symmetric with encode_frame's outbound check; prevents
 // multi-gigabyte resize on a malicious 4-byte length prefix.
 inline constexpr std::uint32_t kMaxFramePayload = 16u * 1024u * 1024u;

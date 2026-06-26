@@ -401,3 +401,11 @@ EXPORTS
     AdsDDGrantPermission
     AdsDDRevokePermission
 
+    ; Task 2: server-side filtered scan result-set API
+    AdsFetchWhere
+    AdsFetchWhereRows
+    AdsFetchWhereRecno
+    AdsFetchWhereField
+    AdsFetchWhereEof
+    AdsFetchWhereClose
+
