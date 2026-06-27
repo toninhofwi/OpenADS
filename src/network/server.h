@@ -131,8 +131,9 @@ private:
     // Data root directory: relative client paths are resolved under it.
     std::string                                   data_dir_;
 
-    // M12.9 — credential map (user -> password). Read-only after
-    // start() returns; set up at construction time / before start.
+    // M12.9 — credential map (user -> password). Protected by creds_mu_
+    // because add_credential() may run while sessions authenticate.
+    mutable std::mutex                           creds_mu_;
     std::unordered_map<std::string, std::string> creds_;
 
     // studio.web.0.4 — live session registry. session_loop

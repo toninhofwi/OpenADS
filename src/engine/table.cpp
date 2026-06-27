@@ -1188,7 +1188,11 @@ util::Result<void> Table::lock_record_excl(std::uint32_t recno) {
     auto h = locks_.lock_record_excl(driver_->file(), to_lock_type_(),
                                      locking_, recno);
     if (!h) return h.error();
-    recno_locks_.emplace(recno, std::move(h).value());
+    auto [it, inserted] = recno_locks_.emplace(recno, std::move(h).value());
+    if (!inserted) {
+        // Nested acquire on the same record — refcount bumped in LockMgr.
+        (void)it;
+    }
     return load_record_(recno);
 }
 
@@ -1197,16 +1201,21 @@ util::Result<void> Table::try_lock_record_excl(std::uint32_t recno) {
     auto h = locks_.try_lock_record_excl(driver_->file(), to_lock_type_(),
                                          locking_, recno);
     if (!h) return h.error();
-    recno_locks_.emplace(recno, std::move(h).value());
+    auto [it, inserted] = recno_locks_.emplace(recno, std::move(h).value());
+    if (!inserted) {
+        (void)it;
+    }
     return load_record_(recno);
 }
 
 util::Result<void> Table::unlock_record(std::uint32_t recno) {
     auto it = recno_locks_.find(recno);
     if (it != recno_locks_.end()) {
-        it->second.release();
-        recno_locks_.erase(it);
-        locks_.unlock_record(driver_->file(), to_lock_type_(), locking_, recno);
+        if (locks_.unlock_record(driver_->file(), to_lock_type_(), locking_,
+                                 recno)) {
+            it->second.release();
+            recno_locks_.erase(it);
+        }
     }
     return {};
 }
@@ -1215,7 +1224,9 @@ util::Result<void> Table::lock_table_excl() {
     if (mode_ == OpenMode::Read) return {};
     auto h = locks_.lock_table_excl(driver_->file(), to_lock_type_(), locking_);
     if (!h) return h.error();
-    table_lock_ = std::move(h).value();
+    if (!table_lock_) {
+        table_lock_ = std::move(h).value();
+    }
     return {};
 }
 
@@ -1232,15 +1243,18 @@ util::Result<void> Table::try_lock_table_excl() {
     auto h = locks_.try_lock_table_excl(driver_->file(), to_lock_type_(),
                                         locking_);
     if (!h) return h.error();
-    table_lock_ = std::move(h).value();
+    if (!table_lock_) {
+        table_lock_ = std::move(h).value();
+    }
     return {};
 }
 
 util::Result<void> Table::unlock_table() {
     if (table_lock_) {
-        table_lock_->release();
-        table_lock_.reset();
-        locks_.unlock_table(driver_->file(), to_lock_type_(), locking_);
+        if (locks_.unlock_table(driver_->file(), to_lock_type_(), locking_)) {
+            table_lock_->release();
+            table_lock_.reset();
+        }
     }
     return {};
 }

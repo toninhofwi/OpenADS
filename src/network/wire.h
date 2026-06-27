@@ -198,6 +198,10 @@ namespace FetchWhereFlags {
 // multi-gigabyte resize on a malicious 4-byte length prefix.
 inline constexpr std::uint32_t kMaxFramePayload = 16u * 1024u * 1024u;
 
+// Upper bound on field count in a single wire row — guards against
+// malicious/corrupt servers or clients allocating unbounded vectors.
+inline constexpr std::uint16_t kMaxWireFields = 4096u;
+
 // M12.21 option C — client capability flags, advertised as a trailing
 // [u32 LE] appended to the Connect payload (after the password field).
 // A server only piggybacks the sequential-prefetch lookahead block onto

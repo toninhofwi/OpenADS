@@ -2762,12 +2762,146 @@ void snapshot_ri_pks(Table* t) {
 // Clipper dbSetRelation. A `scoped` relation (AdsSetScopedRelation) also
 // constrains the child to the group of records whose key matches, by
 // setting the child order's top/bottom scope to the relation key.
-// Relations live only for local Tables.
+// Parent work-area → child relations (local Tables and tcp:// RemoteTables).
 struct AdsRelation { ADSHANDLE child; std::string expr; bool scoped; };
-std::unordered_map<Table*, std::vector<AdsRelation>>& relation_table() {
-    static std::unordered_map<Table*, std::vector<AdsRelation>> m;
+std::unordered_map<ADSHANDLE, std::vector<AdsRelation>>& relation_map() {
+    static std::unordered_map<ADSHANDLE, std::vector<AdsRelation>> m;
     return m;
 }
+
+namespace {
+
+void remote_child_to_eof(openads::network::RemoteTable* child) {
+    if (child == nullptr || child->conn == nullptr) return;
+    (void)child->conn->goto_bottom(child);
+    (void)child->conn->skip(child, 1);
+    child->row_valid = false;
+}
+
+bool remote_parent_positioned(openads::network::RemoteTable* parent) {
+    if (parent == nullptr || parent->conn == nullptr) return false;
+    if (parent->row_valid) return true;
+    (void)parent->conn->fetch_current_row(parent);
+    if (parent->row_valid) return true;
+    auto eof = parent->conn->at_eof(parent->id);
+    return eof.has_value() && !eof.value();
+}
+
+std::string remote_parent_field(openads::network::RemoteTable* parent,
+                                const std::string& expr) {
+    std::string field = openads::engine::strip_alias_qualifiers(expr);
+    if (!parent->row_valid) {
+        (void)parent->conn->fetch_current_row(parent);
+    }
+    auto v = parent->conn->get_field(parent->id, field);
+    return v.has_value() ? v.value() : std::string();
+}
+
+std::string remote_relation_seek_key(openads::network::RemoteTable* child,
+                                     const std::string& raw) {
+    if (!child->fields_cached) {
+        auto r = child->conn->describe_table(child->id);
+        if (r) {
+            child->fields = std::move(r).value();
+            child->fields_cached = true;
+        }
+    }
+    std::uint32_t klen = 10;
+    bool numeric = false;
+    std::uint16_t width = 0;
+    std::uint16_t dec = 0;
+    if (child->active_index_id != 0) {
+        for (auto& [tag, wid] : child->index_by_tag) {
+            if (wid == child->active_index_id) {
+                (void)tag;
+                break;
+            }
+        }
+    }
+    for (auto& fd : child->fields) {
+        if (fd.type == ADS_NUMERIC || fd.type == ADS_INTEGER ||
+            fd.type == ADS_DOUBLE) {
+            numeric = true;
+            width = static_cast<std::uint16_t>(fd.length);
+            dec   = fd.decimals;
+            klen  = fd.length > 0 ? fd.length : 8u;
+        }
+    }
+    if (numeric) {
+        char buf[264];
+        double dv = 0;
+        try { dv = std::stod(raw); } catch (...) { dv = 0; }
+        int n = (dec > 0)
+            ? std::snprintf(buf, sizeof(buf), "%*.*f",
+                            static_cast<int>(width), static_cast<int>(dec), dv)
+            : std::snprintf(buf, sizeof(buf), "%*.0f",
+                            static_cast<int>(width), dv);
+        std::size_t take = (n < 0)
+            ? 0u
+            : std::min<std::size_t>(static_cast<std::size_t>(n),
+                                    sizeof(buf) - 1);
+        std::string key(buf, take);
+        if (key.size() < klen) key.append(klen - key.size(), ' ');
+        return key;
+    }
+    std::string key = raw;
+    if (key.size() < klen) key.append(klen - key.size(), ' ');
+    else if (key.size() > klen) key.resize(klen);
+    return key;
+}
+
+void seek_remote_child_relation(openads::network::RemoteTable* parent,
+                                openads::network::RemoteTable* child,
+                                const std::string& expr,
+                                bool scoped) {
+    if (parent == nullptr || child == nullptr || child->conn == nullptr) return;
+    if (!remote_parent_positioned(parent)) {
+        if (scoped && child->active_index_id != 0) {
+            (void)child->conn->clear_scope(child->active_index_id, ADS_TOP);
+            (void)child->conn->clear_scope(child->active_index_id, ADS_BOTTOM);
+        }
+        remote_child_to_eof(child);
+        return;
+    }
+    std::string raw = remote_parent_field(parent, expr);
+    if (child->active_index_id == 0) {
+        double dv = 0;
+        try { dv = std::stod(raw); } catch (...) { dv = 0; }
+        auto rc = child->conn->record_count(child->id);
+        std::uint32_t max_rec = rc.has_value() ? rc.value() : 0;
+        auto rn = static_cast<std::uint32_t>(dv);
+        if (rn >= 1 && rn <= max_rec) {
+            (void)child->conn->goto_record(child, rn);
+        } else {
+            remote_child_to_eof(child);
+        }
+        return;
+    }
+    std::string key = remote_relation_seek_key(child, raw);
+    if (scoped) {
+        (void)child->conn->clear_scope(child->active_index_id, ADS_TOP);
+        (void)child->conn->clear_scope(child->active_index_id, ADS_BOTTOM);
+        (void)child->conn->set_scope(child->active_index_id, ADS_TOP,
+                                     key, ADS_STRINGKEY);
+        (void)child->conn->set_scope(child->active_index_id, ADS_BOTTOM,
+                                     key, ADS_STRINGKEY);
+        (void)child->conn->goto_top(child);
+        child->found_cached  = true;
+        child->current_found = true;
+        return;
+    }
+    auto so = child->conn->seek(child->active_index_id, key,
+                                /*soft=*/1, /*last=*/0);
+    if (!so || so.value().hit == 0) {
+        remote_child_to_eof(child);
+        return;
+    }
+    (void)child->conn->goto_record(child, so.value().recno);
+    child->found_cached  = true;
+    child->current_found = true;
+}
+
+}  // namespace
 
 // Drive `child` to EOF — used when the parent has no current record or
 // the relation key finds no match.
@@ -2879,46 +3013,75 @@ void seek_child_relation(Table* parent, Table* child, const std::string& expr,
     }
 }
 
-// Re-seek every child related to `parent`, then cascade into each child's
-// own relations so a multi-level chain (A→B→C) refreshes end to end. A
-// thread-local in-progress set breaks any accidental cycle (A→B→A).
-void apply_relations_for(Table* parent) {
-    if (parent == nullptr) return;
-    auto& tbl = relation_table();
-    auto it = tbl.find(parent);
+// Re-seek every child related to `hParent`, then cascade into each child's
+// own relations so a multi-level chain (A→B→C) refreshes end to end.
+void apply_relations_for_handle(ADSHANDLE hParent) {
+    auto& tbl = relation_map();
+    auto it = tbl.find(hParent);
     if (it == tbl.end()) return;
-    static thread_local std::unordered_set<Table*> active;
-    if (!active.insert(parent).second) return;   // cycle guard
-    for (auto& rel : it->second) {
-        Table* child = get_table(rel.child);
-        if (child != nullptr) {
-            seek_child_relation(parent, child, rel.expr, rel.scoped);
-            apply_relations_for(child);
-        }
-    }
-    active.erase(parent);
-}
-
-// Drop any relation state touching a closing table. Removes it as a parent
-// and prunes it from every other parent's child list so a future Table at
-// the same address (or a reused handle) inherits nothing.
-void forget_relations(Table* t, ADSHANDLE h) {
-    auto& tbl = relation_table();
-    if (t != nullptr) {
-        // Release scopes this table imposed on its scoped children before
-        // dropping its relations (the children may outlive it).
-        if (auto it = tbl.find(t); it != tbl.end()) {
-            for (auto& rel : it->second) {
-                if (rel.scoped)
-                    if (Table* child = get_table(rel.child))
-                        (void)child->clear_scopes();
+    static thread_local std::unordered_set<ADSHANDLE> active;
+    if (!active.insert(hParent).second) return;
+    if (auto* rtp = get_remote_table(hParent)) {
+        for (auto& rel : it->second) {
+            if (auto* rtc = get_remote_table(rel.child)) {
+                seek_remote_child_relation(rtp, rtc, rel.expr, rel.scoped);
+                apply_relations_for_handle(rel.child);
             }
         }
-        tbl.erase(t);
+        active.erase(hParent);
+        return;
+    }
+    Table* parent = get_table(hParent);
+    if (parent == nullptr) {
+        active.erase(hParent);
+        return;
+    }
+    for (auto& rel : it->second) {
+        if (Table* child = get_table(rel.child)) {
+            seek_child_relation(parent, child, rel.expr, rel.scoped);
+            apply_relations_for_handle(rel.child);
+        } else if (auto* rtc = get_remote_table(rel.child)) {
+            seek_remote_child_relation(nullptr, rtc, rel.expr, rel.scoped);
+            apply_relations_for_handle(rel.child);
+        }
+    }
+    active.erase(hParent);
+}
+
+void apply_relations_for_table(Table* parent) {
+    if (parent == nullptr) return;
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    ADSHANDLE h = 0;
+    s.registry.for_each_handle([&](Handle handle, HandleKind k, void* p) {
+        if (!h && k == HandleKind::Table &&
+            static_cast<Table*>(p) == parent) {
+            h = handle;
+        }
+    });
+    if (h) apply_relations_for_handle(h);
+}
+
+// Drop any relation state touching a closing table handle.
+void forget_relations(ADSHANDLE h) {
+    auto& tbl = relation_map();
+    if (auto it = tbl.find(h); it != tbl.end()) {
+        for (auto& rel : it->second) {
+            if (!rel.scoped) continue;
+            if (Table* child = get_table(rel.child)) {
+                (void)child->clear_scopes();
+            } else if (auto* rtc = get_remote_table(rel.child);
+                       rtc != nullptr && rtc->active_index_id != 0 &&
+                       rtc->conn != nullptr) {
+                (void)rtc->conn->clear_scope(rtc->active_index_id, ADS_TOP);
+                (void)rtc->conn->clear_scope(rtc->active_index_id, ADS_BOTTOM);
+            }
+        }
+        tbl.erase(it);
     }
     for (auto& [parent, kids] : tbl) {
-        for (auto it = kids.begin(); it != kids.end();) {
-            it = (it->child == h) ? kids.erase(it) : it + 1;
+        for (auto kid = kids.begin(); kid != kids.end();) {
+            kid = (kid->child == h) ? kids.erase(kid) : kid + 1;
         }
     }
 }
@@ -3149,11 +3312,12 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerTy
             std::string pw   = pucPwd  ? openads::abi::to_internal(pucPwd, 0)
                                        : std::string();
             openads::network::TlsConfig cfg;
-            // For now, no CA bundle plumbed through the public ABI —
-            // dev / self-signed setups skip verification. A future
-            // milestone will let the caller pass a CA cert via an
-            // AdsSetTlsCa-style entry point.
-            cfg.insecure_skip_verify = true;
+            // Verify peer certificates by default. Set OPENADS_TLS_INSECURE=1
+            // for dev/self-signed endpoints until AdsSetTlsCa ships.
+            if (const char* env = std::getenv("OPENADS_TLS_INSECURE")) {
+                cfg.insecure_skip_verify =
+                    (env[0] == '1' || env[0] == 'y' || env[0] == 'Y');
+            }
             cfg.sni_hostname         = thost;
             auto tt = openads::network::connect_tls(thost, tport, cfg);
             if (!tt) return fail(tt.error());
@@ -4700,6 +4864,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoTo clears Found()
         auto r = rt->conn->goto_record(rt, ulRecord);
         if (!r) return fail(r.error());
+        apply_relations_for_handle(hTable);
         return ok();
     }
     Table* t = get_table(hTable);
@@ -4707,7 +4872,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     auto r = t->goto_record(ulRecord);
     if (!r) return fail(r.error());
     snapshot_ri_pks(t);
-    apply_relations_for(t);
+    apply_relations_for_handle(hTable);
     return ok();
 }
 
@@ -4785,6 +4950,7 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
             // is freed; skip the wire close op if the connection is already gone.
             if (rt->conn != nullptr)
                 (void)rt->conn->close_table(rt->id);
+            forget_relations(hTable);
             auto& s2 = state();
             std::lock_guard<std::recursive_mutex> lk2(s2.mu);
             s2.registry.release(hTable);
@@ -4814,7 +4980,7 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
         (void)t->flush();
         purge_bindings_for_table(t);
         purge_pending_binaries_for_table(t);
-        forget_relations(t, hTable);
+        forget_relations(hTable);
         t->ri_snapshot().clear();
         if (owning) owning->close_table_ptr(t);
     }
@@ -4831,6 +4997,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoTop clears Found()
         auto r = rt->conn->goto_top(rt);
         if (!r) return fail(r.error());
+        apply_relations_for_handle(hTable);
         return ok();
     }
     if (auto* ops = openads::abi::backend_table_ops_for(hTable))
@@ -4840,7 +5007,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
     auto r = t->goto_top();
     if (!r) return fail(r.error());
     snapshot_ri_pks(t);
-    apply_relations_for(t);
+    apply_relations_for_handle(hTable);
     return ok();
 }
 
@@ -4849,6 +5016,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoBottom clears Found()
         auto r = rt->conn->goto_bottom(rt);
         if (!r) return fail(r.error());
+        apply_relations_for_handle(hTable);
         return ok();
     }
     if (auto* ops = openads::abi::backend_table_ops_for(hTable))
@@ -4858,7 +5026,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
     auto r = t->goto_bottom();
     if (!r) return fail(r.error());
     snapshot_ri_pks(t);
-    apply_relations_for(t);
+    apply_relations_for_handle(hTable);
     return ok();
 }
 
@@ -4880,12 +5048,14 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
             // we are one logical row further ahead so the next wire op
             // resyncs by (step + prefetch_consumed).
             ++rt->prefetch_consumed;
+            apply_relations_for_handle(hTable);
             return ok();
         }
         // Any non-sequential nav drops the queue (handled inside
         // parse_row_trailer_into when the new ack arrives).
         auto r = rt->conn->skip(rt, lRows);
         if (!r) return fail(r.error());
+        apply_relations_for_handle(hTable);
         return ok();
     }
     if (auto* ops = openads::abi::backend_table_ops_for(hTable))
@@ -4895,7 +5065,7 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     auto r = t->skip(lRows);
     if (!r) return fail(r.error());
     snapshot_ri_pks(t);
-    apply_relations_for(t);
+    apply_relations_for_handle(hTable);
     return ok();
 }
 
@@ -6603,8 +6773,27 @@ UNSIGNED32 ENTRYPOINT AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 ENTRYPOINT AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pusType) {
+    if (pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        switch (rt->fields[i].type) {
+            case ADS_IMAGE:
+                *pusType = static_cast<UNSIGNED16>(ADS_IMAGE);
+                break;
+            case ADS_BINARY:
+                *pusType = static_cast<UNSIGNED16>(ADS_BINARY);
+                break;
+            default:
+                *pusType = static_cast<UNSIGNED16>(ADS_STRING);
+                break;
+        }
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -6746,18 +6935,46 @@ UNSIGNED32 emit_utf16(UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
 
 UNSIGNED32 ENTRYPOINT AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucValueW, UNSIGNED32 ulLen) {
+    constexpr std::size_t kMaxUtf16Units = 1u << 20;
+    std::size_t units = ulLen;
+    if (units == 0 && pucValueW != nullptr) {
+        while (units < kMaxUtf16Units && pucValueW[units] != 0) ++units;
+        if (units >= kMaxUtf16Units) {
+            return fail(openads::AE_INSUFFICIENT_BUFFER, "unicode string too long");
+        }
+    }
+    std::string utf8 = openads::abi::utf16le_to_utf8(
+        reinterpret_cast<const std::uint16_t*>(pucValueW), units);
+
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        {
+            auto p = reinterpret_cast<std::uintptr_t>(pucField);
+            if (p != 0 && p < 0x10000u) {
+                auto i = remote_field_index(rt, pucField);
+                if (i == std::numeric_limits<std::size_t>::max()) {
+                    return fail(openads::AE_COLUMN_NOT_FOUND, "");
+                }
+                fname = rt->fields[i].name;
+            }
+        }
+        remote_settle_cursor(rt);
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname, utf8);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (!t) {
+        return AdsSetString(hTable, pucField,
+                            reinterpret_cast<UNSIGNED8*>(utf8.data()),
+                            static_cast<UNSIGNED32>(utf8.size()));
+    }
     std::uint16_t idx = 0;
     if (!resolve_field_index_w(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
-    std::size_t units = ulLen;
-    if (units == 0 && pucValueW != nullptr) {
-        while (pucValueW[units] != 0) ++units;
-    }
-    std::string utf8 = openads::abi::utf16le_to_utf8(
-        reinterpret_cast<const std::uint16_t*>(pucValueW), units);
     auto r = t->set_field(idx, utf8);
     if (!r) return fail(r.error());
     return ok();
@@ -6795,12 +7012,6 @@ UNSIGNED32 ENTRYPOINT AdsGetFieldW(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 ENTRYPOINT AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
                         SIGNED32 lDate) {
-    Table* t = get_table(hTable);
-    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    std::uint16_t idx = 0;
-    if (!resolve_field_index(t, pucField, &idx)) {
-        return fail(openads::AE_COLUMN_NOT_FOUND, "");
-    }
     char buf[9];
     if (lDate <= 0) {
         std::memset(buf, ' ', 8); buf[8] = '\0';
@@ -6814,6 +7025,35 @@ UNSIGNED32 ENTRYPOINT AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
         std::snprintf(buf, sizeof(buf), "%04d%02d%02d", y, m, d);
     }
     std::string val(buf, 8);
+
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        {
+            auto p = reinterpret_cast<std::uintptr_t>(pucField);
+            if (p != 0 && p < 0x10000u) {
+                auto i = remote_field_index(rt, pucField);
+                if (i == std::numeric_limits<std::size_t>::max()) {
+                    return fail(openads::AE_COLUMN_NOT_FOUND, "");
+                }
+                fname = rt->fields[i].name;
+            }
+        }
+        remote_settle_cursor(rt);
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    Table* t = get_table(hTable);
+    if (!t) {
+        return AdsSetString(hTable, pucField,
+                            reinterpret_cast<UNSIGNED8*>(val.data()), 8);
+    }
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
     auto r = t->set_field(idx, val);
     if (!r) return fail(r.error());
     return ok();
@@ -7371,6 +7611,16 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 HandleKind::RemoteIndex, ri.get());
             ahIndex[i] = gh;
             remote_indexes.emplace(gh, std::move(ri));
+            UNSIGNED8 tbuf[32] = {0};
+            UNSIGNED16 tlen = sizeof(tbuf);
+            if (AdsGetIndexName(gh, tbuf, &tlen) == 0) {
+                std::string tag(reinterpret_cast<char*>(tbuf), tlen);
+                while (!tag.empty() && tag.back() == ' ') tag.pop_back();
+                rt->index_by_tag.emplace_back(tag, ids[i]);
+            } else {
+                rt->index_by_tag.emplace_back("", ids[i]);
+            }
+            if (rt->active_index_id == 0) rt->active_index_id = ids[i];
         }
         if (pu16ArrayLen != nullptr) *pu16ArrayLen = out_n;
         return ok();
@@ -8561,15 +8811,36 @@ UNSIGNED32 ENTRYPOINT AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 ENTRYPOINT AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
                           UNSIGNED8* pucBuf, UNSIGNED32 ulLen) {
-    Table* t = get_table(hTable);
-    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    std::uint16_t idx = 0;
-    if (!resolve_field_index(t, pucField, &idx)) {
-        return fail(openads::AE_COLUMN_NOT_FOUND, "");
-    }
     std::string raw;
     if (pucBuf != nullptr && ulLen > 0) {
         raw.assign(reinterpret_cast<const char*>(pucBuf), ulLen);
+    }
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        {
+            auto p = reinterpret_cast<std::uintptr_t>(pucField);
+            if (p != 0 && p < 0x10000u) {
+                auto i = remote_field_index(rt, pucField);
+                if (i == std::numeric_limits<std::size_t>::max()) {
+                    return fail(openads::AE_COLUMN_NOT_FOUND, "");
+                }
+                fname = rt->fields[i].name;
+            }
+        }
+        remote_settle_cursor(rt);
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname, raw);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    Table* t = get_table(hTable);
+    if (!t) {
+        return AdsSetString(hTable, pucField, pucBuf, ulLen);
+    }
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     auto r = t->set_field(idx, raw);
     if (!r) return fail(r.error());
@@ -8625,6 +8896,23 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
             ? openads::abi::to_internal(pucName, 0) : std::string();
         auto r = rt->conn->set_order_by_name(rt->id, name);
         if (!r) return fail(r.error());
+        if (name.empty()) {
+            rt->active_index_id = 0;
+        } else {
+            for (auto& [tag, wid] : rt->index_by_tag) {
+                if (tag.size() == name.size()) {
+                    bool eq = true;
+                    for (std::size_t i = 0; i < tag.size(); ++i) {
+                        if (std::toupper(static_cast<unsigned char>(tag[i])) !=
+                            std::toupper(static_cast<unsigned char>(name[i]))) {
+                            eq = false;
+                            break;
+                        }
+                    }
+                    if (eq) { rt->active_index_id = wid; break; }
+                }
+            }
+        }
         return ok();
     }
     Table* t = get_table(hTable);
@@ -8678,6 +8966,7 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hInde
         if (auto* ri = get_remote_index(hIndex)) {
             auto r = rt->conn->set_order(rt->id, ri->id);
             if (!r) return fail(r.error());
+            rt->active_index_id = ri->id;
             return ok();
         }
         return fail(openads::AE_INTERNAL_ERROR,
@@ -10586,7 +10875,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             if (pbFound != nullptr) *pbFound = 1;
             t->set_last_seek_found(true);
             snapshot_ri_pks(t);
-            apply_relations_for(t);
+            apply_relations_for_table(t);
             return ok();
         }
     }
@@ -10595,7 +10884,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
     bool found = r.value();
     if (pbFound != nullptr) *pbFound = found ? 1 : 0;
     snapshot_ri_pks(t);
-    apply_relations_for(t);
+    apply_relations_for_table(t);
     return ok();
 }
 
@@ -19068,21 +19357,7 @@ UNSIGNED32 ENTRYPOINT AdsConnect(UNSIGNED8* pucServer, ADSHANDLE* phConnect) {
 UNSIGNED32 ENTRYPOINT AdsApplicationExit(void) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 ENTRYPOINT AdsClearFilter(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 ENTRYPOINT AdsClearRelation(ADSHANDLE hParent) {
-    // Drop only the relations this table drives as a parent; it may still
-    // be a child of another work area, so leave those bindings intact.
-    Table* parent = get_table(hParent);
-    if (parent == nullptr) return ok();
-    auto& tbl = relation_table();
-    auto it = tbl.find(parent);
-    if (it != tbl.end()) {
-        // Release any scope a scoped relation imposed on its child so the
-        // child can navigate its whole table again.
-        for (auto& rel : it->second) {
-            if (!rel.scoped) continue;
-            if (Table* child = get_table(rel.child)) (void)child->clear_scopes();
-        }
-        tbl.erase(it);
-    }
+    forget_relations(hParent);
     return ok();
 }
 UNSIGNED32 ENTRYPOINT AdsClearCallbackFunction(void) { ADS_STUB(openads::AE_SUCCESS); }
@@ -19958,24 +20233,17 @@ UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
     if (!r) return fail(r.error());
     return ok();
 }
-// Not yet implemented — return AE_FUNCTION_NOT_AVAILABLE so callers know to
-// use a workaround rather than silently getting no relation following.
 UNSIGNED32 set_relation_impl(ADSHANDLE hParent, ADSHANDLE hChild,
                              UNSIGNED8* pucExpr, bool scoped) {
     if (pucExpr == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
-    if (get_remote_table(hParent) || get_remote_table(hChild))
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsSetRelation: not available for remote tables");
-    Table* parent = get_table(hParent);
-    Table* child  = get_table(hChild);
-    if (parent == nullptr || child == nullptr)
-        return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (get_table(hParent) == nullptr && get_remote_table(hParent) == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "unknown parent table");
+    if (get_table(hChild) == nullptr && get_remote_table(hChild) == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "unknown child table");
     std::string expr = openads::abi::to_internal(pucExpr, 0);
-    relation_table()[parent].push_back(
+    relation_map()[hParent].push_back(
         AdsRelation{hChild, std::move(expr), scoped});
-    // Position the child against the parent's current record immediately,
-    // the way ACE / Clipper do on dbSetRelation.
-    apply_relations_for(parent);
+    apply_relations_for_handle(hParent);
     return ok();
 }
 

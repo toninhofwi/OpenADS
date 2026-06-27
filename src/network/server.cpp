@@ -129,6 +129,7 @@ Server::~Server() { stop(); }
 
 void Server::add_credential(const std::string& user,
                             const std::string& password) {
+    std::lock_guard<std::mutex> lk(creds_mu_);
     creds_[user] = password;
 }
 

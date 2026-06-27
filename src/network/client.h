@@ -280,6 +280,11 @@ struct RemoteTable {
     std::string aof_expr;
     // Table alias (stored for AdsGetTableAlias).
     std::string alias;
+    // Server-side wire id of the active controlling index (0 = natural order).
+    // Updated by AdsSetIndexOrder / AdsSetIndexOrderByHandle / AdsOpenIndex.
+    std::uint32_t active_index_id = 0;
+    // Tag name → server wire index id (populated at AdsOpenIndex).
+    std::vector<std::pair<std::string, std::uint32_t>> index_by_tag;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag

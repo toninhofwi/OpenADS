@@ -91,6 +91,46 @@ TEST_CASE("M12.3 server Connect against a real data dir succeeds") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M12.3 Connect rejects paths outside server data_dir jail") {
+    namespace fs = std::filesystem;
+    auto root = fs::temp_directory_path() / "openads_m12_jail_root";
+    auto outside = fs::temp_directory_path() / "openads_m12_jail_out";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::remove_all(outside, ec);
+    fs::create_directories(root);
+    fs::create_directories(outside);
+
+    Server srv;
+    srv.set_data_dir(root.string());
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    auto cli = connect_tcp("127.0.0.1", srv.port());
+    REQUIRE(cli.has_value());
+    Socket cs = cli.value();
+
+    Frame req;
+    req.opcode = Opcode::Connect;
+    std::string ds = "../" + outside.filename().string();
+    auto pushlen = [](std::vector<std::uint8_t>& out, std::uint16_t n) {
+        out.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
+    };
+    pushlen(req.payload, static_cast<std::uint16_t>(ds.size()));
+    req.payload.insert(req.payload.end(), ds.begin(), ds.end());
+    pushlen(req.payload, 0);
+    pushlen(req.payload, 0);
+    REQUIRE(write_frame(cs, req).has_value());
+    auto reply = read_frame(cs);
+    REQUIRE(reply.has_value());
+    CHECK(reply.value().opcode == Opcode::Error);
+
+    sock_close(cs);
+    srv.stop();
+    fs::remove_all(root, ec);
+    fs::remove_all(outside, ec);
+}
+
 TEST_CASE("M12.3 server unknown opcode returns Error frame") {
     Server srv;
     REQUIRE(srv.start("127.0.0.1", 0).has_value());

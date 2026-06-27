@@ -5,7 +5,10 @@
 #include "doctest.h"
 #include "openads/ace.h"
 #include "openads/error.h"
+#include "network/server.h"
 
+#include <array>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -271,5 +274,108 @@ TEST_CASE("AdsSetScopedRelation constrains the child to the matching key group")
     REQUIRE(AdsCloseTable(hC) == openads::AE_SUCCESS);
     REQUIRE(AdsCloseTable(hP) == openads::AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == openads::AE_SUCCESS);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AdsSetRelation drives remote child over tcp://") {
+    const auto dir = fs::temp_directory_path() / "openads_setrelation_wire";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    {
+        UNSIGNED8 srv[512];
+        std::string d = dir.string();
+        std::memcpy(srv, d.c_str(), d.size() + 1);
+        ADSHANDLE hConn = 0;
+        REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn)
+                == openads::AE_SUCCESS);
+
+        UNSIGNED8 pdef[]  = "CODE,Character,4";
+        UNSIGNED8 pname[] = "par";
+        ADSHANDLE hP = 0;
+        REQUIRE(AdsCreateTable(hConn, pname, nullptr, ADS_CDX, 0, 0, 0, 0, pdef, &hP)
+                == openads::AE_SUCCESS);
+        const char* codes[] = {"AAAA", "BBBB", "CCCC"};
+        for (const char* c : codes) {
+            REQUIRE(AdsAppendRecord(hP) == openads::AE_SUCCESS);
+            UNSIGNED8 f[8] = "CODE";
+            REQUIRE(AdsSetString(hP, f, (UNSIGNED8*)c, 4) == openads::AE_SUCCESS);
+            REQUIRE(AdsWriteRecord(hP) == openads::AE_SUCCESS);
+        }
+
+        UNSIGNED8 cdef[]  = "CODE,Character,4;DATA,Character,8";
+        UNSIGNED8 cname[] = "chi";
+        ADSHANDLE hC = 0;
+        REQUIRE(AdsCreateTable(hConn, cname, nullptr, ADS_CDX, 0, 0, 0, 0, cdef, &hC)
+                == openads::AE_SUCCESS);
+        UNSIGNED8 bag[]  = "chi.cdx";
+        UNSIGNED8 tag[]  = "BYCODE";
+        UNSIGNED8 cexpr[] = "CODE";
+        ADSHANDLE hCI = 0;
+        REQUIRE(AdsCreateIndex61(hC, bag, tag, cexpr, nullptr, nullptr, 0, 0, &hCI)
+                == openads::AE_SUCCESS);
+        struct { const char* code; const char* data; } rows[] = {
+            {"AAAA", "alpha"}, {"BBBB", "beta"}, {"CCCC", "gamma"},
+        };
+        for (auto& r : rows) {
+            REQUIRE(AdsAppendRecord(hC) == openads::AE_SUCCESS);
+            UNSIGNED8 fc[8] = "CODE";
+            UNSIGNED8 fd[8] = "DATA";
+            REQUIRE(AdsSetString(hC, fc, (UNSIGNED8*)r.code, 4) == openads::AE_SUCCESS);
+            REQUIRE(AdsSetString(hC, fd, (UNSIGNED8*)r.data,
+                                 (UNSIGNED32)std::strlen(r.data)) == openads::AE_SUCCESS);
+            REQUIRE(AdsWriteRecord(hC) == openads::AE_SUCCESS);
+        }
+        REQUIRE(AdsCloseTable(hC) == openads::AE_SUCCESS);
+        REQUIRE(AdsCloseTable(hP) == openads::AE_SUCCESS);
+        REQUIRE(AdsDisconnect(hConn) == openads::AE_SUCCESS);
+    }
+
+    openads::network::Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    std::string path = dir.string();
+    std::replace(path.begin(), path.end(), '\\', '/');
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(srv.port()) + "/" + path;
+
+    std::array<UNSIGNED8, 512> srv_uri{};
+    REQUIRE(uri.size() < srv_uri.size());
+    std::memcpy(srv_uri.data(), uri.c_str(), uri.size() + 1);
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv_uri.data(), ADS_REMOTE_SERVER, nullptr, nullptr, 0, &hConn)
+            == openads::AE_SUCCESS);
+
+    ADSHANDLE hP = 0, hC = 0;
+    UNSIGNED8 pn[] = "par";
+    UNSIGNED8 cn[] = "chi";
+    REQUIRE(AdsOpenTable(hConn, pn, nullptr, ADS_CDX, ADS_ANSI, ADS_READONLY,
+                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hP)
+            == openads::AE_SUCCESS);
+    REQUIRE(AdsOpenTable(hConn, cn, nullptr, ADS_CDX, ADS_ANSI, ADS_READONLY,
+                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hC)
+            == openads::AE_SUCCESS);
+
+    UNSIGNED8 bag[] = "chi.cdx";
+    ADSHANDLE ahIdx[8] = {0};
+    UNSIGNED16 nidx = 8;
+    REQUIRE(AdsOpenIndex(hC, bag, ahIdx, &nidx) == openads::AE_SUCCESS);
+    REQUIRE(nidx >= 1);
+    REQUIRE(AdsSetIndexOrderByHandle(hC, ahIdx[0]) == openads::AE_SUCCESS);
+
+    UNSIGNED8 rexpr[] = "CODE";
+    REQUIRE(AdsSetRelation(hP, hC, rexpr) == openads::AE_SUCCESS);
+
+    REQUIRE(AdsGotoTop(hP) == openads::AE_SUCCESS);
+    CHECK(child_data(hC) == "alpha");
+
+    REQUIRE(AdsSkip(hP, 1) == openads::AE_SUCCESS);
+    CHECK(child_data(hC) == "beta");
+
+    REQUIRE(AdsCloseTable(hC) == openads::AE_SUCCESS);
+    REQUIRE(AdsCloseTable(hP) == openads::AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hConn) == openads::AE_SUCCESS);
+    srv.stop();
     fs::remove_all(dir, ec);
 }

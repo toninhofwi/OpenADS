@@ -11,6 +11,7 @@
 #include "platform/proc.h"
 #include "openads/ace.h"
 #include "openads/error.h"
+#include "platform/path.h"
 #include "session/connection.h"
 #include "sql_backend/enterprise_config.h"
 
@@ -459,6 +460,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                     (caps & openads::network::kCapPrefetchConsume) != 0;
             }
             if (srv_->require_auth()) {
+                std::lock_guard<std::mutex> clk(srv_->creds_mu_);
                 auto cit = srv_->creds_.find(user);
                 if (cit == srv_->creds_.end() || cit->second != pw) {
                     reply = err("Connect: authentication failed",
@@ -466,13 +468,18 @@ DispatchResult Session::dispatch(const Frame& f) {
                     break;
                 }
             }
-            // Resolve relative client paths under the server's data root.
+            // Resolve client paths under the server's data root and reject
+            // traversal attempts (e.g. "../../outside").
             std::string resolved = dir;
             if (!srv_->data_dir_.empty()) {
-                namespace fs = std::filesystem;
-                fs::path cp(dir);
-                if (cp.is_relative())
-                    resolved = (fs::path(srv_->data_dir_) / cp).string();
+                auto jail = openads::platform::resolve_under_root(
+                    srv_->data_dir_, dir);
+                if (!jail) {
+                    reply = err("Connect: path outside data directory",
+                                openads::AE_ACCESS_DENIED);
+                    break;
+                }
+                resolved = *jail;
             }
             auto co = openads::session::Connection::open(resolved);
             if (!co) {

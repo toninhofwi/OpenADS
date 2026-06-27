@@ -60,6 +60,7 @@ std::size_t parse_one_row(const std::vector<std::uint8_t>& pl,
     recno   = read_u32_le(&pl[pos]); pos += 4;
     deleted = (pl[pos++] != 0);
     std::uint16_t n = read_u16_le(&pl[pos]); pos += 2;
+    if (n > kMaxWireFields) return fail;
     fields.clear();
     fields.reserve(n);
     for (std::uint16_t i = 0; i < n; ++i) {
