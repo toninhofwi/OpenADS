@@ -70,7 +70,7 @@ import SAP una sola vez vía `tools/import_dd`; no perseguir round-trip binario 
 
 | # | Tarea |
 |---|-------|
-| 3.1 | Documento de diseño DD v2 (objetos, permisos bitmask, caché en servidor) |
+| 3.1 | Documento de diseño DD v2 (objetos, permisos bitmask, caché en servidor) | [x] `docs/dd-v2-design.md` |
 | 3.2 | Migrar `import_dd` al formato v2 |
 | 3.3 | Suite de tests DD v2 (usuarios, grupos, RI, triggers, permisos efectivos) |
 | 3.4 | DaWeb: leer solo DD v2; dejar de depender de blobs SAP |
@@ -103,10 +103,10 @@ import SAP una sola vez vía `tools/import_dd`; no perseguir round-trip binario 
 
 ## Orden de trabajo inmediato (próxima sesión)
 
-1. Confirmar job `harbour-smoke` verde en GitHub Actions (primer run = cache fría)
-2. Test live MSSQL con `OPENADS_TEST_MSSQL_CONNSTR` (read padding + write)
-3. Fase 3.1 — documento de diseño DD v2
-4. Fase 5.3 — DaWeb: RI dropdown, grupos de usuario
+1. Fase 3.2 — `import_dd` escribe formato nativo v2 (ver `docs/dd-v2-design.md` §8)
+2. Fase 3.3 — suite de tests DD v2
+3. CI: arreglar `harbour-smoke` bootstrap + build `msvc-x86` (fallan en último push)
+4. Test live MSSQL con `OPENADS_TEST_MSSQL_CONNSTR` (read padding + write)
 
 ---
 
