@@ -69,13 +69,13 @@
 #include "sql/parser.h"
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <functional>
 #include <limits>
 #include <thread>
 
 #include <cctype>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

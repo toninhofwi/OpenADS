@@ -208,19 +208,18 @@ TEST_CASE("AdsSetAOF: non-optimisable AOF succeeds with OPTIMIZED_NONE") {
                              nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0,
                              &hT) == 0);
 
-        // UPPER(NAME) / Empty(NAME) are outside the optimisable AOF
-        // subset. ADS doesn't error on those — it declines to
-        // optimise (OPTIMIZED_NONE) and the client RDD filters
-        // client-side. AdsSetAOF must mirror that, not reject.
+        // Empty(NAME) is outside the optimisable AOF subset.
+        // Real ADS errors when it cannot build a server-side AOF,
+        // and stock rddads decides whether to run its own
+        // client-side row filter purely from AdsSetAOF's return
+        // value — it does NOT call AdsGetAOFOptLevel. So
+        // AdsSetAOF must return a non-success code here, causing
+        // rddads to fall back to client-side filtering.
         std::string cond = "Empty(NAME)";
         UNSIGNED32 rc = AdsSetAOF(hT,
                           reinterpret_cast<UNSIGNED8*>(cond.data()),
                           0);
-        CHECK(rc == 0);
-
-        UNSIGNED16 lvl = 0xFFFF;
-        CHECK(AdsGetAOFOptLevel(hT, &lvl, nullptr, nullptr) == 0);
-        CHECK(lvl == ADS_OPTIMIZED_NONE);
+        CHECK(rc == AE_INVALID_EXPRESSION);
 
         AdsCloseTable(hT);
         AdsDisconnect(hConn);

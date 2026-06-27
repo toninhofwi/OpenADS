@@ -28,6 +28,7 @@
 #undef AE_INVALID_WORKAREA
 #undef AE_NO_CURRENT_RECORD
 #undef AE_INSUFFICIENT_BUFFER
+#undef AE_INVALID_EXPRESSION
 
 namespace openads {
 
@@ -66,7 +67,11 @@ enum : std::uint32_t {
     // peers when the caller's buffer is smaller than the data; the required
     // size is written back through the length out-parameter so the caller
     // can resize and retry.
-    AE_INSUFFICIENT_BUFFER      = 5051
+    AE_INSUFFICIENT_BUFFER      = 5051,
+    // 5079 = AE_INVALID_EXPRESSION (SAP SDK). Returned by AdsSetAOF when the
+    // filter expression cannot be optimised into a server-side AOF, causing
+    // the stock rddads RDD to fall back to its client-side row filter.
+    AE_INVALID_EXPRESSION       = 5079
 };
 
 } // namespace openads
