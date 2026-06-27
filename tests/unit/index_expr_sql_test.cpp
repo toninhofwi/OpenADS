@@ -95,19 +95,80 @@ TEST_CASE("SQL push-down: untranslatable predicates decline to nullopt") {
     CHECK_FALSE(try_emit_sql_where("RECNO() > 5").has_value());
     CHECK_FALSE(try_emit_sql_where("DELETED()").has_value());
     CHECK_FALSE(try_emit_sql_where(".NOT. DELETED()").has_value());
-    // Conversions not modelled.
-    CHECK_FALSE(try_emit_sql_where("STR(QTY) = '1'").has_value());
-    CHECK_FALSE(try_emit_sql_where("VAL(CODE) > 3").has_value());
-    CHECK_FALSE(try_emit_sql_where("DTOS(DT) = '20260101'").has_value());
     // Unknown function.
     CHECK_FALSE(try_emit_sql_where("FOO(X) = 1").has_value());
-    // '$' with a non-literal needle (field) can't be safely pushed.
-    CHECK_FALSE(try_emit_sql_where("NM $ DESC").has_value());
-    // '$' with a LIKE wildcard in the needle would change matching -> decline.
+    // '$' with a LIKE wildcard in the needle: xBase treats % as literal,
+    // LIKE treats it as wildcard -> decline to avoid wrong results.
     CHECK_FALSE(try_emit_sql_where("'a%b' $ NM").has_value());
+    CHECK_FALSE(try_emit_sql_where("'a_b' $ NM").has_value());
     // A bare scalar with no comparison can't be coerced to a SQL boolean.
     CHECK_FALSE(try_emit_sql_where("QTY").has_value());
     // Empty / whitespace.
     CHECK_FALSE(try_emit_sql_where("").has_value());
     CHECK_FALSE(try_emit_sql_where("   ").has_value());
+}
+
+TEST_CASE("SQL push-down: STR/VAL/DTOS now translatable") {
+    // STR(n) -> CAST(n AS VARCHAR)
+    CHECK(emit("STR(QTY) = '1'")       == "CAST(QTY AS VARCHAR) = '1'");
+    CHECK(emit("STR(QTY,10) = 'x'")    == "CAST(QTY AS VARCHAR) = 'x'");
+    CHECK(emit("STR(QTY,10,2) = 'x'")  == "CAST(QTY AS VARCHAR) = 'x'");
+    // VAL(c) -> CAST(c AS DECIMAL)
+    CHECK(emit("VAL(CODE) > 3")        == "CAST(CODE AS DECIMAL) > 3");
+    CHECK(emit("VAL(AMT) >= 100")      == "CAST(AMT AS DECIMAL) >= 100");
+    // DTOS(d) -> REPLACE(CAST(d AS VARCHAR),'-','')
+    CHECK(emit("DTOS(DT) = '20260101'")
+          == "REPLACE(CAST(DT AS VARCHAR), '-', '') = '20260101'");
+}
+
+TEST_CASE("SQL push-down: date/time functions") {
+    CHECK(emit("YEAR(DT) = 2026")       == "EXTRACT(YEAR FROM DT) = 2026");
+    CHECK(emit("MONTH(DT) = 6")         == "EXTRACT(MONTH FROM DT) = 6");
+    CHECK(emit("DAY(DT) = 15")          == "EXTRACT(DAY FROM DT) = 15");
+    CHECK(emit("DATE() = DT")           == "NOW() = DT");
+    CHECK(emit("TIME() = TM")           == "CURRENT_TIME = TM");
+    CHECK(emit("DATETIME() = DT")       == "NOW() = DT");
+}
+
+TEST_CASE("SQL push-down: conditional / type functions") {
+    // Functions must appear in a comparison context (emit_cmp requires an operator)
+    CHECK(emit("IIF(A,B,C) = 'X'")
+          == "(CASE WHEN A THEN B ELSE C END) = 'X'");
+    CHECK(emit("IF(X,Y,Z) = 'hello'")
+          == "(CASE WHEN X THEN Y ELSE Z END) = 'hello'");
+    CHECK(emit("ISNULL(A) = 1")
+          == "(A IS NULL) = 1");
+    CHECK(emit("EMPTY(A) = 1")
+          == "(A IS NULL OR A = '' OR A = 0) = 1");
+    CHECK(emit("LEN(NM) > 0")
+          == "LENGTH(NM) > 0");
+    CHECK(emit("ABS(QTY) > 5")
+          == "ABS(QTY) > 5");
+    CHECK(emit("INT(AMT) > 3")
+          == "FLOOR(AMT) > 3");
+}
+
+TEST_CASE("SQL push-down: '$' field-to-field") {
+    CHECK(emit("NM $ DESC")
+          == "DESC LIKE ('%' || NM || '%')");
+    // With MySQL CONCAT dialect
+    SqlDialect mysql;
+    mysql.use_concat_fn = true;
+    auto r = try_emit_sql_where("NM $ DESC", mysql);
+    REQUIRE(r.has_value());
+    CHECK(*r == "DESC LIKE CONCAT('%', NM, '%')");
+}
+
+TEST_CASE("SQL push-down: $ with dialect LIKE overrides") {
+    SqlDialect pg;
+    pg.length_fn = "CHAR_LENGTH";
+    pg.now_fn    = "NOW()";
+    pg.true_literal  = "TRUE";
+    pg.false_literal = "FALSE";
+    auto r = try_emit_sql_where("DTOS(DT) = '20260101'", pg);
+    REQUIRE(r.has_value());
+    CHECK(*r == "REPLACE(CAST(DT AS VARCHAR), '-', '') = '20260101'");
+    CHECK(emit("EMPTY(A) = 1")
+          == "(A IS NULL OR A = '' OR A = 0) = 1");
+    CHECK(emit("LEN(NM) > 0")   == "LENGTH(NM) > 0");
 }

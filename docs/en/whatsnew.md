@@ -14,6 +14,36 @@ the [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md).
 
 ---
 
+## v1.5.0 Highlights
+
+### SQL Push-Down — 50+ New Translatable Functions
+
+The `try_emit_sql_where()` emitter now translates STR, VAL, DTOS,
+DTOC, CTOD, ROUND, CEILING, MOD, EXP, LOG, SQRT, SIGN, PADR/PADL/PADC,
+STRTRAN, LEFT, RIGHT, AT/ATNUM, IIF, IF, NIL, ISNULL, ISBLANK, EMPTY,
+LEN, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, DOW, CDOW, CMONTH, NOW,
+and more into portable SQL. The `$` contains operator now supports
+field-to-field (`field1 $ field2 → field2 LIKE '%' || field1 || '%'`).
+
+### UNION / UNION ALL
+
+The SQL parser handles `SELECT ... UNION [ALL] SELECT ...` with any
+nesting depth. Each UNION member carries its own WHERE, ORDER BY,
+LIMIT, and aliases.
+
+### DDL Parsing
+
+New `ALTER TABLE`, `DROP TABLE`, `DROP INDEX` statement parsers with
+support for IF EXISTS, quoted identifiers, and column definitions.
+Ready for backend execution hooks.
+
+### AOF Expression — LIKE and IS NULL
+
+The AOF expression layer now supports `LIKE '%pattern%'` with `%`/`_`
+wildcards, and `IS NULL` / `IS NOT NULL` unary operators.
+
+---
+
 ## New Features
 
 ### SQLite-backed Table Driver

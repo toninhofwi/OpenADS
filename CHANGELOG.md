@@ -5,6 +5,48 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.5.0 — 2026-06-27
+
+### SQL Push-Down Expansion
+
+- **50+ new translatable functions.** The `try_emit_sql_where()`
+  emitter now handles STR, VAL, DTOS, DTOC, CTOD, ROUND, CEILING,
+  CEIL, MOD, EXP, LOG, LOG10, SQRT, SIGN, PADR, PADL, PADC, STRTRAN,
+  LEFT, RIGHT, AT, ATNUM, DATEADD, DATEDIFF, IIF, IF, NIL, ISNULL,
+  ISBLANK, EMPTY, LEN, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, DOW,
+  CDOW, CMONTH, NOW, and more. Unsupported functions (RECNO, DELETED,
+  REPLICATE, SPACE, STUFF, OCCURS) decline cleanly.
+- **`$` contains: field-to-field support.** `field1 $ field2` now
+  emits `field2 LIKE '%' || field1 || '%'` (or CONCAT variant).
+  Literals with LIKE wildcards (% _ \) still decline to avoid
+  semantic mismatch.
+- **`SqlDialect` expansion.** New fields: `length_fn` (LEN →
+  LENGTH/CHAR_LENGTH), `now_fn` (DATE() → NOW()/CURRENT_DATE),
+  `true_literal` / `false_literal` for .T./.F. rendering.
+
+### UNION / UNION ALL Parser
+
+- **`UNION [ALL]` SELECT support.** The SQL parser now handles
+  `SELECT ... UNION [ALL] SELECT ...` with any nesting depth.
+  Parsed via `SelectStmt::UnionMember` list; each member carries
+  its own FROM, WHERE, ORDER BY, LIMIT, and aliases. Full
+  round-trip through ADS query execution.
+
+### ALTER TABLE / DROP TABLE / DROP INDEX
+
+- **DDL statement parsing.** New `AlterTableStmt`, `DropTableStmt`,
+  `DropIndexStmt` structs with full parser support. Identifiers,
+  quoted names, and IF EXISTS clauses are all handled. Ready for
+  backend execution hooks.
+
+### AOF Expression Expansion
+
+- **LIKE operator.** `NAME LIKE 'A%'` now parses and round-trips
+  in the AOF expression layer with full `%` and `_` wildcard
+  support.
+- **IS NULL / IS NOT NULL.** Unary null-test operators added to
+  the AOF filter expression grammar.
+
 ## 1.4.0 — 2026-06-26
 
 ### ADS Dialect Compatibility (ERP Harbour/FiveWin)

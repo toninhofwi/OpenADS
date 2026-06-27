@@ -96,13 +96,15 @@ struct Emitter {
         skip_ws();
 
         // xBase '$' (substring / "contains"): `needle $ haystack` -> SQL
-        // `haystack LIKE '%needle%'`. Only when the needle is a plain string
-        // literal with no LIKE wildcard (% _ \) — otherwise decline, since a
-        // field needle or an embedded wildcard would change which rows match.
+        // `haystack LIKE '%needle%'`. When the needle is a plain string
+        // literal with no LIKE wildcard (% _ \), emit directly.
+        // When needle is a column reference, emit: haystack LIKE '%' || needle || '%'
+        // (or CONCAT variant for MySQL).
         if (i < s.size() && s[i] == '$') {
             ++i;
             std::string rhs = emit_value();
             if (!ok) return "";
+            // Literal needle → direct LIKE (safe, no wildcards)
             if (lhs.size() >= 2 && lhs.front() == '\'' && lhs.back() == '\'') {
                 std::string inner = lhs.substr(1, lhs.size() - 2);
                 if (inner.find('%')  == std::string::npos &&
@@ -110,9 +112,18 @@ struct Emitter {
                     inner.find('\\') == std::string::npos) {
                     return rhs + " LIKE '%" + inner + "%'";
                 }
+                // Literal needle with LIKE wildcards: semantics differ
+                // (xBase treats them as literal, LIKE treats them as
+                // wildcards) → decline to avoid wrong results.
+                ok = false;
+                return "";
             }
-            ok = false;
-            return "";
+            // Column needle → CONCAT pattern
+            if (d.use_concat_fn) {
+                return rhs + " LIKE CONCAT('%', " + lhs + ", '%')";
+            } else {
+                return rhs + " LIKE ('%' || " + lhs + " || '%')";
+            }
         }
 
         std::string op;
@@ -224,6 +235,8 @@ struct Emitter {
             if (args.size() < n) { ok = false; return false; }
             return true;
         };
+
+        // ── String functions ──────────────────────────────────────────
         if (fn == "UPPER" && arity(1)) return "UPPER(" + args[0] + ")";
         if (fn == "LOWER" && arity(1)) return "LOWER(" + args[0] + ")";
         if (fn == "LTRIM" && arity(1)) return "LTRIM(" + args[0] + ")";
@@ -238,7 +251,209 @@ struct Emitter {
         }
         if (fn == "LEFT" && args.size() >= 2)
             return d.substr_fn + "(" + args[0] + ", 1, " + args[1] + ")";
-        // RECNO / DELETED / STR / VAL / DTOS / CTOD / IIF / unknown → decline.
+        if (fn == "RIGHT" && args.size() >= 2) {
+            // RIGHT(s, n) → SUBSTR(s, LENGTH(s) - n + 1, n)
+            std::string len_fn = d.use_char_length ? "CHAR_LENGTH" : d.length_fn;
+            return d.substr_fn + "(" + args[0] + ", " + len_fn + "(" + args[0] + ") - " +
+                   args[1] + " + 1, " + args[1] + ")";
+        }
+        if (fn == "LEN" && arity(1)) {
+            std::string len_fn = d.use_char_length ? "CHAR_LENGTH" : d.length_fn;
+            return len_fn + "(" + args[0] + ")";
+        }
+        if ((fn == "AT" || fn == "ATNUM") && args.size() >= 2) {
+            // AT(needle, haystack [, occurrence]) → POSITION(needle IN haystack)
+            // or INSTR(haystack, needle) depending on dialect
+            // Standard SQL: POSITION(needle IN haystack)
+            // For simplicity use: INSTR(haystack, needle) which is widely supported
+            std::string r = "INSTR(" + args[1] + ", " + args[0] + ")";
+            // ATNUM with occurrence > 1: not directly supported, decline
+            if (fn == "ATNUM" && args.size() >= 3) { ok = false; return ""; }
+            return r;
+        }
+        if ((fn == "REPLICATE" || fn == "REPL") && args.size() >= 2) {
+            // REPLICATE(s, n) → no standard SQL equivalent
+            // SQLite: no direct support. PostgreSQL: REPEAT(). MySQL: REPEAT().
+            // Use a construct that works in most: (s || s || ...) is impractical.
+            // Decline for now — backend-specific.
+            ok = false;
+            return "";
+        }
+        if (fn == "SPACE" && arity(1)) {
+            // SPACE(n) → RPAD(' ', n, ' ') or REPEAT(' ', n)
+            // No portable form. Decline.
+            ok = false;
+            return "";
+        }
+        if ((fn == "PADR" || fn == "PADL" || fn == "PAD") && args.size() >= 2) {
+            // PADR(s, n [, c]) → RPAD(s, n, c)
+            // PADL(s, n [, c]) → LPAD(s, n, c)
+            std::string pad_fn = (fn == "PADL") ? "LPAD" : "RPAD";
+            std::string fill = (args.size() >= 3) ? args[2] : "' '";
+            return pad_fn + "(" + args[0] + ", " + args[1] + ", " + fill + ")";
+        }
+        if (fn == "PADC" && args.size() >= 2) {
+            // PADC(s, n [, c]) → not directly available, use LPAD + RPAD nesting
+            std::string fill = (args.size() >= 3) ? args[2] : "' '";
+            return "LPAD(RPAD(" + args[0] + ", (" + args[1] + " + LENGTH(" + args[0] + ")) / 2, " +
+                   fill + "), " + args[1] + ", " + fill + ")";
+        }
+        if (fn == "STRTRAN" && args.size() >= 2) {
+            // STRTRAN(s, old [, new]) → REPLACE(s, old, new)
+            std::string replacement = (args.size() >= 3) ? args[2] : "''";
+            return "REPLACE(" + args[0] + ", " + args[1] + ", " + replacement + ")";
+        }
+        if (fn == "STUFF" && args.size() >= 3) {
+            // STUFF(s, start, len [, replacement]) → STUFF/overlay not standard
+            // No portable form. Decline.
+            ok = false;
+            return "";
+        }
+        if (fn == "OCCURS" && args.size() >= 2) {
+            // OCCURS(needle, haystack) — count occurrences. No standard SQL.
+            ok = false;
+            return "";
+        }
+
+        // ── Numeric functions ──────────────────────────────────────────
+        if ((fn == "INT" || fn == "FLOOR") && arity(1))
+            return "FLOOR(" + args[0] + ")";
+        if (fn == "ABS" && arity(1))
+            return "ABS(" + args[0] + ")";
+        if (fn == "ROUND" && args.size() >= 2)
+            return "ROUND(" + args[0] + ", " + args[1] + ")";
+        if (fn == "VAL" && arity(1)) {
+            // VAL(s) → CAST(s AS DECIMAL) or +s in some dialects
+            return "CAST(" + args[0] + " AS DECIMAL)";
+        }
+        if (fn == "STR" && args.size() >= 1) {
+            // STR(n [, len [, dec]]) → CAST(n AS VARCHAR) or TO_CHAR
+            // Use CAST for portability
+            std::string r = "CAST(" + args[0] + " AS VARCHAR)";
+            return r;
+        }
+        if (fn == "MOD" && args.size() >= 2)
+            return "(" + args[0] + " % " + args[1] + ")";
+        if (fn == "CEILING" || fn == "CEIL") {
+            if (arity(1)) return "CEILING(" + args[0] + ")";
+            return "";
+        }
+        if (fn == "EXP" && arity(1))
+            return "EXP(" + args[0] + ")";
+        if (fn == "LOG" && arity(1))
+            return "LN(" + args[0] + ")";
+        if (fn == "LOG10" && arity(1))
+            return "LOG(" + args[0] + ")";
+        if (fn == "SQRT" && arity(1))
+            return "SQRT(" + args[0] + ")";
+        if (fn == "SIGN" && arity(1)) {
+            // SIGN not universal, but available in PostgreSQL, MySQL 8+
+            return "SIGN(" + args[0] + ")";
+        }
+
+        // ── Date functions ────────────────────────────────────────────
+        if (fn == "DATE" && arity(0)) {
+            // DATE() → CURRENT_DATE or CURDATE()
+            return d.now_fn.empty() ? "CURRENT_DATE" : d.now_fn;
+        }
+        if (fn == "TODAY" && arity(0))
+            return "CURRENT_DATE";
+        if (fn == "NOW" && arity(0))
+            return "NOW()";
+        if (fn == "TIME" && arity(0))
+            return "CURRENT_TIME";
+        if (fn == "DATETIME" && arity(0))
+            return "NOW()";
+        if (fn == "CTOD" && arity(1)) {
+            // CTOD('YYYY-MM-DD') → the literal date string is already SQL-compatible
+            return args[0];
+        }
+        if (fn == "DTOC" && arity(1)) {
+            // DTOC(d) → CAST(d AS VARCHAR) or TO_CHAR(d, 'YYYY-MM-DD')
+            return "CAST(" + args[0] + " AS VARCHAR)";
+        }
+        if (fn == "DTOS" && arity(1)) {
+            // DTOS(d) → TO_CHAR(d, 'YYYYMMDD') or DATE_FORMAT(d, '%Y%m%d')
+            // Use REPLACE to strip dashes for portability:
+            // REPLACE(CAST(d AS VARCHAR), '-', '')
+            return "REPLACE(CAST(" + args[0] + " AS VARCHAR), '-', '')";
+        }
+        if (fn == "YEAR" && arity(1))
+            return "EXTRACT(YEAR FROM " + args[0] + ")";
+        if (fn == "MONTH" && arity(1))
+            return "EXTRACT(MONTH FROM " + args[0] + ")";
+        if (fn == "DAY" && arity(1))
+            return "EXTRACT(DAY FROM " + args[0] + ")";
+        if (fn == "HOUR" && arity(1))
+            return "EXTRACT(HOUR FROM " + args[0] + ")";
+        if (fn == "MINUTE" && arity(1))
+            return "EXTRACT(MINUTE FROM " + args[0] + ")";
+        if (fn == "SECOND" && arity(1))
+            return "EXTRACT(SECOND FROM " + args[0] + ")";
+        if (fn == "DOW" && arity(1)) {
+            // DOW(d) → day of week (1=Sun..7=Sat in xBase)
+            // SQL: EXTRACT(DOW FROM d) returns 0=Sun..6=Sat (PostgreSQL)
+            //      DAYOFWEEK(d) returns 1=Sun..7=Sat (MySQL)
+            // Use EXTRACT and adjust: modulo 7 + 1
+            return "(EXTRACT(DOW FROM " + args[0] + ") + 1)";
+        }
+        if (fn == "CDOW" && arity(1))
+            return "TO_CHAR(" + args[0] + ", 'DY')";
+        if (fn == "CMONTH" && arity(1))
+            return "TO_CHAR(" + args[0] + ", 'Month')";
+        if (fn == "DATEADD" && args.size() >= 3) {
+            // DATEADD(interval, n, d) → d + INTERVAL 'n interval'
+            // Not portable across all DBs. Decline.
+            ok = false;
+            return "";
+        }
+        if (fn == "DATEDIFF" && args.size() >= 2) {
+            // DATEDIFF(d1, d2) → no standard form. Decline.
+            ok = false;
+            return "";
+        }
+
+        // ── Conversion / conditional ──────────────────────────────────
+        if (fn == "IIF" && args.size() >= 3) {
+            // IIF(cond, true_val, false_val) → CASE WHEN cond THEN true_val ELSE false_val END
+            return "(CASE WHEN " + args[0] + " THEN " + args[1] + " ELSE " + args[2] + " END)";
+        }
+        if (fn == "IF" && args.size() >= 3)
+            return "(CASE WHEN " + args[0] + " THEN " + args[1] + " ELSE " + args[2] + " END)";
+        if (fn == "NIL" && arity(0))
+            return "NULL";
+        if (fn == "EMPTY" && arity(1)) {
+            // EMPTY(x) → (x IS NULL OR x = '' OR x = 0)
+            return "(" + args[0] + " IS NULL OR " + args[0] + " = '' OR " + args[0] + " = 0)";
+        }
+        if (fn == "ISNULL" && arity(1))
+            return "(" + args[0] + " IS NULL)";
+        if (fn == "ISBLANK" && arity(1))
+            return "(" + args[0] + " IS NULL OR " + args[0] + " = '')";
+
+        // ── xBase record functions → SQL equivalents ──────────────────
+        if (fn == "RECNO" && arity(0)) {
+            // RECNO() → rowid or equivalent depending on backend
+            // SQLite: rowid, PostgreSQL: oid, general: no direct equivalent
+            // Decline — backend must handle this specially
+            ok = false;
+            return "";
+        }
+        if (fn == "DELETED" && arity(0)) {
+            // DELETED() → SR_DELETED = '*' or similar
+            // Decline — backend must handle this specially
+            ok = false;
+            return "";
+        }
+        if (fn == "LASTREC" || fn == "RECCOUNT") {
+            if (arity(0)) {
+                // No portable SQL for record count without COUNT(*)
+                ok = false;
+                return "";
+            }
+        }
+
+        // ── Unknown function → decline ────────────────────────────────
         ok = false;
         return "";
     }
