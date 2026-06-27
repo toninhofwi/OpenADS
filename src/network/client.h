@@ -116,6 +116,9 @@ public:
     util::Result<void>          close_all_indexes(std::uint32_t id);
     util::Result<void>          set_aof(std::uint32_t id, const std::string& cond);
     util::Result<void>          clear_aof(std::uint32_t id);
+    util::Result<void>          customize_aof(std::uint32_t id,
+                                              std::uint16_t option,
+                                              const std::vector<std::uint32_t>& recnos);
     util::Result<std::uint16_t> get_aof_opt_level(std::uint32_t id);
     // M12.16 — remote index handle subsystem.
     util::Result<std::vector<std::uint32_t>>

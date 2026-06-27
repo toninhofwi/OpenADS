@@ -1134,6 +1134,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             auto rep = openads::engine::aof::evaluate_optimised(*ast.value(), *tbl);
             if (!rep) { reply = err("SetAOF: " + rep.error().message); break; }
             tbl->install_aof_bitmap(std::move(rep.value().bm));
+            tbl->set_aof_expr(cond);
             int lvl = ADS_OPTIMIZED_NONE;
             switch (rep.value().level) {
                 case openads::engine::aof::OptLevel::None: lvl = ADS_OPTIMIZED_NONE; break;
@@ -1786,6 +1787,44 @@ DispatchResult Session::dispatch(const Frame& f) {
                                      rowbuf.begin(), rowbuf.end());
                 reply.payload.push_back(
                     static_cast<std::uint8_t>(tbl->eof() ? 1 : 0));
+                break;
+            }
+            case Opcode::CustomizeAOF: {
+                if (f.payload.size() < 7) {
+                    reply = err("CustomizeAOF: bad payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint8_t  opt = f.payload[4];
+                std::uint16_t nrecs = static_cast<std::uint16_t>(
+                    static_cast<std::uint16_t>(f.payload[5]) |
+                    (static_cast<std::uint16_t>(f.payload[6]) << 8));
+                std::size_t p = 7;
+                if (f.payload.size() < p + static_cast<std::size_t>(nrecs) * 4u) {
+                    reply = err("CustomizeAOF: truncated recnos"); break;
+                }
+                if (cursor_tbls_.find(id) != cursor_tbls_.end()) {
+                    reply = err("CustomizeAOF: not supported on SQL cursors");
+                    break;
+                }
+                auto it = tbls_.find(id);
+                if (it == tbls_.end() || !sess_conn_) {
+                    reply = err("CustomizeAOF: bad table id"); break;
+                }
+                auto* tbl = sess_conn_->lookup_table(it->second);
+                if (!tbl) { reply = err("CustomizeAOF: lookup failed"); break; }
+                if (!tbl->aof_active()) {
+                    reply = err("CustomizeAOF: no active AOF"); break;
+                }
+                bool include = false;
+                if (opt == 1) include = true;
+                else if (opt == 2) include = false;
+                else { reply = err("CustomizeAOF: invalid option"); break; }
+                for (std::uint16_t i = 0; i < nrecs; ++i) {
+                    std::uint32_t recno = read_u32_le(f.payload.data() + p);
+                    p += 4;
+                    (void)tbl->customize_aof_record(recno, include);
+                }
+                reply.opcode = Opcode::CustomizeAOFAck;
                 break;
             }
             case Opcode::GetRecord: {

@@ -1095,6 +1095,28 @@ util::Result<void> RemoteConnection::clear_aof(std::uint32_t id) {
     return {};
 }
 
+util::Result<void> RemoteConnection::customize_aof(
+    std::uint32_t id, std::uint16_t option,
+    const std::vector<std::uint32_t>& recnos) {
+    if (recnos.size() > 0xFFFFu) {
+        return util::Error{5000, 0, "CustomizeAOF: too many records", ""};
+    }
+    Frame req;
+    req.opcode = Opcode::CustomizeAOF;
+    write_u32_le(id, req.payload);
+    req.payload.push_back(static_cast<std::uint8_t>(option & 0xFFu));
+    auto n = static_cast<std::uint16_t>(recnos.size());
+    write_u16_le(n, req.payload);
+    for (auto r : recnos)
+        write_u32_le(r, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::CustomizeAOFAck) {
+        return util::Error{5000, 0, "CustomizeAOF: server error", ""};
+    }
+    return {};
+}
+
 util::Result<std::uint16_t>
 RemoteConnection::get_aof_opt_level(std::uint32_t id) {
     Frame req; req.opcode = Opcode::GetAOFOptLevel;

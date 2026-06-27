@@ -11330,6 +11330,9 @@ UNSIGNED32 ENTRYPOINT AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
         std::string cond = openads::abi::to_internal(pucCondition, 0);
         auto r = rt->conn->set_aof(rt->id, cond);
         if (!r) return fail(r.error());
+        rt->aof_expr = cond;
+        rt->row_valid = false;
+        rt->prefetch_queue.clear();
         return ok();
     }
     if (UNSIGNED32 rc = 0;
@@ -19405,13 +19408,6 @@ UNSIGNED32 ENTRYPOINT AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
 }
 UNSIGNED32 ENTRYPOINT AdsCustomizeAOF(ADSHANDLE hTable, UNSIGNED32 ulNumRecords,
                            UNSIGNED32* pulRecords, UNSIGNED16 usOption) {
-    if (get_remote_table(hTable))
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsCustomizeAOF: not available for remote tables");
-    Table* t = get_table(hTable);
-    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
-    if (!t->aof_active())
-        return fail(openads::AE_INTERNAL_ERROR, "no active AOF on table");
     bool include;
     switch (usOption) {
         case ADS_AOF_ADD_RECORD:    include = true;  break;
@@ -19419,6 +19415,24 @@ UNSIGNED32 ENTRYPOINT AdsCustomizeAOF(ADSHANDLE hTable, UNSIGNED32 ulNumRecords,
         default: return fail(openads::AE_INTERNAL_ERROR, "invalid AOF option");
     }
     if (pulRecords == nullptr || ulNumRecords == 0) return ok();
+
+    if (auto* rt = get_remote_table(hTable)) {
+        std::vector<std::uint32_t> recnos;
+        recnos.reserve(ulNumRecords);
+        for (UNSIGNED32 i = 0; i < ulNumRecords; ++i)
+            recnos.push_back(pulRecords[i]);
+        remote_settle_cursor(rt);
+        rt->row_valid = false;
+        rt->prefetch_queue.clear();
+        auto r = rt->conn->customize_aof(rt->id, usOption, recnos);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (!t->aof_active())
+        return fail(openads::AE_INTERNAL_ERROR, "no active AOF on table");
     for (UNSIGNED32 i = 0; i < ulNumRecords; ++i)
         (void)t->customize_aof_record(pulRecords[i], include);
     return ok();

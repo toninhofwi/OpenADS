@@ -192,6 +192,13 @@ enum class Opcode : std::uint8_t {
     SetRecord          = 0xAA,
     SetRecordAck       = 0xAB,
 
+    // M12.26 — AdsCustomizeAOF: flip individual records in/out of the
+    // active AOF bitmap. Payload:
+    //   [u32 tid][u8 option][u16 nrecs][u32 recno]...
+    // option: 1=ADD (ADS_AOF_ADD_RECORD), 2=REMOVE (ADS_AOF_REMOVE_RECORD).
+    CustomizeAOF       = 0xAC,
+    CustomizeAOFAck    = 0xAD,
+
     Error              = 0xFF,
 };
 
