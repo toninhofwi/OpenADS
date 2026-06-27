@@ -67,6 +67,7 @@
       Tools
       <div class="menu-dropdown">
         <div class="drop-item" data-action="import-sap-dd">Import SAP DD…</div>
+        <div class="drop-item" data-action="server-info">Server Info…</div>
         <div class="drop-separator"></div>
         <div class="drop-item" data-action="refresh-tree">Refresh Tree</div>
       </div>
@@ -256,6 +257,13 @@
       <div class="form-group">
         <label for="connect-password">Password</label>
         <input type="password" id="connect-password" autocomplete="current-password">
+      </div>
+      <div class="form-group">
+        <label>Connection type</label>
+        <div class="toggle-group" id="connect-conn-type">
+          <button type="button" class="toggle-btn active" data-value="local">Local</button>
+          <button type="button" class="toggle-btn" data-value="remote">Remote</button>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -546,6 +554,57 @@
     <div class="modal-footer">
       <button class="btn btn-primary" id="blob-viewer-download" style="display:none;">&#11015; Download</button>
       <button class="btn" onclick="document.getElementById('modal-blob-viewer').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: Server Info ─────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-server-info" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header">
+      <span>Server Info</span>
+      <span class="modal-close" onclick="document.getElementById('modal-server-info').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body" style="padding:12px;">
+      <div id="srvinfo-err" class="modal-err"></div>
+
+      <!-- Summary counters -->
+      <div id="srvinfo-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px;"></div>
+
+      <!-- Connected users -->
+      <div style="margin-bottom:10px;">
+        <div style="font-size:11px;color:#a6adc8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Connected Users</div>
+        <div id="srvinfo-users-wrap">
+          <table id="srvinfo-users" style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr>
+              <th style="text-align:left;padding:3px 6px;color:#a6adc8;">User</th>
+              <th style="text-align:left;padding:3px 6px;color:#a6adc8;">Auth</th>
+              <th style="text-align:left;padding:3px 6px;color:#a6adc8;">Address</th>
+              <th style="text-align:right;padding:3px 6px;color:#a6adc8;">Conn#</th>
+            </tr></thead>
+            <tbody id="srvinfo-users-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Open tables -->
+      <div>
+        <div style="font-size:11px;color:#a6adc8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Open Tables</div>
+        <div id="srvinfo-tables-wrap">
+          <table id="srvinfo-tables" style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr>
+              <th style="text-align:left;padding:3px 6px;color:#a6adc8;">Table</th>
+              <th style="text-align:left;padding:3px 6px;color:#a6adc8;">User</th>
+              <th style="text-align:right;padding:3px 6px;color:#a6adc8;">Conn#</th>
+            </tr></thead>
+            <tbody id="srvinfo-tables-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="srvinfo-refresh">&#8635; Refresh</button>
+      <button class="btn" onclick="document.getElementById('modal-server-info').classList.remove('open')">Close</button>
     </div>
   </div>
 </div>

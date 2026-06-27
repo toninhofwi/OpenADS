@@ -27,26 +27,21 @@ if ($ddName === '' || $groupName === '') {
 }
 
 $c    = $_SESSION['connections'][$ddName];
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 try {
     $conn = AdsConnection::connect($opts);
 
-    $escapedGroup = str_replace("'", "''", $groupName);
-
     $members = [];
-    $stmt = $conn->query(
-        "SELECT USER_NAME FROM system.usergroupmembers
-          WHERE GROUP_NAME = '$escapedGroup'
-          ORDER BY USER_NAME"
-    );
+    $stmt = $conn->query("SELECT GROUP_NAME, USER_NAME FROM system.usergroupmembers");
     while ($row = $stmt->fetchAssoc()) {
+        $g = trim((string)($row['GROUP_NAME'] ?? ''));
+        if (strcasecmp($g, $groupName) !== 0) continue;
         $u = trim((string)($row['USER_NAME'] ?? ''));
         if ($u !== '') $members[] = $u;
     }
     $stmt->close();
+    sort($members);
 
     $allUsers = [];
     $stmt = $conn->query('SELECT USER_NAME FROM system.users ORDER BY USER_NAME');

@@ -123,6 +123,8 @@ using PFN_FindFirst  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, UNSIGNED16 findTyp
 using PFN_FindNext   = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, ADSHANDLE hFind,
                            UNSIGNED8* nameBuf, UNSIGNED16* nameLen);
 using PFN_FindClose  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, ADSHANDLE hFind);
+using PFN_GetDBProp  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE h, UNSIGNED16 usProp,
+                           void* pBuf, UNSIGNED16* pusLen);
 
 struct SapFuncs {
     PFN_Connect    connect    = nullptr;
@@ -139,6 +141,7 @@ struct SapFuncs {
     PFN_FindFirst  findFirst  = nullptr;
     PFN_FindNext   findNext   = nullptr;
     PFN_FindClose  findClose  = nullptr;
+    PFN_GetDBProp  getDBProp  = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -162,13 +165,13 @@ static std::string json_escape(const std::string& s) {
 
 static void emit_result(bool ok,
                         int memberships, int permissions,
-                        int function_bodies,
+                        int function_bodies, int db_properties,
                         const std::string& error,
                         const std::vector<std::string>& warnings) {
     std::printf("{\"ok\":%s", ok ? "true" : "false");
     if (ok) {
-        std::printf(",\"memberships\":%d,\"permissions\":%d,\"function_bodies\":%d",
-                    memberships, permissions, function_bodies);
+        std::printf(",\"memberships\":%d,\"permissions\":%d,\"function_bodies\":%d,\"db_properties\":%d",
+                    memberships, permissions, function_bodies, db_properties);
     } else {
         std::printf(",\"error\":\"%s\"", json_escape(error).c_str());
     }
@@ -248,7 +251,7 @@ int main(int argc, char** argv) {
     }
 
     if (source.empty() || dest.empty() || user.empty()) {
-        emit_result(false, 0, 0, 0,
+        emit_result(false, 0, 0, 0, 0,
             "Usage: openads_import_dd --source <sap.add> --dest <copy.add> "
             "--user <name> --password <pw> [--sap-lib <path>] [--no-copy]",
             warnings);
@@ -260,7 +263,7 @@ int main(int argc, char** argv) {
         std::error_code ec;
         fs::copy_file(source, dest, fs::copy_options::overwrite_existing, ec);
         if (ec) {
-            emit_result(false, 0, 0, 0,
+            emit_result(false, 0, 0, 0, 0,
                 "Cannot copy " + source + " → " + dest + ": " + ec.message(),
                 warnings);
             return 1;
@@ -292,7 +295,7 @@ int main(int argc, char** argv) {
         }
     }
     if (!sap) {
-        emit_result(false, 0, 0, 0,
+        emit_result(false, 0, 0, 0, 0,
             "Cannot load SAP ACE library: " + lib_error() +
             ". Specify the path with --sap-lib.",
             warnings);
@@ -318,11 +321,12 @@ int main(int argc, char** argv) {
     f.findFirst  = (PFN_FindFirst) lib_sym(sap, "AdsDDFindFirstObject");
     f.findNext   = (PFN_FindNext)  lib_sym(sap, "AdsDDFindNextObject");
     f.findClose  = (PFN_FindClose) lib_sym(sap, "AdsDDFindClose");
+    f.getDBProp  = (PFN_GetDBProp) lib_sym(sap, "AdsDDGetDatabaseProperty");
 
     if (!f.connect || !f.disconnect || !f.execSQL || !f.close ||
         !f.createStmt || !f.atEOF || !f.skip || !f.getField) {
         lib_close(sap);
-        emit_result(false, 0, 0, 0, "SAP library missing required exports.", warnings);
+        emit_result(false, 0, 0, 0, 0, "SAP library missing required exports.", warnings);
         return 1;
     }
 
@@ -338,7 +342,7 @@ int main(int argc, char** argv) {
         char msg[128];
         std::snprintf(msg, sizeof(msg),
             "SAP connect failed (rc=%u). Check credentials and source path.", rc);
-        emit_result(false, 0, 0, 0, msg, warnings);
+        emit_result(false, 0, 0, 0, 0, msg, warnings);
         return 1;
     }
 
@@ -347,7 +351,7 @@ int main(int argc, char** argv) {
     if (rc != 0 || !hStmt) {
         f.disconnect(hConn);
         lib_close(sap);
-        emit_result(false, 0, 0, 0, "AdsCreateSQLStatement failed.", warnings);
+        emit_result(false, 0, 0, 0, 0, "AdsCreateSQLStatement failed.", warnings);
         return 1;
     }
 
@@ -511,6 +515,80 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── Step 5f: read database-level properties from SAP ─────────────────────
+    // SAP database property IDs (from ace.h, 100+ range) differ from OpenADS
+    // internal storage keys.  The table below maps each SAP ID to the OpenADS
+    // "prop_N" key that SP_MODIFYDATABASE / the engine uses, so that db_props.php
+    // and the login-required check in AdsConnect60 can find the values.
+    // Skip: 101=ADMIN_PASSWORD, 105=ENCRYPT_TABLE_PASSWORD (write-only/sensitive).
+    struct DBPropDef { UNSIGNED16 sap_id; bool is_u16; const char* openads_key; };
+    static const DBPropDef kDBProps[] = {
+        //  sap_id   u16    openads key   — SAP name
+        {    1, false, "prop_1"  }, // COMMENT (generic object prop, works for DB)
+        {  100, false, "prop_3"  }, // DEFAULT_TABLE_PATH
+        {  102, false, "prop_12" }, // TEMP_TABLE_PATH
+        {  103, true,  "prop_5"  }, // LOG_IN_REQUIRED
+        {  104, true,  "prop_8"  }, // VERIFY_ACCESS_RIGHTS
+        {  106, true,  "prop_10" }, // ENCRYPT_NEW_TABLE
+        {  111, true,  "prop_14" }, // VERSION_MAJOR
+        {  112, true,  "prop_15" }, // VERSION_MINOR
+        {  113, true,  "prop_16" }, // LOGINS_DISABLED
+        {  114, false, "prop_17" }, // LOGINS_DISABLED_ERRSTR
+        {  115, false, "prop_18" }, // FTS_DELIMITERS
+        {  116, false, "prop_19" }, // FTS_NOISE
+        {  117, false, "prop_20" }, // FTS_DROP_CHARS
+        {  118, false, "prop_21" }, // FTS_CONDITIONAL_CHARS
+        {  119, true,  "prop_22" }, // ENCRYPTED (read-only state flag)
+        {  120, true,  "prop_23" }, // ENCRYPT_INDEXES
+        {  122, true,  "prop_25" }, // ENCRYPT_COMMUNICATION
+        {    3, false, "prop_26" }, // USER_DEFINED_PROP (generic object prop ID 3)
+    };
+
+    struct DBPropValue { std::string openads_key; std::string value; };
+    std::vector<DBPropValue> db_prop_values;
+
+    if (f.getDBProp) {
+        for (const auto& pd : kDBProps) {
+            char buf[4096] = {};
+            // UNSIGNED16 properties require exactly 2 bytes input length (SAP returns
+            // AE_INVALID_PROPERTY_LENGTH=5133 if a larger buffer length is passed).
+            UNSIGNED16 len = pd.is_u16
+                ? static_cast<UNSIGNED16>(sizeof(UNSIGNED16))
+                : static_cast<UNSIGNED16>(sizeof(buf) - 1);
+            UNSIGNED32 prc = f.getDBProp(hConn, pd.sap_id, buf, &len);
+            if (prc != 0) {
+                // Warn for every failure (including "not set") so users can see
+                // exactly which SAP properties are available on their server.
+                char wmsg[80];
+                std::snprintf(wmsg, sizeof(wmsg),
+                    "DB prop sap_id=%u rc=%u", (unsigned)pd.sap_id, (unsigned)prc);
+                warnings.push_back(wmsg);
+                continue;
+            }
+            if (pd.is_u16) {
+                UNSIGNED16 val = 0;
+                if (len >= 2)
+                    val = static_cast<UNSIGNED16>(
+                        static_cast<unsigned char>(buf[0]) |
+                        (static_cast<unsigned char>(buf[1]) << 8));
+                else if (len == 1)
+                    val = static_cast<unsigned char>(buf[0]);
+                // Store even 0 — "disabled/false" is a meaningful SAP state.
+                db_prop_values.push_back({pd.openads_key, std::to_string(val)});
+            } else {
+                // Trim trailing spaces and null bytes.
+                while (len > 0 && (buf[len - 1] == ' ' || buf[len - 1] == '\0')) --len;
+                if (len == 0) continue;
+                db_prop_values.push_back({pd.openads_key, std::string(buf, len)});
+            }
+        }
+        if (db_prop_values.empty()) {
+            warnings.push_back("No DB properties retrieved from SAP (all returned errors).");
+        }
+    } else {
+        warnings.push_back("AdsDDGetDatabaseProperty not found in SAP library — DB properties skipped.");
+    }
+
     // ── Step 6: read object permissions via AdsDDGetPermissions ─────────────
     // system.permissions SQL returns 0 rows for SAP binary .add files because
     // the real ACLs are stored in encrypted property blobs.  Use the
@@ -599,11 +677,12 @@ int main(int argc, char** argv) {
     // Wrapped in a scope so DataDict (RAII) is destroyed — and the file fully
     // flushed — before we binary-patch function bodies in Step 8.
     int written_memberships = 0;
-    int written_perms = 0;
+    int written_perms       = 0;
+    int written_db_props    = 0;
     {
         auto opened = openads::engine::DataDict::open(dest);
         if (!opened) {
-            emit_result(false, 0, 0, 0,
+            emit_result(false, 0, 0, 0, 0,
                 "Cannot open dest DD: " + opened.error().message, warnings);
             return 1;
         }
@@ -616,10 +695,52 @@ int main(int argc, char** argv) {
                 dd.set_table_property(tp.name, 213, tp.default_index);
         }
 
+        for (const auto& pv : db_prop_values) {
+            auto r = dd.set_db_property(pv.openads_key, pv.value);
+            if (r) ++written_db_props;
+            else warnings.push_back("set_db_property(" + pv.openads_key + "): " + r.error().message);
+        }
+
         for (const auto& m : memberships) {
             auto r = dd.add_user_to_group(m.user, m.group);
             if (r) ++written_memberships;
             else warnings.push_back("add_user_to_group(" + m.user + "," + m.group + "): " + r.error().message);
+        }
+
+        // ── Guarantee adssys user exists and is DB:Admin ──────────────────────
+        // adssys is the SAP root account (equivalent to MySQL root).  SAP treats
+        // it as built-in and does not expose it through system.usergroupmembers,
+        // so it may not appear in the memberships list above.  Ensure the target
+        // DD has adssys as a recognised user with at least DB:Admin membership so
+        // OpenADS authentication still works for the admin account.
+        {
+            // Case-insensitive search: SAP may export the name as "ADSSYS".
+            auto ci_lower = [](std::string s) {
+                for (auto& c : s) c = static_cast<char>(std::tolower((unsigned char)c));
+                return s;
+            };
+            std::string canonical;
+            for (const auto& u : dd.users()) {
+                if (ci_lower(u) == "adssys") { canonical = u; break; }
+            }
+            if (canonical.empty()) {
+                for (const auto& m : memberships) {
+                    if (ci_lower(m.user) == "adssys") { canonical = m.user; break; }
+                }
+            }
+            if (canonical.empty()) canonical = "adssys"; // default if SAP never exported it
+
+            if (!dd.has_user(canonical)) {
+                auto r = dd.create_user(canonical);
+                if (!r) warnings.push_back("create_user(" + canonical + "): " + r.error().message);
+                else    warnings.push_back(canonical + " created (SAP built-in, not in export)");
+            }
+            // Always ensure DB:Admin membership — idempotent if already present.
+            {
+                auto r = dd.add_user_to_group(canonical, "DB:Admin");
+                if (!r) warnings.push_back("add_user_to_group(" + canonical + ",DB:Admin): " + r.error().message);
+                else    ++written_memberships;
+            }
         }
 
         for (const auto& p : perms) {
@@ -1059,6 +1180,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    emit_result(true, written_memberships, written_perms, written_func_bodies, "", warnings);
+    emit_result(true, written_memberships, written_perms, written_func_bodies, written_db_props, "", warnings);
     return 0;
 }

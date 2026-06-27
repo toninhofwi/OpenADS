@@ -10,6 +10,7 @@
 #include "util/result.h"
 
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -126,8 +127,13 @@ public:
     void       set_collation(Collation c) noexcept { collation_ = c; }
     Collation  collation() const noexcept { return collation_; }
 
-    // DD authentication — set after credential validation in AdsConnect60.
-    void               set_username(std::string name) { username_ = std::move(name); }
+    // DD authentication: set after credential validation in AdsConnect60.
+    // RCB 2026-06-27: Keep the connection username normalized so every
+    // conn->username() permission check sees one canonical DD user name.
+    void set_username(std::string name) {
+        for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        username_ = std::move(name);
+    }
     const std::string& username() const noexcept { return username_; }
 
 private:

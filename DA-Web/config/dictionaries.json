@@ -15,14 +15,14 @@
     },
     {
         "name": "PMSys",
-        "path": "f:\\OpenAds\\TestData\\Pmsys\\pmsys.add",
-        "username": "Adssys",
+        "path": "c:\\Pmsys\\data\\pmsys.add",
+        "username": "AdsSys",
         "connType": "local",
         "entryType": "dd"
     },
     {
         "name": "PMSys_OpenADS",
-        "path": "f:\\OpenAds\\TestData\\Pmsys\\pmsys_openads.add",
+        "path": "c:\\Pmsys\\data\\pmsys_openads.add",
         "username": "AdsSys",
         "connType": "local",
         "entryType": "dd"

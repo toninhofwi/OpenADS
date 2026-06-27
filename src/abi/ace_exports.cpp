@@ -3289,12 +3289,18 @@ const BackendTableOps* backend_table_ops_for(ADSHANDLE h) {
 
 extern "C" {
 
-UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
+UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType,
                         UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                         UNSIGNED32 /*ulOptions*/, ADSHANDLE* phConnect) {
     if (phConnect == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                           "phConnect is null");
     auto path = openads::abi::to_internal(pucServer, 0);
+    auto has_remote_scheme = [](const std::string& s) {
+        return s.rfind("tcp://", 0) == 0 || s.rfind("tls://", 0) == 0;
+    };
+    if (usServerType == ADS_REMOTE_SERVER && !has_remote_scheme(path)) {
+        path = "tcp://127.0.0.1:6262/" + path;
+    }
     // M12.5 — `tcp://host:port/<data_dir>` routes the connection
     // through the wire client; every Ads* function that recognises
     // the connection handle's RemoteConnection kind dispatches to
@@ -14276,7 +14282,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                     schema.push_back(src->field_descriptor(k));
                 }
             }
-            // Determine target table type. If the caller explicitly set a
+            // RCB-- 06-25-2026.  Determine target table type. If the caller explicitly set a
             // type via AdsStmtSetTableType(), honour it; otherwise mirror
             // the source so that an ADT source produces an ADT target and a
             // DBF source produces a CDX target.  Hardcoding ADS_CDX here

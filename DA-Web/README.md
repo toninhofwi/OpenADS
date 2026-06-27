@@ -86,6 +86,7 @@ The OpenADS DD format is documented in `data_dict.h` / `data_dict.cpp` and versi
 | Users and groups | Yes | |
 | Group memberships | Yes | |
 | RI rules | Yes | Parent/child tags sourced from `system.relations` |
+| Database properties (comment, paths, login flags, version) | Yes | Read via `AdsDDGetDatabaseProperty`; requires admin credentials |
 | Group permissions | Partial | Unencrypted bits preserved; encrypted per-user blobs not decodeable |
 | Per-user direct permissions | Manual | Encrypted in SAP format; must be re-entered after import |
 | Encrypted table data | No | Table files (`.adt`/`.dbf`) are read directly — never imported |
@@ -129,6 +130,39 @@ extension=php_openads
 ```
 
 Restart Apache after any DLL change.
+
+### 4b. Deploy the import tool
+
+`import_sap_dd.php` calls a native binary (`openads_import_dd.exe` on Windows) to read a SAP DD and write the OpenADS copy. After each build, deploy it:
+
+```bat
+copy F:\OpenADS\build\msvc-x64\tools\import_dd\Release\openads_import_dd.exe C:\php\
+```
+
+**Binary search order** — `import_sap_dd.php` looks for the binary in this order and uses the first match:
+
+| Priority | Location | Notes |
+|----------|----------|-------|
+| 1 | `OPENADS_IMPORT_DD_BIN` env var | Set this to override everything else |
+| 2 | `<project-root>\bin\openads_import_dd.exe` | Manual copy; useful for production |
+| 3 | `<project-root>\build\msvc-x64\tools\import_dd\Release\openads_import_dd.exe` | Dev build output (Windows) |
+| 4 | `<project-root>\build\msvc-x64\tools\import_dd\Debug\openads_import_dd.exe` | Dev debug build (Windows) |
+| 5 | `<project-root>\build\ninja-linux\tools\import_dd\openads_import_dd` | Dev build output (Linux) |
+| 6 | `openads_import_dd.exe` in `PATH` | Fallback; finds `C:\php\` if it is on PATH |
+
+> **Note:** The development machine (where `F:\OpenADS` is the project root) picks up the binary from priority 3 automatically — no copy to `C:\php` is needed for local development. Copy to `C:\php` (or set `OPENADS_IMPORT_DD_BIN`) only when deploying to a server where the build directory is not present.
+
+**SAP library (`ace64.dll`) search order** — `import_sap_dd.php` also locates the SAP ACE engine:
+
+| Priority | Location |
+|----------|----------|
+| 1 | Path entered in the **SAP Library** field of the Import dialog |
+| 2 | `C:\php\ace64.dll` |
+| 3 | `C:\ADS\ace64.dll` |
+| 4 | `C:\Program Files\Advantage Database Server\ace64.dll` |
+| 5 | `C:\Program Files (x86)\Advantage Database Server\ace64.dll` |
+
+If none of those are found, the binary itself tries `f:\ads11\ace64.dll` and a few other locations as a last resort.
 
 ### 5. Install DA-Web vendor files
 

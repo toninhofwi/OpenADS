@@ -3,6 +3,7 @@
 #include "util/result.h"
 
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -97,9 +98,11 @@ public:
                                               const std::string& group);
     util::Result<void> remove_user_from_group(const std::string& user,
                                               const std::string& group);
-    bool has_user (const std::string& user) const noexcept {
-        return users_.find(user) != users_.end();
-    }
+    // RCB 2026-06-27: User names are case-insensitive in ADS DDs, so
+    // public user APIs normalize through ci_name() instead of trusting
+    // caller-provided casing from imported dictionaries or clients.
+    bool has_user(const std::string& user) const noexcept;
+    static std::string ci_name(const std::string& s) noexcept;
     bool is_member_of(const std::string& user,
                       const std::string& group) const;
     const std::unordered_set<std::string>& groups_of(const std::string& user) const;
@@ -409,7 +412,9 @@ private:
     std::unordered_map<std::string, FunctionEntry> functions_;
     std::unordered_map<std::string, ViewEntry>     views_;
 
-    // Per-user effective-permission cache:  username → object_name → merged_bits.
+    // RCB 2026-06-27: The cache key is the normalized DD user name; this
+    // keeps effective permissions stable for AdsSys/adssys/ADSSYS logins.
+    // Per-user effective-permission cache: username -> object_name -> merged_bits.
     // Built lazily on first check_perm() call for each user, or eagerly via
     // build_perm_cache().  Invalidated on every grant_permission() / set_table_permission().
     mutable std::unordered_map<std::string,

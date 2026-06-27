@@ -22,6 +22,8 @@ if ($action === 'connect') {
     $path     = trim($body['path']     ?? '');
     $username = trim($body['username'] ?? '');
     $password = trim($body['password'] ?? '');
+    $connType = strtolower(trim($body['connType'] ?? 'local'));
+    if (!in_array($connType, ['local', 'remote'], true)) $connType = 'local';
 
     if ($name === '' || $path === '') {
         http_response_code(400);
@@ -30,9 +32,12 @@ if ($action === 'connect') {
     }
 
     try {
-        $opts = ['path' => $path];
-        if ($username !== '') $opts['user']     = $username;
-        if ($password !== '') $opts['password'] = $password;
+        $opts = api_ads_connect_opts([
+            'path' => $path,
+            'username' => $username,
+            'password' => $password,
+            'connType' => $connType,
+        ]);
         $conn = AdsConnection::connect($opts);
         $conn->close();
     } catch (AdsException $e) {
@@ -46,9 +51,11 @@ if ($action === 'connect') {
         $_SESSION['connections'] = [];
     }
     $_SESSION['connections'][$name] = [
-        'path'     => $path,
+        'path'     => $opts['path'] ?? $path,
+        'sourcePath' => $path,
         'username' => $username,
         'password' => $password,
+        'connType' => $connType,
     ];
 
     echo json_encode(['ok' => true]);

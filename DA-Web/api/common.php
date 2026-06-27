@@ -93,6 +93,33 @@ function api_sql_quote(string $s): string
 }
 
 /**
+ * Build php_openads connection options from a stored/session DD entry.
+ *
+ * DA-Web opens short-lived backend connections for most API calls, so the
+ * selected local/remote mode has to travel with the session credentials.
+ */
+function api_ads_connect_opts(array $c): array
+{
+    $path = (string)($c['path'] ?? '');
+    $connType = strtolower((string)($c['connType'] ?? 'local'));
+    if ($connType !== 'remote') {
+        $connType = 'local';
+    }
+    if ($connType === 'remote' && !preg_match('#^(tcp|tls)://#i', $path)) {
+        $path = 'tcp://127.0.0.1:6262/' . $path;
+    }
+
+    $opts = ['path' => $path, 'server_type' => $connType, 'connType' => $connType];
+    if (($c['username'] ?? '') !== '') {
+        $opts['user'] = $c['username'];
+    }
+    if (($c['password'] ?? '') !== '') {
+        $opts['password'] = $c['password'];
+    }
+    return $opts;
+}
+
+/**
  * Resolve $candidate to an absolute path that exists and lies under $root.
  * Returns null when the path escapes the root, contains traversal, or is missing.
  */

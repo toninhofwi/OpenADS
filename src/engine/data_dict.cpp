@@ -3,6 +3,7 @@
 #include "platform/file.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -715,7 +716,9 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                 indexes_.push_back({tbl_alias, idx_path, {}});
 
         } else if (rec.obj_type == "User" && !rec.obj_name.empty()) {
-            users_.insert(rec.obj_name);
+            // RCB 2026-06-27: Imported SAP user object names can arrive in
+            // mixed case; store them folded so all user lookups share one key.
+            users_.insert(ci_name(rec.obj_name));
 
         } else if (rec.obj_type == "Group" && !rec.obj_name.empty()) {
             groups_.insert(rec.obj_name);
@@ -1205,7 +1208,7 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             //       prop_null=true (SAP-written) records may be stale → skip them.
             //       Current SAP memberships are decoded from XOR tokens (Third Pass).
             if (!rec.prop_null) {
-                memberships_[principal].insert(target_name);
+                memberships_[ci_name(principal)].insert(target_name);
             }
         } else {
             // ACL entry: store full bitmask for system.permissions.
@@ -1501,7 +1504,7 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                         (static_cast<uint32_t>(t[3] ^ K[3]) << 24);
                     auto it = id_to_name.find(gid);
                     if (it != id_to_name.end())
-                        memberships_[e.user].insert(it->second);
+                        memberships_[ci_name(e.user)].insert(it->second);
                 }
             }
         }
@@ -1644,11 +1647,14 @@ util::Result<void> DataDict::load_() {
 
         } else if (obj_type == "User") {
             // OBJ_NAME=username, JSON={prop_*=value,...}
-            users_.insert(obj_name);
+            const auto lo_name = ci_name(obj_name);
+            // RCB 2026-06-27: Text-format OpenADS DDs also normalize user
+            // records at load time, matching the binary loader and connect path.
+            users_.insert(lo_name);
             if (!json.empty()) {
                 auto m = json_parse_flat(json);
                 for (auto& [k, v] : m)
-                    user_props_[obj_name][k] = v;
+                    user_props_[lo_name][k] = v;
             }
 
         } else if (obj_type == "Group") {
@@ -1657,7 +1663,9 @@ util::Result<void> DataDict::load_() {
 
         } else if (obj_type == "Member") {
             // OBJ_NAME=username, OBJ_KEY=groupname
-            memberships_[obj_name].insert(obj_key);
+            // RCB 2026-06-27: Membership keys are normalized by user name so
+            // effective permissions survive mixed-case imported usernames.
+            memberships_[ci_name(obj_name)].insert(obj_key);
 
         } else if (obj_type == "Link") {
             // OBJ_NAME=alias, JSON={path,user,pwd}
@@ -1713,6 +1721,15 @@ util::Result<void> DataDict::load_() {
                               std::stoul(m.at("bitmask"))); } catch (...) {}
                 }
                 bool is_grp = (groups_.find(obj_key) != groups_.end());
+                if (!is_grp) {
+                    const auto obj_key_ci = ci_name(obj_key);
+                    for (const auto& g : groups_) {
+                        if (ci_name(g) == obj_key_ci) {
+                            is_grp = true;
+                            break;
+                        }
+                    }
+                }
                 auto type_code_of = [](const std::string& t) -> int {
                     if (t == "Table")      return 1;
                     if (t == "View")       return 6;
@@ -2105,17 +2122,33 @@ DataDict::remove_index_file(const std::string& table_alias,
 // USER / GROUP / MEMBER
 // ---------------------------------------------------------------------------
 
+// RCB 2026-06-27: ADS DD user names are case-insensitive. Fold to
+// lowercase before storage or lookup so "ADSSYS", "adssys", and "AdsSys"
+// resolve to the same user across imports, login, and permission checks.
+/* static */ std::string DataDict::ci_name(const std::string& s) noexcept {
+    std::string r = s;
+    for (auto& c : r) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return r;
+}
+
+bool DataDict::has_user(const std::string& user) const noexcept {
+    return users_.find(ci_name(user)) != users_.end();
+}
+
 util::Result<void> DataDict::create_user(const std::string& user) {
     if (user.empty())
         return util::Error{5000, 0, "DD user name empty", ""};
-    users_.insert(user);
+    users_.insert(ci_name(user));
     return save();
 }
 
 util::Result<void> DataDict::delete_user(const std::string& user) {
-    users_.erase(user);
-    memberships_.erase(user);
-    user_props_.erase(user);
+    const auto lo = ci_name(user);
+    if (lo == "adssys")
+        return util::Error{5000, 0, "AdsSys user cannot be deleted", ""};
+    users_.erase(lo);
+    memberships_.erase(lo);
+    user_props_.erase(lo);
     return save();
 }
 
@@ -2124,18 +2157,24 @@ DataDict::add_user_to_group(const std::string& user,
                             const std::string& group) {
     if (user.empty() || group.empty())
         return util::Error{5000, 0, "DD member user / group empty", ""};
+    if (ci_name(user) == "adssys")
+        return util::Error{5000, 0, "AdsSys group membership cannot be changed", ""};
     // Auto-create DB: built-in groups in groups_ so they round-trip.
     if (group.size() >= 3 &&
-        group[0]=='D' && group[1]=='B' && group[2]==':')
+        std::toupper(static_cast<unsigned char>(group[0])) == 'D' &&
+        std::toupper(static_cast<unsigned char>(group[1])) == 'B' &&
+        group[2] == ':')
         groups_.insert(group);
-    memberships_[user].insert(group);
+    memberships_[ci_name(user)].insert(group);
     return save();
 }
 
 util::Result<void>
 DataDict::remove_user_from_group(const std::string& user,
                                  const std::string& group) {
-    auto it = memberships_.find(user);
+    if (ci_name(user) == "adssys")
+        return util::Error{5000, 0, "AdsSys group membership cannot be changed", ""};
+    auto it = memberships_.find(ci_name(user));
     if (it != memberships_.end()) {
         it->second.erase(group);
         if (it->second.empty()) memberships_.erase(it);
@@ -2145,7 +2184,7 @@ DataDict::remove_user_from_group(const std::string& user,
 
 bool DataDict::is_member_of(const std::string& user,
                             const std::string& group) const {
-    auto it = memberships_.find(user);
+    auto it = memberships_.find(ci_name(user));
     if (it == memberships_.end()) return false;
     return it->second.find(group) != it->second.end();
 }
@@ -2153,7 +2192,7 @@ bool DataDict::is_member_of(const std::string& user,
 const std::unordered_set<std::string>&
 DataDict::groups_of(const std::string& user) const {
     static const std::unordered_set<std::string> empty;
-    auto it = memberships_.find(user);
+    auto it = memberships_.find(ci_name(user));
     return it == memberships_.end() ? empty : it->second;
 }
 
@@ -2240,14 +2279,14 @@ DataDict::set_user_property(const std::string& user,
                             const std::string& value) {
     if (user.empty() || key.empty())
         return util::Error{5000, 0, "DD user-property user / key empty", ""};
-    user_props_[user][key] = value;
+    user_props_[ci_name(user)][key] = value;
     return save();
 }
 
 std::string
 DataDict::get_user_property(const std::string& user,
                             const std::string& key) const {
-    auto u = user_props_.find(user);
+    auto u = user_props_.find(ci_name(user));
     if (u == user_props_.end()) return {};
     auto k = u->second.find(key);
     return k == u->second.end() ? std::string{} : k->second;
@@ -2266,6 +2305,15 @@ DataDict::grant_permission(const std::string& obj_type,
         return util::Error{5000, 0, "PERM obj_type/obj_name/grantee empty", ""};
 
     bool is_grp = (groups_.find(grantee) != groups_.end());
+    if (!is_grp) {
+        const auto grantee_ci = ci_name(grantee);
+        for (const auto& g : groups_) {
+            if (ci_name(g) == grantee_ci) {
+                is_grp = true;
+                break;
+            }
+        }
+    }
 
     // Keep table_perms_ coarse-level map in sync for Table objects.
     if (obj_type == "Table") {
@@ -2361,22 +2409,34 @@ static DataDict::EffectiveOps ops_from_bitmask(uint32_t mask) {
 // we OR together the bits from direct user grants and every group
 // the user belongs to.
 void DataDict::build_perm_cache(const std::string& username) const {
+    const auto lo = ci_name(username);
+    // RCB 2026-06-27: Store the normalized user plus both original and
+    // folded group names. Imported SAP DDs commonly mix group casing
+    // (for example General/general or DB:Admin/db:Admin), but effective
+    // permissions must still match the memberships shown for the user.
     // Collect the user's principals (self + groups).
     std::unordered_set<std::string> principals;
-    principals.insert(username);
-    auto mg = memberships_.find(username);
-    if (mg != memberships_.end())
-        for (const auto& g : mg->second) principals.insert(g);
+    principals.insert(lo);
+    auto mg = memberships_.find(lo);
+    if (mg != memberships_.end()) {
+        for (const auto& g : mg->second) {
+            principals.insert(g);
+            principals.insert(ci_name(g));
+        }
+    }
 
     // Store the raw OR of all bitmasks for each object.  Do NOT expand FULL
     // here — we need the sentinel bit preserved so get_effective_permission()
     // can distinguish level 4 from level 3.  Expansion happens at check time.
     std::unordered_map<std::string, uint32_t> obj_bits;
     for (const auto& pe : permissions_) {
-        if (principals.find(pe.grantee) == principals.end()) continue;
+        if (principals.find(pe.grantee) == principals.end() &&
+            principals.find(ci_name(pe.grantee)) == principals.end()) {
+            continue;
+        }
         obj_bits[pe.object_name] |= pe.bitmask;
     }
-    perm_cache_[username] = std::move(obj_bits);
+    perm_cache_[lo] = std::move(obj_bits);
 }
 
 bool DataDict::check_perm(const std::string& username,
@@ -2385,11 +2445,12 @@ bool DataDict::check_perm(const std::string& username,
     // No ACL at all → open access.
     if (permissions_.empty()) return true;
 
+    const auto lo = ci_name(username);
     // Ensure cache is populated for this user.
-    if (perm_cache_.find(username) == perm_cache_.end())
-        build_perm_cache(username);
+    if (perm_cache_.find(lo) == perm_cache_.end())
+        build_perm_cache(lo);
 
-    const auto& user_map = perm_cache_.at(username);
+    const auto& user_map = perm_cache_.at(lo);
     auto it = user_map.find(object_name);
     if (it == user_map.end())
         return true;   // no entry for this object → unrestricted
@@ -2409,11 +2470,12 @@ DataDict::EffectiveOps DataDict::get_effective_ops(
         return full;
     }
 
+    const auto lo = ci_name(username);
     // Use cache (build lazily if needed).
-    if (perm_cache_.find(username) == perm_cache_.end())
-        build_perm_cache(username);
+    if (perm_cache_.find(lo) == perm_cache_.end())
+        build_perm_cache(lo);
 
-    const auto& user_map = perm_cache_.at(username);
+    const auto& user_map = perm_cache_.at(lo);
     auto it = user_map.find(object_name);
     if (it == user_map.end()) {
         // No entry for this object → unrestricted.
@@ -2428,9 +2490,10 @@ DataDict::EffectiveOps DataDict::get_effective_ops(
 
 std::vector<DataDict::EffectivePermEntry>
 DataDict::get_all_effective_perms(const std::string& username) const {
+    const auto lo = ci_name(username);
     // Ensure cache is built.
-    if (perm_cache_.find(username) == perm_cache_.end())
-        build_perm_cache(username);
+    if (perm_cache_.find(lo) == perm_cache_.end())
+        build_perm_cache(lo);
 
     // Build object_type lookup from the raw permission entries.
     std::unordered_map<std::string, std::string> obj_type_map;
@@ -2440,7 +2503,7 @@ DataDict::get_all_effective_perms(const std::string& username) const {
         obj_code_map[pe.object_name] = pe.object_type_code;
     }
 
-    const auto& user_map = perm_cache_.at(username);
+    const auto& user_map = perm_cache_.at(lo);
     std::vector<EffectivePermEntry> result;
     result.reserve(user_map.size());
     for (const auto& kv : user_map) {
@@ -2448,7 +2511,7 @@ DataDict::get_all_effective_perms(const std::string& username) const {
         e.object_name      = kv.first;
         e.object_type      = obj_type_map[kv.first];
         e.object_type_code = obj_code_map[kv.first];
-        e.grantee          = username;
+        e.grantee          = lo;
         e.ops              = ops_from_bitmask(kv.second);
         result.push_back(std::move(e));
     }
@@ -2457,11 +2520,12 @@ DataDict::get_all_effective_perms(const std::string& username) const {
 
 int DataDict::get_effective_permission(const std::string& username,
                                         const std::string& table) const {
+    const auto lo = ci_name(username);
     // Prefer the fine-grained cache when available; fall back to table_perms_.
     if (!permissions_.empty()) {
-        if (perm_cache_.find(username) == perm_cache_.end())
-            build_perm_cache(username);
-        const auto& user_map = perm_cache_.at(username);
+        if (perm_cache_.find(lo) == perm_cache_.end())
+            build_perm_cache(lo);
+        const auto& user_map = perm_cache_.at(lo);
         auto it = user_map.find(table);
         if (it == user_map.end()) return 4;   // no entry → full access
         uint32_t bits = it->second;
@@ -2476,9 +2540,9 @@ int DataDict::get_effective_permission(const std::string& username,
     auto t = table_perms_.find(table);
     if (t == table_perms_.end()) return 4;
     int eff = 0;
-    auto u = t->second.find(username);
+    auto u = t->second.find(lo);
     if (u != t->second.end()) eff = u->second;
-    auto mg = memberships_.find(username);
+    auto mg = memberships_.find(lo);
     if (mg != memberships_.end()) {
         for (const auto& g : mg->second) {
             auto gi = t->second.find(g);

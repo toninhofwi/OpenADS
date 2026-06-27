@@ -118,6 +118,7 @@
       case 'disconnect':   disconnectDD(el.dataset.dd);   break;
       case 'open-sql':     openSqlTab();                  break;
       case 'import-sap-dd': openImportSapDDModal();         break;
+      case 'server-info':  openServerInfoModal();          break;
       case 'refresh-tree': refreshTree();                  break;
       case 'about':        openAboutModal();               break;
     }
@@ -1197,36 +1198,31 @@
           container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
           return;
         }
+        const sec = (title) =>
+          `<div style="grid-column:1/-1;margin-top:6px;padding-top:8px;
+                       border-top:1px solid #313244;font-size:11px;font-weight:600;
+                       color:#89b4fa;text-transform:uppercase;letter-spacing:.05em;">
+             ${title}</div>`;
         container.innerHTML = `
           <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;
                       background:#1e1e2e;border-bottom:1px solid #313244;flex-shrink:0;">
             <button class="btn btn-sm btn-primary" id="save-dbprops-${tabId}">&#128190; Save</button>
             <span id="dbprops-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
           </div>
-          <div style="padding:16px;max-width:560px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
+          <div style="padding:16px;max-width:580px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
             <h3 style="margin:0;color:#cdd6f4;font-size:14px;">Dictionary: ${escHtml(dd)}</h3>
 
-            <div style="display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:start;">
+            <div style="display:grid;grid-template-columns:180px 1fr;gap:8px;align-items:start;">
+
+              ${sec('General')}
 
               <label style="padding-top:6px;font-size:12px;">Description</label>
               <textarea id="dbprops-desc-${tabId}" rows="3"
                 style="background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;
                        padding:6px;font-size:12px;resize:vertical;">${escHtml(resp.description || '')}</textarea>
 
-              ${cbRow('Login required', `dbprops-login-${tabId}`, chk(resp.loginRequired),
-                      'Require username/password to connect')}
-
-              ${cbRow('Verify access rights', `dbprops-verify-${tabId}`, chk(resp.verifyAccessRights),
-                      'Enforce per-user table/view/proc permissions')}
-
               <label style="font-size:12px;padding-top:4px;">User-defined property</label>
               ${inp(`dbprops-udp-${tabId}`, resp.userDefinedProp)}
-
-              <label style="font-size:12px;padding-top:4px;">Default table path</label>
-              ${inp(`dbprops-dtp-${tabId}`, resp.defaultTablePath, 'text', 'placeholder="(same as .add file)"')}
-
-              <label style="font-size:12px;padding-top:4px;">Temp table path</label>
-              ${inp(`dbprops-ttp-${tabId}`, resp.tempTablePath, 'text', 'placeholder="(same as default table path)"')}
 
               <label style="font-size:12px;">Version major</label>
               ${inp(`dbprops-vmaj-${tabId}`, resp.versionMajor ?? 0, 'number',
@@ -1236,6 +1232,64 @@
               ${inp(`dbprops-vmin-${tabId}`, resp.versionMinor ?? 0, 'number',
                     'min="0" max="65535" style="width:80px;"')}
 
+              ${sec('Paths')}
+
+              <label style="font-size:12px;padding-top:4px;">Default table path</label>
+              ${inp(`dbprops-dtp-${tabId}`, resp.defaultTablePath, 'text', 'placeholder="(same as .add file)"')}
+
+              <label style="font-size:12px;padding-top:4px;">Temp table path</label>
+              ${inp(`dbprops-ttp-${tabId}`, resp.tempTablePath, 'text', 'placeholder="(same as default table path)"')}
+
+              ${sec('Security')}
+
+              ${cbRow('Login required', `dbprops-login-${tabId}`, chk(resp.loginRequired),
+                      'Require username/password to connect')}
+
+              ${cbRow('Verify access rights', `dbprops-verify-${tabId}`, chk(resp.verifyAccessRights),
+                      'Enforce per-user table/view/proc permissions')}
+
+              ${sec('Encryption')}
+
+              <label style="font-size:12px;">DB is encrypted</label>
+              <span style="font-size:12px;color:${resp.encrypted ? '#a6e3a1' : '#6c7086'};padding-top:2px;">
+                ${resp.encrypted ? 'Yes (read-only)' : 'No'}</span>
+
+              ${cbRow('Encrypt new tables', `dbprops-enc-new-${tabId}`, chk(resp.encryptNewTable),
+                      'Auto-encrypt tables added to the DD')}
+
+              ${cbRow('Encrypt indexes', `dbprops-enc-idx-${tabId}`, chk(resp.encryptIndexes),
+                      'Encrypt index files')}
+
+              ${cbRow('Encrypt communication', `dbprops-enc-comm-${tabId}`, chk(resp.encryptCommunication),
+                      'Encrypt client-server communication')}
+
+              <label style="font-size:12px;padding-top:4px;">Encryption password</label>
+              ${inp(`dbprops-enc-pw-${tabId}`, resp.encryptTablePassword, 'password',
+                    'autocomplete="new-password" placeholder="Password for encrypted tables"')}
+
+              ${sec('Logins')}
+
+              ${cbRow('Disable logins', `dbprops-ldis-${tabId}`, chk(resp.loginsDisabled),
+                      'Block all new login attempts')}
+
+              <label style="font-size:12px;padding-top:4px;">Disabled message</label>
+              ${inp(`dbprops-ldis-msg-${tabId}`, resp.loginsDisabledErrstr, 'text',
+                    'placeholder="Message shown when logins are disabled"')}
+
+              ${sec('Full-Text Search')}
+
+              <label style="font-size:12px;padding-top:4px;">Delimiters</label>
+              ${inp(`dbprops-fts-del-${tabId}`, resp.ftsDelimiters)}
+
+              <label style="font-size:12px;padding-top:4px;">Noise words</label>
+              ${inp(`dbprops-fts-noise-${tabId}`, resp.ftsNoise)}
+
+              <label style="font-size:12px;padding-top:4px;">Drop chars</label>
+              ${inp(`dbprops-fts-drop-${tabId}`, resp.ftsDropChars)}
+
+              <label style="font-size:12px;padding-top:4px;">Conditional chars</label>
+              ${inp(`dbprops-fts-cond-${tabId}`, resp.ftsConditionalChars)}
+
             </div>
           </div>`;
 
@@ -1244,14 +1298,24 @@
           if (msgEl) msgEl.textContent = 'Saving…';
           const payload = {
             dd,
-            description:        document.getElementById(`dbprops-desc-${tabId}`)?.value   ?? '',
-            loginRequired:      document.getElementById(`dbprops-login-${tabId}`)?.checked ?? false,
-            verifyAccessRights: document.getElementById(`dbprops-verify-${tabId}`)?.checked ?? false,
-            userDefinedProp:    document.getElementById(`dbprops-udp-${tabId}`)?.value      ?? '',
-            defaultTablePath:   document.getElementById(`dbprops-dtp-${tabId}`)?.value      ?? '',
-            tempTablePath:      document.getElementById(`dbprops-ttp-${tabId}`)?.value      ?? '',
-            versionMajor:  parseInt(document.getElementById(`dbprops-vmaj-${tabId}`)?.value ?? '0', 10) || 0,
-            versionMinor:  parseInt(document.getElementById(`dbprops-vmin-${tabId}`)?.value ?? '0', 10) || 0,
+            description:           document.getElementById(`dbprops-desc-${tabId}`)?.value     ?? '',
+            userDefinedProp:       document.getElementById(`dbprops-udp-${tabId}`)?.value       ?? '',
+            versionMajor:   parseInt(document.getElementById(`dbprops-vmaj-${tabId}`)?.value    ?? '0', 10) || 0,
+            versionMinor:   parseInt(document.getElementById(`dbprops-vmin-${tabId}`)?.value    ?? '0', 10) || 0,
+            defaultTablePath:      document.getElementById(`dbprops-dtp-${tabId}`)?.value       ?? '',
+            tempTablePath:         document.getElementById(`dbprops-ttp-${tabId}`)?.value       ?? '',
+            loginRequired:         document.getElementById(`dbprops-login-${tabId}`)?.checked   ?? false,
+            verifyAccessRights:    document.getElementById(`dbprops-verify-${tabId}`)?.checked  ?? false,
+            encryptNewTable:       document.getElementById(`dbprops-enc-new-${tabId}`)?.checked ?? false,
+            encryptIndexes:        document.getElementById(`dbprops-enc-idx-${tabId}`)?.checked ?? false,
+            encryptCommunication:  document.getElementById(`dbprops-enc-comm-${tabId}`)?.checked ?? false,
+            encryptTablePassword:  document.getElementById(`dbprops-enc-pw-${tabId}`)?.value    ?? '',
+            loginsDisabled:        document.getElementById(`dbprops-ldis-${tabId}`)?.checked    ?? false,
+            loginsDisabledErrstr:  document.getElementById(`dbprops-ldis-msg-${tabId}`)?.value  ?? '',
+            ftsDelimiters:         document.getElementById(`dbprops-fts-del-${tabId}`)?.value   ?? '',
+            ftsNoise:              document.getElementById(`dbprops-fts-noise-${tabId}`)?.value ?? '',
+            ftsDropChars:          document.getElementById(`dbprops-fts-drop-${tabId}`)?.value  ?? '',
+            ftsConditionalChars:   document.getElementById(`dbprops-fts-cond-${tabId}`)?.value  ?? '',
           };
           try {
             const r = await apiFetch('api/db_props.php', {
@@ -3698,7 +3762,7 @@
         await apiFetch('api/connect.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'connect', name: ddName, path: d.path, username: '', password: '' }),
+          body: JSON.stringify({ action: 'connect', name: ddName, path: d.path, username: '', password: '', connType: d.connType ?? 'local' }),
         });
         state.openConnections.add(ddName);
         refreshTree();
@@ -3714,6 +3778,11 @@
     document.getElementById('connect-dd-name').textContent = ddName;
     overlay.dataset.dd   = ddName;
     overlay.dataset.path = d.path;
+    overlay.dataset.connType = d.connType ?? 'local';
+    resetToggleGroup('connect-conn-type');
+    document.querySelectorAll('#connect-conn-type .toggle-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.value === (d.connType ?? 'local'));
+    });
     document.getElementById('connect-username').value = d.username || '';
     document.getElementById('connect-password').value = '';
     overlay.classList.add('open');
@@ -3730,6 +3799,7 @@
     const path     = overlay.dataset.path;
     const username = document.getElementById('connect-username').value.trim();
     const password = document.getElementById('connect-password').value;
+    const connType = toggleGroupValue('connect-conn-type');
     const errEl    = document.getElementById('connect-err');
     errEl.textContent = '';
 
@@ -3737,7 +3807,7 @@
       await apiFetch('api/connect.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'connect', name: ddName, path, username, password }),
+        body: JSON.stringify({ action: 'connect', name: ddName, path, username, password, connType }),
       });
       state.openConnections.add(ddName);
       overlay.classList.remove('open');
@@ -4075,7 +4145,7 @@
         await apiFetch('api/connect.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'connect', name, path, username, password: '' }),
+          body: JSON.stringify({ action: 'connect', name, path, username, password: '', connType }),
         }).catch(() => {});
       }
       refreshTree();
@@ -4142,6 +4212,7 @@
         `✓ Import complete`,
         `  Group memberships: ${data.memberships}`,
         `  Permissions:       ${data.permissions}`,
+        `  DB properties:     ${data.db_properties ?? 0}`,
         data.registered ? `  Registered as "${name}" in the connection list` : `  (already registered)`,
       ];
       if (data.warnings?.length) {
@@ -4165,7 +4236,7 @@
         await apiFetch('api/connect.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'connect', name, path: dest, username: user, password: '' }),
+          body: JSON.stringify({ action: 'connect', name, path: dest, username: user, password: '', connType: 'local' }),
         });
         state.openConnections.add(name);
         updateConnectionCount();
@@ -4194,6 +4265,62 @@
       setStatus('Import failed');
     }
   });
+
+  // ── Server Info modal ──────────────────────────────────────────────────────
+  async function loadServerInfo() {
+    const errEl   = document.getElementById('srvinfo-err');
+    const summary = document.getElementById('srvinfo-summary');
+    const usersEl = document.getElementById('srvinfo-users-body');
+    const tablesEl= document.getElementById('srvinfo-tables-body');
+    errEl.textContent = '';
+    summary.innerHTML = '<span style="color:#a6adc8;font-size:12px;">Loading…</span>';
+    usersEl.innerHTML  = '';
+    tablesEl.innerHTML = '';
+
+    const dd = state.selectedDD || [...state.openConnections][0] || '';
+    if (!dd) { errEl.textContent = 'No active connection.'; summary.innerHTML = ''; return; }
+
+    try {
+      const data = await apiFetch(`api/server_info.php?dd=${encodeURIComponent(dd)}`);
+
+      const a = data.activity;
+      const counters = [
+        { label: 'Users',    value: a.users.inUse },
+        { label: 'Conns',    value: a.connections.inUse },
+        { label: 'Tables',   value: a.tables.inUse },
+        { label: 'Indexes',  value: a.indexes.inUse },
+        { label: 'Locks',    value: a.locks.inUse },
+      ];
+      summary.innerHTML = counters.map(c => `
+        <div style="background:#313244;border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:22px;font-weight:700;color:#cba6f7;">${c.value}</div>
+          <div style="font-size:11px;color:#a6adc8;">${c.label}</div>
+        </div>`).join('');
+
+      const row = (cells) => '<tr>' + cells.map(v =>
+        `<td style="padding:3px 6px;border-bottom:1px solid #313244;">${escHtml(String(v ?? ''))}</td>`
+      ).join('') + '</tr>';
+
+      usersEl.innerHTML = data.users.length
+        ? data.users.map(u => row([u.name, u.authUser, u.address, u.connNo])).join('')
+        : '<tr><td colspan="4" style="padding:6px;color:#585b70;text-align:center;">No connected users</td></tr>';
+
+      tablesEl.innerHTML = data.tables.length
+        ? data.tables.map(t => row([t.name, t.user, t.connNo])).join('')
+        : '<tr><td colspan="3" style="padding:6px;color:#585b70;text-align:center;">No open tables</td></tr>';
+
+    } catch (err) {
+      errEl.textContent = err.message;
+      summary.innerHTML = '';
+    }
+  }
+
+  function openServerInfoModal() {
+    document.getElementById('modal-server-info').classList.add('open');
+    loadServerInfo();
+  }
+
+  document.getElementById('srvinfo-refresh').addEventListener('click', loadServerInfo);
 
   // ── Boot ───────────────────────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', async () => {

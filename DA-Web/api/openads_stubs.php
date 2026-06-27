@@ -13,7 +13,7 @@ if (!extension_loaded('openads') && !class_exists('AdsConnection')) {
 
     class AdsConnection
     {
-        /** @param array $opts keys: path, user, password */
+        /** @param array $opts keys: path, user, password, server_type, connType */
         public static function connect(array $opts): static {}
         public function close(): void {}
         public function query(string $sql): AdsStatement {}

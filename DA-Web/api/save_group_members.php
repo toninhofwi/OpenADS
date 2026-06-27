@@ -29,23 +29,17 @@ foreach ($newMembers as $u) {
 }
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 try {
     $conn = AdsConnection::connect($opts);
 
-    $qGroup = api_sql_quote($groupName);
-
     // Current members
     $current = [];
-    $stmt = $conn->query(
-        "SELECT USER_NAME FROM system.usergroupmembers
-          WHERE GROUP_NAME = '$qGroup'
-          ORDER BY USER_NAME"
-    );
+    $stmt = $conn->query("SELECT GROUP_NAME, USER_NAME FROM system.usergroupmembers");
     while ($row = $stmt->fetchAssoc()) {
+        $g = trim((string)($row['GROUP_NAME'] ?? ''));
+        if (strcasecmp($g, $groupName) !== 0) continue;
         $u = trim((string)($row['USER_NAME'] ?? ''));
         if ($u !== '') $current[] = $u;
     }
@@ -66,14 +60,14 @@ try {
         $uname = $newMap[$u] ?? $u;
         try {
             $conn->execute("EXECUTE PROCEDURE sp_AddUserToGroup('"
-                . api_sql_quote($uname) . "', '$qGroup')");
+                . api_sql_quote($uname) . "', '" . api_sql_quote($groupName) . "')");
         } catch (Throwable $e) { $errs[] = "Add $uname: " . $e->getMessage(); }
     }
     foreach ($toRemove as $u) {
         $uname = $currentMap[$u] ?? $u;
         try {
             $conn->execute("EXECUTE PROCEDURE sp_RemoveUserFromGroup('"
-                . api_sql_quote($uname) . "', '$qGroup')");
+                . api_sql_quote($uname) . "', '" . api_sql_quote($groupName) . "')");
         } catch (Throwable $e) { $errs[] = "Remove $uname: " . $e->getMessage(); }
     }
 

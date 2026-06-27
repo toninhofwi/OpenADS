@@ -43,9 +43,7 @@ if ($ddName === '' || $userName === '') {
 }
 
 $c    = $_SESSION['connections'][$ddName];
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 try {
     $conn = AdsConnection::connect($opts);
@@ -53,15 +51,12 @@ try {
     $PERM_COLS = ['SELECT','INSERT','UPDATE','DELETE','EXECUTE','ALTER','DROP'];
 
     // ── Step 1: get the user's groups ────────────────────────────────────────────
-    $escapedUser = str_replace("'", "''", $userName);
     $userGroups  = [];
     try {
-        $stmt = $conn->query(
-            "SELECT GROUP_NAME FROM system.usergroupmembers
-              WHERE USER_NAME = '$escapedUser'
-              ORDER BY GROUP_NAME"
-        );
+        $stmt = $conn->query("SELECT GROUP_NAME, USER_NAME FROM system.usergroupmembers");
         while ($row = $stmt->fetchAssoc()) {
+            $u = trim((string)($row['USER_NAME'] ?? ''));
+            if (strcasecmp($u, $userName) !== 0) continue;
             $g = trim((string)($row['GROUP_NAME'] ?? ''));
             if ($g !== '') $userGroups[] = $g;
         }
@@ -78,13 +73,9 @@ try {
     $permMaps   = [];   // lc_grantee => [ key => row ]
     $canInherit = false;
 
-    // Build IN clause to limit the scan to the user and their groups only.
-    // This avoids fetching all permissions for all users (3000+ rows → ~1s timeout).
-    $grantees = array_merge([$userName], $userGroups);
-    $inParts  = array_map(fn($g) => "'" . str_replace("'", "''", $g) . "'", $grantees);
-    $inClause = implode(',', $inParts);
-
-    $stmt = $conn->query("SELECT * FROM system.permissions WHERE GRANTEE IN ($inClause)");
+    // Scan and filter in PHP so imported mixed-case group names still match
+    // memberships such as General/general or DB:Admin/db:Admin.
+    $stmt = $conn->query("SELECT * FROM system.permissions");
     while ($row = $stmt->fetchAssoc()) {
         $granteeLc = strtolower(trim((string)($row['GRANTEE'] ?? '')));
         $isUser    = ($granteeLc === $userLc);
@@ -104,6 +95,7 @@ try {
         }
     }
     $stmt->close();
+    $canInherit = $canInherit || count($userGroups) > 0;
 
     $directMap = $permMaps[$userLc] ?? [];
 

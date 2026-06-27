@@ -24,6 +24,8 @@
  *   6. openads_import_dd[.exe] in PATH
  */
 header('Content-Type: application/json');
+set_time_limit(0);    // import can take minutes — never let PHP timeout kill a long run
+ignore_user_abort(true); // keep running even if browser disconnects mid-import
 session_start();
 require_once __DIR__ . '/common.php';
 
@@ -145,6 +147,7 @@ if (!is_resource($proc)) {
 
 fclose($pipes[0]);
 $stdout = stream_get_contents($pipes[1]);
+$stderr = stream_get_contents($pipes[2]);
 fclose($pipes[1]);
 fclose($pipes[2]);
 $exitCode = proc_close($proc);
@@ -155,6 +158,7 @@ if (!is_array($toolResult)) {
     api_error(500, 'openads_import_dd produced no parseable JSON output', 0, [
         'exit_code' => $exitCode,
         'raw'       => substr($stdout, 0, 500),
+        'stderr'    => substr($stderr, 0, 500),
     ]);
 }
 

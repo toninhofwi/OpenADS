@@ -29,18 +29,17 @@ foreach ($newGroups as $g) {
 }
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 try {
     $conn = AdsConnection::connect($opts);
 
     // Current groups — filter in PHP (padded CHAR / case-safe)
     $current = [];
-    $qUser = api_sql_quote($userName);
-    $stmt = $conn->query("SELECT GROUP_NAME FROM system.usergroupmembers WHERE USER_NAME = '$qUser'");
+    $stmt = $conn->query("SELECT GROUP_NAME, USER_NAME FROM system.usergroupmembers");
     while ($row = $stmt->fetchAssoc()) {
+        $u = trim((string)($row['USER_NAME'] ?? $row['User_Name'] ?? ''));
+        if (strcasecmp($u, $userName) !== 0) continue;
         $g = trim((string)($row['GROUP_NAME'] ?? $row['Group_Name'] ?? ''));
         if ($g !== '') $current[] = $g;
     }
