@@ -101,9 +101,9 @@ if (-not $hbmk2) {
     Write-Error "[harbour-ci] hbmk2 not found under $InstallRoot after install"
 }
 
-$rddads = Join-Path $InstallRoot "contrib\rddads\rddads.ch"
-if (-not (Test-Path $rddads)) {
-    Write-Warning "[harbour-ci] contrib\rddads\rddads.ch missing"
+$rddadsHdr = Join-Path $InstallRoot "contrib\rddads\rddads.h"
+if (-not (Test-Path $rddadsHdr)) {
+    Write-Warning "[harbour-ci] contrib\rddads not installed (missing $rddadsHdr)"
 }
 
 $env:HARBOUR_ROOT = $InstallRoot

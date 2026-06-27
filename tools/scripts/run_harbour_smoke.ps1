@@ -15,22 +15,46 @@ $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $smokeDir = Join-Path $repo "tests\smoke\harbour"
 
+function Find-Hbmk2 {
+    param([string]$Root)
+    if (-not $Root) { return $null }
+    foreach ($rel in @(
+        "bin\win\msvc64\hbmk2.exe",
+        "bin\win\mingw64\hbmk2.exe",
+        "bin\hbmk2.exe"
+    )) {
+        $p = Join-Path $Root $rel
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
 if ($env:OPENADS_SKIP_HARBOUR_SMOKE -eq "1") {
     Write-Host "[harbour-smoke] Skipped (OPENADS_SKIP_HARBOUR_SMOKE=1)"
     exit 0
 }
 
-if (-not $HarbourRoot) {
-    foreach ($c in @("C:\harbour", "$env:RUNNER_TEMP\harbour-ci")) {
-        if (Test-Path (Join-Path $c "bin\win\msvc64\hbmk2.exe")) {
+$hbmk2 = $null
+if ($HarbourRoot) {
+    $hbmk2 = Find-Hbmk2 $HarbourRoot
+}
+if (-not $hbmk2) {
+    foreach ($c in @("C:\harbour", "$env:RUNNER_TEMP\harbour-ci", "$env:HARBOUR_CI_ROOT")) {
+        if (-not $c) { continue }
+        $hbmk2 = Find-Hbmk2 $c
+        if ($hbmk2) {
             $HarbourRoot = $c
             break
         }
     }
 }
-if (-not $HarbourRoot -or -not (Test-Path (Join-Path $HarbourRoot "bin\win\msvc64\hbmk2.exe"))) {
+if (-not $hbmk2) {
     Write-Error "[harbour-smoke] Harbour not found. Set HARBOUR_ROOT or run bootstrap_harbour_ci.ps1"
 }
+
+$hbBin = Split-Path $hbmk2 -Parent
+Write-Host "[harbour-smoke] hbmk2: $hbmk2"
+Write-Host "[harbour-smoke] HB_INSTALL: $HarbourRoot"
 
 $aceLib = Join-Path $OpenAdsBuild "src\Release"
 $makeCdx = Join-Path $OpenAdsBuild "tests\Release\make_cdx.exe"
@@ -40,7 +64,6 @@ if (-not (Test-Path $makeCdx)) {
 
 $env:HB_INSTALL = $HarbourRoot
 $env:OPENADS_LIB = $aceLib
-$hbBin = Join-Path $HarbourRoot 'bin\win\msvc64'
 $env:PATH = "$hbBin;$aceLib;$env:PATH"
 
 Push-Location $smokeDir
@@ -53,11 +76,10 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     Write-Host "[harbour-smoke] hbmk2 build ..."
-    # hbmk2 may write benign warnings to stderr (e.g. ignored -gt); do not treat as fatal.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & hbmk2 -comp=msvc64 smoke.hbp 2>&1 | ForEach-Object { Write-Host $_ }
+        & $hbmk2 -comp=msvc64 smoke.hbp 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         $ErrorActionPreference = $prevEap
