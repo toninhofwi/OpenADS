@@ -914,4 +914,19 @@ util::Result<void> MariaConnection::unlock_table(MariaTable* tbl) {
 #endif
 }
 
+util::Result<void> MariaConnection::exec_sql(const std::string& sql) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid()) {
+        return util::Error{5001, 0, "mariadb connection not open", ""};
+    }
+    if (mysql_query(impl_->conn, sql.c_str()) != 0) {
+        return maria_error("exec_sql", mysql_error(impl_->conn));
+    }
+    return util::Result<void>{};
+#else
+    (void)sql;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
 } // namespace openads::sql_backend

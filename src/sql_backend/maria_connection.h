@@ -70,6 +70,8 @@ public:
     util::Result<void> lock_table(MariaTable* tbl);
     util::Result<void> unlock_table(MariaTable* tbl);
 
+    util::Result<void> exec_sql(const std::string& sql);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

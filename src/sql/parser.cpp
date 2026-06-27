@@ -2440,7 +2440,13 @@ bool sql_is_drop_table(const std::string& sql) {
     Cursor c(sql);
     c.skip_ws();
     c.skip_optimizer_hint();
-    return c.peek_keyword("DROP");
+    if (!c.peek_keyword("DROP")) return false;
+    while (!c.eof()) {
+        char ch = c.consume_char();
+        if (std::isspace(static_cast<unsigned char>(ch))) break;
+    }
+    c.skip_ws();
+    return c.peek_keyword("TABLE");
 }
 
 // ── DROP INDEX ────────────────────────────────────────────────────────────

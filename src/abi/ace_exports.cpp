@@ -12334,6 +12334,18 @@ struct SqlStatement {
 #if defined(OPENADS_WITH_MSSQL)
     openads::sql_backend::MssqlConnection*     mssql_conn  = nullptr;
 #endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    openads::sql_backend::PostgresConnection* postgres = nullptr;
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    openads::sql_backend::MariaConnection* maria = nullptr;
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    openads::sql_backend::OdbcConnection* odbc = nullptr;
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    openads::sql_backend::FirebirdConnection* firebird = nullptr;
+#endif
     std::string                            sql;
     // RCB 2026-05-22 17:03 — The original struct stored only the raw SQL string.
     // AdsSet* functions never had a place to write named parameter values because
@@ -12465,6 +12477,41 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::MssqlConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->mssql_conn = mc;
+        *phStatement = stmt_register(std::move(stmt));
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pc = get_postgres_conn(hConnect)) {
+        auto stmt = std::make_unique<SqlStatement>();
+        stmt->postgres = pc;
+        *phStatement = stmt_register(std::move(stmt));
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = s.registry.lookup<openads::sql_backend::MariaConnection>(
+            hConnect, HandleKind::MariaConnection)) {
+        auto stmt = std::make_unique<SqlStatement>();
+        stmt->maria = mc;
+        *phStatement = stmt_register(std::move(stmt));
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = s.registry.lookup<openads::sql_backend::OdbcConnection>(
+            hConnect, HandleKind::OdbcConnection)) {
+        auto stmt = std::make_unique<SqlStatement>();
+        stmt->odbc = oc;
+        *phStatement = stmt_register(std::move(stmt));
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = s.registry.lookup<openads::sql_backend::FirebirdConnection>(
+            hConnect, HandleKind::FirebirdConnection)) {
+        auto stmt = std::make_unique<SqlStatement>();
+        stmt->firebird = fc;
         *phStatement = stmt_register(std::move(stmt));
         return ok();
     }
@@ -13958,6 +14005,10 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             return fail(static_cast<int>(result.error_number),
                         result.message.c_str());
         }
+        if (result.columns.empty()) {
+            *phCursor = 0;
+            return ok();
+        }
         auto st = openads::sql_backend::MssqlTable::from_result(
             std::move(result));
         auto& s = state();
@@ -13967,6 +14018,61 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
         mssql_tables_map().emplace(h, std::move(st));
         *phCursor = h;
         return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (it->second->postgres != nullptr) {
+        auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        if (openads::sql::sql_is_alter_table(sqlstr) ||
+            openads::sql::sql_is_drop_index(sqlstr) ||
+            openads::sql::sql_is_drop_table(sqlstr)) {
+            if (auto r = it->second->postgres->exec_sql(sqlstr); !r) {
+                return fail(r.error());
+            }
+            *phCursor = 0;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (it->second->maria != nullptr) {
+        auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        if (openads::sql::sql_is_alter_table(sqlstr) ||
+            openads::sql::sql_is_drop_index(sqlstr) ||
+            openads::sql::sql_is_drop_table(sqlstr)) {
+            if (auto r = it->second->maria->exec_sql(sqlstr); !r) {
+                return fail(r.error());
+            }
+            *phCursor = 0;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (it->second->odbc != nullptr) {
+        auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        if (openads::sql::sql_is_alter_table(sqlstr) ||
+            openads::sql::sql_is_drop_index(sqlstr) ||
+            openads::sql::sql_is_drop_table(sqlstr)) {
+            if (auto r = it->second->odbc->exec_sql(sqlstr); !r) {
+                return fail(r.error());
+            }
+            *phCursor = 0;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (it->second->firebird != nullptr) {
+        auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        if (openads::sql::sql_is_alter_table(sqlstr) ||
+            openads::sql::sql_is_drop_index(sqlstr) ||
+            openads::sql::sql_is_drop_table(sqlstr)) {
+            auto r = it->second->firebird->run_sql(sqlstr);
+            if (!r) return fail(r.error());
+            *phCursor = 0;
+            return ok();
+        }
     }
 #endif
     Connection* c = it->second->conn;
@@ -14047,6 +14153,93 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
     // UPDATE / DELETE / CREATE TABLE / CREATE INDEX write through
     // the engine and return no cursor (phCursor → 0); SELECT keeps
     // the M9.21 path.
+    if (openads::sql::sql_is_drop_index(sql)) {
+        auto di = openads::sql::parse_drop_index(sql);
+        if (!di) return fail(di.error());
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "DROP INDEX via SQL not implemented for DBF tables");
+    }
+
+    if (openads::sql::sql_is_drop_table(sql)) {
+        auto dt = openads::sql::parse_drop_table(sql);
+        if (!dt) return fail(dt.error());
+        namespace fs = std::filesystem;
+        fs::path full = fs::path(c->data_dir()) / dt.value().table;
+        if (!full.has_extension()) full.replace_extension(".dbf");
+        if (!fs::exists(full)) {
+            if (dt.value().if_exists) {
+                *phCursor = 0;
+                return ok();
+            }
+            return fail(openads::AE_NO_FILE_FOUND, dt.value().table.c_str());
+        }
+        std::error_code ec;
+        fs::remove(full, ec);
+        auto cdx = full; cdx.replace_extension(".cdx");
+        fs::remove(cdx, ec);
+        auto fpt = full; fpt.replace_extension(".fpt");
+        fs::remove(fpt, ec);
+        auto dbt = full; dbt.replace_extension(".dbt");
+        fs::remove(dbt, ec);
+        *phCursor = 0;
+        return ok();
+    }
+
+    if (openads::sql::sql_is_alter_table(sql)) {
+        auto at = openads::sql::parse_alter_table(sql);
+        if (!at) return fail(at.error());
+        auto field_def = [](const openads::sql::AlterTableAction& a) {
+            std::string s = a.column + "," + a.type;
+            if (a.length > 0) {
+                s += "," + std::to_string(a.length);
+                if (a.decimals > 0) s += "," + std::to_string(a.decimals);
+            }
+            return s;
+        };
+        std::string add_defs, del_list, chg_defs;
+        for (const auto& action : at.value().actions) {
+            switch (action.kind) {
+                case openads::sql::AlterTableAction::Kind::AddColumn:
+                    if (!add_defs.empty()) add_defs += ';';
+                    add_defs += field_def(action);
+                    break;
+                case openads::sql::AlterTableAction::Kind::DropColumn:
+                    if (!del_list.empty()) del_list += ';';
+                    del_list += action.column;
+                    break;
+                case openads::sql::AlterTableAction::Kind::AlterColumn:
+                    if (!chg_defs.empty()) chg_defs += ';';
+                    chg_defs += field_def(action);
+                    break;
+            }
+        }
+        auto& s = state();
+        ADSHANDLE conn_h = 0;
+        s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+            if (k != HandleKind::Connection) return;
+            if (static_cast<Connection*>(p) == c) conn_h = h;
+        });
+        if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::vector<UNSIGNED8> name_buf(at.value().table.size() + 1, 0);
+        std::memcpy(name_buf.data(), at.value().table.data(),
+                    at.value().table.size());
+        std::vector<UNSIGNED8> add_buf(add_defs.size() + 1, 0);
+        std::memcpy(add_buf.data(), add_defs.data(), add_defs.size());
+        std::vector<UNSIGNED8> del_buf(del_list.size() + 1, 0);
+        std::memcpy(del_buf.data(), del_list.data(), del_list.size());
+        std::vector<UNSIGNED8> chg_buf(chg_defs.size() + 1, 0);
+        std::memcpy(chg_buf.data(), chg_defs.data(), chg_defs.size());
+        UNSIGNED32 rc = AdsRestructureTable(
+            conn_h, name_buf.data(), nullptr,
+            0, 0, 0, 0,
+            add_buf.data(),
+            del_buf.data(),
+            chg_buf.data());
+        if (rc != openads::AE_SUCCESS) return rc;
+        *phCursor = 0;
+        return ok();
+    }
+
     if (openads::sql::sql_is_create_table(sql)) {
         auto& s = state();
         auto ct = openads::sql::parse_create_table(sql);

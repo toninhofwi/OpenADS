@@ -83,6 +83,8 @@ public:
     util::Result<void> lock_table(OdbcTable* tbl);
     util::Result<void> unlock_table(OdbcTable* tbl);
 
+    util::Result<void> exec_sql(const std::string& sql);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

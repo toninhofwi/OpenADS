@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -40,6 +41,15 @@ TEST_CASE("M10.9 sql_is_create_table / sql_is_create_index dispatch") {
     CHECK_FALSE(openads::sql::sql_is_create_table("CREATE INDEX …"));
     CHECK_FALSE(openads::sql::sql_is_create_index("CREATE TABLE …"));
     CHECK_FALSE(openads::sql::sql_is_create_table("SELECT * FROM x"));
+}
+
+TEST_CASE("DDL keyword dispatch distinguishes DROP TABLE vs DROP INDEX") {
+    CHECK(openads::sql::sql_is_drop_table("DROP TABLE customers"));
+    CHECK(openads::sql::sql_is_drop_index("DROP INDEX tagord ON data"));
+    CHECK_FALSE(openads::sql::sql_is_drop_table("DROP INDEX tagord ON data"));
+    CHECK_FALSE(openads::sql::sql_is_drop_index("DROP TABLE customers"));
+    CHECK(openads::sql::sql_is_alter_table(
+        "ALTER TABLE t ADD COLUMN nome Character(20)"));
 }
 
 TEST_CASE("M10.9 CREATE TABLE through AdsExecuteSQLDirect produces a usable table") {
@@ -118,3 +128,106 @@ TEST_CASE("M10.9 CREATE INDEX through AdsExecuteSQLDirect builds a CDX tag") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("DDL ALTER TABLE ADD COLUMN through AdsExecuteSQLDirect") {
+    auto dir = fs::temp_directory_path() / "openads_ddl_alter";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 ct[160] = "CREATE TABLE data (TAG Character(4))";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, ct, &hCur) == 0);
+
+    UNSIGNED8 alter[200] =
+        "ALTER TABLE data ADD COLUMN AGE Numeric(3,0)";
+    REQUIRE(AdsExecuteSQLDirect(hStmt, alter, &hCur) == 0);
+    CHECK(hCur == 0);
+
+    UNSIGNED8 leaf[16] = "data";
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    UNSIGNED16 nfields = 0;
+    REQUIRE(AdsGetNumFields(hTable, &nfields) == 0);
+    CHECK(nfields == 2);
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("DDL DROP TABLE through AdsExecuteSQLDirect") {
+    auto dir = fs::temp_directory_path() / "openads_ddl_drop";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 ct[160] = "CREATE TABLE doomed (ID Numeric(4,0))";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, ct, &hCur) == 0);
+    CHECK(fs::exists(dir / "doomed.dbf"));
+
+    UNSIGNED8 drop_sql[64] = "DROP TABLE doomed";
+    REQUIRE(AdsExecuteSQLDirect(hStmt, drop_sql, &hCur) == 0);
+    CHECK_FALSE(fs::exists(dir / "doomed.dbf"));
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+#if defined(OPENADS_WITH_SQLITE)
+
+TEST_CASE("DDL ALTER/DROP passthrough on sqlite backend") {
+    const auto dir = fs::temp_directory_path() / "openads_ddl_sqlite";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const auto db_path = dir / "ddl.db";
+
+    const std::string uri = "sqlite://" + db_path.string();
+    std::vector<UNSIGNED8> srv(uri.size() + 1);
+    std::memcpy(srv.data(), uri.c_str(), uri.size() + 1);
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    auto exec = [&](const char* sql) {
+        std::vector<UNSIGNED8> b(std::strlen(sql) + 1);
+        std::memcpy(b.data(), sql, std::strlen(sql) + 1);
+        ADSHANDLE hCur = 1;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, b.data(), &hCur) == 0);
+        CHECK(hCur == 0);
+    };
+
+    exec("CREATE TABLE t(id INTEGER PRIMARY KEY, nome TEXT)");
+    exec("ALTER TABLE t ADD COLUMN saldo REAL");
+    exec("DROP TABLE t");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+#endif

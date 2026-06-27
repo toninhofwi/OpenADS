@@ -1079,6 +1079,15 @@ util::Result<void> OdbcConnection::unlock_table(OdbcTable* tbl) {
     return util::Result<void>{};
 }
 
+util::Result<void> OdbcConnection::exec_sql(const std::string& sql) {
+    if (!valid()) {
+        return util::Error{5001, 0, "odbc connection not open", ""};
+    }
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::vector<bool>>        nulls;
+    return run_query(impl_->dbc, sql, rows, nulls);
+}
+
 } // namespace openads::sql_backend
 
 #endif // OPENADS_WITH_ODBC

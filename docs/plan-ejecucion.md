@@ -94,7 +94,7 @@ import SAP una sola vez vía `tools/import_dd`; no perseguir round-trip binario 
 | # | Tarea | Estado |
 |---|-------|--------|
 | 5.1 | Release v1.5.1 con changelog | [x] |
-| 5.2 | DDL `ALTER`/`DROP` — enganchar hooks backend (ya parseado en v1.5.0) | [ ] |
+| 5.2 | DDL `ALTER`/`DROP` — enganchar hooks backend (ya parseado en v1.5.0) | [x] |
 | 5.3 | DaWeb: RI dropdown, grupos de usuario, grupos `DB:Public`… | [ ] |
 | 5.4 | Harbour smoke Linux en CI (después de Windows estable) | [ ] |
 | 5.5 | README: `openace64.dll` rename, `bindings/php` vs `php_ext` | [ ] |
@@ -105,8 +105,8 @@ import SAP una sola vez vía `tools/import_dd`; no perseguir round-trip binario 
 
 1. Confirmar job `harbour-smoke` verde en GitHub Actions (primer run = cache fría)
 2. Test live MSSQL con `OPENADS_TEST_MSSQL_CONNSTR` (read padding + write)
-3. Fase 5.2 — hooks `ALTER`/`DROP` en backends SQL
-4. Fase 3.1 — documento de diseño DD v2
+3. Fase 3.1 — documento de diseño DD v2
+4. Fase 5.3 — DaWeb: RI dropdown, grupos de usuario
 
 ---
 

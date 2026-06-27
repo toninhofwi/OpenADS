@@ -7,7 +7,7 @@
 
 param(
     [string]$OpenAdsBuild = $(if ($env:OPENADS_BUILD) { $env:OPENADS_BUILD }
-                              else { Join-Path $PSScriptRoot "..\..\build\msvc-x64" }),
+                              else { Join-Path $PSScriptRoot "..\..\build\default" }),
     [string]$HarbourRoot  = $env:HARBOUR_ROOT
 )
 
@@ -53,8 +53,15 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     Write-Host "[harbour-smoke] hbmk2 build ..."
-    hbmk2 -comp=msvc64 smoke.hbp
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    # hbmk2 may write benign warnings to stderr (e.g. ignored -gt); do not treat as fatal.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & hbmk2 -comp=msvc64 smoke.hbp 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
 
     Write-Host "[harbour-smoke] Running smoke.exe ..."
     & .\smoke.exe
