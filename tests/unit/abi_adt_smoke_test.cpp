@@ -15,19 +15,17 @@
 
 namespace fs = std::filesystem;
 
-static const fs::path kAdtDir  { "tests/fixtures/adi" };
-static const fs::path kAdtPath { kAdtDir / "landlords.adt" };
+static fs::path fixture_adi_dir() {
+    return fs::path(__FILE__).parent_path().parent_path() / "fixtures" / "adi";
+}
 
 TEST_CASE("M4 ADT: open landlords.adt, read fields and records") {
-    // Skip on machines without the sample data.
-    std::error_code ec;
-    if (!fs::exists(kAdtPath, ec)) {
-        MESSAGE("landlords.adt not found, skipping M4 ADT smoke test");
-        return;
-    }
+    fs::path fdir = fixture_adi_dir();
+    fs::path adt_path = fdir / "landlords.adt";
+    REQUIRE(fs::exists(adt_path));
 
     UNSIGNED8 srv[256]{};
-    std::memcpy(srv, kAdtDir.string().c_str(), kAdtDir.string().size());
+    std::memcpy(srv, fdir.string().c_str(), fdir.string().size());
     ADSHANDLE hConn = 0;
     REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
                          nullptr, nullptr, 0, &hConn) == AE_SUCCESS);

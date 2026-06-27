@@ -51,11 +51,9 @@ static std::string sql_scalar(ADSHANDLE hConn, const char* sql,
 
 TEST_CASE("M4 ADT SQL: field types and values via fixture tables") {
     fs::path fdir = fixture_dir();
-    std::error_code ec;
-    if (!fs::exists(fdir, ec) || !fs::exists(fdir / "landlords.adt", ec)) {
-        MESSAGE("fixtures/adi absent, skipping M4 ADT SQL test");
-        return;
-    }
+    REQUIRE(fs::exists(fdir / "landlords.adt"));
+    REQUIRE(fs::exists(fdir / "leases.adt"));
+    REQUIRE(fs::exists(fdir / "properties.adt"));
 
     UNSIGNED8 srv[260]{};
     std::memcpy(srv, fdir.string().c_str(), fdir.string().size());
@@ -132,8 +130,7 @@ TEST_CASE("M4 ADT SQL: field types and values via fixture tables") {
     }
 
     // ── 3. properties.adt: ShortInt fields ───────────────────────────────────
-    if (fs::exists(fdir / "properties.adt", ec)) {
-        SUBCASE("properties ShortInt fields") {
+    SUBCASE("properties ShortInt fields") {
             UNSIGNED8 tbl[] = "properties.adt";
             ADSHANDLE hT    = 0;
             REQUIRE(AdsOpenTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI,
@@ -158,12 +155,10 @@ TEST_CASE("M4 ADT SQL: field types and values via fixture tables") {
             }
 
             AdsCloseTable(hT);
-        }
     }
 
     // ── 4. leases.adt: MONEY fields (IEEE754 double verify) ──────────────────
-    if (fs::exists(fdir / "leases.adt", ec)) {
-        SUBCASE("leases MONEY field type and value") {
+    SUBCASE("leases MONEY field type and value") {
             UNSIGNED8 tbl[] = "leases.adt";
             ADSHANDLE hT    = 0;
             REQUIRE(AdsOpenTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI,
@@ -197,12 +192,10 @@ TEST_CASE("M4 ADT SQL: field types and values via fixture tables") {
             }
 
             AdsCloseTable(hT);
-        }
     }
 
     // ── 5. properties.adt: AdtDate fields ────────────────────────────────────
-    if (fs::exists(fdir / "properties.adt", ec)) {
-        SUBCASE("properties AdtDate field type") {
+    SUBCASE("properties AdtDate field type") {
             UNSIGNED8 tbl[] = "properties.adt";
             ADSHANDLE hT    = 0;
             REQUIRE(AdsOpenTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI,
@@ -216,12 +209,10 @@ TEST_CASE("M4 ADT SQL: field types and values via fixture tables") {
             CHECK(ftype == ADS_DATE);
 
             AdsCloseTable(hT);
-        }
     }
 
     // ── 6. leases.adt: AdtTimestamp field ────────────────────────────────────
-    if (fs::exists(fdir / "leases.adt", ec)) {
-        SUBCASE("leases AdtTimestamp field type") {
+    SUBCASE("leases AdtTimestamp field type") {
             UNSIGNED8 tbl[] = "leases.adt";
             ADSHANDLE hT    = 0;
             REQUIRE(AdsOpenTable(hConn, tbl, nullptr, ADS_ADT, ADS_ANSI,
@@ -235,7 +226,6 @@ TEST_CASE("M4 ADT SQL: field types and values via fixture tables") {
             CHECK(ftype == ADS_TIMESTAMP);
 
             AdsCloseTable(hT);
-        }
     }
 
     AdsDisconnect(hConn);

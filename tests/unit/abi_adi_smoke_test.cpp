@@ -20,28 +20,26 @@
 
 namespace fs = std::filesystem;
 
-static const fs::path kAdtDir  { "tests/fixtures/adi" };
-static const fs::path kAdtPath { kAdtDir / "landlords.adt" };
-static const fs::path kAdiPath { kAdtDir / "landlords.adi" };
+static fs::path fixture_adi_dir() {
+    return fs::path(__FILE__).parent_path().parent_path() / "fixtures" / "adi";
+}
 
 // ── direct driver test ──────────────────────────────────────────────────────
 
 TEST_CASE("M4 ADI driver: list_tags and iterate landlords.adi") {
-    std::error_code ec;
-    if (!fs::exists(kAdiPath, ec)) {
-        MESSAGE("landlords.adi not found, skipping M4 ADI driver test");
-        return;
-    }
+    fs::path fdir = fixture_adi_dir();
+    fs::path adi_path = fdir / "landlords.adi";
+    REQUIRE(fs::exists(adi_path));
 
     // list_tags must return at least one field name
-    auto tags = openads::drivers::adi::AdiIndex::list_tags(kAdiPath.string());
+    auto tags = openads::drivers::adi::AdiIndex::list_tags(adi_path.string());
     REQUIRE(tags);
     REQUIRE(!tags.value().empty());
 
     // Open the first tag
     const std::string first_tag = tags.value().front();
     openads::drivers::adi::AdiIndex idx;
-    REQUIRE(idx.open_named(kAdiPath.string(),
+    REQUIRE(idx.open_named(adi_path.string(),
                            openads::drivers::IndexOpenMode::ReadOnly,
                            first_tag));
 
@@ -72,14 +70,12 @@ TEST_CASE("M4 ADI driver: list_tags and iterate landlords.adi") {
 // ── ABI integration test ────────────────────────────────────────────────────
 
 TEST_CASE("M4 ADI ABI: AdsOpenIndex + AdsSetOrder iterates landlords.adt") {
-    std::error_code ec;
-    if (!fs::exists(kAdtPath, ec) || !fs::exists(kAdiPath, ec)) {
-        MESSAGE("landlords.adt/.adi not found, skipping M4 ADI ABI test");
-        return;
-    }
+    fs::path fdir = fixture_adi_dir();
+    REQUIRE(fs::exists(fdir / "landlords.adt"));
+    REQUIRE(fs::exists(fdir / "landlords.adi"));
 
     UNSIGNED8 srv[256]{};
-    std::memcpy(srv, kAdtDir.string().c_str(), kAdtDir.string().size());
+    std::memcpy(srv, fdir.string().c_str(), fdir.string().size());
     ADSHANDLE hConn = 0;
     REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
                          nullptr, nullptr, 0, &hConn) == AE_SUCCESS);
@@ -93,7 +89,7 @@ TEST_CASE("M4 ADI ABI: AdsOpenIndex + AdsSetOrder iterates landlords.adt") {
 
     // Open the ADI index explicitly (auto-open already fires in AdsOpenTable,
     // but calling it again with Shared mode should be idempotent / additive).
-    std::string adi_str = kAdiPath.string();
+    std::string adi_str = (fdir / "landlords.adi").string();
     std::vector<UNSIGNED8> adi_buf(adi_str.size() + 1);
     std::memcpy(adi_buf.data(), adi_str.data(), adi_str.size());
     ADSHANDLE idx_handles[64] = {0};
@@ -125,17 +121,9 @@ TEST_CASE("M4 ADI ABI: AdsOpenIndex + AdsSetOrder iterates landlords.adt") {
 
 // ── Level-2 dense leaf fix: leases.adi character-key navigation ─────────────
 
-static fs::path fixture_adi_dir() {
-    return fs::path(__FILE__).parent_path().parent_path() / "fixtures" / "adi";
-}
-
 TEST_CASE("M4 ADI driver: navigate leases.adi char-key tags (level-2 dense leaf)") {
     fs::path adi_path = fixture_adi_dir() / "leases.adi";
-    std::error_code ec;
-    if (!fs::exists(adi_path, ec)) {
-        MESSAGE("leases.adi not found, skipping char-key ADI test");
-        return;
-    }
+    REQUIRE(fs::exists(adi_path));
 
     // list_tags must return 7 entries (6 single-field + 1 compound)
     auto tags = openads::drivers::adi::AdiIndex::list_tags(adi_path.string());
@@ -177,11 +165,7 @@ TEST_CASE("M4 ADI driver: navigate leases.adi char-key tags (level-2 dense leaf)
 
 TEST_CASE("M4 ADI driver: leases.adi all char-key tags navigable") {
     fs::path adi_path = fixture_adi_dir() / "leases.adi";
-    std::error_code ec;
-    if (!fs::exists(adi_path, ec)) {
-        MESSAGE("leases.adi not found, skipping");
-        return;
-    }
+    REQUIRE(fs::exists(adi_path));
 
     auto tag_names = openads::drivers::adi::AdiIndex::list_tags(adi_path.string());
     REQUIRE(tag_names);

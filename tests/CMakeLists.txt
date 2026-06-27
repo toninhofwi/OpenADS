@@ -314,6 +314,11 @@ add_executable(make_cdx smoke/harbour/make_cdx.cpp)
 target_include_directories(make_cdx PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(make_cdx PRIVATE openads_core)
 
+# ADT/ADI fixture generator (M4 smoke tests — landlords, leases, properties).
+add_executable(generate_adi_fixtures tools/generate_adi_fixtures.cpp)
+target_include_directories(generate_adi_fixtures PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(generate_adi_fixtures PRIVATE openads_ace)
+
 add_executable(probe_cdx smoke/harbour/probe_cdx.cpp)
 target_include_directories(probe_cdx PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(probe_cdx PRIVATE openads_core)
