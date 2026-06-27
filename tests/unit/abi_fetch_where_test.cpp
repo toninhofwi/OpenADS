@@ -3,8 +3,7 @@
 // Task 3 ABI orchestration contract: COUNT / LOCATE / multi-batch scan.
 //
 // Test cases:
-//   1. Local table → AdsFetchWhere returns non-zero (not applicable; caller
-//      falls back to the classic client-side scan path).
+//   1. Local table: filtered batch with field values and per-row recnos.
 //   2. Remote wire: filtered batch with field values and per-row recnos.
 //   3. Remote wire: count-only (pszCols = nullptr → no column data).
 //   4. FetchWhere orchestration: COUNT via maxRows=UINT32_MAX + no cols.
@@ -83,28 +82,53 @@ std::string trim_right(std::string s) {
 
 } // namespace
 
-// ── 1. Local table — not applicable ─────────────────────────────────────────
-TEST_CASE("AdsFetchWhere reports not-applicable on a local table") {
+// ── 1. Local table: filtered batch + recnos + field access ──────────────────
+TEST_CASE("AdsFetchWhere local: filtered batch with recnos and field access") {
     fw_wipe();
     auto dir = fw_tmp_dir();
+    seed_nm_fixture(dir);
 
     UNSIGNED8 srv[260]{};
     std::memcpy(srv, dir.string().c_str(), dir.string().size());
     ADSHANDLE hConn = 0;
     REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == AE_SUCCESS);
 
-    UNSIGNED8 def[]   = "NM,C,4,0";
-    UNSIGNED8 tname[] = "local_fw.dbf";
+    UNSIGNED8 tname[] = "fw.dbf";
     ADSHANDLE hTable  = 0;
-    REQUIRE(AdsCreateTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI,
-                           0, 0, 0, def, &hTable) == AE_SUCCESS);
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI, ADS_SHARED,
+                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
+            == AE_SUCCESS);
 
     UNSIGNED8 expr[] = "NM >= 'B'";
+    UNSIGNED8 cols[] = "NM";
     ADSHANDLE hRes   = 0;
-    UNSIGNED32 rc = AdsFetchWhere(hTable, expr, nullptr, 100, 0, &hRes);
-    CHECK(rc != 0);    // must be non-zero: not applicable on a local table
-    CHECK(hRes == 0);  // must NOT set a result handle on failure
+    REQUIRE(AdsFetchWhere(hTable, expr, cols, 100, 0x01u, &hRes) == AE_SUCCESS);
 
+    UNSIGNED32 nrows = 0;
+    REQUIRE(AdsFetchWhereRows(hRes, &nrows) == AE_SUCCESS);
+    CHECK(nrows == 2u);
+
+    UNSIGNED32 rec0 = 0, rec1 = 0;
+    REQUIRE(AdsFetchWhereRecno(hRes, 0, &rec0) == AE_SUCCESS);
+    REQUIRE(AdsFetchWhereRecno(hRes, 1, &rec1) == AE_SUCCESS);
+    CHECK(rec0 == 2u);
+    CHECK(rec1 == 3u);
+
+    UNSIGNED8 nm_fld[] = "NM";
+    UNSIGNED8 buf[16]{};
+    UNSIGNED16 blen = sizeof(buf);
+    REQUIRE(AdsFetchWhereField(hRes, 0, nm_fld, buf, &blen) == AE_SUCCESS);
+    CHECK(trim_right(std::string(reinterpret_cast<char*>(buf), blen)) == "B");
+
+    blen = sizeof(buf);
+    REQUIRE(AdsFetchWhereField(hRes, 1, nm_fld, buf, &blen) == AE_SUCCESS);
+    CHECK(trim_right(std::string(reinterpret_cast<char*>(buf), blen)) == "C");
+
+    UNSIGNED16 eof_flag = 0;
+    REQUIRE(AdsFetchWhereEof(hRes, &eof_flag) == AE_SUCCESS);
+    CHECK(eof_flag == 1u);
+
+    REQUIRE(AdsFetchWhereClose(hRes) == AE_SUCCESS);
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
 }

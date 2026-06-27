@@ -9,7 +9,7 @@
 // wire.
 //
 // Test cases:
-//   1. Local table -> AE_FUNCTION_NOT_AVAILABLE (caller falls back).
+//   1. Local table: COUNT/SUM/AVG/MIN/MAX over a FOR predicate.
 //   2. Remote wire: COUNT/SUM/AVG/MIN/MAX over a FOR predicate.
 //   3. Remote wire: zero matches -> COUNT 0, SUM 0, AVG/MIN/MAX empty.
 #include "doctest.h"
@@ -111,29 +111,42 @@ std::string agg_value(ADSHANDLE hRes, UNSIGNED32 i, UNSIGNED16& ty) {
 
 } // namespace
 
-// ── 1. Local table — not applicable ──────────────────────────────────────────
-TEST_CASE("AdsAggregate reports not-applicable on a local table") {
+// ── 1. Local table: full aggregate set over a FOR predicate ─────────────────
+TEST_CASE("AdsAggregate local: COUNT/SUM/AVG/MIN/MAX over a FOR predicate") {
     agg_wipe();
     auto dir = agg_tmp_dir();
+    seed_agg_fixture(dir);
 
     UNSIGNED8 srv[260]{};
     std::memcpy(srv, dir.string().c_str(), dir.string().size());
     ADSHANDLE hConn = 0;
     REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == AE_SUCCESS);
 
-    UNSIGNED8 def[]   = "NM,C,4,0";
-    UNSIGNED8 tname[] = "local_agg.dbf";
+    UNSIGNED8 tname[] = "agg.dbf";
     ADSHANDLE hTable  = 0;
-    REQUIRE(AdsCreateTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI,
-                           0, 0, 0, def, &hTable) == AE_SUCCESS);
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI, ADS_SHARED,
+                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
+            == AE_SUCCESS);
 
-    UNSIGNED8 forc[] = "";
-    UNSIGNED8 spec[] = "COUNT:";
+    UNSIGNED8 forc[] = "QTY >= 20";
+    UNSIGNED8 spec[] = "COUNT:;SUM:QTY;AVG:QTY;MIN:QTY;MAX:QTY;MIN:NM;MAX:NM";
     ADSHANDLE hRes   = 0;
-    UNSIGNED32 rc = AdsAggregate(hTable, forc, spec, &hRes);
-    CHECK(rc == AE_FUNCTION_NOT_AVAILABLE);
-    CHECK(hRes == 0);
+    REQUIRE(AdsAggregate(hTable, forc, spec, &hRes) == AE_SUCCESS);
 
+    UNSIGNED32 n = 0;
+    REQUIRE(AdsAggregateCount(hRes, &n) == AE_SUCCESS);
+    CHECK(n == 7u);
+
+    UNSIGNED16 ty = 0;
+    CHECK(agg_value(hRes, 0, ty) == "2");   CHECK(ty == 1u);
+    CHECK(agg_value(hRes, 1, ty) == "50");  CHECK(ty == 1u);
+    CHECK(agg_value(hRes, 2, ty) == "25");  CHECK(ty == 1u);
+    CHECK(agg_value(hRes, 3, ty) == "20");  CHECK(ty == 1u);
+    CHECK(agg_value(hRes, 4, ty) == "30");  CHECK(ty == 1u);
+    CHECK(trim_right(agg_value(hRes, 5, ty)) == "BIA"); CHECK(ty == 2u);
+    CHECK(trim_right(agg_value(hRes, 6, ty)) == "CAU"); CHECK(ty == 2u);
+
+    REQUIRE(AdsAggregateClose(hRes) == AE_SUCCESS);
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
 }

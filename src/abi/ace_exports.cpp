@@ -12,6 +12,7 @@
 #include "engine/aof_expr.h"
 #include "engine/codepage.h"
 #include "engine/fts.h"
+#include "engine/aggregate.h"
 #include "engine/index_expr.h"
 #include "engine/table.h"
 
@@ -21444,6 +21445,117 @@ ADSHANDLE fw_next_handle() {
     return static_cast<ADSHANDLE>(n++);
 }
 
+bool agg_field_is_numeric(openads::drivers::DbfFieldType t) {
+    using T = openads::drivers::DbfFieldType;
+    switch (t) {
+        case T::Numeric:  case T::Float:
+        case T::Integer:  case T::Currency:
+        case T::Double:   case T::ShortInt:
+        case T::AutoInc:  case T::AdtMoney:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// In-process FetchWhere scan — mirrors network/session.cpp Opcode::FetchWhere.
+openads::network::FetchWhereBatch
+local_run_fetch_where(Table& tbl, std::uint32_t maxrows,
+                      const std::string& expr,
+                      const std::vector<std::string>& cols,
+                      std::uint8_t flags) {
+    openads::network::FetchWhereBatch batch;
+    const bool want_recno =
+        (flags & openads::network::FetchWhereFlags::WANT_RECNO) != 0;
+    std::uint32_t nrows_out = 0;
+    while (!tbl.eof() && nrows_out < maxrows) {
+        if (openads::engine::evaluate_index_expr_truthy(tbl, expr)) {
+            if (want_recno)
+                batch.recnos.push_back(tbl.recno());
+            std::vector<std::string> row;
+            row.reserve(cols.size());
+            for (const auto& cn : cols) {
+                std::int32_t fi = tbl.field_index(cn);
+                std::string val;
+                if (fi >= 0) {
+                    auto v = tbl.read_field(static_cast<std::uint16_t>(fi));
+                    if (v) val = v.value().as_string;
+                }
+                row.push_back(std::move(val));
+            }
+            batch.rows.push_back(std::move(row));
+            ++nrows_out;
+        }
+        if (!tbl.skip(1)) break;
+    }
+    batch.eof = tbl.eof();
+    return batch;
+}
+
+// In-process aggregate scan — mirrors network/session.cpp Opcode::Aggregate.
+// Returns false and sets err on an invalid spec (unknown field, empty field on
+// non-COUNT, etc.).
+bool local_run_aggregate(Table& tbl, const std::string& for_expr,
+                         const std::vector<openads::network::AggSpec>& specs,
+                         std::vector<openads::engine::AggValue>& out,
+                         std::string& err) {
+    std::vector<openads::engine::AggAccumulator> accs;
+    std::vector<std::int32_t> fidx;
+    accs.reserve(specs.size());
+    fidx.reserve(specs.size());
+    for (const auto& s : specs) {
+        if (s.field.empty()) {
+            if (s.fn != openads::engine::AggFn::Count) {
+                err = "Aggregate: empty field only valid for COUNT";
+                return false;
+            }
+            fidx.push_back(-1);
+            accs.emplace_back(s.fn, false);
+            continue;
+        }
+        std::int32_t fi = tbl.field_index(s.field);
+        if (fi < 0) {
+            err = "Aggregate: unknown field " + s.field;
+            return false;
+        }
+        const auto& fd = tbl.field_descriptor(static_cast<std::uint16_t>(fi));
+        accs.emplace_back(s.fn, agg_field_is_numeric(fd.type));
+        fidx.push_back(fi);
+    }
+
+    const std::uint32_t saved   = tbl.recno();
+    const bool          was_eof = tbl.eof();
+    tbl.goto_top();
+    while (!tbl.eof()) {
+        if (openads::engine::evaluate_index_expr_truthy(tbl, for_expr)) {
+            for (std::size_t i = 0; i < accs.size(); ++i) {
+                if (fidx[i] < 0) {
+                    accs[i].feed(false, 0.0, "");
+                } else {
+                    auto v = tbl.read_field(static_cast<std::uint16_t>(fidx[i]));
+                    if (v) {
+                        const auto& dv = v.value();
+                        accs[i].feed(dv.is_null, dv.as_double, dv.as_string);
+                    } else {
+                        accs[i].feed(true, 0.0, "");
+                    }
+                }
+            }
+        }
+        if (!tbl.skip(1)) break;
+    }
+    if (!was_eof && saved >= 1 && saved <= tbl.record_count())
+        tbl.goto_record(saved);
+    else
+        tbl.goto_top();
+
+    out.clear();
+    out.reserve(accs.size());
+    for (auto& a : accs)
+        out.push_back(a.finalize());
+    return true;
+}
+
 // Parse a comma-separated column list (e.g. "NM,QTD") into a vector.
 // Returns an empty vector when pszCols is null or an empty string, which
 // tells the server to return no column data (count / locate mode).
@@ -21469,31 +21581,36 @@ std::vector<std::string> fw_split_cols(const UNSIGNED8* pszCols) {
 extern "C" {  // reopen for AdsFetchWhere* exports
 
 // ─ AdsFetchWhere ─────────────────────────────────────────────────────────────
-// Send a server-side filtered scan request over the wire and store the
-// resulting batch under a fresh opaque handle in *phResult.
-// Returns AE_FUNCTION_NOT_AVAILABLE for local (non-remote) tables so the
-// caller can fall back to the classic client-side scan path.
+// Filtered scan over a table; remote tables use the wire opcode, local DBF
+// tables scan in-process. SQL-backed tables are not supported here.
 UNSIGNED32 ENTRYPOINT AdsFetchWhere(ADSHANDLE hTbl, UNSIGNED8* pszExpr, UNSIGNED8* pszCols,
                          UNSIGNED32 ulMaxRows, UNSIGNED32 ulFlags,
                          ADSHANDLE* phResult) {
     if (phResult == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhere: null phResult");
     *phResult = 0;
-    auto* rt = get_remote_table(hTbl);
-    if (rt == nullptr)
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsFetchWhere: not applicable on a local table");
     std::string expr;
     if (pszExpr != nullptr)
         expr = openads::abi::to_internal(pszExpr, 0);
     auto cols = fw_split_cols(pszCols);
     const std::uint8_t wire_flags =
         (ulFlags & 0x01u) ? openads::network::FetchWhereFlags::WANT_RECNO : 0u;
-    auto r = rt->conn->fetch_where(rt->id, ulMaxRows, expr, cols, wire_flags);
-    if (!r) return fail(r.error());
+
+    openads::network::FetchWhereBatch batch;
+    if (auto* rt = get_remote_table(hTbl)) {
+        auto r = rt->conn->fetch_where(rt->id, ulMaxRows, expr, cols, wire_flags);
+        if (!r) return fail(r.error());
+        batch = std::move(r).value();
+    } else if (Table* tbl = get_table(hTbl)) {
+        batch = local_run_fetch_where(*tbl, ulMaxRows, expr, cols, wire_flags);
+    } else {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsFetchWhere: not applicable on this table");
+    }
+
     std::lock_guard<std::mutex> lk(fw_mu());
     ADSHANDLE h = fw_next_handle();
-    fw_results().emplace(h, FetchWhereResult{std::move(r).value(), std::move(cols)});
+    fw_results().emplace(h, FetchWhereResult{std::move(batch), std::move(cols)});
     *phResult = h;
     return ok();
 }
@@ -21775,9 +21892,24 @@ UNSIGNED32 ENTRYPOINT AdsAggregate(ADSHANDLE hTbl, UNSIGNED8* pszForCond,
         return ok();
     }
 
-    // Local in-process DBF: not wired yet — fall back to a client-side loop.
+    // Local in-process DBF table.
+    if (Table* tbl = get_table(hTbl)) {
+        std::vector<openads::engine::AggValue> vals;
+        std::string err;
+        if (!local_run_aggregate(*tbl, for_expr, specs, vals, err)) {
+            if (err.find("unknown field") != std::string::npos)
+                return fail(openads::AE_COLUMN_NOT_FOUND, err.c_str());
+            return fail(openads::AE_INTERNAL_ERROR, err.c_str());
+        }
+        std::lock_guard<std::mutex> lk(agg_mu());
+        ADSHANDLE h = agg_next_handle();
+        agg_results().emplace(h, AggregateResult{std::move(vals)});
+        *phResult = h;
+        return ok();
+    }
+
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "AdsAggregate: not applicable on a local table");
+                "AdsAggregate: not applicable on this table");
 }
 
 // ─ AdsAggregateCount ─────────────────────────────────────────────────────────
