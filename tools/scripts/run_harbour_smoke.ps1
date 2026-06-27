@@ -15,6 +15,21 @@ $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $smokeDir = Join-Path $repo "tests\smoke\harbour"
 
+function Import-VcVars {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) { return $false }
+    $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (-not $vsPath) { return $false }
+    $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+    if (-not (Test-Path $vcvars)) { return $false }
+    cmd /c "`"$vcvars`" x64 >nul 2>&1 && set" | ForEach-Object {
+        if ($_ -match '^([^=]+)=(.*)$') {
+            Set-Item -Path "env:$($matches[1])" -Value $matches[2]
+        }
+    }
+    return $true
+}
+
 function Find-Hbmk2 {
     param([string]$Root)
     if (-not $Root) { return $null }
@@ -62,9 +77,35 @@ if (-not (Test-Path $makeCdx)) {
     Write-Error "[harbour-smoke] make_cdx.exe missing - build OpenADS first: $makeCdx"
 }
 
+$openAceDll = Join-Path $aceLib "openace64.dll"
+if (-not (Test-Path $openAceDll)) {
+    Write-Error "[harbour-smoke] openace64.dll missing - build openads_ace first: $openAceDll"
+}
+
+$aceDll = Join-Path $smokeDir "ace64.dll"
+if (-not (Test-Path $aceDll)) {
+    Copy-Item $openAceDll $aceDll -Force
+    Write-Host "[harbour-smoke] Staged ace64.dll in smoke dir"
+}
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$aceLibImport = Join-Path $smokeDir "ace64.lib"
+if (-not (Test-Path $aceLibImport)) {
+    $bundledAceLib = Join-Path $repoRoot "dist\import-libs\x64\msvc\ace64.lib"
+    if (Test-Path $bundledAceLib) {
+        Copy-Item $bundledAceLib $aceLibImport -Force
+        Write-Host "[harbour-smoke] Staged ace64.lib in smoke dir"
+    }
+}
+
+$rddadsHdr = Join-Path $HarbourRoot "contrib\rddads\rddads.h"
+if (-not (Test-Path $rddadsHdr)) {
+    Write-Error "[harbour-smoke] contrib\rddads missing under $HarbourRoot - run bootstrap_harbour_ci.ps1"
+}
+
 $env:HB_INSTALL = $HarbourRoot
-$env:OPENADS_LIB = $aceLib
-$env:PATH = "$hbBin;$aceLib;$env:PATH"
+$env:OPENADS_LIB = if (Test-Path $aceLibImport) { $smokeDir } else { $aceLib }
+$env:PATH = "$hbBin;$smokeDir;$aceLib;$env:PATH"
 
 Push-Location $smokeDir
 try {
@@ -76,18 +117,41 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     Write-Host "[harbour-smoke] hbmk2 build ..."
+    if (-not (Import-VcVars)) {
+        Write-Error "[harbour-smoke] MSVC environment not found (vcvarsall.bat)"
+    }
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & $hbmk2 -comp=msvc64 smoke.hbp 2>&1 | ForEach-Object { Write-Host $_ }
+        $rddadsInc = Join-Path $HarbourRoot "contrib\rddads"
+        & $hbmk2 -comp=msvc64 "-incpath=$rddadsInc" smoke.hbp 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         $ErrorActionPreference = $prevEap
     }
 
     Write-Host "[harbour-smoke] Running smoke.exe ..."
-    & .\smoke.exe
-    $code = $LASTEXITCODE
+    $smokeExe = Join-Path $smokeDir "smoke.exe"
+    if (-not (Test-Path $smokeExe)) {
+        Write-Error "[harbour-smoke] smoke.exe missing after hbmk2 build: $smokeExe"
+    }
+
+    $smokeOut = Join-Path $smokeDir "smoke.out.txt"
+    $smokeErr = Join-Path $smokeDir "smoke.err.txt"
+    $proc = Start-Process -FilePath $smokeExe -WorkingDirectory $smokeDir `
+        -RedirectStandardOutput $smokeOut -RedirectStandardError $smokeErr `
+        -NoNewWindow -Wait -PassThru
+    $code = $proc.ExitCode
+    if (Test-Path $smokeOut) {
+        Get-Content $smokeOut | ForEach-Object { Write-Host $_ }
+    }
+    if (Test-Path $smokeErr) {
+        $errText = Get-Content $smokeErr -Raw
+        if ($errText) {
+            Write-Host "[harbour-smoke] stderr:"
+            Write-Host $errText
+        }
+    }
     Write-Host "[harbour-smoke] EXIT=$code"
     exit $code
 }
