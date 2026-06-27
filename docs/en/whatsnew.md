@@ -6,7 +6,7 @@ nav_order: 0
 permalink: /en/whatsnew/
 ---
 
-# What's New (v1.0.0-rc29 → v1.2.2)
+# What's New (v1.0.0-rc29 → v1.5.0)
 
 This page summarises the most notable changes since the
 v1.0.0-rc29 release. For the full commit-by-commit history see
@@ -176,12 +176,92 @@ records, completing the ARIES-lite recovery model.
   views, and index properties.
 - Per-table access control with user/group permission levels.
 
+### Server-Side Aggregation (Tier-3)
+
+`AdsAggregate` now supports `COUNT`, `SUM`, `AVG`, `MIN`, and
+`MAX` push-down to SQL backends (SQLite, PostgreSQL, MariaDB,
+ODBC). The aggregate spec is validated before execution, and
+results are served through a handle-based result set
+(`AdsAggregateCount` / `AdsAggregateValue` /
+`AdsAggregateClose`).
+
+### FetchWhere V2
+
+`AdsFetchWhere` now serves forward scans from a cached result
+set — no per-match `goto_record` round-trip. The client
+receives rows in bulk and walks them locally, with optional
+per-row recno (`WANT_RECNO` flag). Non-AOF `SET FILTER` bulk
+scans are routed through `AdsFetchWhere` for significant
+throughput gains.
+
+### ODBC Driver (slice 1–3)
+
+A full ODBC driver (`openads_odbc.dll`) is now available:
+
+- **SELECT round-trip** with scrollable cursors
+  (`SQLFetchScroll`).
+- **Typed column access** — `SQLDescribeCol` /
+  `SQLColAttribute` / `SQLGetData` dispatch through the
+  backend ops vtable.
+- **Positional parameter binding** via `SQLBindParameter`.
+- **Catalog functions** — `SQLPrimaryKeys` /
+  `system.primarykeys`.
+- **App-lock emulation** — `rLock()`/`fLock()` via SQL Server
+  `sp_getapplock`, PostgreSQL advisory locks, MariaDB named
+  locks, and Firebird `OPENADS$LOCKS` table.
+
+### Native Write Path (PostgreSQL / MariaDB / Firebird)
+
+`AdsAppendRecord` / `AdsSetField` / `AdsWriteRecord` /
+`AdsDeleteRecord` now work end-to-end on PostgreSQL, MariaDB,
+and Firebird backends — no ODBC passthrough required.
+
+### SQL Push-Down Expansion
+
+`SET FILTER` and AOF expressions are now pushed down to SQLite
+and PostgreSQL as `WHERE` clauses when the expression tree is
+within the optimisable subset (`try_emit_sql_where`). Coverage
+includes `$` (contains), `LEFT()`, `RIGHT()`, `SUBSTR()`, and
+`UPPER()`.
+
+### Complete API Documentation (Portuguese)
+
+All **364 ACE functions** are now documented in Portuguese
+(pt-BR) under `docs/pt/funcoes/`, covering syntax, parameters,
+return values, and examples.
+
+### x86 (32-bit) Calling Convention Fix
+
+`ENTRYPOINT` is now `__stdcall` (WINAPI) on Win32, matching
+Harbour's `rddads` calling convention. This fixes stack
+corruption when 32-bit Harbour apps call ACE functions through
+the DLL. The x86 `.def` file and import library are updated
+to match. (Reported by Jonsson / RusSoft Ltda.)
+
+### CI — msvc-x86 Build Leg
+
+A new `msvc-x86` matrix entry in `.github/workflows/ci.yml`
+ensures 32-bit builds are tested on every PR, catching
+x86-only breakage (bitness-dependent narrowing, `SQLLEN*`
+signature mismatches, `/WX` warnings) before they reach main.
+
 ---
 
 ## Bug Fixes
 
 ### Engine
 
+- **CDX tag order** — `list_tags()` now sorts by tag-header
+  offset (creation order) instead of alphabetical leaf order.
+  Fixes `DBSETORDER(n)` selecting the wrong tag on CDX bags
+  written by SAP ADS or BCC Harbour. (Reported by Jonsson /
+  RusSoft Ltda.)
+- **CDX expression-index key size** — composite expression
+  keys (e.g. `UPPER(cName)`) are now sized from the expression's
+  natural fixed-width length, not the first record's content
+  length. The old rtrim truncated keys, causing rows out of
+  order after reindex on large tables. (Reported by Jonsson /
+  RusSoft Ltda.)
 - **CDX empty-leaf walk** — forward and backward index walks now
   skip empty leaves left behind by `erase()`. Fixes REINDEX /
   bulk-delete `ADSCDX/5000`. (PR #63)
@@ -191,6 +271,12 @@ records, completing the ARIES-lite recovery model.
 - **CDX prefix seek** — `seek_key` compares only the search-key
   length, so partial seeks like `SEEK "ART-00024800"` match stored
   `"ART-00024800 desc ..."` keys. (PR #62)
+- **Conditional FOR on logical fields** — the index expression
+  evaluator now treats logical fields as numeric (0/1) instead of
+  truthy strings, so `FOR ACTIVE` correctly filters `.F.` records.
+  (PR #121)
+- **INDEX ON corruption** — prevent `INDEX ON` from corrupting
+  source table indexes. (PR #118)
 - **MSSQL backward SKIP** — off-by-one: `abs_n == pos` now reaches
   row 0 instead of reporting BOF. (PR #65)
 - **ABI typed getters for SQL backends** — `AdsGetDouble`/`Long`/`
@@ -239,6 +325,25 @@ records, completing the ARIES-lite recovery model.
   double-prefixes the table directory.
 - **Trig helper linkage** — C++ linkage for `trig_*` helpers to
   silence MSVC C4190.
+- **`AdsGetField` crash on SQL backends** — reading by field ordinal
+  no longer crashes.
+- **AdsGetRecordCount on conditional ORDER** — counts FOR matches
+  correctly. (PR #100)
+- **`AdsSetAOF` for non-optimisable filters** — now returns
+  `AE_INVALID_EXPRESSION` instead of success, so stock rddads
+  falls back to client-side filtering. The old behaviour silently
+  disabled `SET FILTER` entirely. (Reported by Jonsson / RusSoft
+  Ltda.)
+
+### ODBC Driver
+
+- **x86 build** — `C4100` (unused parameter) and `C2733`
+  (`SQLLEN*` vs `SQLPOINTER` signature mismatch) fixed for 32-bit
+  MSVC `/WX`. (PR #119)
+- **DM/ADO conformance** — descriptor handles, `SQLBindCol`, and
+  `BIT` type mapping fixed.
+- **`SQL_DRIVER_ODBC_VER` / `SQL_ODBC_VER`** — now reported in
+  `SQLGetInfo`.
 
 ### DA-Web Security
 
@@ -306,18 +411,40 @@ records, completing the ARIES-lite recovery model.
   content checksum and a seek-vs-scan headline. A FiveWin
   `xbrowse` CRUD sample and connection-string / field-type /
   troubleshooting guides round it out.
+- **API Reference (PT)** — all 364 ACE functions documented in
+  Portuguese with syntax, parameters, return values, and examples.
+
+---
+
+## Packaging
+
+- **Windows Inno Setup installer** (`openads-setup.iss`).
+- **CPack packages** with guaranteed `openace32.lib` /
+  `openace64.lib` in Windows archives.
+- **Release CI** — `openace{32,64}.lib` shipped in release
+  archives automatically.
 
 ---
 
 ## Testing
 
-- **738 unit tests** passing across all platforms (349 231
+- **874 unit tests** passing on x64 and x86 (361 300+
   assertions).
-- New test files: `abi_ntx_numeric_edge_test.cpp` (NTX numeric
-  edge cases: -0.0, clamping, complement, custom key),
-  `cdx_empty_tree_test.cpp` (empty tree, all-erased tree, exact
-  prefix, descending prefix), `abi_ntx_numeric_key_test.cpp`,
-  `cdx_reindex_char_test.cpp`, `cdx_prev_empty_leaf_test.cpp`,
-  `cdx_multitag_2nd_test.cpp`, `cdx_prefix_seek_test.cpp`,
-  `mssql_table_skip_test.cpp`.
+- New test files: `abi_cdx_tag_order_test.cpp` (CDX tag creation
+  order), `abi_cdx_expr_index_scale_test.cpp` (expression-index
+  key size at scale), `abi_multitag_order_nav_test.cpp`
+  (multi-tag navigation), `abi_ntx_numeric_edge_test.cpp` (NTX
+  numeric edge cases), `cdx_empty_tree_test.cpp`, and more.
+- **x86 CI** — `msvc-x86` build leg catches 32-bit breakage on
+  every PR.
 - Harbour demo in `examples/adt-native/` (by glokcode).
+
+---
+
+## Contributors
+
+- **Jonsson / RusSoft Ltda.** — CDX tag order, expression-index
+  key size, `AdsSetAOF` non-optimisable filter, and x86 calling
+  convention fixes.
+- **Admnwk** — ODBC driver, SQL push-down, aggregation, FetchWhere
+  V2, native write path, and CI improvements.

@@ -1,4 +1,4 @@
----
+﻿---
 title: Novidades
 layout: default
 parent: Início (PT)
@@ -6,7 +6,7 @@ nav_order: 0
 permalink: /pt/novidades/
 ---
 
-# Novidades (v1.0.0-rc29 → v1.2.2)
+# Novidades (v1.0.0-rc29 → v1.5.0)
 
 Esta página resume as mudanças mais notáveis desde a versão
 v1.0.0-rc29. Para o histórico completo de commits, consulte o

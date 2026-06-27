@@ -2961,7 +2961,7 @@ const BackendTableOps* backend_table_ops_for(ADSHANDLE h) {
 
 extern "C" {
 
-UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
+UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
                         UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                         UNSIGNED32 /*ulOptions*/, ADSHANDLE* phConnect) {
     if (phConnect == nullptr) return fail(openads::AE_INTERNAL_ERROR,
@@ -3292,7 +3292,7 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     return ok();
 }
 
-UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
+UNSIGNED32 ENTRYPOINT AdsDisconnect(ADSHANDLE hConnect) {
     {
         auto& s_local = state();
         std::lock_guard<std::recursive_mutex> lk_local(s_local.mu);
@@ -3431,7 +3431,7 @@ UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
     return ok();
 }
 
-UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
+UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                         UNSIGNED8* pucName,
                         UNSIGNED8* /*pucAlias*/,
                         UNSIGNED16 usTableType,
@@ -3656,7 +3656,7 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
     return ok();
 }
 
-UNSIGNED32 AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {
+UNSIGNED32 ENTRYPOINT AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {
     if (pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->get_table_type(rt->id);
@@ -3686,7 +3686,7 @@ UNSIGNED32 AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {
     return ok();
 }
 
-UNSIGNED32 AdsGetTableFilename(ADSHANDLE hTable, UNSIGNED16 /*usOption*/,
+UNSIGNED32 ENTRYPOINT AdsGetTableFilename(ADSHANDLE hTable, UNSIGNED16 /*usOption*/,
                                UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -3699,7 +3699,7 @@ UNSIGNED32 AdsGetTableFilename(ADSHANDLE hTable, UNSIGNED16 /*usOption*/,
     return ok();
 }
 
-UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen) {
+UNSIGNED32 ENTRYPOINT AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen) {
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->get_record_length(rt->id);
@@ -3935,7 +3935,7 @@ AdtFieldSpec adt_spec_for(const FieldOut& f) {
 } // namespace
 } // extern "C++"
 
-UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
+UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
                           UNSIGNED8*    pucName,
                           UNSIGNED8*    /*pucAlias*/,
                           UNSIGNED16    usTableType,
@@ -4197,7 +4197,7 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
 // follow up with AdsReindex; the on-disk record format changed, so
 // stale entries point at the wrong recnos.
 
-UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
+UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
                                UNSIGNED8*  pucTableName,
                                UNSIGNED8*  /*pucAlias*/,
                                UNSIGNED16  /*usFileType*/,
@@ -4504,7 +4504,7 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
     return ok();
 }
 
-UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsRefreshRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;                      // M12.17 cache invalidation
@@ -4520,7 +4520,7 @@ UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                          UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null len");
     Table* t = lookup_table_by_index(hIndex);
@@ -4534,7 +4534,7 @@ UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
     return ok();
 }
 
-UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoTo clears Found()
         auto r = rt->conn->goto_record(rt, ulRecord);
@@ -4550,7 +4550,7 @@ UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     return ok();
 }
 
-UNSIGNED32 AdsCheckExistence(ADSHANDLE /*hConn*/, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE /*hConn*/, UNSIGNED8* pucName,
                              UNSIGNED16* pbExists) {
     if (pbExists == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "null out");
@@ -4565,7 +4565,7 @@ UNSIGNED32 AdsCheckExistence(ADSHANDLE /*hConn*/, UNSIGNED8* pucName,
     return ok();
 }
 
-UNSIGNED32 AdsDeleteFile(ADSHANDLE /*hConn*/, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDeleteFile(ADSHANDLE /*hConn*/, UNSIGNED8* pucName) {
     if (pucName == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null name");
     auto path = openads::abi::to_internal(pucName, 0);
     std::error_code ec;
@@ -4579,7 +4579,7 @@ UNSIGNED32 AdsDeleteFile(ADSHANDLE /*hConn*/, UNSIGNED8* pucName) {
 // SAP's ace.h declares `AdsCloseAllTables(void)`: close every table
 // the calling process has opened. We accept the same 0-arg form;
 // per-connection close still works through AdsCloseTable().
-UNSIGNED32 AdsCloseAllTables(void) {
+UNSIGNED32 ENTRYPOINT AdsCloseAllTables(void) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     (void)0;
@@ -4617,7 +4617,7 @@ UNSIGNED32 AdsCloseAllTables(void) {
     return ok();
 }
 
-UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
     {
         if (auto* rt = get_remote_table(hTable)) {
             // conn is nulled out by AdsDisconnect before the RemoteConnection
@@ -4662,7 +4662,7 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         // M12.18 — rt-aware overload parses the row trailer in the
         // same RTT, so AdsGetField immediately after GoTop hits
@@ -4683,7 +4683,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoBottom clears Found()
         auto r = rt->conn->goto_bottom(rt);
@@ -4701,7 +4701,7 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
+UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* rt = get_remote_table(hTable)) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: Skip clears Found()
@@ -4738,7 +4738,7 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     return ok();
 }
 
-UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
+UNSIGNED32 ENTRYPOINT AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
         // M12.21 option C — a valid cached current row (including one
@@ -4760,7 +4760,7 @@ UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
     return ok();
 }
 
-UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
+UNSIGNED32 ENTRYPOINT AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
     if (pbAtBegin == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         // M12.21 option C — a valid cached current row means the cursor
@@ -4780,7 +4780,7 @@ UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
     return ok();
 }
 
-UNSIGNED32 AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
+UNSIGNED32 ENTRYPOINT AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
     if (pusFields == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         if (!rt->fields_cached) {
@@ -4804,7 +4804,7 @@ UNSIGNED32 AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
     return ok();
 }
 
-UNSIGNED32 AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
+UNSIGNED32 ENTRYPOINT AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
                            UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     if (auto* rt = get_remote_table(hTable)) {
         if (!rt->fields_cached) {
@@ -4891,7 +4891,7 @@ std::size_t remote_field_index(openads::network::RemoteTable* rt,
 
 } // namespace
 
-UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED16* pusType) {
     if (pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -4922,7 +4922,7 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
                              UNSIGNED32* pulLen) {
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -4966,7 +4966,7 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
                                UNSIGNED16* pusDec) {
     if (pusDec == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -4989,7 +4989,7 @@ UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
+UNSIGNED32 ENTRYPOINT AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
     if (plVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         if (!rt->row_valid) {
@@ -5041,7 +5041,7 @@ UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
     return ok();
 }
 
-UNSIGNED32 AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
+UNSIGNED32 ENTRYPOINT AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
     if (pdVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         if (!rt->row_valid) {
@@ -5111,7 +5111,7 @@ SIGNED32 to_julian(int y, int m, int d) {
 
 } // namespace
 
-UNSIGNED32 AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plDate) {
+UNSIGNED32 ENTRYPOINT AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plDate) {
     if (plDate == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto decode_date = [](const std::string& s) -> SIGNED32 {
         if (s.size() < 8) return 0;
@@ -5153,7 +5153,7 @@ UNSIGNED32 AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plDate)
     return ok();
 }
 
-UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
+UNSIGNED32 ENTRYPOINT AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
                            UNSIGNED32* pulRecordNum) {
     if (pulRecordNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -5177,7 +5177,7 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
     return ok();
 }
 
-UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
+UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
                              UNSIGNED32* pulRecordCount) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -5257,7 +5257,7 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
     return ok();
 }
 
-UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
                        UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
                        UNSIGNED16 /*usOption*/) {
     if (auto* rt = get_remote_table(hTable)) {
@@ -5320,7 +5320,7 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetLastError(UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsGetLastError(UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
                            UNSIGNED16* pusBufLen) {
     if (pulCode != nullptr) *pulCode = static_cast<UNSIGNED32>(
         openads::abi::last_error_code());
@@ -5339,7 +5339,7 @@ UNSIGNED32 AdsGetLastError(UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
 // pucDesc / pusDescLen : caller-allocated description buffer +
 //             in/out length. We write the OpenADS version string
 //             and truncate to the caller's capacity.
-UNSIGNED32 AdsGetVersion(UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
+UNSIGNED32 ENTRYPOINT AdsGetVersion(UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
                          UNSIGNED8*  pucLetter, UNSIGNED8* pucDesc,
                          UNSIGNED16* pusDescLen) {
     if (pulMajor  != nullptr) *pulMajor  = 0;
@@ -5384,13 +5384,13 @@ UNSIGNED32 emit_text_with_u16len(UNSIGNED8* pucBuf, UNSIGNED16* pusLen,
 
 }  // namespace
 
-UNSIGNED32 AdsGetServerName(ADSHANDLE /*hConnect*/,
+UNSIGNED32 ENTRYPOINT AdsGetServerName(ADSHANDLE /*hConnect*/,
                             UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     return emit_text_with_u16len(pucBuf, pusLen,
                                  openads::platform::host_name());
 }
 
-UNSIGNED32 AdsGetServerTime(ADSHANDLE  /*hConnect*/,
+UNSIGNED32 ENTRYPOINT AdsGetServerTime(ADSHANDLE  /*hConnect*/,
                             UNSIGNED8* pucDateBuf, UNSIGNED16* pusDateLen,
                             SIGNED32*  plTime,
                             UNSIGNED8* pucTimeBuf, UNSIGNED16* pusTimeLen) {
@@ -5930,7 +5930,7 @@ bool fire_triggers_(Handle hConn, Connection* conn,
 }
 } // anonymous namespace
 
-UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
@@ -5995,7 +5995,7 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->flush_table(rt->id);
@@ -6093,7 +6093,7 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
@@ -6181,7 +6181,7 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsRecallRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid        = false;               // M12.17
@@ -6197,7 +6197,7 @@ UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
+UNSIGNED32 ENTRYPOINT AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
     if (pbDeleted == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         // M12.18 — deleted flag rides with the row trailer.
@@ -6218,7 +6218,7 @@ UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
     return ok();
 }
 
-UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucValue, UNSIGNED32 ulLen) {
     // RCB 2026-05-22 17:03 — AdsSet* previously had no awareness of statement
     // handles.  get_table() only queries the HandleRegistry for HandleKind::Table
@@ -6319,7 +6319,7 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16 bValue) {
     // RCB 2026-05-22 17:03 — same statement-handle gap as AdsSetString.
     // Logical fields in DBF are stored as 'T'/'F' but the SQL parser accepts
@@ -6349,7 +6349,7 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
                         double dValue) {
     // RCB 2026-05-22 17:03 — same statement-handle gap as AdsSetString.
     // AdsSetLongLong also routes through here (it casts to double before calling
@@ -6386,7 +6386,7 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsSetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
                           std::int64_t llValue) {
     return AdsSetDouble(hTable, pucField, static_cast<double>(llValue));
 }
@@ -6416,7 +6416,7 @@ void julian_to_ymd(SIGNED32 jd, int& y, int& m, int& d) {
 // payload length, and the third copies the bytes into the caller's
 // buffer. We resolve the field as before, fetch the memo block via
 // the attached IMemoStore, and answer in kind.
-UNSIGNED32 AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
                             UNSIGNED32* pulLen) {
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
@@ -6440,7 +6440,7 @@ UNSIGNED32 AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pusType) {
     Table* t = get_table(hTable);
     if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -6464,7 +6464,7 @@ UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
                         UNSIGNED16 usOption) {
     // Remote cursor OR a SQL backend (e.g. postgresql) that exposes a
@@ -6583,7 +6583,7 @@ UNSIGNED32 emit_utf16(UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
 
 }  // namespace
 
-UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucValueW, UNSIGNED32 ulLen) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -6602,7 +6602,7 @@ UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                          UNSIGNED16 /*usOption*/) {
     if (pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -6626,13 +6626,13 @@ UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
     return emit_utf16(pucBufW, pulLenW, v.value().as_string);
 }
 
-UNSIGNED32 AdsGetFieldW(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetFieldW(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                         UNSIGNED16 /*usOption*/) {
     return AdsGetStringW(hTable, pucField, pucBufW, pulLenW, 0);
 }
 
-UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
                         SIGNED32 lDate) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -6699,14 +6699,14 @@ UNSIGNED32 lock_with_retry(std::function<openads::util::Result<void>()> fn) {
 
 }  // namespace
 
-UNSIGNED32 AdsSetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32 ulCycle) {
+UNSIGNED32 ENTRYPOINT AdsSetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32 ulCycle) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     lock_policy().cycle_ms = ulCycle;
     return ok();
 }
 
-UNSIGNED32 AdsGetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32* pulCycle) {
+UNSIGNED32 ENTRYPOINT AdsGetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32* pulCycle) {
     if (pulCycle == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -6714,14 +6714,14 @@ UNSIGNED32 AdsGetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32* pulCycle) {
     return ok();
 }
 
-UNSIGNED32 AdsSetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16 usRetryCount) {
+UNSIGNED32 ENTRYPOINT AdsSetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16 usRetryCount) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     lock_policy().retry_count = usRetryCount;
     return ok();
 }
 
-UNSIGNED32 AdsGetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16* pusRetryCount) {
+UNSIGNED32 ENTRYPOINT AdsGetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16* pusRetryCount) {
     if (pusRetryCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -6729,7 +6729,7 @@ UNSIGNED32 AdsGetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16* pusRetryCoun
     return ok();
 }
 
-UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->lock_record(rt->id, ulRecord);
         if (!r) return fail(r.error());
@@ -6782,7 +6782,7 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     });
 }
 
-UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+UNSIGNED32 ENTRYPOINT AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->unlock_record(rt->id, ulRecord);
         if (!r) return fail(r.error());
@@ -6832,7 +6832,7 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     return ok();
 }
 
-UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsLockTable(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->lock_table(rt->id);
         if (!r) return fail(r.error());
@@ -6879,7 +6879,7 @@ UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
     return lock_with_retry([t]() { return t->try_lock_table_excl(); });
 }
 
-UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsUnlockTable(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->unlock_table(rt->id);
         if (!r) return fail(r.error());
@@ -6928,7 +6928,7 @@ UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsFlushFileBuffers(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->flush_file_buffers(rt->id);
         if (!r) return fail(r.error());
@@ -6941,7 +6941,7 @@ UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsSetDeferredFlush(ADSHANDLE hTable, UNSIGNED16 usDeferred) {
+UNSIGNED32 ENTRYPOINT AdsSetDeferredFlush(ADSHANDLE hTable, UNSIGNED16 usDeferred) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     t->set_deferred_flush(usDeferred != 0);
@@ -7180,7 +7180,7 @@ bool same_index_path(const std::string& a, const std::string& b) {
 // currently bound. Repeated calls with the SAME path drop the prior
 // bindings for that path (refresh semantics) so reopening the same
 // .ntx / .cdx leaves at most one binding per tag.
-UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                         ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
     if (ahIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "null out");
@@ -7362,7 +7362,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     return ok();
 }
 
-UNSIGNED32 AdsCloseIndex(ADSHANDLE hIndex) {
+UNSIGNED32 ENTRYPOINT AdsCloseIndex(ADSHANDLE hIndex) {
 #if defined(OPENADS_WITH_SQLITE)
     if (auto* si = get_sqlite_index(hIndex)) {
         (void)si;
@@ -7436,7 +7436,7 @@ UNSIGNED32 AdsCloseIndex(ADSHANDLE hIndex) {
     return ok();
 }
 
-UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsCloseAllIndexes(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->close_all_indexes(rt->id);
         if (!r) return fail(r.error());
@@ -7462,7 +7462,7 @@ UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
+UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
                             UNSIGNED8*  pucFileName,
                             UNSIGNED8*  pucIndexName,
                             UNSIGNED8*  pucExpr,
@@ -7705,17 +7705,21 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         if (fi >= 0) {
             klen = t->field_descriptor(static_cast<std::uint16_t>(fi)).length;
         } else if (t->record_count() > 0) {
-            // Composite expression: probe the first record's key. Note
-            // evaluate_index_expr right-pads its result to the probe width, so
-            // trim the padding back off — otherwise every composite key would
-            // be pinned to the 254-byte probe length.
+            // Composite expression: probe the first record's key.
+            // key_len=0 makes evaluate_index_expr return the un-padded
+            // result, reading fields at their declared width. Do NOT
+            // rtrim: a fixed-width field's trailing blanks are part of
+            // the key. The old code rtrimmed here, pinning key_size to
+            // the first record's *content* length, so any longer key
+            // (e.g. a longer UPPER(name)) got truncated, its
+            // distinguishing tail dropped; the bulk-build sort then
+            // scrambled recnos and the browse showed rows out of order.
             if (auto g = t->goto_record(1); g) {
-                if (auto k = openads::engine::evaluate_index_expr(*t, expr, 254)) {
-                    std::string s = std::move(k).value();
-                    while (!s.empty() && s.back() == ' ') s.pop_back();
-                    if (!s.empty())
+                if (auto k = openads::engine::evaluate_index_expr(*t, expr, 0)) {
+                    std::size_t natlen = k.value().size();
+                    if (natlen > 0)
                         klen = static_cast<std::uint16_t>(
-                            std::min<std::size_t>(s.size(), 254));
+                            std::min<std::size_t>(natlen, 254));
                 }
             }
         }
@@ -8078,7 +8082,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     return ok();
 }
 
-UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
+UNSIGNED32 ENTRYPOINT AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
                           UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
                           UNSIGNED8* pucCondition, UNSIGNED32 /*ulOptions*/,
                           UNSIGNED16 /*usKeyType*/, ADSHANDLE* phIndex) {
@@ -8173,7 +8177,7 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
     return ok();
 }
 
-UNSIGNED32 AdsDeleteIndex(ADSHANDLE hIndex) {
+UNSIGNED32 ENTRYPOINT AdsDeleteIndex(ADSHANDLE hIndex) {
     return AdsCloseIndex(hIndex);
 }
 
@@ -8206,7 +8210,7 @@ openads::drivers::IIndex* iindex_for_binding(IndexBinding& b) {
 
 }  // namespace
 
-UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
+UNSIGNED32 ENTRYPOINT AdsAddCustomKey(ADSHANDLE hIndex) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto& m = index_bindings();
@@ -8248,7 +8252,7 @@ UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
     return ok();
 }
 
-UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex) {
+UNSIGNED32 ENTRYPOINT AdsDeleteCustomKey(ADSHANDLE hIndex) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto& m = index_bindings();
@@ -8355,7 +8359,7 @@ extern "C" {
 
 // --- M9.23 fill in remaining MISS exports ---------------------------------
 
-UNSIGNED32 AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
                           std::int64_t* pllValue) {
     if (pllValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // SQL backend (e.g. postgresql): read text via the per-backend ops
@@ -8394,7 +8398,7 @@ UNSIGNED32 AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
                           UNSIGNED8* pucBuf, UNSIGNED32 ulLen) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -8411,7 +8415,7 @@ UNSIGNED32 AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsVerifySQL(ADSHANDLE /*hStatement*/, UNSIGNED8* pucSQL) {
+UNSIGNED32 ENTRYPOINT AdsVerifySQL(ADSHANDLE /*hStatement*/, UNSIGNED8* pucSQL) {
     if (pucSQL == nullptr) return fail(openads::AE_PARSE_ERROR, "null SQL");
     auto sql = openads::abi::to_internal(pucSQL, 0);
     auto r = openads::sql::parse_select(sql);
@@ -8419,7 +8423,7 @@ UNSIGNED32 AdsVerifySQL(ADSHANDLE /*hStatement*/, UNSIGNED8* pucSQL) {
     return ok();
 }
 
-UNSIGNED32 AdsFailedTransactionRecovery(UNSIGNED8* pucServer) {
+UNSIGNED32 ENTRYPOINT AdsFailedTransactionRecovery(UNSIGNED8* pucServer) {
     if (pucServer == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "null server path");
     }
@@ -8433,7 +8437,7 @@ UNSIGNED32 AdsFailedTransactionRecovery(UNSIGNED8* pucServer) {
     return ok();
 }
 
-UNSIGNED32 AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
+UNSIGNED32 ENTRYPOINT AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
                           UNSIGNED16* pusCount) {
     Table* t = get_table(hTable);
     if (!t || pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -8454,7 +8458,7 @@ UNSIGNED32 AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
 // whose tag matches `pucName` (case-insensitive). Mirrors the
 // rddads adsOrdSetActive(cTagName) flow. Empty / NULL name flips
 // the table back to natural-record-order (clear active binding).
-UNSIGNED32 AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
     if (auto* rt = get_remote_table(hTable)) {
         std::string name = pucName
             ? openads::abi::to_internal(pucName, 0) : std::string();
@@ -8508,7 +8512,7 @@ UNSIGNED32 AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
                 ("AdsSetIndexOrder: no tag '" + name + "' on table").c_str());
 }
 
-UNSIGNED32 AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hIndex) {
+UNSIGNED32 ENTRYPOINT AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hIndex) {
     if (auto* rt = get_remote_table(hTable)) {
         if (auto* ri = get_remote_index(hIndex)) {
             auto r = rt->conn->set_order(rt->id, ri->id);
@@ -8531,7 +8535,7 @@ UNSIGNED32 AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hIndex) {
     return ok();
 }
 
-UNSIGNED32 AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
+UNSIGNED32 ENTRYPOINT AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
     if (auto* ri = get_remote_index(hIndex)) {
         if (ri->parent) ri->parent->row_valid = false;   // M12.17
         auto r = ri->conn->skip_unique(ri->id, lDirection);
@@ -8573,7 +8577,7 @@ UNSIGNED32 AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
 // `paRecnos`. `*pulCount` is treated as in/out — the caller passes
 // the array capacity and reads back the total number of matches
 // (which may be larger than the buffer).
-UNSIGNED32 AdsFTSSearch(ADSHANDLE   /*hConnect*/,
+UNSIGNED32 ENTRYPOINT AdsFTSSearch(ADSHANDLE   /*hConnect*/,
                         UNSIGNED8*  pucFile,
                         UNSIGNED8*  pucQuery,
                         UNSIGNED32* paRecnos,
@@ -8625,7 +8629,7 @@ openads::engine::DataDict* dd_from_handle(ADSHANDLE hConn) {
 
 }  // namespace
 
-UNSIGNED32 AdsDDAddIndexFile(ADSHANDLE hConn,
+UNSIGNED32 ENTRYPOINT AdsDDAddIndexFile(ADSHANDLE hConn,
                              UNSIGNED8* pucTable, UNSIGNED8* pucIndex,
                              UNSIGNED8* pucComment) {
     auto* dd = dd_from_handle(hConn);
@@ -8639,7 +8643,7 @@ UNSIGNED32 AdsDDAddIndexFile(ADSHANDLE hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDRemoveIndexFile(ADSHANDLE hConn,
+UNSIGNED32 ENTRYPOINT AdsDDRemoveIndexFile(ADSHANDLE hConn,
                                 UNSIGNED8* pucTable, UNSIGNED8* pucIndex,
                                 UNSIGNED16 /*opt*/) {
     auto* dd = dd_from_handle(hConn);
@@ -8651,7 +8655,7 @@ UNSIGNED32 AdsDDRemoveIndexFile(ADSHANDLE hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* pucGroup,
+UNSIGNED32 ENTRYPOINT AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* pucGroup,
                            UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                            UNSIGNED8* pucDesc) {
     auto* dd = dd_from_handle(hConn);
@@ -8674,7 +8678,7 @@ UNSIGNED32 AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* pucGroup,
     return ok();
 }
 
-UNSIGNED32 AdsDDDeleteUser(ADSHANDLE hConn, UNSIGNED8* pucUser) {
+UNSIGNED32 ENTRYPOINT AdsDDDeleteUser(ADSHANDLE hConn, UNSIGNED8* pucUser) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto user = openads::abi::to_internal(pucUser, 0);
@@ -8683,7 +8687,7 @@ UNSIGNED32 AdsDDDeleteUser(ADSHANDLE hConn, UNSIGNED8* pucUser) {
     return ok();
 }
 
-UNSIGNED32 AdsDDAddUserToGroup(ADSHANDLE hConn,
+UNSIGNED32 ENTRYPOINT AdsDDAddUserToGroup(ADSHANDLE hConn,
                                UNSIGNED8* pucGroup, UNSIGNED8* pucUser) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
@@ -8694,7 +8698,7 @@ UNSIGNED32 AdsDDAddUserToGroup(ADSHANDLE hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDRemoveUserFromGroup(ADSHANDLE hConn,
+UNSIGNED32 ENTRYPOINT AdsDDRemoveUserFromGroup(ADSHANDLE hConn,
                                     UNSIGNED8* pucGroup, UNSIGNED8* pucUser) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
@@ -8705,7 +8709,7 @@ UNSIGNED32 AdsDDRemoveUserFromGroup(ADSHANDLE hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDCreateLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+UNSIGNED32 ENTRYPOINT AdsDDCreateLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
                            UNSIGNED8* pucPath, UNSIGNED8* pucUser,
                            UNSIGNED8* pucPwd, UNSIGNED16 /*opt*/) {
     auto* dd = dd_from_handle(hConn);
@@ -8719,7 +8723,7 @@ UNSIGNED32 AdsDDCreateLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
     return ok();
 }
 
-UNSIGNED32 AdsDDDropLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+UNSIGNED32 ENTRYPOINT AdsDDDropLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
                          UNSIGNED16 /*opt*/) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
@@ -8729,7 +8733,7 @@ UNSIGNED32 AdsDDDropLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
     return ok();
 }
 
-UNSIGNED32 AdsDDModifyLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+UNSIGNED32 ENTRYPOINT AdsDDModifyLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
                            UNSIGNED8* pucPath, UNSIGNED8* pucUser,
                            UNSIGNED8* pucPwd, UNSIGNED16 /*opt*/) {
     auto* dd = dd_from_handle(hConn);
@@ -8743,7 +8747,7 @@ UNSIGNED32 AdsDDModifyLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
     return ok();
 }
 
-UNSIGNED32 AdsDDCreateRefIntegrity(ADSHANDLE hConn,
+UNSIGNED32 ENTRYPOINT AdsDDCreateRefIntegrity(ADSHANDLE hConn,
                                    UNSIGNED8* pucName, UNSIGNED8* pucFail,
                                    UNSIGNED8* pucParent, UNSIGNED8* pucParentTag,
                                    UNSIGNED8* pucChild, UNSIGNED8* pucChildTag,
@@ -8764,7 +8768,7 @@ UNSIGNED32 AdsDDCreateRefIntegrity(ADSHANDLE hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDRemoveRefIntegrity(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDRemoveRefIntegrity(ADSHANDLE hConn, UNSIGNED8* pucName) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -8773,7 +8777,7 @@ UNSIGNED32 AdsDDRemoveRefIntegrity(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return ok();
 }
 
-UNSIGNED32 AdsDDSetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
+UNSIGNED32 ENTRYPOINT AdsDDSetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
                                     void* pBuf, UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
@@ -8787,7 +8791,7 @@ UNSIGNED32 AdsDDSetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
     return ok();
 }
 
-UNSIGNED32 AdsDDGetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
+UNSIGNED32 ENTRYPOINT AdsDDGetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
                                     void* pBuf, UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto* dd = dd_from_handle(hConn);
@@ -8805,7 +8809,7 @@ UNSIGNED32 AdsDDGetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
     return ok();
 }
 
-UNSIGNED32 AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
+UNSIGNED32 ENTRYPOINT AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
                                 UNSIGNED16 usProp, void* pBuf,
                                 UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -8846,7 +8850,7 @@ UNSIGNED32 AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
     return ok();
 }
 
-UNSIGNED32 AdsDDSetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
+UNSIGNED32 ENTRYPOINT AdsDDSetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
                                 UNSIGNED16 usProp, void* pvBuf,
                                 UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -8880,7 +8884,7 @@ UNSIGNED32 AdsDDSetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
     return ok();
 }
 
-UNSIGNED32 AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+UNSIGNED32 ENTRYPOINT AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
                                  UNSIGNED16 usProp, void* pBuf,
                                  UNSIGNED16* pusLen) {
     namespace fs = std::filesystem;
@@ -8989,7 +8993,7 @@ UNSIGNED32 AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
     }
 }
 
-UNSIGNED32 AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+UNSIGNED32 ENTRYPOINT AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
                                  UNSIGNED16 usProp, void* pBuf,
                                  UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -9010,7 +9014,7 @@ UNSIGNED32 AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
                 "AdsDDSetTableProperty");
 }
 
-UNSIGNED32 AdsDDSetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
+UNSIGNED32 ENTRYPOINT AdsDDSetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
                                    UNSIGNED8* pucUser, UNSIGNED32 ulLevel) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
@@ -9023,7 +9027,7 @@ UNSIGNED32 AdsDDSetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
     return ok();
 }
 
-UNSIGNED32 AdsDDGetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
+UNSIGNED32 ENTRYPOINT AdsDDGetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
                                    UNSIGNED8* pucUser, UNSIGNED32* pulLevel) {
     if (pulLevel == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     Connection* c = conn_from_handle(hConn);
@@ -9039,7 +9043,7 @@ UNSIGNED32 AdsDDGetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
 // AdsDDGetFieldProperty / AdsDDSetFieldProperty
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+UNSIGNED32 ENTRYPOINT AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
                                   UNSIGNED8* pucField, UNSIGNED16 usProp,
                                   void* pBuf, UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -9156,7 +9160,7 @@ UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
     return put_str(dd->get_field_property(alias, field, key));
 }
 
-UNSIGNED32 AdsDDSetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+UNSIGNED32 ENTRYPOINT AdsDDSetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
                                   UNSIGNED8* pucField, UNSIGNED16 usProp,
                                   void* pBuf, UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -9191,7 +9195,7 @@ UNSIGNED32 AdsDDSetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
 // AdsDDGetIndexProperty / AdsDDSetIndexProperty
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDGetIndexProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+UNSIGNED32 ENTRYPOINT AdsDDGetIndexProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
                                   UNSIGNED8* pucIndex, UNSIGNED16 usProp,
                                   void* pBuf, UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -9255,7 +9259,7 @@ UNSIGNED32 AdsDDGetIndexProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
     }
 }
 
-UNSIGNED32 AdsDDSetIndexProperty(ADSHANDLE /*hConn*/, UNSIGNED8* /*pucTable*/,
+UNSIGNED32 ENTRYPOINT AdsDDSetIndexProperty(ADSHANDLE /*hConn*/, UNSIGNED8* /*pucTable*/,
                                   UNSIGNED8* /*pucIndex*/, UNSIGNED16 /*usProp*/,
                                   void* /*pBuf*/, UNSIGNED16 /*usLen*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "AdsDDSetIndexProperty");
@@ -9265,7 +9269,7 @@ UNSIGNED32 AdsDDSetIndexProperty(ADSHANDLE /*hConn*/, UNSIGNED8* /*pucTable*/,
 // AdsDDCreateTrigger / AdsDDDropTrigger / AdsDDGet/SetTriggerProperty
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDCreateTrigger(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDCreateTrigger(ADSHANDLE hConn, UNSIGNED8* pucName,
                                UNSIGNED8* pucTable, UNSIGNED32 ulType,
                                UNSIGNED32 /*ulOptions*/, UNSIGNED8* pucContainer,
                                UNSIGNED8* pucProcedure, UNSIGNED32 ulPriority) {
@@ -9303,7 +9307,7 @@ UNSIGNED32 AdsDDCreateTrigger(ADSHANDLE hConn, UNSIGNED8* pucName,
     return ok();
 }
 
-UNSIGNED32 AdsDDDropTrigger(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDDropTrigger(ADSHANDLE hConn, UNSIGNED8* pucName) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -9314,7 +9318,7 @@ UNSIGNED32 AdsDDDropTrigger(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return ok();
 }
 
-UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                     UNSIGNED16 usProp, void* pBuf,
                                     UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -9384,7 +9388,7 @@ UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     }
 }
 
-UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                     UNSIGNED16 usProp, void* pBuf,
                                     UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -9464,7 +9468,7 @@ UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
 // AdsDDCreateProcedure / AdsDDDropProcedure / AdsDDGet/SetProcProperty
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDCreateProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDCreateProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
                                  UNSIGNED8* pucContainer,
                                  UNSIGNED8* pucProcName,
                                  UNSIGNED32 /*ulInvokeOption*/,
@@ -9487,7 +9491,7 @@ UNSIGNED32 AdsDDCreateProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
     return ok();
 }
 
-UNSIGNED32 AdsDDDropProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDDropProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -9498,7 +9502,7 @@ UNSIGNED32 AdsDDDropProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return ok();
 }
 
-UNSIGNED32 AdsDDGetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDGetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                  UNSIGNED16 usProp, void* pBuf,
                                  UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -9538,7 +9542,7 @@ UNSIGNED32 AdsDDGetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     }
 }
 
-UNSIGNED32 AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                  UNSIGNED16 usProp, void* pBuf,
                                  UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -9578,7 +9582,7 @@ UNSIGNED32 AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
 //                 703=container, 704=comment
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDCreateFunction(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDCreateFunction(ADSHANDLE hConn, UNSIGNED8* pucName,
                                 UNSIGNED8* pucContainer,
                                 UNSIGNED8* pucImplementation,
                                 UNSIGNED8* pucRetType,
@@ -9600,7 +9604,7 @@ UNSIGNED32 AdsDDCreateFunction(ADSHANDLE hConn, UNSIGNED8* pucName,
     return ok();
 }
 
-UNSIGNED32 AdsDDDropFunction(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDDropFunction(ADSHANDLE hConn, UNSIGNED8* pucName) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -9611,7 +9615,7 @@ UNSIGNED32 AdsDDDropFunction(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return ok();
 }
 
-UNSIGNED32 AdsDDGetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDGetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                      UNSIGNED16 usProp, void* pBuf,
                                      UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -9641,7 +9645,7 @@ UNSIGNED32 AdsDDGetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     }
 }
 
-UNSIGNED32 AdsDDSetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDSetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                      UNSIGNED16 usProp, void* pBuf,
                                      UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -9669,7 +9673,7 @@ UNSIGNED32 AdsDDSetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
 // AdsDDCreateView / AdsDDDropView / AdsDDGet/SetViewProperty
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDCreateView(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDCreateView(ADSHANDLE hConn, UNSIGNED8* pucName,
                             UNSIGNED8* pucComments, UNSIGNED8* pucSQL) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
@@ -9684,7 +9688,7 @@ UNSIGNED32 AdsDDCreateView(ADSHANDLE hConn, UNSIGNED8* pucName,
     return ok();
 }
 
-UNSIGNED32 AdsDDDropView(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDDropView(ADSHANDLE hConn, UNSIGNED8* pucName) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -9712,16 +9716,16 @@ static const char* dd_type_name_from_code(UNSIGNED16 code) {
     }
 }
 
-UNSIGNED32 AdsDDAddView(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDAddView(ADSHANDLE hConn, UNSIGNED8* pucName,
                          UNSIGNED8* pucComments, UNSIGNED8* pucSQL) {
     return AdsDDCreateView(hConn, pucName, pucComments, pucSQL);
 }
 
-UNSIGNED32 AdsDDRemoveView(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDRemoveView(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return AdsDDDropView(hConn, pucName);
 }
 
-UNSIGNED32 AdsDDGetPermissions(ADSHANDLE hConn,
+UNSIGNED32 ENTRYPOINT AdsDDGetPermissions(ADSHANDLE hConn,
                                 UNSIGNED8*  pucGrantee,
                                 UNSIGNED16  usObjectType,
                                 UNSIGNED8*  pucObjectName,
@@ -9744,7 +9748,7 @@ UNSIGNED32 AdsDDGetPermissions(ADSHANDLE hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDGrantPermission(ADSHANDLE  hConn,
+UNSIGNED32 ENTRYPOINT AdsDDGrantPermission(ADSHANDLE  hConn,
                                  UNSIGNED16  usObjectType,
                                  UNSIGNED8*  pucObjectName,
                                  UNSIGNED8*  /*pucParentName*/,
@@ -9760,7 +9764,7 @@ UNSIGNED32 AdsDDGrantPermission(ADSHANDLE  hConn,
     return ok();
 }
 
-UNSIGNED32 AdsDDRevokePermission(ADSHANDLE  hConn,
+UNSIGNED32 ENTRYPOINT AdsDDRevokePermission(ADSHANDLE  hConn,
                                   UNSIGNED16  usObjectType,
                                   UNSIGNED8*  pucObjectName,
                                   UNSIGNED8*  pucParentName,
@@ -9772,7 +9776,7 @@ UNSIGNED32 AdsDDRevokePermission(ADSHANDLE  hConn,
                                 pucParentName, pucGrantee, 0);
 }
 
-UNSIGNED32 AdsDDGetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDGetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                  UNSIGNED16 usProp, void* pBuf,
                                  UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -9799,7 +9803,7 @@ UNSIGNED32 AdsDDGetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     }
 }
 
-UNSIGNED32 AdsDDSetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDSetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                  UNSIGNED16 usProp, void* pBuf,
                                  UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -9824,7 +9828,7 @@ UNSIGNED32 AdsDDSetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
 // AdsDDGetRefIntegrityProperty / AdsDDSetRefIntegrityProperty
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDGetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDGetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                          UNSIGNED16 usProp, void* pBuf,
                                          UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -9872,7 +9876,7 @@ UNSIGNED32 AdsDDGetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     }
 }
 
-UNSIGNED32 AdsDDSetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDSetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                          UNSIGNED16 usProp, void* pBuf,
                                          UNSIGNED16 usLen) {
     auto* dd = dd_from_handle(hConn);
@@ -9912,7 +9916,7 @@ UNSIGNED32 AdsDDSetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
     return ok();
 }
 
-UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
+UNSIGNED32 ENTRYPOINT AdsCreateFTSIndex(ADSHANDLE   hTable,
                              UNSIGNED8*  pucFileName,
                              UNSIGNED8*  pucTag,
                              UNSIGNED8*  pucField,
@@ -9960,7 +9964,7 @@ UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
     return ok();
 }
 
-UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
+UNSIGNED32 ENTRYPOINT AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
     if (pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->get_num_indexes(rt->id);
@@ -9980,7 +9984,7 @@ UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
     return ok();
 }
 
-UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
                              ADSHANDLE* phIndex) {
     if (phIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
@@ -10096,7 +10100,7 @@ extern "C++" std::vector<ADSHANDLE> ordered_index_handles_for(Table* t) {
     return ordered;
 }
 
-UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
+UNSIGNED32 ENTRYPOINT AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
                                     ADSHANDLE* phIndex) {
     Table* t = get_table(hTable);
     if (!t || phIndex == nullptr) {
@@ -10116,7 +10120,7 @@ UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
     return ok();
 }
 
-UNSIGNED32 AdsGetIndexExpr(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsGetIndexExpr(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                            UNSIGNED16* pusBufLen) {
     auto& m = index_bindings();
     auto it = m.find(hIndex);
@@ -10136,7 +10140,7 @@ UNSIGNED32 AdsGetIndexExpr(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
     return ok();
 }
 
-UNSIGNED32 AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                            UNSIGNED16* pusBufLen) {
     auto& m = index_bindings();
     auto it = m.find(hIndex);
@@ -10147,7 +10151,7 @@ UNSIGNED32 AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
     return ok();
 }
 
-UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
+UNSIGNED32 ENTRYPOINT AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto it = index_bindings().find(hIndex);
@@ -10179,7 +10183,7 @@ UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
 // rddads' hb_adsUpdateAreaFlags asks AdsIsFound after every seek to
 // decide whether Found() should report .T. — return the flag the
 // engine set inside seek_key.
-UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+UNSIGNED32 ENTRYPOINT AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     if (pbFound == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         // M12.21 option C — serve Found() locally when a nav/seek op set
@@ -10199,7 +10203,7 @@ UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     return ok();
 }
 
-UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
+UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
                    UNSIGNED8* pucKey,
                    UNSIGNED16 u16KeyLen,
                    UNSIGNED16 u16KeyType,
@@ -10434,7 +10438,7 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     return ok();
 }
 
-UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
+UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
                        UNSIGNED8* pucKey,
                        UNSIGNED16 u16KeyLen,
                        UNSIGNED16 u16KeyType,
@@ -10563,7 +10567,7 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
 //               ADS_DOUBLEKEY -> ASCII-padded conversion so a scope
 //               set with a double compares apples-to-apples against
 //               the index's stored key bytes.
-UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
+UNSIGNED32 ENTRYPOINT AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
                        UNSIGNED8* pucScope, UNSIGNED16 usLen,
                        UNSIGNED16 usDataType) {
     if (auto* ri = get_remote_index(hIndex)) {
@@ -10634,7 +10638,7 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
     return ok();
 }
 
-UNSIGNED32 AdsClearScope(ADSHANDLE hIndex, UNSIGNED16 usScope) {
+UNSIGNED32 ENTRYPOINT AdsClearScope(ADSHANDLE hIndex, UNSIGNED16 usScope) {
     if (auto* ri = get_remote_index(hIndex)) {
         auto r = ri->conn->clear_scope(ri->id, usScope);
         if (!r) return fail(r.error());
@@ -10647,7 +10651,7 @@ UNSIGNED32 AdsClearScope(ADSHANDLE hIndex, UNSIGNED16 usScope) {
     return ok();
 }
 
-UNSIGNED32 AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
+UNSIGNED32 ENTRYPOINT AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
                        UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
@@ -10656,7 +10660,7 @@ UNSIGNED32 AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
     return ok();
 }
 
-UNSIGNED32 AdsPackTable(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsPackTable(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->row_valid        = false;               // M12.17/19
         rt->rec_count_cached = false;
@@ -10671,7 +10675,7 @@ UNSIGNED32 AdsPackTable(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsZapTable(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsZapTable(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->row_valid        = false;               // M12.17/19
         rt->rec_count_cached = false;
@@ -10686,7 +10690,7 @@ UNSIGNED32 AdsZapTable(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsCopyTable(ADSHANDLE   hHandle,
+UNSIGNED32 ENTRYPOINT AdsCopyTable(ADSHANDLE   hHandle,
                         UNSIGNED16  /*usFilterOption*/,
                         UNSIGNED8*  pucFile) {
     if (pucFile == nullptr) {
@@ -10779,7 +10783,7 @@ UNSIGNED32 AdsCopyTable(ADSHANDLE   hHandle,
 // matches IGNOREFILTERS (the default Harbour passes). RESPECT
 // will land alongside AOF-aware copy in a follow-up; until then
 // the param is accepted for signature parity and noted.
-UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst,
+UNSIGNED32 ENTRYPOINT AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst,
                                 UNSIGNED16 usFilterOption) {
     (void)usFilterOption;
     Table* src = get_table(hSrc);
@@ -10805,7 +10809,7 @@ UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst,
     return ok();
 }
 
-UNSIGNED32 AdsConvertTable(ADSHANDLE   hHandle,
+UNSIGNED32 ENTRYPOINT AdsConvertTable(ADSHANDLE   hHandle,
                            UNSIGNED16  usFilterOption,
                            UNSIGNED8*  pucFile,
                            UNSIGNED16  /*usTargetType*/) {
@@ -10815,7 +10819,7 @@ UNSIGNED32 AdsConvertTable(ADSHANDLE   hHandle,
     return AdsCopyTable(hHandle, usFilterOption, pucFile);
 }
 
-UNSIGNED32 AdsReindex(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsReindex(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->reindex(rt->id);
         if (!r) return fail(r.error());
@@ -10866,7 +10870,7 @@ static bool backend_try_push_filter(ADSHANDLE hTable,
 // on per-leaf coverage. The "is an AOF currently installed at
 // all?" signal is exposed separately so the ABI layer can keep
 // AdsSetFilter and AdsSetAOF distinct.
-UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
+UNSIGNED32 ENTRYPOINT AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
                      UNSIGNED16 /*usResolve*/) {
     if (pucCondition == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "AdsSetAOF: NULL condition");
@@ -10890,12 +10894,19 @@ UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
     auto ast = openads::engine::aof::parse(cond);
     if (!ast) {
         // An expression outside the optimisable AOF subset (e.g.
-        // `Empty(NAME)`, `UPPER(NAME) = 'A'`) is not an error — ADS
-        // just declines to optimise it and the client RDD applies the
-        // filter itself. Drop any prior AOF, report OPTIMIZED_NONE,
-        // and succeed so the caller's own row filter takes over.
+        // `Empty(NAME)`, `UPPER(NAME) = 'A'`) cannot be turned into a
+        // server-side AOF. Return a non-success code so the client RDD
+        // (rddads) falls back to its own client-side row filter. This
+        // mirrors real ADS, which errors when an AOF cannot be built.
+        // Returning "success + OPTIMIZED_NONE" reads correct in
+        // isolation, but stock rddads decides whether to run its own
+        // client-side row filter purely from AdsSetAOF's return value —
+        // it does not call AdsGetAOFOptLevel — so on AE_SUCCESS it
+        // assumes the server optimised the filter and skips the
+        // client-side pass, turning SET FILTER into a no-op.
         t->clear_filter();
-        return ok();
+        return fail(openads::AE_INVALID_EXPRESSION,
+                    "AOF expression not optimisable; client filters");
     }
     // Route through the M-AOF.4 index-accelerated evaluator: every
     // leaf that hits an open CDX/NTX index whose key expression is
@@ -10917,7 +10928,7 @@ UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
     return ok();
 }
 
-UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
+UNSIGNED32 ENTRYPOINT AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                              UNSIGNED8* /*pucBuf*/, UNSIGNED16* /*pusLen*/) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->get_aof_opt_level(rt->id);
@@ -10937,7 +10948,7 @@ UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
     return ok();
 }
 
-UNSIGNED32 AdsClearAOF(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsClearAOF(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->clear_aof(rt->id);
         if (!r) return fail(r.error());
@@ -10955,7 +10966,7 @@ UNSIGNED32 AdsClearAOF(ADSHANDLE hTable) {
 
 // --- M4 memo + autoinc + encryption ----------------------------------------
 
-UNSIGNED32 AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED8* pucPath) {
     if (pucPath == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
@@ -10986,7 +10997,7 @@ UNSIGNED32 AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
     return write_path(v.value().as_string);
 }
 
-UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED16 /*usType*/, UNSIGNED8* pucPath) {
     if (pucPath == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto path = openads::abi::to_internal(pucPath, 0);
@@ -11029,7 +11040,7 @@ UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
 // back the field as bytes plus an offset window so the caller can do
 // chunked reads through a small fixed-size buffer.
 
-UNSIGNED32 AdsGetBinaryLength(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetBinaryLength(ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED32* pulLength) {
     Table* t = get_table(hTable);
     if (!t || pulLength == nullptr) {
@@ -11045,7 +11056,7 @@ UNSIGNED32 AdsGetBinaryLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED32 ulOffset, UNSIGNED8* pucBuf,
                         UNSIGNED32* pulLen) {
     Table* t = get_table(hTable);
@@ -11134,7 +11145,7 @@ void purge_pending_binaries_for_table(openads::engine::Table* t) {
 
 extern "C" {
 
-UNSIGNED32 AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED16 usBinaryType,
                         UNSIGNED32 ulTotalBytes, UNSIGNED32 ulOffset,
                         UNSIGNED8* pucBuf, UNSIGNED32 ulBytes) {
@@ -11205,7 +11216,7 @@ UNSIGNED32 AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
-UNSIGNED32 AdsGetLastAutoinc(ADSHANDLE hTable, UNSIGNED32* pulValue) {
+UNSIGNED32 ENTRYPOINT AdsGetLastAutoinc(ADSHANDLE hTable, UNSIGNED32* pulValue) {
     if (pulValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->get_last_autoinc(rt->id);
@@ -11231,26 +11242,26 @@ UNSIGNED32 AdsGetLastAutoinc(ADSHANDLE hTable, UNSIGNED32* pulValue) {
 // is not yet documented byte-for-byte. The thunks below behave as
 // no-ops or fail with AE_FUNCTION_NOT_AVAILABLE.
 
-UNSIGNED32 AdsEnableEncryption(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucPassword*/) {
+UNSIGNED32 ENTRYPOINT AdsEnableEncryption(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucPassword*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                 "AdsEnableEncryption pending ADS encryption-mode RE");
 }
 
-UNSIGNED32 AdsDisableEncryption(ADSHANDLE /*hConnect*/) {
+UNSIGNED32 ENTRYPOINT AdsDisableEncryption(ADSHANDLE /*hConnect*/) {
     return ok();
 }
 
-UNSIGNED32 AdsIsEncryptionEnabled(ADSHANDLE /*hConnect*/, UNSIGNED16* pbEnabled) {
+UNSIGNED32 ENTRYPOINT AdsIsEncryptionEnabled(ADSHANDLE /*hConnect*/, UNSIGNED16* pbEnabled) {
     if (pbEnabled != nullptr) *pbEnabled = 0;
     return ok();
 }
 
-UNSIGNED32 AdsIsTableEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
+UNSIGNED32 ENTRYPOINT AdsIsTableEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
     if (pbEncrypted != nullptr) *pbEncrypted = 0;
     return ok();
 }
 
-UNSIGNED32 AdsIsRecordEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
+UNSIGNED32 ENTRYPOINT AdsIsRecordEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
     if (pbEncrypted != nullptr) *pbEncrypted = 0;
     return ok();
 }
@@ -11259,7 +11270,7 @@ UNSIGNED32 AdsIsRecordEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
 // Requires AdsSetEncryptionPassword to have been called on the
 // owning connection (located by walking the registry for the
 // connection whose tables include this Table*).
-UNSIGNED32 AdsEncryptTable(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsEncryptTable(ADSHANDLE hTable) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
@@ -11287,24 +11298,24 @@ UNSIGNED32 AdsEncryptTable(ADSHANDLE hTable) {
     return ok();
 }
 
-UNSIGNED32 AdsDecryptTable(ADSHANDLE /*hTable*/) {
+UNSIGNED32 ENTRYPOINT AdsDecryptTable(ADSHANDLE /*hTable*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                 "AdsDecryptTable pending ADS encryption-mode RE");
 }
 
-UNSIGNED32 AdsEncryptRecord(ADSHANDLE /*hTable*/) {
+UNSIGNED32 ENTRYPOINT AdsEncryptRecord(ADSHANDLE /*hTable*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                 "AdsEncryptRecord pending ADS encryption-mode RE");
 }
 
-UNSIGNED32 AdsDecryptRecord(ADSHANDLE /*hTable*/) {
+UNSIGNED32 ENTRYPOINT AdsDecryptRecord(ADSHANDLE /*hTable*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                 "AdsDecryptRecord pending ADS encryption-mode RE");
 }
 
 // --- M5 transaction surface -------------------------------------------------
 
-UNSIGNED32 AdsBeginTransaction(ADSHANDLE hConnect) {
+UNSIGNED32 ENTRYPOINT AdsBeginTransaction(ADSHANDLE hConnect) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = lookup_connection(hConnect);
@@ -11314,7 +11325,7 @@ UNSIGNED32 AdsBeginTransaction(ADSHANDLE hConnect) {
     return ok();
 }
 
-UNSIGNED32 AdsCommitTransaction(ADSHANDLE hConnect) {
+UNSIGNED32 ENTRYPOINT AdsCommitTransaction(ADSHANDLE hConnect) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = lookup_connection(hConnect);
@@ -11324,7 +11335,7 @@ UNSIGNED32 AdsCommitTransaction(ADSHANDLE hConnect) {
     return ok();
 }
 
-UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect) {
+UNSIGNED32 ENTRYPOINT AdsRollbackTransaction(ADSHANDLE hConnect) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = lookup_connection(hConnect);
@@ -11334,7 +11345,7 @@ UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect) {
     return ok();
 }
 
-UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
+UNSIGNED32 ENTRYPOINT AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = lookup_connection(hConnect);
@@ -11355,7 +11366,7 @@ UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
 // in place into the same buffer (caller must size for worst case
 // — UTF-8 may grow up to 3x); `pulLen` carries the input length
 // in and the output length out.
-UNSIGNED32 AdsConvertOemToAnsi(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
+UNSIGNED32 ENTRYPOINT AdsConvertOemToAnsi(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
     if (pucBuf == nullptr || pulLen == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
@@ -11368,7 +11379,7 @@ UNSIGNED32 AdsConvertOemToAnsi(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
     return ok();
 }
 
-UNSIGNED32 AdsConvertAnsiToOem(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
+UNSIGNED32 ENTRYPOINT AdsConvertAnsiToOem(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
     if (pucBuf == nullptr || pulLen == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
@@ -11385,7 +11396,7 @@ UNSIGNED32 AdsConvertAnsiToOem(UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
 // M11.7 — set the connection's string-compare collation. Names:
 // `binary` (default) or `nocase`. Affects equality / range
 // comparisons for Character columns in SQL WHERE.
-UNSIGNED32 AdsSetCollation(ADSHANDLE hConnect, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsSetCollation(ADSHANDLE hConnect, UNSIGNED8* pucName) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(
@@ -11409,7 +11420,7 @@ UNSIGNED32 AdsSetCollation(ADSHANDLE hConnect, UNSIGNED8* pucName) {
     return ok();
 }
 
-UNSIGNED32 AdsSetEncryptionPassword(ADSHANDLE hConnect,
+UNSIGNED32 ENTRYPOINT AdsSetEncryptionPassword(ADSHANDLE hConnect,
                                     UNSIGNED8* pucPassword) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -11425,7 +11436,7 @@ UNSIGNED32 AdsSetEncryptionPassword(ADSHANDLE hConnect,
 
 // SAP / rddads signature: 3 args. ulOptions is reserved on the
 // real ACE (must be ADS_DEFAULT); accept and ignore.
-UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName,
                               UNSIGNED32 ulOptions) {
     (void)ulOptions;
     auto& s = state();
@@ -11442,7 +11453,7 @@ UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName,
 
 // M11.3 — release a savepoint without rolling back. The work done
 // since CreateSavepoint stays part of the enclosing transaction.
-UNSIGNED32 AdsReleaseSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsReleaseSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = lookup_connection(hConnect);
@@ -11457,7 +11468,7 @@ UNSIGNED32 AdsReleaseSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
 
 // SAP / rddads signature: 3 args. ulOptions is reserved on real
 // ACE; accept and ignore. Null pucSavepoint => full rollback.
-UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint,
+UNSIGNED32 ENTRYPOINT AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint,
                                     UNSIGNED32 ulOptions) {
     (void)ulOptions;
     auto& s = state();
@@ -11508,7 +11519,7 @@ UNSIGNED32 emit_name(UNSIGNED8* pucBuf, UNSIGNED16* pusLen,
 
 }  // namespace
 
-UNSIGNED32 AdsFindFirstTable(ADSHANDLE   hConnect,
+UNSIGNED32 ENTRYPOINT AdsFindFirstTable(ADSHANDLE   hConnect,
                              UNSIGNED8*  pucMask,
                              UNSIGNED8*  pucFileName,
                              UNSIGNED16* pusFileNameLen,
@@ -11533,7 +11544,7 @@ UNSIGNED32 AdsFindFirstTable(ADSHANDLE   hConnect,
     return emit_name(pucFileName, pusFileNameLen, name);
 }
 
-UNSIGNED32 AdsFindNextTable(ADSHANDLE   hConnect,
+UNSIGNED32 ENTRYPOINT AdsFindNextTable(ADSHANDLE   hConnect,
                             ADSHANDLE   hFind,
                             UNSIGNED8*  pucFileName,
                             UNSIGNED16* pusFileNameLen) {
@@ -11552,7 +11563,7 @@ UNSIGNED32 AdsFindNextTable(ADSHANDLE   hConnect,
     return emit_name(pucFileName, pusFileNameLen, r.value());
 }
 
-UNSIGNED32 AdsFindClose(ADSHANDLE hConnect, ADSHANDLE hFind) {
+UNSIGNED32 ENTRYPOINT AdsFindClose(ADSHANDLE hConnect, ADSHANDLE hFind) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
@@ -11568,7 +11579,7 @@ UNSIGNED32 AdsFindClose(ADSHANDLE hConnect, ADSHANDLE hFind) {
 
 // --- M6 Data Dictionary ----------------------------------------------------
 
-UNSIGNED32 AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 /*bEncrypt*/,
+UNSIGNED32 ENTRYPOINT AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 /*bEncrypt*/,
                        UNSIGNED8* /*pucAdminPassword*/,
                        ADSHANDLE* phConnect) {
     if (pucDictionary == nullptr || phConnect == nullptr) {
@@ -11594,7 +11605,7 @@ UNSIGNED32 AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 /*bEncrypt*/,
 
 // SAP signature (rddads): (hConn, name, file, fileType, charType,
 // indexFile, comment). Matches Harbour's HB_FUNC(ADSDDADDTABLE).
-UNSIGNED32 AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+UNSIGNED32 ENTRYPOINT AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
                          UNSIGNED8* pucTablePath,
                          UNSIGNED16 /*usFileType*/,
                          UNSIGNED16 /*usCharType*/,
@@ -11618,7 +11629,7 @@ UNSIGNED32 AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
     return ok();
 }
 
-UNSIGNED32 AdsDDRemoveTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+UNSIGNED32 ENTRYPOINT AdsDDRemoveTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
                             UNSIGNED16 /*usDeleteFiles*/) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -11754,7 +11765,7 @@ openads::engine::LockingMode stmt_locking_mode(const SqlStatement& s) {
 
 } // extern "C++"
 
-UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
+UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
     if (phStatement == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -11791,19 +11802,19 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
     return ok();
 }
 
-UNSIGNED32 AdsCloseSQLStatement(ADSHANDLE hStatement) {
+UNSIGNED32 ENTRYPOINT AdsCloseSQLStatement(ADSHANDLE hStatement) {
     stmt_unregister(hStatement);
     return ok();
 }
 
-UNSIGNED32 AdsPrepareSQL(ADSHANDLE hStatement, UNSIGNED8* pucSQL) {
+UNSIGNED32 ENTRYPOINT AdsPrepareSQL(ADSHANDLE hStatement, UNSIGNED8* pucSQL) {
     SqlStatement* st = stmt_lookup(hStatement);
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
     st->sql = openads::abi::to_internal(pucSQL, 0);
     return ok();
 }
 
-UNSIGNED32 AdsGetNumParams(ADSHANDLE hStatement, UNSIGNED16* pusNumParams) {
+UNSIGNED32 ENTRYPOINT AdsGetNumParams(ADSHANDLE hStatement, UNSIGNED16* pusNumParams) {
     if (!pusNumParams) return fail(openads::AE_INTERNAL_ERROR, "");
     SqlStatement* st = stmt_lookup(hStatement);
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
@@ -11826,7 +11837,7 @@ UNSIGNED32 AdsGetNumParams(ADSHANDLE hStatement, UNSIGNED16* pusNumParams) {
     return ok();
 }
 
-UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
+UNSIGNED32 ENTRYPOINT AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
     SqlStatement* st_ptr = stmt_lookup(hStatement);
     if (st_ptr == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
     // Alias so the body below keeps its `it->second->...` accesses unchanged;
@@ -13206,7 +13217,7 @@ static std::string exec_body(const std::string& body, Scope& scope, ADSHANDLE hS
 
 extern "C" {  // reopen for the ACE API exports
 
-UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
+UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                ADSHANDLE* phCursor) {
     if (phCursor == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     SqlStatement* st_ptr = stmt_lookup(hStatement);
@@ -18758,13 +18769,13 @@ void copy_ace_string(const std::string& s, UNSIGNED8* buf, UNSIGNED16* pusLen) {
 
 extern "C" {
 
-UNSIGNED32 AdsConnect(UNSIGNED8* pucServer, ADSHANDLE* phConnect) {
+UNSIGNED32 ENTRYPOINT AdsConnect(UNSIGNED8* pucServer, ADSHANDLE* phConnect) {
     return AdsConnect60(pucServer, ADS_LOCAL_SERVER,
                         nullptr, nullptr, 0, phConnect);
 }
-UNSIGNED32 AdsApplicationExit(void) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsClearFilter(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsClearRelation(ADSHANDLE hParent) {
+UNSIGNED32 ENTRYPOINT AdsApplicationExit(void) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsClearFilter(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsClearRelation(ADSHANDLE hParent) {
     // Drop only the relations this table drives as a parent; it may still
     // be a child of another work area, so leave those bindings intact.
     Table* parent = get_table(hParent);
@@ -18782,18 +18793,18 @@ UNSIGNED32 AdsClearRelation(ADSHANDLE hParent) {
     }
     return ok();
 }
-UNSIGNED32 AdsClearCallbackFunction(void) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsClearProgressCallback(void) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsCacheOpenCursors(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsCacheOpenTables(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsCacheRecords(ADSHANDLE hTable, UNSIGNED16 /*usNumRecords*/) {
+UNSIGNED32 ENTRYPOINT AdsClearCallbackFunction(void) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsClearProgressCallback(void) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsCacheOpenCursors(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsCacheOpenTables(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsCacheRecords(ADSHANDLE hTable, UNSIGNED16 /*usNumRecords*/) {
     // Read-ahead hint. OpenADS does not pre-cache rows, so this is a no-op
     // beyond validating the table handle.
     if (get_remote_table(hTable) || get_table(hTable) != nullptr) return ok();
     return fail(openads::AE_INTERNAL_ERROR, "unknown table");
 }
-UNSIGNED32 AdsCloseCachedTables(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
+UNSIGNED32 ENTRYPOINT AdsCloseCachedTables(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
     Table* src = get_table(hSrc);
     Table* dst = get_table(hDst);
     if (!src || !dst) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -18824,7 +18835,7 @@ UNSIGNED32 AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
     if (auto fl = dst->flush(); !fl) return fail(fl.error());
     return ok();
 }
-UNSIGNED32 AdsCustomizeAOF(ADSHANDLE hTable, UNSIGNED32 ulNumRecords,
+UNSIGNED32 ENTRYPOINT AdsCustomizeAOF(ADSHANDLE hTable, UNSIGNED32 ulNumRecords,
                            UNSIGNED32* pulRecords, UNSIGNED16 usOption) {
     if (get_remote_table(hTable))
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
@@ -18844,22 +18855,22 @@ UNSIGNED32 AdsCustomizeAOF(ADSHANDLE hTable, UNSIGNED32 ulNumRecords,
         (void)t->customize_aof_record(pulRecords[i], include);
     return ok();
 }
-UNSIGNED32 AdsData(UNSIGNED16, void*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsData(UNSIGNED16, void*) { ADS_STUB(openads::AE_SUCCESS); }
 // SAP / rddads signature: AdsEvalAOF(hTable, pucExpr, *pusOptLevel).
 // Returns the optimisation level (ADS_OPTIMIZED_NONE / PART / FULL)
 // the engine would use to evaluate the filter. Currently a stub —
 // caller's *pusOptLevel is zeroed (= ADS_OPTIMIZED_NONE).
-UNSIGNED32 AdsEvalAOF(ADSHANDLE, UNSIGNED8*, UNSIGNED16* pusOptLevel)
+UNSIGNED32 ENTRYPOINT AdsEvalAOF(ADSHANDLE, UNSIGNED8*, UNSIGNED16* pusOptLevel)
     { if (pusOptLevel) *pusOptLevel = 0;
       return openads::AE_SUCCESS; }
-UNSIGNED32 AdsFilterOption(ADSHANDLE, UNSIGNED16, UNSIGNED16* p)
+UNSIGNED32 ENTRYPOINT AdsFilterOption(ADSHANDLE, UNSIGNED16, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
 // SAP / rddads signature: AdsGetAOF(hTable, pucFilter, *pusLen).
 // pucFilter is a caller-allocated buffer; pusLen is in/out (capacity
 // in, actual filter length out). We don't track per-table AOF source
 // strings yet (only the evaluated bitmap), so return an empty filter
 // — Harbour's ADSGETAOF treats that as "no AOF" and returns "".
-UNSIGNED32 AdsGetAOF(ADSHANDLE hTable, UNSIGNED8* pucFilter, UNSIGNED16* pusLen) {
+UNSIGNED32 ENTRYPOINT AdsGetAOF(ADSHANDLE hTable, UNSIGNED8* pucFilter, UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         openads::abi::copy_to_caller(pucFilter, pusLen, rt->aof_expr);
@@ -18874,7 +18885,7 @@ UNSIGNED32 AdsGetAOF(ADSHANDLE hTable, UNSIGNED8* pucFilter, UNSIGNED16* pusLen)
     openads::abi::copy_to_caller(pucFilter, pusLen, t->aof_expr());
     return ok();
 }
-UNSIGNED32 AdsGetConnectionType(ADSHANDLE hConnect, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetConnectionType(ADSHANDLE hConnect, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = ADS_LOCAL_SERVER;
     // If the handle resolves to a remote connection, report REMOTE.
@@ -18888,16 +18899,16 @@ UNSIGNED32 AdsGetConnectionType(ADSHANDLE hConnect, UNSIGNED16* p) {
     }
     return ok();
 }
-UNSIGNED32 AdsGetDateFormat(UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+UNSIGNED32 ENTRYPOINT AdsGetDateFormat(UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     copy_ace_string(g_date_format, pucBuf, pusLen);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l) {
+UNSIGNED32 ENTRYPOINT AdsGetDefault(UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     openads::abi::copy_to_caller(p, l, g_default_path);
     return ok();
 }
-UNSIGNED32 AdsGetDeleted(UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetDeleted(UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // show_deleted()==true means "show deleted records" which is
     // SET DELETED OFF (the Clipper default). AdsGetDeleted returns
@@ -18906,12 +18917,12 @@ UNSIGNED32 AdsGetDeleted(UNSIGNED16* p) {
     return ok();
 }
 // AdsGetDouble already defined elsewhere in this file.
-UNSIGNED32 AdsGetEpoch(UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetEpoch(UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = openads::engine::epoch();
     return ok();
 }
-UNSIGNED32 AdsGetErrorString(UNSIGNED32 ulErrCode, UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+UNSIGNED32 ENTRYPOINT AdsGetErrorString(UNSIGNED32 ulErrCode, UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     const char* text;
     switch (ulErrCode) {
         case openads::AE_PARSE_ERROR:               text = "SQL parsing error";               break;
@@ -18938,16 +18949,16 @@ UNSIGNED32 AdsGetErrorString(UNSIGNED32 ulErrCode, UNSIGNED8* pucBuf, UNSIGNED16
     openads::abi::copy_to_caller(pucBuf, pusLen, std::string(text));
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsGetExact(UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetExact(UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = openads::engine::set_exact() ? 1 : 0;
     return ok();
 }
-UNSIGNED32 AdsGetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsGetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
                           UNSIGNED8* pucBuf, UNSIGNED32* pulLen) {
     return AdsGetField(hTable, pucField, pucBuf, pulLen, 0);
 }
-UNSIGNED32 AdsGetFilter(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
+UNSIGNED32 ENTRYPOINT AdsGetFilter(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         openads::abi::copy_to_caller(p, l, rt->filter_expr);
@@ -18962,7 +18973,7 @@ UNSIGNED32 AdsGetFilter(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
     openads::abi::copy_to_caller(p, l, t->filter_expr());
     return ok();
 }
-UNSIGNED32 AdsGetHandleType(ADSHANDLE h, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetHandleType(ADSHANDLE h, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = ADS_NONE;
     auto& s = state();
@@ -18987,7 +18998,7 @@ UNSIGNED32 AdsGetHandleType(ADSHANDLE h, UNSIGNED16* p) {
     }
     return ok();
 }
-UNSIGNED32 AdsGetIndexCondition(ADSHANDLE hIndex, UNSIGNED8* p,
+UNSIGNED32 ENTRYPOINT AdsGetIndexCondition(ADSHANDLE hIndex, UNSIGNED8* p,
                                UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& m = index_bindings();
@@ -19007,7 +19018,7 @@ UNSIGNED32 AdsGetIndexCondition(ADSHANDLE hIndex, UNSIGNED8* p,
     openads::abi::copy_to_caller(p, l, cond);
     return ok();
 }
-UNSIGNED32 AdsGetIndexFilename(ADSHANDLE hIndex, UNSIGNED16 /*usOrder*/,
+UNSIGNED32 ENTRYPOINT AdsGetIndexFilename(ADSHANDLE hIndex, UNSIGNED16 /*usOrder*/,
                                UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& m = index_bindings();
@@ -19026,7 +19037,7 @@ UNSIGNED32 AdsGetIndexFilename(ADSHANDLE hIndex, UNSIGNED16 /*usOrder*/,
 // name to a handle (contrib/rddads/ads1.c, adsOrderInfo); a stubbed 0
 // made OrdNumber() report 0 for every tag. Returns 0 (natural order)
 // for an unknown handle.
-UNSIGNED32 AdsGetIndexOrderByHandle(ADSHANDLE hIndex, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetIndexOrderByHandle(ADSHANDLE hIndex, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
     auto& m = index_bindings();
@@ -19052,7 +19063,7 @@ UNSIGNED32 AdsGetIndexOrderByHandle(ADSHANDLE hIndex, UNSIGNED16* p) {
     return ok();
 }
 // AdsGetJulian already defined elsewhere in this file.
-UNSIGNED32 AdsGetKeyLength(ADSHANDLE hIndex, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetKeyLength(ADSHANDLE hIndex, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
     auto* idx = iindex_for_handle(hIndex);
@@ -19064,7 +19075,7 @@ UNSIGNED32 AdsGetKeyLength(ADSHANDLE hIndex, UNSIGNED16* p) {
 // sequence (== the record number when no order is active). FWH's
 // xBrowse uses this (via Harbour rddads' AdsKeyNo()) as its scrollbar
 // position; a stubbed 0 left the browse unable to paint any row.
-UNSIGNED32 AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/,
+UNSIGNED32 ENTRYPOINT AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/,
                         UNSIGNED32* pulKeyNum) {
     if (pulKeyNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulKeyNum = 0;
@@ -19111,7 +19122,7 @@ UNSIGNED32 AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/,
     *pulKeyNum = found;            // 0 when rn isn't in the index walk
     return ok();
 }
-UNSIGNED32 AdsGetKeyType(ADSHANDLE hIndex, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetKeyType(ADSHANDLE hIndex, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = ADS_STRINGKEY;
     auto* idx = iindex_for_handle(hIndex);
@@ -19125,7 +19136,7 @@ UNSIGNED32 AdsGetKeyType(ADSHANDLE hIndex, UNSIGNED16* p) {
     }
     return ok();
 }
-UNSIGNED32 AdsGetLastTableUpdate(ADSHANDLE hTable, UNSIGNED8* pucDate,
+UNSIGNED32 ENTRYPOINT AdsGetLastTableUpdate(ADSHANDLE hTable, UNSIGNED8* pucDate,
                                  UNSIGNED16* pusLen) {
     int y = 0, m = 0, d = 0;
     if (auto* rt = get_remote_table(hTable)) {
@@ -19144,7 +19155,7 @@ UNSIGNED32 AdsGetLastTableUpdate(ADSHANDLE hTable, UNSIGNED8* pucDate,
     copy_ace_string(format_ace_date(g_date_format, y, m, d), pucDate, pusLen);
     return ok();
 }
-UNSIGNED32 AdsGetLogical(ADSHANDLE hTable, UNSIGNED8* pucField, UNSIGNED16* pb) {
+UNSIGNED32 ENTRYPOINT AdsGetLogical(ADSHANDLE hTable, UNSIGNED8* pucField, UNSIGNED16* pb) {
     if (pb == nullptr) return openads::AE_INTERNAL_ERROR;
     UNSIGNED8 buf[8] = {0};
     UNSIGNED32 cap = sizeof(buf);
@@ -19155,9 +19166,9 @@ UNSIGNED32 AdsGetLogical(ADSHANDLE hTable, UNSIGNED8* pucField, UNSIGNED16* pb) 
                         buf[0] == '1')) ? 1 : 0;
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsGetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32* p)
+UNSIGNED32 ENTRYPOINT AdsGetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsGetNumActiveLinks(ADSHANDLE /*hConnect*/, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetNumActiveLinks(ADSHANDLE /*hConnect*/, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
     auto& s = state();
@@ -19168,7 +19179,7 @@ UNSIGNED32 AdsGetNumActiveLinks(ADSHANDLE /*hConnect*/, UNSIGNED16* p) {
     *p = count;
     return ok();
 }
-UNSIGNED32 AdsGetNumLocks(ADSHANDLE hTable, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetNumLocks(ADSHANDLE hTable, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
     if (auto* rt = get_remote_table(hTable)) { return ok(); }
@@ -19177,7 +19188,7 @@ UNSIGNED32 AdsGetNumLocks(ADSHANDLE hTable, UNSIGNED16* p) {
     *p = t->lock_count();
     return ok();
 }
-UNSIGNED32 AdsGetNumOpenTables(UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetNumOpenTables(UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
     auto& s = state();
@@ -19193,7 +19204,7 @@ UNSIGNED32 AdsGetNumOpenTables(UNSIGNED16* p) {
     *p = count;
     return ok();
 }
-UNSIGNED32 AdsGetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
+UNSIGNED32 ENTRYPOINT AdsGetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
                         UNSIGNED32* pulLen) {
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (get_remote_table(hTable))
@@ -19219,7 +19230,7 @@ UNSIGNED32 AdsGetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
     *pulLen = need;
     return ok();
 }
-UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
+UNSIGNED32 ENTRYPOINT AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0.0;
 #if defined(OPENADS_WITH_ODBC)
@@ -19381,12 +19392,12 @@ UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
     return ok();
 }
-UNSIGNED32 AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l) {
+UNSIGNED32 ENTRYPOINT AdsGetSearchPath(UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     openads::abi::copy_to_caller(p, l, g_search_path);
     return ok();
 }
-UNSIGNED32 AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
+UNSIGNED32 ENTRYPOINT AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
         openads::abi::copy_to_caller(p, l, rt->alias);
@@ -19401,7 +19412,7 @@ UNSIGNED32 AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED16* l) {
     openads::abi::copy_to_caller(p, l, t->alias());
     return ok();
 }
-UNSIGNED32 AdsGetTableCharType(ADSHANDLE hTable, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetTableCharType(ADSHANDLE hTable, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // OpenADS always uses ANSI character type. Validate the handle.
     if (auto* rt = get_remote_table(hTable)) { *p = ADS_ANSI; return ok(); }
@@ -19410,13 +19421,13 @@ UNSIGNED32 AdsGetTableCharType(ADSHANDLE hTable, UNSIGNED16* p) {
     *p = ADS_ANSI;
     return ok();
 }
-UNSIGNED32 AdsGetTableConType(ADSHANDLE hTable, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsGetTableConType(ADSHANDLE hTable, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // Delegate to AdsGetTableType which already maps file extensions
     // to ACE table-type constants (CDX/NTX/ADT).
     return AdsGetTableType(hTable, p);
 }
-UNSIGNED32 AdsGetTableConnection(ADSHANDLE hTable, ADSHANDLE* p) {
+UNSIGNED32 ENTRYPOINT AdsGetTableConnection(ADSHANDLE hTable, ADSHANDLE* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
     if (auto* rt = get_remote_table(hTable)) {
@@ -19444,7 +19455,7 @@ UNSIGNED32 AdsGetTableConnection(ADSHANDLE hTable, ADSHANDLE* p) {
     });
     return ok();
 }
-UNSIGNED32 AdsIsConnectionAlive(ADSHANDLE hConnect, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsIsConnectionAlive(ADSHANDLE hConnect, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 1;  // assume alive
     if (auto* rt = get_remote_table(hConnect)) {
@@ -19459,14 +19470,14 @@ UNSIGNED32 AdsIsConnectionAlive(ADSHANDLE hConnect, UNSIGNED16* p) {
     }
     return ok();
 }
-UNSIGNED32 AdsIsEmpty(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
+UNSIGNED32 ENTRYPOINT AdsIsEmpty(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsIsExprValid(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
+UNSIGNED32 ENTRYPOINT AdsIsExprValid(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
     { if (p) *p = 1; return openads::AE_SUCCESS; }
 // AdsIsFound already defined elsewhere in this file.
-UNSIGNED32 AdsIsIndexCustom(ADSHANDLE, UNSIGNED16* p)
+UNSIGNED32 ENTRYPOINT AdsIsIndexCustom(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsIsIndexDescending(ADSHANDLE hIndex, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsIsIndexDescending(ADSHANDLE hIndex, UNSIGNED16* p) {
     if (p == nullptr) return openads::AE_INTERNAL_ERROR;
     *p = 0;
     auto* idx = iindex_for_handle(hIndex);
@@ -19474,7 +19485,7 @@ UNSIGNED32 AdsIsIndexDescending(ADSHANDLE hIndex, UNSIGNED16* p) {
     *p = idx->descending() ? 1 : 0;
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsIsIndexUnique(ADSHANDLE hIndex, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsIsIndexUnique(ADSHANDLE hIndex, UNSIGNED16* p) {
     if (p == nullptr) return openads::AE_INTERNAL_ERROR;
     *p = 0;
     auto* idx = iindex_for_handle(hIndex);
@@ -19482,7 +19493,7 @@ UNSIGNED32 AdsIsIndexUnique(ADSHANDLE hIndex, UNSIGNED16* p) {
     *p = idx->unique() ? 1 : 0;
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsIsNull(ADSHANDLE hTable, UNSIGNED8* pucField,
+UNSIGNED32 ENTRYPOINT AdsIsNull(ADSHANDLE hTable, UNSIGNED8* pucField,
                      UNSIGNED16* pbNull) {
     if (pbNull == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbNull = 0;
@@ -19500,12 +19511,12 @@ UNSIGNED32 AdsIsNull(ADSHANDLE hTable, UNSIGNED8* pucField,
     *pbNull = t->is_field_null(idx) ? 1 : 0;
     return ok();
 }
-UNSIGNED32 AdsIsRecordInAOF(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
+UNSIGNED32 ENTRYPOINT AdsIsRecordInAOF(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
     { if (p) *p = 1; return openads::AE_SUCCESS; }
 // ulRecord == 0 means "the current record" (ACE convention). Reports
 // whether *this* connection holds an exclusive lock on it. Remote
 // handles aren't introspected yet — they report 0.
-UNSIGNED32 AdsIsRecordLocked(ADSHANDLE hTable, UNSIGNED32 ulRecord,
+UNSIGNED32 ENTRYPOINT AdsIsRecordLocked(ADSHANDLE hTable, UNSIGNED32 ulRecord,
                              UNSIGNED16* pbLocked) {
     if (pbLocked == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbLocked = 0;
@@ -19518,9 +19529,9 @@ UNSIGNED32 AdsIsRecordLocked(ADSHANDLE hTable, UNSIGNED32 ulRecord,
     }
     return ok();
 }
-UNSIGNED32 AdsIsServerLoaded(UNSIGNED8*, UNSIGNED16* p)
+UNSIGNED32 ENTRYPOINT AdsIsServerLoaded(UNSIGNED8*, UNSIGNED16* p)
     { if (p) *p = 1; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsIsTableLocked(ADSHANDLE hTable, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsIsTableLocked(ADSHANDLE hTable, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
     if (auto* rt = get_remote_table(hTable)) { return ok(); }
@@ -19529,7 +19540,7 @@ UNSIGNED32 AdsIsTableLocked(ADSHANDLE hTable, UNSIGNED16* p) {
     *p = t->is_table_locked() ? 1 : 0;
     return ok();
 }
-UNSIGNED32 AdsRefreshAOF(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsRefreshAOF(ADSHANDLE hTable) {
     // Remote AOFs are maintained server-side; nothing to do client-side.
     if (get_remote_table(hTable)) return ok();
     Table* t = get_table(hTable);
@@ -19547,31 +19558,31 @@ UNSIGNED32 AdsRefreshAOF(ADSHANDLE hTable) {
     t->install_aof_bitmap(std::move(rep.value().bm));
     return ok();
 }
-UNSIGNED32 AdsRegisterCallbackFunction(void*) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsRegisterProgressCallback(void*) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsSetDateFormat(UNSIGNED8* pucFormat) {
+UNSIGNED32 ENTRYPOINT AdsRegisterCallbackFunction(void*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsRegisterProgressCallback(void*) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 ENTRYPOINT AdsSetDateFormat(UNSIGNED8* pucFormat) {
     if (pucFormat != nullptr && pucFormat[0] != 0)
         g_date_format.assign(reinterpret_cast<const char*>(pucFormat));
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsSetDecimals(UNSIGNED16 usDecimals) {
+UNSIGNED32 ENTRYPOINT AdsSetDecimals(UNSIGNED16 usDecimals) {
     g_set_decimals = usDecimals;
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsSetDefault(UNSIGNED8* pucPath) {
+UNSIGNED32 ENTRYPOINT AdsSetDefault(UNSIGNED8* pucPath) {
     g_default_path = pucPath
         ? openads::abi::to_internal(pucPath, 0) : std::string();
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsSetEpoch(UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsSetEpoch(UNSIGNED16 us) {
     openads::engine::set_epoch(us);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsSetExact(UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsSetExact(UNSIGNED16 us) {
     openads::engine::set_set_exact(us != 0);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
+UNSIGNED32 ENTRYPOINT AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
     if (pucFilter == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null filter");
     if (auto* rt = get_remote_table(hTable)) {
         // Remote: store the filter expression for later retrieval.
@@ -19588,8 +19599,8 @@ UNSIGNED32 AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
     return ok();
 }
 // AdsSetJulian, AdsSetLongLong already defined elsewhere in this file.
-UNSIGNED32 AdsSetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
-UNSIGNED32 AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
+UNSIGNED32 ENTRYPOINT AdsSetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 ENTRYPOINT AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
                         UNSIGNED32 ulLen) {
     if (pucRecord == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null record");
     if (get_remote_table(hTable))
@@ -19601,7 +19612,7 @@ UNSIGNED32 AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
     if (!r) return fail(r.error());
     return ok();
 }
-UNSIGNED32 AdsSetRelKeyPos(ADSHANDLE h, double pos) {
+UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
     Table* t = get_table(h);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     std::uint32_t rc = t->record_count();
@@ -19676,15 +19687,15 @@ UNSIGNED32 set_relation_impl(ADSHANDLE hParent, ADSHANDLE hChild,
     return ok();
 }
 
-UNSIGNED32 AdsSetRelation(ADSHANDLE hParent, ADSHANDLE hChild,
+UNSIGNED32 ENTRYPOINT AdsSetRelation(ADSHANDLE hParent, ADSHANDLE hChild,
                           UNSIGNED8* pucExpr) {
     return set_relation_impl(hParent, hChild, pucExpr, /*scoped=*/false);
 }
-UNSIGNED32 AdsSetScopedRelation(ADSHANDLE hParent, ADSHANDLE hChild,
+UNSIGNED32 ENTRYPOINT AdsSetScopedRelation(ADSHANDLE hParent, ADSHANDLE hChild,
                                 UNSIGNED8* pucExpr) {
     return set_relation_impl(hParent, hChild, pucExpr, /*scoped=*/true);
 }
-UNSIGNED32 AdsSetSearchPath(UNSIGNED8* pucPath) {
+UNSIGNED32 ENTRYPOINT AdsSetSearchPath(UNSIGNED8* pucPath) {
     g_search_path = pucPath
         ? openads::abi::to_internal(pucPath, 0) : std::string();
     return openads::AE_SUCCESS;
@@ -19704,15 +19715,15 @@ std::uint16_t& server_type_mask() {
     return m;
 }
 }  // extern "C++"
-UNSIGNED32 AdsSetServerType(UNSIGNED16 usServerOptions) {
+UNSIGNED32 ENTRYPOINT AdsSetServerType(UNSIGNED16 usServerOptions) {
     server_type_mask() = usServerOptions;
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsShowDeleted(UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsShowDeleted(UNSIGNED16 us) {
     openads::engine::set_show_deleted(us != 0);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsShowError(UNSIGNED8* pucErrText) {
+UNSIGNED32 ENTRYPOINT AdsShowError(UNSIGNED8* pucErrText) {
     // ADS pops up a message box on a GUI host; OpenADS is headless, so the
     // closest faithful behaviour is to write the caller's text to stderr.
     if (pucErrText != nullptr && pucErrText[0] != '\0')
@@ -19720,37 +19731,37 @@ UNSIGNED32 AdsShowError(UNSIGNED8* pucErrText) {
                      reinterpret_cast<const char*>(pucErrText));
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsStmtSetTableLockType(ADSHANDLE h, UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableLockType(ADSHANDLE h, UNSIGNED16 us) {
     SqlStatement* st = stmt_lookup(h);
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
     st->lock_type = us; return ok();
 }
-UNSIGNED32 AdsStmtSetTablePassword(ADSHANDLE h, UNSIGNED8* pTable, UNSIGNED8* pPwd) {
+UNSIGNED32 ENTRYPOINT AdsStmtSetTablePassword(ADSHANDLE h, UNSIGNED8* pTable, UNSIGNED8* pPwd) {
     SqlStatement* st = stmt_lookup(h);
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
     st->passwords.emplace_back(openads::abi::to_internal(pTable, 0),
                                openads::abi::to_internal(pPwd, 0));
     return ok();
 }
-UNSIGNED32 AdsStmtSetTableReadOnly(ADSHANDLE h, UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableReadOnly(ADSHANDLE h, UNSIGNED16 us) {
     SqlStatement* st = stmt_lookup(h);
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
     st->read_only = us; return ok();
 }
-UNSIGNED32 AdsStmtSetTableType(ADSHANDLE h, UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableType(ADSHANDLE h, UNSIGNED16 us) {
     SqlStatement* st = stmt_lookup(h);
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
     st->table_type = us; return ok();
 }
-UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
+UNSIGNED32 ENTRYPOINT AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
     { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsTestRecLocks(ADSHANDLE hTable) {
+UNSIGNED32 ENTRYPOINT AdsTestRecLocks(ADSHANDLE hTable) {
     // Diagnostic hook. Validate the handle and report success — OpenADS
     // has no separate lock-table consistency check to run.
     if (get_remote_table(hTable) || get_table(hTable) != nullptr) return ok();
     return fail(openads::AE_INTERNAL_ERROR, "unknown table");
 }
-UNSIGNED32 AdsWriteAllRecords(void) { return openads::AE_SUCCESS; }
+UNSIGNED32 ENTRYPOINT AdsWriteAllRecords(void) { return openads::AE_SUCCESS; }
 
 // This file is largely one big `extern "C"` block; the mgmt helpers
 // below return std::string / Result<> / a small struct, so they need
@@ -19934,7 +19945,7 @@ bool send_mg_mutator(const MgBackend& be,
 // "local" server string yields a local-process backend; anything of
 // the form "host" or "host:port" yields a remote backend (default
 // port 16262, the OpenADS server port).
-UNSIGNED32 AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* /*pucUser*/,
+UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* /*pucUser*/,
                         UNSIGNED8* /*pucPwd*/, ADSHANDLE* phMgmt) {
     if (phMgmt == nullptr) return openads::AE_INTERNAL_ERROR;
 
@@ -19997,22 +20008,22 @@ UNSIGNED32 AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* /*pucUser*/,
     return openads::AE_SUCCESS;
 }
 
-UNSIGNED32 AdsMgDisconnect(ADSHANDLE hMgmt) {
+UNSIGNED32 ENTRYPOINT AdsMgDisconnect(ADSHANDLE hMgmt) {
     std::lock_guard<std::mutex> g(g_mg_mu);
     g_mg_handles.erase(hMgmt);
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
+UNSIGNED32 ENTRYPOINT AdsMgGetActivityInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
     auto c = mg_collector_for(h);
     if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     return emit_mg_struct(c.value().activity_info(), p, l);
 }
-UNSIGNED32 AdsMgGetCommStats(ADSHANDLE h, void* p, UNSIGNED16* l) {
+UNSIGNED32 ENTRYPOINT AdsMgGetCommStats(ADSHANDLE h, void* p, UNSIGNED16* l) {
     auto c = mg_collector_for(h);
     if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     return emit_mg_struct(c.value().comm_stats(), p, l);
 }
-UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE h, void* pv, UNSIGNED16* lv,
+UNSIGNED32 ENTRYPOINT AdsMgGetConfigInfo(ADSHANDLE h, void* pv, UNSIGNED16* lv,
                                void* pm, UNSIGNED16* lm) {
     auto c = mg_collector_for(h);
     if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
@@ -20020,63 +20031,63 @@ UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE h, void* pv, UNSIGNED16* lv,
     if (rc != openads::AE_SUCCESS) return rc;
     return emit_mg_struct(c.value().config_memory(), pm, lm);
 }
-UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
+UNSIGNED32 ENTRYPOINT AdsMgGetInstallInfo(ADSHANDLE h, void* p, UNSIGNED16* l) {
     auto c = mg_collector_for(h);
     if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     return emit_mg_struct(c.value().install_info(), p, l);
 }
-UNSIGNED32 AdsMgGetLockOwner(ADSHANDLE h, UNSIGNED8* /*t*/, UNSIGNED32 ulRec,
+UNSIGNED32 ENTRYPOINT AdsMgGetLockOwner(ADSHANDLE h, UNSIGNED8* /*t*/, UNSIGNED32 ulRec,
                               void* p, UNSIGNED16* l, UNSIGNED16* lt) {
     auto col = mg_collector_for(h);
     if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     if (lt) *lt = ADS_MGMT_RECORD_LOCK;
     return emit_mg_struct(col.value().lock_owner(ulRec), p, l);
 }
-UNSIGNED32 AdsMgGetLocks(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
+UNSIGNED32 ENTRYPOINT AdsMgGetLocks(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
                           UNSIGNED16 /*o*/, void* p, UNSIGNED16* c,
                           UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
     if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().locks(), p, c, sz);
 }
-UNSIGNED32 AdsMgGetOpenIndexes(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
+UNSIGNED32 ENTRYPOINT AdsMgGetOpenIndexes(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED8* /*t*/,
                                 UNSIGNED16 /*o*/, void* p, UNSIGNED16* c,
                                 UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
     if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().open_indexes(), p, c, sz);
 }
-UNSIGNED32 AdsMgGetOpenTables(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
+UNSIGNED32 ENTRYPOINT AdsMgGetOpenTables(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
                                void* p, UNSIGNED16* c, UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
     if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().open_tables(), p, c, sz);
 }
-UNSIGNED32 AdsMgGetOpenTables2(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
+UNSIGNED32 ENTRYPOINT AdsMgGetOpenTables2(ADSHANDLE h, UNSIGNED8* /*f*/, UNSIGNED16 /*o*/,
                                 void* p, UNSIGNED16* c, UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
     if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().open_tables(), p, c, sz);
 }
-UNSIGNED32 AdsMgGetServerType(ADSHANDLE h, UNSIGNED16* p) {
+UNSIGNED32 ENTRYPOINT AdsMgGetServerType(ADSHANDLE h, UNSIGNED16* p) {
     auto c = mg_collector_for(h);
     if (!c.has_value()) return static_cast<UNSIGNED32>(c.error().code);
     if (p) *p = c.value().server_type();
     return openads::AE_SUCCESS;
 }
-UNSIGNED32 AdsMgGetUserNames(ADSHANDLE h, UNSIGNED8* /*pucFile*/, void* p,
+UNSIGNED32 ENTRYPOINT AdsMgGetUserNames(ADSHANDLE h, UNSIGNED8* /*pucFile*/, void* p,
                               UNSIGNED16* c, UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
     if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().user_names(), p, c, sz);
 }
-UNSIGNED32 AdsMgGetWorkerThreadActivity(ADSHANDLE h, void* p, UNSIGNED16* c,
+UNSIGNED32 ENTRYPOINT AdsMgGetWorkerThreadActivity(ADSHANDLE h, void* p, UNSIGNED16* c,
                                          UNSIGNED16* sz) {
     auto col = mg_collector_for(h);
     if (!col.has_value()) return static_cast<UNSIGNED32>(col.error().code);
     return emit_mg_array(col.value().worker_thread_activity(), p, c, sz);
 }
-UNSIGNED32 AdsMgKillUser(ADSHANDLE h, UNSIGNED8* /*pucUser*/,
+UNSIGNED32 ENTRYPOINT AdsMgKillUser(ADSHANDLE h, UNSIGNED8* /*pucUser*/,
                          UNSIGNED16 usConnNo) {
     const MgBackend* be = lookup_mg(h);
     if (be == nullptr) return openads::AE_INVALID_CONNECTION_HANDLE;
@@ -20085,7 +20096,7 @@ UNSIGNED32 AdsMgKillUser(ADSHANDLE h, UNSIGNED8* /*pucUser*/,
                openads::network::MgRequestKind::KillUser, usConnNo)
         ? openads::AE_SUCCESS : openads::AE_NO_CONNECTION;
 }
-UNSIGNED32 AdsMgResetCommStats(ADSHANDLE h) {
+UNSIGNED32 ENTRYPOINT AdsMgResetCommStats(ADSHANDLE h) {
     const MgBackend* be = lookup_mg(h);
     if (be == nullptr) return openads::AE_INVALID_CONNECTION_HANDLE;
     if (!be->remote) {
@@ -20111,13 +20122,13 @@ UNSIGNED32 AdsMgResetCommStats(ADSHANDLE h) {
 // minimal implementation. Parameter lists mirror XSharp.Rdd/ACE/ACE.prg.
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsConnect26(UNSIGNED8* pucServer, UNSIGNED16 usServerType,
+UNSIGNED32 ENTRYPOINT AdsConnect26(UNSIGNED8* pucServer, UNSIGNED16 usServerType,
                         ADSHANDLE* phConnect) {
     return AdsConnect60(pucServer, usServerType, nullptr, nullptr, 0,
                         phConnect);
 }
 
-UNSIGNED32 AdsCreateTable71(ADSHANDLE hConnect, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsCreateTable71(ADSHANDLE hConnect, UNSIGNED8* pucName,
                             UNSIGNED8* pucAlias, UNSIGNED16 usTableType,
                             UNSIGNED16 usCharType, UNSIGNED16 usLockType,
                             UNSIGNED16 usCheckRights, UNSIGNED16 usMemoSize,
@@ -20128,7 +20139,7 @@ UNSIGNED32 AdsCreateTable71(ADSHANDLE hConnect, UNSIGNED8* pucName,
                           phTable);
 }
 
-UNSIGNED32 AdsCreateTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsCreateTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
                             UNSIGNED8* pucAlias, UNSIGNED16 usTableType,
                             UNSIGNED16 usCharType, UNSIGNED16 usLockType,
                             UNSIGNED16 usCheckRights, UNSIGNED16 usMemoSize,
@@ -20139,7 +20150,7 @@ UNSIGNED32 AdsCreateTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
                           phTable);
 }
 
-UNSIGNED32 AdsOpenTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsOpenTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
                           UNSIGNED8* pucAlias, UNSIGNED16 usTableType,
                           UNSIGNED16 usCharType, UNSIGNED16 usLockType,
                           UNSIGNED16 usCheckRights, UNSIGNED32 ulOptions,
@@ -20149,7 +20160,7 @@ UNSIGNED32 AdsOpenTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
                         static_cast<UNSIGNED16>(ulOptions), phTable);
 }
 
-UNSIGNED32 AdsCreateIndex90(ADSHANDLE hObj, UNSIGNED8* pucFileName,
+UNSIGNED32 ENTRYPOINT AdsCreateIndex90(ADSHANDLE hObj, UNSIGNED8* pucFileName,
                             UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
                             UNSIGNED8* pucCondition, UNSIGNED8* pucWhile,
                             UNSIGNED32 ulOptions, UNSIGNED32 ulPageSize,
@@ -20159,7 +20170,7 @@ UNSIGNED32 AdsCreateIndex90(ADSHANDLE hObj, UNSIGNED8* pucFileName,
                             static_cast<UNSIGNED16>(ulPageSize), phIndex);
 }
 
-UNSIGNED32 AdsDDAddTable90(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+UNSIGNED32 ENTRYPOINT AdsDDAddTable90(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
                            UNSIGNED8* pucTablePath, UNSIGNED16 usTableType,
                            UNSIGNED16 usCharType, UNSIGNED8* pucIndexPath,
                            UNSIGNED8* pucComment, UNSIGNED8* /*pucCollation*/) {
@@ -20167,7 +20178,7 @@ UNSIGNED32 AdsDDAddTable90(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
                          usCharType, pucIndexPath, pucComment);
 }
 
-UNSIGNED32 AdsDDCreateRefIntegrity62(ADSHANDLE hConnect, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDCreateRefIntegrity62(ADSHANDLE hConnect, UNSIGNED8* pucName,
                                      UNSIGNED8* pucFail, UNSIGNED8* pucParent,
                                      UNSIGNED8* pucParentTag, UNSIGNED8* pucChild,
                                      UNSIGNED8* pucChildTag, UNSIGNED16 usUpdate,
@@ -20179,7 +20190,7 @@ UNSIGNED32 AdsDDCreateRefIntegrity62(ADSHANDLE hConnect, UNSIGNED8* pucName,
                                    usUpdate, usDelete);
 }
 
-UNSIGNED32 AdsFindFirstTable62(ADSHANDLE hConnect, UNSIGNED8* pucFileMask,
+UNSIGNED32 ENTRYPOINT AdsFindFirstTable62(ADSHANDLE hConnect, UNSIGNED8* pucFileMask,
                                UNSIGNED8* pucFirstDD, UNSIGNED16* pusDDLen,
                                UNSIGNED8* pucFirstFile, UNSIGNED16* pusFileLen,
                                ADSHANDLE* phFind) {
@@ -20193,7 +20204,7 @@ UNSIGNED32 AdsFindFirstTable62(ADSHANDLE hConnect, UNSIGNED8* pucFileMask,
                              phFind);
 }
 
-UNSIGNED32 AdsFindNextTable62(ADSHANDLE hConnect, ADSHANDLE hFind,
+UNSIGNED32 ENTRYPOINT AdsFindNextTable62(ADSHANDLE hConnect, ADSHANDLE hFind,
                               UNSIGNED8* pucDDName, UNSIGNED16* pusDDLen,
                               UNSIGNED8* pucFileName, UNSIGNED16* pusFileLen) {
     if (pusDDLen) {
@@ -20203,20 +20214,20 @@ UNSIGNED32 AdsFindNextTable62(ADSHANDLE hConnect, ADSHANDLE hFind,
     return AdsFindNextTable(hConnect, hFind, pucFileName, pusFileLen);
 }
 
-UNSIGNED32 AdsGetDateFormat60(ADSHANDLE /*hConnect*/, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsGetDateFormat60(ADSHANDLE /*hConnect*/, UNSIGNED8* pucBuf,
                               UNSIGNED16* pusLen) {
     return AdsGetDateFormat(pucBuf, pusLen);
 }
 
-UNSIGNED32 AdsGetExact22(ADSHANDLE /*hObj*/, UNSIGNED16* pbExact) {
+UNSIGNED32 ENTRYPOINT AdsGetExact22(ADSHANDLE /*hObj*/, UNSIGNED16* pbExact) {
     return AdsGetExact(pbExact);
 }
 
-UNSIGNED32 AdsReindex61(ADSHANDLE hObject, UNSIGNED32 /*ulPageSize*/) {
+UNSIGNED32 ENTRYPOINT AdsReindex61(ADSHANDLE hObject, UNSIGNED32 /*ulPageSize*/) {
     return AdsReindex(hObject);
 }
 
-UNSIGNED32 AdsRestructureTable90(ADSHANDLE hConnect, UNSIGNED8* pucTableName,
+UNSIGNED32 ENTRYPOINT AdsRestructureTable90(ADSHANDLE hConnect, UNSIGNED8* pucTableName,
                                  UNSIGNED8* /*pucPassword*/,
                                  UNSIGNED16 usTableType, UNSIGNED16 usCharType,
                                  UNSIGNED16 usLockType, UNSIGNED16 usCheckRights,
@@ -20234,22 +20245,22 @@ UNSIGNED32 AdsRestructureTable90(ADSHANDLE hConnect, UNSIGNED8* pucTableName,
 // X# calls these on row-edit cancel / connection-property tuning.
 // OpenADS has no deferred-write row buffer and treats ACE properties
 // as no-ops, so acknowledge success rather than break the caller flow.
-UNSIGNED32 AdsCancelUpdate90(ADSHANDLE /*hTable*/, UNSIGNED32 /*ulOptions*/) {
+UNSIGNED32 ENTRYPOINT AdsCancelUpdate90(ADSHANDLE /*hTable*/, UNSIGNED32 /*ulOptions*/) {
     return ok();
 }
-UNSIGNED32 AdsSetProperty90(ADSHANDLE /*hObj*/, UNSIGNED32 /*ulOperation*/,
+UNSIGNED32 ENTRYPOINT AdsSetProperty90(ADSHANDLE /*hObj*/, UNSIGNED32 /*ulOperation*/,
                             UNSIGNED64* /*puqValue*/) {
     return ok();
 }
 
 // OpenADS keys connections/tables by handle, not by path/name, so
 // report "not found" — X# then opens a fresh connection/table.
-UNSIGNED32 AdsFindConnection25(UNSIGNED8* /*pucFullPath*/,
+UNSIGNED32 ENTRYPOINT AdsFindConnection25(UNSIGNED8* /*pucFullPath*/,
                                ADSHANDLE* phConnect) {
     if (phConnect) *phConnect = 0;
     return fail(openads::AE_NO_CONNECTION, "no connection for path");
 }
-UNSIGNED32 AdsGetTableHandle25(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucName*/,
+UNSIGNED32 ENTRYPOINT AdsGetTableHandle25(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucName*/,
                                ADSHANDLE* phTable) {
     if (phTable) *phTable = 0;
     return fail(openads::AE_TABLE_NOT_FOUND, "no open table for name");
@@ -20258,7 +20269,7 @@ UNSIGNED32 AdsGetTableHandle25(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucName*/,
 // The SAP "60" bookmark API hands back an opaque blob the app later
 // replays. OpenADS encodes it as the 4-byte little-endian recno —
 // stable for the table's lifetime, enough for navigate-and-return.
-UNSIGNED32 AdsGetBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
+UNSIGNED32 ENTRYPOINT AdsGetBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
                             UNSIGNED32* pulLength) {
     if (pulLength == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (pucBookmark == nullptr || *pulLength < 4) {
@@ -20281,7 +20292,7 @@ UNSIGNED32 AdsGetBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
 // because real ACE supports variable-length bookmarks (the size
 // depends on the index/order). OpenADS encodes everything as a
 // 4-byte recno today, so any ulLength < 4 is a malformed call.
-UNSIGNED32 AdsGotoBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
+UNSIGNED32 ENTRYPOINT AdsGotoBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
                              UNSIGNED32 ulLength) {
     if (pucBookmark == nullptr || ulLength < 4) {
         return fail(openads::AE_INTERNAL_ERROR, "");
@@ -20297,7 +20308,7 @@ UNSIGNED32 AdsGotoBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
 // Report the attached memo store's block size; for a table with no
 // memo (or a remote handle — no memo introspection over the wire yet)
 // hand back the xBase FPT default so the RDD has a usable value.
-UNSIGNED32 AdsGetMemoBlockSize(ADSHANDLE hObj, UNSIGNED16* pusBlockSize) {
+UNSIGNED32 ENTRYPOINT AdsGetMemoBlockSize(ADSHANDLE hObj, UNSIGNED16* pusBlockSize) {
     if (pusBlockSize == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pusBlockSize = 64;
     if (get_remote_table(hObj) != nullptr) return ok();
@@ -20339,7 +20350,7 @@ static UNSIGNED8* as_field(const char* s) {
     return const_cast<UNSIGNED8*>(reinterpret_cast<const UNSIGNED8*>(s));
 }
 
-UNSIGNED32 AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32* pulOptions) {
+UNSIGNED32 ENTRYPOINT AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32* pulOptions) {
     if (pulOptions == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulOptions = 0;
     if (auto* rt = get_remote_table(hTable)) { return ok(); }
@@ -20353,7 +20364,7 @@ UNSIGNED32 AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32* pulOptions) {
     }
     return ok();
 }
-UNSIGNED32 AdsGetBookmark(ADSHANDLE hTable, ADSHANDLE* phBookmark) {
+UNSIGNED32 ENTRYPOINT AdsGetBookmark(ADSHANDLE hTable, ADSHANDLE* phBookmark) {
     if (phBookmark == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     UNSIGNED32 rec = 0;
     UNSIGNED32 rc = AdsGetRecordNum(hTable, 0, &rec);
@@ -20361,24 +20372,24 @@ UNSIGNED32 AdsGetBookmark(ADSHANDLE hTable, ADSHANDLE* phBookmark) {
     *phBookmark = rec;            // recno-as-token; pairs with AdsGotoRecord
     return ok();
 }
-UNSIGNED32 AdsCancelUpdate(ADSHANDLE /*hTable*/) { return ok(); }
-UNSIGNED32 AdsClearAllScopes(ADSHANDLE /*hTable*/) { return ok(); }
-UNSIGNED32 AdsClearDefault(void) { return ok(); }
-UNSIGNED32 AdsResetConnection(ADSHANDLE /*hConnect*/) { return ok(); }
-UNSIGNED32 AdsThreadExit(void) { return ok(); }
-UNSIGNED32 AdsDisableLocalConnections(void) { return ok(); }
-UNSIGNED32 AdsEnableRI(ADSHANDLE /*hConn*/) { return ok(); }
-UNSIGNED32 AdsDisableRI(ADSHANDLE /*hConn*/) { return ok(); }
-UNSIGNED32 AdsEnableUniqueEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
-UNSIGNED32 AdsDisableUniqueEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
-UNSIGNED32 AdsEnableAutoIncEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
-UNSIGNED32 AdsDisableAutoIncEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
-UNSIGNED32 AdsRecallAllRecords(ADSHANDLE /*hTable*/) { return ok(); }
-UNSIGNED32 AdsIsRecordVisible(ADSHANDLE /*hObj*/, UNSIGNED16* pbVisible) {
+UNSIGNED32 ENTRYPOINT AdsCancelUpdate(ADSHANDLE /*hTable*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsClearAllScopes(ADSHANDLE /*hTable*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsClearDefault(void) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsResetConnection(ADSHANDLE /*hConnect*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsThreadExit(void) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsDisableLocalConnections(void) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsEnableRI(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsDisableRI(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsEnableUniqueEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsDisableUniqueEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsEnableAutoIncEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsDisableAutoIncEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsRecallAllRecords(ADSHANDLE /*hTable*/) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsIsRecordVisible(ADSHANDLE /*hObj*/, UNSIGNED16* pbVisible) {
     if (pbVisible) *pbVisible = 1;
     return ok();
 }
-UNSIGNED32 AdsGetKeyCount(ADSHANDLE hIndex, UNSIGNED16 /*usFilter*/,
+UNSIGNED32 ENTRYPOINT AdsGetKeyCount(ADSHANDLE hIndex, UNSIGNED16 /*usFilter*/,
                           UNSIGNED32* pulCount) {
     if (pulCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulCount = 0;
@@ -20401,7 +20412,7 @@ UNSIGNED32 AdsGetKeyCount(ADSHANDLE hIndex, UNSIGNED16 /*usFilter*/,
     *pulCount = t->record_count();
     return ok();
 }
-UNSIGNED32 AdsContinue(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+UNSIGNED32 ENTRYPOINT AdsContinue(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     if (pbFound) *pbFound = 0;
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -20413,12 +20424,12 @@ UNSIGNED32 AdsContinue(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     if (pbFound) *pbFound = t->eof() ? 0 : 1;
     return ok();
 }
-UNSIGNED32 AdsEvalTestExpr(ADSHANDLE /*hTable*/, UNSIGNED8* /*pucExpr*/,
+UNSIGNED32 ENTRYPOINT AdsEvalTestExpr(ADSHANDLE /*hTable*/, UNSIGNED8* /*pucExpr*/,
                            UNSIGNED16* pusType) {
     if (pusType) *pusType = 0;
     return ok();                                 // treat any expr as syntactically valid
 }
-UNSIGNED32 AdsEvalLogicalExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
+UNSIGNED32 ENTRYPOINT AdsEvalLogicalExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
                               UNSIGNED16* pbResult) {
     if (pbResult) *pbResult = 0;
     if (!pucExpr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
@@ -20431,7 +20442,7 @@ UNSIGNED32 AdsEvalLogicalExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
         *pbResult = openads::engine::aof::evaluate_record(*ast.value(), *t) ? 1 : 0;
     return ok();
 }
-UNSIGNED32 AdsEvalNumericExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr, double* pdResult) {
+UNSIGNED32 ENTRYPOINT AdsEvalNumericExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr, double* pdResult) {
     if (pdResult) *pdResult = 0.0;
     if (!pucExpr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
     Table* t = get_table(hTable);
@@ -20451,7 +20462,7 @@ UNSIGNED32 AdsEvalNumericExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr, double* pdRe
     } catch (...) {}
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "cannot evaluate numeric expr");
 }
-UNSIGNED32 AdsEvalStringExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
+UNSIGNED32 ENTRYPOINT AdsEvalStringExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
                              UNSIGNED8* pucResult, UNSIGNED16* pusLen) {
     if (!pucExpr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
     Table* t = get_table(hTable);
@@ -20478,11 +20489,11 @@ UNSIGNED32 AdsEvalStringExpr(ADSHANDLE hTable, UNSIGNED8* pucExpr,
     }
     return ok();
 }
-UNSIGNED32 AdsFindConnection(UNSIGNED8* /*pucServer*/, ADSHANDLE* phConnect) {
+UNSIGNED32 ENTRYPOINT AdsFindConnection(UNSIGNED8* /*pucServer*/, ADSHANDLE* phConnect) {
     if (phConnect) *phConnect = 0;
     return fail(openads::AE_NO_CONNECTION, "no connection for path");
 }
-UNSIGNED32 AdsGetAllIndexes(ADSHANDLE hTable, ADSHANDLE* ahIndex,
+UNSIGNED32 ENTRYPOINT AdsGetAllIndexes(ADSHANDLE hTable, ADSHANDLE* ahIndex,
                             UNSIGNED16* pusArrayLen) {
     if (!pusArrayLen) return fail(openads::AE_INTERNAL_ERROR, "null out");
     if (get_remote_table(hTable)) { *pusArrayLen = 0; return ok(); }
@@ -20501,14 +20512,14 @@ UNSIGNED32 AdsGetAllIndexes(ADSHANDLE hTable, ADSHANDLE* ahIndex,
     }
     return ok();
 }
-UNSIGNED32 AdsGetFTSIndexes(ADSHANDLE /*hTable*/, ADSHANDLE* /*ahIndex*/,
+UNSIGNED32 ENTRYPOINT AdsGetFTSIndexes(ADSHANDLE /*hTable*/, ADSHANDLE* /*ahIndex*/,
                              UNSIGNED16* pusArrayLen) {
     // FTS indexes are loaded ad-hoc at query time with no persistent
     // handle, so there is nothing to enumerate here.
     if (pusArrayLen) *pusArrayLen = 0;
     return ok();
 }
-UNSIGNED32 AdsGetAllTables(ADSHANDLE hConnect, ADSHANDLE* ahTable,
+UNSIGNED32 ENTRYPOINT AdsGetAllTables(ADSHANDLE hConnect, ADSHANDLE* ahTable,
                            UNSIGNED16* pusArrayLen) {
     if (!pusArrayLen) return fail(openads::AE_INTERNAL_ERROR, "null out");
     auto& s = state();
@@ -20530,7 +20541,7 @@ UNSIGNED32 AdsGetAllTables(ADSHANDLE hConnect, ADSHANDLE* ahTable,
     }
     return ok();
 }
-UNSIGNED32 AdsCloneTable(ADSHANDLE hTable, ADSHANDLE* phClone) {
+UNSIGNED32 ENTRYPOINT AdsCloneTable(ADSHANDLE hTable, ADSHANDLE* phClone) {
     if (!phClone) return fail(openads::AE_INTERNAL_ERROR, "null out param");
     *phClone = 0;
     auto& s = state();
@@ -20624,7 +20635,7 @@ UNSIGNED32 AdsCloneTable(ADSHANDLE hTable, ADSHANDLE* phClone) {
     return ok();
 }
 
-UNSIGNED32 AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile) {
+UNSIGNED32 ENTRYPOINT AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile) {
     if (!pucFile) return fail(openads::AE_INTERNAL_ERROR, "null path");
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -20681,7 +20692,7 @@ UNSIGNED32 AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile) {
     }
     return ok();
 }
-UNSIGNED32 AdsGetRecordCRC(ADSHANDLE hTable, UNSIGNED32* pulCRC,
+UNSIGNED32 ENTRYPOINT AdsGetRecordCRC(ADSHANDLE hTable, UNSIGNED32* pulCRC,
                            UNSIGNED32 /*ulOption*/) {
     if (pulCRC == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulCRC = 0;
@@ -20706,73 +20717,73 @@ UNSIGNED32 AdsGetRecordCRC(ADSHANDLE hTable, UNSIGNED32* pulCRC,
     *pulCRC = ~crc;
     return ok();
 }
-UNSIGNED32 AdsInitRawKey(ADSHANDLE) { return ok(); }
-UNSIGNED32 AdsMgDumpInternalTables(ADSHANDLE h) {
+UNSIGNED32 ENTRYPOINT AdsInitRawKey(ADSHANDLE) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsMgDumpInternalTables(ADSHANDLE h) {
     return lookup_mg(h) ? openads::AE_SUCCESS
                         : openads::AE_INVALID_CONNECTION_HANDLE;
 }
-UNSIGNED32 AdsClearSQLAbortFunc(void) { return ok(); }
-UNSIGNED32 AdsClearSQLParams(ADSHANDLE) { return ok(); }
-UNSIGNED32 AdsStmtClearTablePasswords(ADSHANDLE h) {
+UNSIGNED32 ENTRYPOINT AdsClearSQLAbortFunc(void) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsClearSQLParams(ADSHANDLE) { return ok(); }
+UNSIGNED32 ENTRYPOINT AdsStmtClearTablePasswords(ADSHANDLE h) {
     if (auto* st = stmt_lookup(h)) st->passwords.clear();
     return ok();
 }
-UNSIGNED32 AdsStmtDisableEncryption(ADSHANDLE h) {
+UNSIGNED32 ENTRYPOINT AdsStmtDisableEncryption(ADSHANDLE h) {
     if (auto* st = stmt_lookup(h)) st->disable_enc = true;
     return ok();
 }
-UNSIGNED32 AdsStmtSetTableCharType(ADSHANDLE h, UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableCharType(ADSHANDLE h, UNSIGNED16 us) {
     if (auto* st = stmt_lookup(h)) st->char_type = us;
     return ok();
 }
-UNSIGNED32 AdsStmtSetTableCollation(ADSHANDLE h, UNSIGNED8* puc) {
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableCollation(ADSHANDLE h, UNSIGNED8* puc) {
     if (auto* st = stmt_lookup(h)) st->collation = openads::abi::to_internal(puc, 0);
     return ok();
 }
-UNSIGNED32 AdsStmtSetTableRights(ADSHANDLE h, UNSIGNED16 us) {
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableRights(ADSHANDLE h, UNSIGNED16 us) {
     if (auto* st = stmt_lookup(h)) st->check_rights = us;
     return ok();
 }
 
 // --- field-identifier-aware setters/getters (name OR ordinal-as-pointer) ---
-UNSIGNED32 AdsSetField(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsSetField(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
                        UNSIGNED32 ulLen) {
     UNSIGNED8 nm[64];
     return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         pucBuf, ulLen);
 }
-UNSIGNED32 AdsSetEmpty(ADSHANDLE hObj, UNSIGNED8* pId) {
+UNSIGNED32 ENTRYPOINT AdsSetEmpty(ADSHANDLE hObj, UNSIGNED8* pId) {
     UNSIGNED8 nm[64];
     UNSIGNED8 blank = 0;
     return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         &blank, 0);
 }
-UNSIGNED32 AdsSetNull(ADSHANDLE hObj, UNSIGNED8* pId) {
+UNSIGNED32 ENTRYPOINT AdsSetNull(ADSHANDLE hObj, UNSIGNED8* pId) {
     return AdsSetEmpty(hObj, pId);     // DBF has no SQL NULL — store empty
 }
-UNSIGNED32 AdsSetShort(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED32 sValue) {
+UNSIGNED32 ENTRYPOINT AdsSetShort(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED32 sValue) {
     UNSIGNED8 nm[64];
     return AdsSetDouble(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         static_cast<double>(sValue));
 }
-UNSIGNED32 AdsSetMoney(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED64 qValue) {
+UNSIGNED32 ENTRYPOINT AdsSetMoney(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED64 qValue) {
     UNSIGNED8 nm[64];
     return AdsSetDouble(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         static_cast<double>(qValue) / 10000.0);   // ACE money scale
 }
-UNSIGNED32 AdsSetTime(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucValue,
+UNSIGNED32 ENTRYPOINT AdsSetTime(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucValue,
                       UNSIGNED16 usLen) {
     UNSIGNED8 nm[64];
     return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         pucValue, usLen);
 }
-UNSIGNED32 AdsSetTimeStamp(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsSetTimeStamp(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
                            UNSIGNED32 ulLen) {
     UNSIGNED8 nm[64];
     return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         pucBuf, ulLen);
 }
-UNSIGNED32 AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
+UNSIGNED32 ENTRYPOINT AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
                       UNSIGNED16* pusLen) {
     UNSIGNED8 nm[64];
     UNSIGNED32 cap = pusLen ? *pusLen : 0;
@@ -20788,7 +20799,7 @@ UNSIGNED32 AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
 // names.  OpenADS uses Create/Drop internally; SAP ACE uses Add/Remove.
 // ---------------------------------------------------------------------------
 
-UNSIGNED32 AdsDDAddProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDAddProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
                               UNSIGNED8* pucContainer, UNSIGNED8* pucProcName,
                               UNSIGNED32 ulInvokeOption,
                               UNSIGNED8* pucInParams, UNSIGNED8* pucOutParams,
@@ -20797,27 +20808,27 @@ UNSIGNED32 AdsDDAddProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
                                 ulInvokeOption, pucInParams, pucOutParams,
                                 pucComments);
 }
-UNSIGNED32 AdsDDRemoveProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDRemoveProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return AdsDDDropProcedure(hConn, pucName);
 }
-UNSIGNED32 AdsDDGetProcedureProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDGetProcedureProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                       UNSIGNED16 usProp, void* pBuf,
                                       UNSIGNED16* pusLen) {
     return AdsDDGetProcProperty(hConn, pucName, usProp, pBuf, pusLen);
 }
-UNSIGNED32 AdsDDSetProcedureProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+UNSIGNED32 ENTRYPOINT AdsDDSetProcedureProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
                                       UNSIGNED16 usProp, void* pBuf,
                                       UNSIGNED16 usLen) {
     return AdsDDSetProcProperty(hConn, pucName, usProp, pBuf, usLen);
 }
-UNSIGNED32 AdsDDRemoveTrigger(ADSHANDLE hConn, UNSIGNED8* pucName) {
+UNSIGNED32 ENTRYPOINT AdsDDRemoveTrigger(ADSHANDLE hConn, UNSIGNED8* pucName) {
     return AdsDDDropTrigger(hConn, pucName);
 }
 
 // AdsDDFindFirstObject / FindNextObject / FindClose — stubs
 // OpenADS does not implement the find-handle enumeration pattern; callers
 // that need object lists should query the system.* virtual tables instead.
-UNSIGNED32 AdsDDFindFirstObject(ADSHANDLE /*hObject*/,
+UNSIGNED32 ENTRYPOINT AdsDDFindFirstObject(ADSHANDLE /*hObject*/,
                                  UNSIGNED16 /*usFindObjectType*/,
                                  UNSIGNED8*  /*pucParentName*/,
                                  UNSIGNED8*  /*pucObjectName*/,
@@ -20827,14 +20838,14 @@ UNSIGNED32 AdsDDFindFirstObject(ADSHANDLE /*hObject*/,
     if (phFindHandle)     *phFindHandle     = 0;
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "AdsDDFindFirstObject");
 }
-UNSIGNED32 AdsDDFindNextObject(ADSHANDLE /*hObject*/,
+UNSIGNED32 ENTRYPOINT AdsDDFindNextObject(ADSHANDLE /*hObject*/,
                                 ADSHANDLE  /*hFindHandle*/,
                                 UNSIGNED8*  /*pucObjectName*/,
                                 UNSIGNED16* pusObjectNameLen) {
     if (pusObjectNameLen) *pusObjectNameLen = 0;
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "AdsDDFindNextObject");
 }
-UNSIGNED32 AdsDDFindClose(ADSHANDLE /*hObject*/, ADSHANDLE /*hFindHandle*/) {
+UNSIGNED32 ENTRYPOINT AdsDDFindClose(ADSHANDLE /*hObject*/, ADSHANDLE /*hFindHandle*/) {
     return ok();
 }
 
@@ -20902,7 +20913,7 @@ extern "C" {  // reopen for AdsFetchWhere* exports
 // resulting batch under a fresh opaque handle in *phResult.
 // Returns AE_FUNCTION_NOT_AVAILABLE for local (non-remote) tables so the
 // caller can fall back to the classic client-side scan path.
-UNSIGNED32 AdsFetchWhere(ADSHANDLE hTbl, UNSIGNED8* pszExpr, UNSIGNED8* pszCols,
+UNSIGNED32 ENTRYPOINT AdsFetchWhere(ADSHANDLE hTbl, UNSIGNED8* pszExpr, UNSIGNED8* pszCols,
                          UNSIGNED32 ulMaxRows, UNSIGNED32 ulFlags,
                          ADSHANDLE* phResult) {
     if (phResult == nullptr)
@@ -20928,7 +20939,7 @@ UNSIGNED32 AdsFetchWhere(ADSHANDLE hTbl, UNSIGNED8* pszExpr, UNSIGNED8* pszCols,
 }
 
 // ─ AdsFetchWhereRows ─────────────────────────────────────────────────────────
-UNSIGNED32 AdsFetchWhereRows(ADSHANDLE hRes, UNSIGNED32* pulRows) {
+UNSIGNED32 ENTRYPOINT AdsFetchWhereRows(ADSHANDLE hRes, UNSIGNED32* pulRows) {
     if (pulRows == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRows: null");
     std::lock_guard<std::mutex> lk(fw_mu());
@@ -20942,7 +20953,7 @@ UNSIGNED32 AdsFetchWhereRows(ADSHANDLE hRes, UNSIGNED32* pulRows) {
 // ─ AdsFetchWhereRecno ────────────────────────────────────────────────────────
 // ulRow is 0-based.  Recnos are populated only when WANT_RECNO (0x01) was
 // set in ulFlags at AdsFetchWhere call time.
-UNSIGNED32 AdsFetchWhereRecno(ADSHANDLE hRes, UNSIGNED32 ulRow,
+UNSIGNED32 ENTRYPOINT AdsFetchWhereRecno(ADSHANDLE hRes, UNSIGNED32 ulRow,
                                UNSIGNED32* pulRec) {
     if (pulRec == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereRecno: null");
@@ -20962,7 +20973,7 @@ UNSIGNED32 AdsFetchWhereRecno(ADSHANDLE hRes, UNSIGNED32 ulRow,
 // Column lookup is case-insensitive.  *pusLen is in/out (capacity in,
 // written byte count out), following the same truncation idiom as AdsGetField.
 // ulRow is 0-based.
-UNSIGNED32 AdsFetchWhereField(ADSHANDLE hRes, UNSIGNED32 ulRow,
+UNSIGNED32 ENTRYPOINT AdsFetchWhereField(ADSHANDLE hRes, UNSIGNED32 ulRow,
                                UNSIGNED8* pszCol,
                                UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     if (pucBuf == nullptr || pusLen == nullptr)
@@ -21001,7 +21012,7 @@ UNSIGNED32 AdsFetchWhereField(ADSHANDLE hRes, UNSIGNED32 ulRow,
 // *pbEof is set to 1 when the server exhausted the table during the scan
 // (no more rows remain past the last matched record), 0 when ulMaxRows was
 // hit before EOF.
-UNSIGNED32 AdsFetchWhereEof(ADSHANDLE hRes, UNSIGNED16* pbEof) {
+UNSIGNED32 ENTRYPOINT AdsFetchWhereEof(ADSHANDLE hRes, UNSIGNED16* pbEof) {
     if (pbEof == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "AdsFetchWhereEof: null");
     std::lock_guard<std::mutex> lk(fw_mu());
@@ -21015,7 +21026,7 @@ UNSIGNED32 AdsFetchWhereEof(ADSHANDLE hRes, UNSIGNED16* pbEof) {
 // ─ AdsFetchWhereClose ────────────────────────────────────────────────────────
 // Release the result batch and invalidate the handle.  Calling any other
 // AdsFetchWhere* accessor with this handle after Close returns an error.
-UNSIGNED32 AdsFetchWhereClose(ADSHANDLE hRes) {
+UNSIGNED32 ENTRYPOINT AdsFetchWhereClose(ADSHANDLE hRes) {
     std::lock_guard<std::mutex> lk(fw_mu());
     fw_results().erase(hRes);
     return ok();
@@ -21031,7 +21042,7 @@ UNSIGNED32 AdsFetchWhereClose(ADSHANDLE hRes) {
 // The batch must have been fetched with WANT_RECNO. Values are matched to the
 // table's fields by column name (case-insensitive); columns the batch did not
 // request read back empty. Not applicable on local tables.
-UNSIGNED32 AdsFetchWhereApplyRow(ADSHANDLE hRes, UNSIGNED32 ulRow, ADSHANDLE hTbl) {
+UNSIGNED32 ENTRYPOINT AdsFetchWhereApplyRow(ADSHANDLE hRes, UNSIGNED32 ulRow, ADSHANDLE hTbl) {
     auto* rt = get_remote_table(hTbl);
     if (rt == nullptr)
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
@@ -21154,7 +21165,7 @@ bool agg_parse_spec(const UNSIGNED8* pszAggSpec,
 extern "C" {  // reopen for AdsAggregate* exports
 
 // ─ AdsAggregate ──────────────────────────────────────────────────────────────
-UNSIGNED32 AdsAggregate(ADSHANDLE hTbl, UNSIGNED8* pszForCond,
+UNSIGNED32 ENTRYPOINT AdsAggregate(ADSHANDLE hTbl, UNSIGNED8* pszForCond,
                         UNSIGNED8* pszAggSpec, ADSHANDLE* phResult) {
     if (phResult == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "AdsAggregate: null phResult");
@@ -21210,7 +21221,7 @@ UNSIGNED32 AdsAggregate(ADSHANDLE hTbl, UNSIGNED8* pszForCond,
 }
 
 // ─ AdsAggregateCount ─────────────────────────────────────────────────────────
-UNSIGNED32 AdsAggregateCount(ADSHANDLE hRes, UNSIGNED32* pulCount) {
+UNSIGNED32 ENTRYPOINT AdsAggregateCount(ADSHANDLE hRes, UNSIGNED32* pulCount) {
     if (pulCount == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "AdsAggregateCount: null");
     std::lock_guard<std::mutex> lk(agg_mu());
@@ -21225,7 +21236,7 @@ UNSIGNED32 AdsAggregateCount(ADSHANDLE hRes, UNSIGNED32* pulCount) {
 // ─ AdsAggregateValue ─────────────────────────────────────────────────────────
 // ulIndex is 0-based. *pusType receives the result discriminator
 // (0=empty, 1=numeric, 2=string); *pusLen is in/out (capacity / written).
-UNSIGNED32 AdsAggregateValue(ADSHANDLE hRes, UNSIGNED32 ulIndex,
+UNSIGNED32 ENTRYPOINT AdsAggregateValue(ADSHANDLE hRes, UNSIGNED32 ulIndex,
                              UNSIGNED16* pusType, UNSIGNED8* pucBuf,
                              UNSIGNED16* pusLen) {
     if (pusType == nullptr || pucBuf == nullptr || pusLen == nullptr)
@@ -21246,7 +21257,7 @@ UNSIGNED32 AdsAggregateValue(ADSHANDLE hRes, UNSIGNED32 ulIndex,
 }
 
 // ─ AdsAggregateClose ─────────────────────────────────────────────────────────
-UNSIGNED32 AdsAggregateClose(ADSHANDLE hRes) {
+UNSIGNED32 ENTRYPOINT AdsAggregateClose(ADSHANDLE hRes) {
     std::lock_guard<std::mutex> lk(agg_mu());
     agg_results().erase(hRes);
     return ok();

@@ -1,4 +1,4 @@
----
+﻿---
 title: Inicio (ES)
 layout: default
 nav_order: 3
@@ -20,7 +20,7 @@ Release actual: **v1.1.0**.
 ## Contenido
 
 - **[Novedades](novedades/)** — resumen de cambios desde
-  v1.0.0-rc29 (driver SQLite, triggers, DA-Web, escritura ADI,
+  v1.0.0-rc29 → v1.5.0 (driver SQLite, triggers, DA-Web, escritura ADI,
   y más).
 - **[Historia del proyecto](historia/)** — cómo OpenADS creció
   desde un esqueleto mínimo hasta un motor completo compatible

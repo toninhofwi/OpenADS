@@ -1,4 +1,4 @@
----
+﻿---
 title: Home (EN)
 layout: default
 nav_order: 2
@@ -19,7 +19,7 @@ Current release: **v1.1.0**.
 ## What's in here
 
 - **[What's New](whatsnew/)** — summary of changes since
-  v1.0.0-rc29 (SQLite driver, triggers, DA-Web, ADI write, and
+  v1.0.0-rc29 → v1.5.0 (SQLite driver, triggers, DA-Web, ADI write, and
   more).
 - **[Project History](history/)** — how OpenADS grew from a
   minimal skeleton into a full ADS-compatible engine (868 commits).
