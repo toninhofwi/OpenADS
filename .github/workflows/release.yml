@@ -29,17 +29,22 @@ jobs:
             arch: x64
             preset: msvc-x64
             artifact_ext: zip
+            ace_def: ""
+            cmake_extra: ""
           - os: windows-2022
             arch: x86
             preset: msvc-x86
             artifact_ext: zip
             # x86 Harbour (rddads) expects __stdcall @N exports — see
             # dist/import-libs/gen.ps1 and src/openads_ace_x86.def.
-            cmake_extra: '-DOPENADS_ACE_DEF=${{ github.workspace }}/src/openads_ace_x86.def'
+            ace_def: src/openads_ace_x86.def
+            cmake_extra: ""
           - os: ubuntu-24.04
             arch: x64
             preset: ninja-clang
             artifact_ext: tar.gz
+            ace_def: ""
+            cmake_extra: ""
           # One macOS leg builds a universal (arm64 + x86_64)
           # binary on the Apple-Silicon runner — GitHub's Intel
           # macos-13 runners are scarce and stall the release in
@@ -48,6 +53,7 @@ jobs:
             arch: universal
             preset: default
             artifact_ext: tar.gz
+            ace_def: ""
             cmake_extra: '-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"'
 
     steps:
@@ -70,10 +76,19 @@ jobs:
 
       - name: Configure
         shell: bash
+        env:
+          ACE_DEF_REL: ${{ matrix.ace_def }}
         run: |
+          set -euo pipefail
+          ROOT="${GITHUB_WORKSPACE//\\//}"
+          ACE_DEF_ARG=""
+          if [ -n "${ACE_DEF_REL}" ]; then
+            ACE_DEF_ARG="-DOPENADS_ACE_DEF=${ROOT}/${ACE_DEF_REL}"
+          fi
           cmake --preset ${{ matrix.preset }} \
                 -DOPENADS_WITH_TLS=ON \
                 -DOPENADS_WITH_HTTP=ON \
+                ${ACE_DEF_ARG} \
                 ${{ matrix.cmake_extra }}
 
       - name: Build
