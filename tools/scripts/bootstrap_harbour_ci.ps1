@@ -80,8 +80,16 @@ Write-Host "[harbour-ci] Building Harbour (win-make install -> $InstallRoot)"
 Write-Host "[harbour-ci] Log: $buildLog"
 Write-Host "[harbour-ci] Cold build may take 45-90 minutes."
 
-# One cmd.exe line: vcvars x64, native shell, skip 3rd-party autodetect, install.
-$buildCmd = "cd /d `"$src`" && call `"$vcvars`" x64 && set SHELL=cmd.exe && set ComSpec=cmd.exe && set HB_BUILD_3RDEXT=no && win-make install HB_INSTALL_PREFIX=$prefix"
+# Use Harbour's bundled .\win-make.exe (not a random make from PATH/Git).
+# Force msvc64/x64 — auto-detect often picks mingw64 on GHA runners.
+$winMake = Join-Path $src "win-make.exe"
+if (-not (Test-Path $winMake)) {
+    Write-Error "[harbour-ci] win-make.exe missing in clone: $winMake"
+}
+
+$buildCmd = @"
+cd /d "$src" && call "$vcvars" x64 && set "SHELL=%ComSpec%" && set HB_PLATFORM=win && set HB_COMPILER=msvc64 && set HB_BUILD_3RDEXT=no && set HB_SHELL=nt && "$winMake" install HB_INSTALL_PREFIX=$prefix
+"@
 
 cmd /c "$buildCmd > `"$buildLog`" 2>&1"
 $buildExit = $LASTEXITCODE

@@ -96,7 +96,7 @@ jobs:
         id: harbour-cache
         with:
           path: ${{ runner.temp }}/harbour-ci
-          key: harbour-core-master-msvc64-v2-${{ hashFiles('tools/scripts/bootstrap_harbour_ci.ps1') }}
+          key: harbour-core-master-msvc64-v3-${{ hashFiles('tools/scripts/bootstrap_harbour_ci.ps1') }}
 
       - name: Configure OpenADS
         run: cmake --preset msvc-x64
