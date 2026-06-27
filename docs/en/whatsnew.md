@@ -6,11 +6,44 @@ nav_order: 0
 permalink: /en/whatsnew/
 ---
 
-# What's New (v1.0.0-rc29 → v1.5.0)
+# What's New (v1.0.0-rc29 → v1.5.1)
 
 This page summarises the most notable changes since the
 v1.0.0-rc29 release. For the full commit-by-commit history see
 the [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md).
+
+---
+
+## v1.5.1 Highlights
+
+### Security & remote hardening
+
+Path jail on remote `Connect`, coherent nested `LockMgr` unlock, TLS
+verification by default, and remote routing for memo/Unicode/date/raw
+field writes.
+
+### Harbour smoke CI
+
+Windows GitHub Actions job plus `run_harbour_smoke.ps1` /
+`bootstrap_harbour_ci.ps1` for end-to-end Harbour + ACE ABI validation.
+
+### Remote ABI (Fase 2)
+
+`AdsSetRelation`, `AdsSetRecord` / `AdsGetRecord`, and `AdsCustomizeAOF`
+over `tcp://`. Local `AdsAggregate` / `AdsFetchWhere` on in-process DBF
+tables.
+
+### Plus — SQLite & MSSQL navigational write
+
+SQLite and native MS SQL Server (TDS) backends now support
+`AdsAppendRecord`, `AdsSetString`, `AdsWriteRecord`, and
+`AdsDeleteRecord` — parity with MariaDB, PostgreSQL, Firebird, and ODBC.
+MSSQL `ADS_STRING` fields are padded to declared width on read.
+
+### Engine
+
+Committed ADT/ADI fixtures for CI; VFP `0x32` header (autoinc + nullable
+columns together).
 
 ---
 

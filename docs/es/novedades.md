@@ -6,11 +6,41 @@ nav_order: 0
 permalink: /es/novedades/
 ---
 
-# Novedades (v1.0.0-rc29 → v1.5.0)
+# Novedades (v1.0.0-rc29 → v1.5.1)
 
 Esta página resume los cambios más destacados desde la versión
 v1.0.0-rc29. Para el historial completo de commits, consulta el
 [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md).
+
+---
+
+## Destacados v1.5.1
+
+### Seguridad y endurecimiento remoto
+
+Path jail en `Connect` remoto, unlock anidado coherente en `LockMgr`,
+verificación TLS por defecto, y escrituras remotas de memo/Unicode/fecha/raw.
+
+### Harbour smoke CI
+
+Job Windows en GitHub Actions + scripts `run_harbour_smoke.ps1` /
+`bootstrap_harbour_ci.ps1`.
+
+### ABI remoto (Fase 2)
+
+`AdsSetRelation`, `AdsSetRecord` / `AdsGetRecord`, `AdsCustomizeAOF` en
+`tcp://`. `AdsAggregate` / `AdsFetchWhere` local en tablas DBF.
+
+### Plus — escritura navegacional SQLite y MSSQL
+
+Backends SQLite y MS SQL Server nativo (TDS) con
+`AdsAppendRecord` / `AdsSetString` / `AdsWriteRecord` /
+`AdsDeleteRecord` — paridad con MariaDB, PostgreSQL, Firebird y ODBC.
+Relleno de `ADS_STRING` en lectura MSSQL.
+
+### Motor
+
+Fixtures ADT/ADI en el repositorio; cabecera VFP `0x32` (autoinc + nullable).
 
 ---
 

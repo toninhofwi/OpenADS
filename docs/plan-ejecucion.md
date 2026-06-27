@@ -48,15 +48,18 @@ están hechos en esta sesión o antes; el resto sigue el orden de prioridad.
 
 ---
 
-## Fase 2 — Cerrar gaps remotos (siguiente mes)
+## Fase 2 — Cerrar gaps remotos — **cerrada v1.5.1**
 
-| # | Tarea | Prioridad | Esfuerzo |
-|---|-------|-----------|----------|
-| 2.1 | `AdsAggregate` / `AdsFetchWhere` en ABI local (opcodes wire ya existen) | Alta | 2–3 d |
-| 2.2 | `AdsSetRecord` remoto | Alta | 2 d |
-| 2.3 | `AdsCustomizeAOF` remoto | Media | 1–2 d |
-| 2.4 | Fixtures ADT/ADI en repo + tests CI sin skip | Alta | 1 d |
-| 2.5 | VFP header `0x32` (autoinc + NULL juntos) + test | Media | 2 d |
+| # | Tarea | Estado |
+|---|-------|--------|
+| 2.1 | `AdsAggregate` / `AdsFetchWhere` en ABI local | [x] |
+| 2.2 | `AdsSetRecord` remoto | [x] |
+| 2.3 | `AdsCustomizeAOF` remoto | [x] |
+| 2.4 | Fixtures ADT/ADI en repo + tests CI sin skip | [x] |
+| 2.5 | VFP header `0x32` (autoinc + NULL juntos) + test | [x] |
+
+**Plus write (post-Fase 2, mismo release):** SQLite y MSSQL nativo — write navegacional
+(`AdsAppendRecord` / `AdsSetString` / `AdsWriteRecord` / `AdsDeleteRecord`).
 
 ---
 
@@ -88,24 +91,22 @@ import SAP una sola vez vía `tools/import_dd`; no perseguir round-trip binario 
 
 ## Fase 5 — Producto y docs
 
-| # | Tarea |
-|---|-------|
-| 5.1 | Release v1.5.1 con changelog (seguridad + CI smoke + SetRelation remoto) |
-| 5.2 | DDL `ALTER`/`DROP` — enganchar hooks backend (ya parseado en v1.5.0) |
-| 5.3 | DaWeb: RI dropdown, grupos de usuario, grupos `DB:Public`… |
-| 5.4 | Harbour smoke Linux en CI (después de Windows estable) |
-| 5.5 | README: `openace64.dll` rename, `bindings/php` vs `php_ext` |
+| # | Tarea | Estado |
+|---|-------|--------|
+| 5.1 | Release v1.5.1 con changelog | [x] |
+| 5.2 | DDL `ALTER`/`DROP` — enganchar hooks backend (ya parseado en v1.5.0) | [ ] |
+| 5.3 | DaWeb: RI dropdown, grupos de usuario, grupos `DB:Public`… | [ ] |
+| 5.4 | Harbour smoke Linux en CI (después de Windows estable) | [ ] |
+| 5.5 | README: `openace64.dll` rename, `bindings/php` vs `php_ext` | [ ] |
 
 ---
 
-## Orden de trabajo inmediato (esta sesión)
+## Orden de trabajo inmediato (próxima sesión)
 
-1. ~~Plan completo en `docs/plan-ejecucion.md`~~
-2. ~~Harbour smoke CI (Windows) — scripts + job CI; smoke local OK~~
-3. ~~Remote `AdsSetRelation` — implementado + tests wire OK~~
-4. ~~Build + tests SetRelation verdes~~ (`openads_unit_tests --test-case="*SetRelation*"`)
-5. Push a `main` y confirmar job `harbour-smoke` en GitHub Actions
-6. Commit / tag sugerido: `v1.5.1` o rc
+1. Confirmar job `harbour-smoke` verde en GitHub Actions (primer run = cache fría)
+2. Test live MSSQL con `OPENADS_TEST_MSSQL_CONNSTR` (read padding + write)
+3. Fase 5.2 — hooks `ALTER`/`DROP` en backends SQL
+4. Fase 3.1 — documento de diseño DD v2
 
 ---
 
@@ -114,4 +115,4 @@ import SAP una sola vez vía `tools/import_dd`; no perseguir round-trip binario 
 - Plan original de revisión: conversación 2026-06-27
 - `TODO.md` — backlog técnico detallado (DD, VFP, SQL…)
 - `roadmap.txt` — hitos históricos SAP vs OpenADS
-- `docs/known-issues.md` — estado v1.5.0+
+- `docs/known-issues.md` — estado v1.5.1+

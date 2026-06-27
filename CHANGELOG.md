@@ -5,6 +5,65 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.5.1 — 2026-06-27
+
+### Security & remote hardening
+
+- **Path jail on remote Connect** — client paths are canonicalized and
+  confined under `openads_serverd --data`; traversal attempts are rejected.
+- **LockMgr nested unlock** — OS byte locks remain held until the final
+  nested `unlock_*` releases them.
+- **Remote field writes** — `AdsGetMemoDataType`, `AdsSetStringW`,
+  `AdsSetJulian`, and `AdsSetFieldRaw` route through `tcp://`.
+- **TLS** — peer certificate verification on by default;
+  `OPENADS_TLS_INSECURE=1` for dev/self-signed endpoints.
+
+### CI & Harbour smoke
+
+- **`harbour-smoke` job** in GitHub Actions (Windows).
+- **`tools/scripts/run_harbour_smoke.ps1`** and
+  **`bootstrap_harbour_ci.ps1`** — portable Harbour bootstrap for CI.
+
+### Remote ABI — Fase 2 closed
+
+- **`AdsSetRelation` / `AdsSetScopedRelation`** — parent→child relations on
+  local and `tcp://` tables; `apply_relations_for_handle()` after navigation.
+- **`AdsSetRecord` / `AdsGetRecord`** — wire opcodes `0xA8`–`0xAB`.
+- **`AdsCustomizeAOF`** — wire opcodes `0xAC`/`0xAD`.
+- **`AdsAggregate` / `AdsFetchWhere`** — local in-process DBF tables (SQL
+  backends via existing aggregate path).
+
+### SQL backends — navigational write (Plus)
+
+- **SQLite write** — `AdsAppendRecord`, `AdsSetString`, `AdsWriteRecord`,
+  `AdsDeleteRecord` with rowid-keyed DML and parameterized binds
+  (`abi_plus_sqlite_write_test.cpp`, in-process).
+- **MSSQL native (TDS) write** — same ABI surface; PK discovery via
+  `INFORMATION_SCHEMA`, staging buffer, `SELECT *` refetch after DML
+  (`abi_plus_mssql_write_test.cpp`, gated on `OPENADS_TEST_MSSQL_CONNSTR`).
+- **MSSQL read fix** — `ADS_STRING` fields padded to declared width in
+  `mssql_get_field` (NVARCHAR live read test).
+
+### Engine & fixtures
+
+- **ADT/ADI fixtures** in `tests/fixtures/adi/` + generator
+  `generate_adi_fixtures`; smoke tests no longer skip for missing files.
+- **VFP header `0x32`** — autoinc and nullable columns together;
+  `_NullFlags` synthetic column when the NULL bitmap is present.
+
+### SQL Tier-1 wiring
+
+- **`BackendTxManager` hooks** — `AdsBeginTransaction` / commit / rollback /
+  `AdsSetAutoCommit` on SQLite and PostgreSQL; DML auto-commit after write.
+- **Tier-1 utilities in execution** — field optimizer and where builder
+  drive actual SQL generation on SQLite reads.
+
+### Fixes
+
+- **AOF V2** — `Like` / `IsNull` ops handled in `aof_eval` (clang `-Wswitch`).
+- **Harbour CI bootstrap** — track `harbour/core` master.
+- **Concurrent SQLite test** — tolerate minor `SQLITE_BUSY` under contention.
+
 ## 1.5.0 — 2026-06-27
 
 ### SQL Backend Tier-1 Improvements (SQLRDD Patterns)

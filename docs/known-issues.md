@@ -6,7 +6,7 @@ nav_order: 9
 
 # Known issues — current
 
-Status as of **v1.5.0** (2026-06-27).
+Status as of **v1.5.1** (2026-06-27).
 
 ## Open
 
@@ -51,17 +51,9 @@ supports `--http-user user:password`.
 Some `Ads*` entry points still return `AE_FUNCTION_NOT_AVAILABLE` on
 `tcp://` remote tables while the local path works:
 
-- `AdsSetRelation` / `AdsSetScopedRelation`
-- `AdsSetRecord`
-- `AdsCustomizeAOF`
 - `AdsGetRecordCRC`
-- `AdsAggregate` / `AdsFetchWhere` (local in-process; wire opcodes exist)
-
-### VFP combined header (0x32)
-
-Autoinc, V/Q types, and NULL-bitmap work separately. Tables that combine
-autoinc **and** nullable columns under the VFP `0x32` header signature
-may not parse correctly yet.
+- `AdsAggregate` / `AdsFetchWhere` on remote `tcp://` (local DBF + SQL
+  backends work; wire dispatch not wired yet)
 
 ### DDL execution
 
@@ -70,6 +62,14 @@ backend execution hooks are not wired yet.
 
 ## Closed recently
 
+- **VFP header 0x32 (autoinc + nullable)** — fixed v1.5.1: `_NullFlags`
+  column and correct field offsets when the NULL bitmap is present.
+- **Plus SQLite / MSSQL read-only** — fixed v1.5.1: navigational write
+  (`AdsAppendRecord` / `AdsWriteRecord` / `AdsDeleteRecord`).
+- **MSSQL NVARCHAR padding** — fixed v1.5.1: `ADS_STRING` padded to
+  declared width in `mssql_get_field`.
+- **Remote `AdsSetRelation` / `AdsSetRecord` / `AdsCustomizeAOF`** — fixed
+  v1.5.1 (Fase 2).
 - **Path traversal on remote Connect** — fixed v1.5.1: client paths are
   canonicalized and jailed under `openads_serverd --data`.
 - **LockMgr nested unlock** — fixed v1.5.1: OS byte locks stay held until
