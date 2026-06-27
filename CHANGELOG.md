@@ -12,9 +12,10 @@ the real ACE SDK.
 - **Windows x86 (32-bit) archive restored** — v1.5.1 shipped only
   `openads-*-windows-x64.zip` because the x86 MSVC leg failed at build
   time (duplicate `ENTRYPOINT` declarations in `http_server.cpp` /
-  `mgprobe`). The release workflow now verifies both `windows-x64` and
-  `windows-x86` ZIPs before publishing, and the x86 leg builds with
-  `openads_ace_x86.def` for Harbour `rddads` stdcall compatibility.
+  `mgprobe`, fixed on main). The release workflow now verifies both
+  `windows-x64` and `windows-x86` ZIPs before publishing; the x86 ZIP
+  bundles prebuilt `lib/msvc/ace32.lib` (stdcall) plus
+  `openads_ace_x86.def` for Harbour `rddads`.
 
 ### CI
 
