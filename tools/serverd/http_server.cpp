@@ -12,12 +12,6 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
-// AdsGetFieldDecimals is exported but not declared in ace.h yet —
-// forward-declare locally so we can call it from the schema endpoint.
-extern "C" UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable,
-                                            UNSIGNED8* pucField,
-                                            UNSIGNED16* pusDec);
-
 #include <algorithm>
 #include <cstdint>
 #include <cstring>

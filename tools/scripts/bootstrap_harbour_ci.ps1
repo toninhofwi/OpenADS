@@ -2,6 +2,8 @@
 # Installs into $InstallRoot (default: $env:RUNNER_TEMP\harbour-ci).
 # Uses actions/cache keyed on this script's hash - first run builds from
 # source (~45-90 min); subsequent runs reuse the cache.
+#
+# Harbour does not ship a root CMakeLists.txt; it builds with win-make + MSVC.
 
 param(
     [string]$InstallRoot = $(if ($env:HARBOUR_CI_ROOT) { $env:HARBOUR_CI_ROOT }
@@ -23,35 +25,60 @@ if (Test-Path $hbmk2) {
 }
 
 $src = Join-Path $env:RUNNER_TEMP "harbour-src"
-if (-not (Test-Path (Join-Path $src "CMakeLists.txt"))) {
+$makefile = Join-Path $src "Makefile"
+if (-not (Test-Path $makefile)) {
     Write-Host "[harbour-ci] Cloning Harbour ($HarbourRef) from $HarbourRepo ..."
     if (Test-Path $src) { Remove-Item -Recurse -Force $src }
     git clone --depth 1 --branch $HarbourRef $HarbourRepo $src
     if ($LASTEXITCODE -ne 0) {
         Write-Error "[harbour-ci] git clone failed (exit $LASTEXITCODE)"
     }
-    if (-not (Test-Path (Join-Path $src "CMakeLists.txt"))) {
-        Write-Error "[harbour-ci] Harbour source tree missing after clone: $src"
+    if (-not (Test-Path $makefile)) {
+        Write-Error "[harbour-ci] Harbour source tree missing after clone (no Makefile): $src"
     }
 }
 
-$build = Join-Path $src "build-ci"
-Write-Host "[harbour-ci] Configuring CMake build in $build ..."
-cmake -S $src -B $build -G "Visual Studio 17 2022" -A x64 `
-    -DCMAKE_INSTALL_PREFIX=$InstallRoot `
-    -DHB_BUILD_CONTRIBS=ON
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "[harbour-ci] cmake configure failed (exit $LASTEXITCODE)"
+# Locate MSVC vcvarsall.bat (VS 2017+ / Build Tools).
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+if (-not (Test-Path $vswhere)) {
+    Write-Error "[harbour-ci] vswhere.exe not found - MSVC toolchain required"
+}
+$vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $vsPath) {
+    Write-Error "[harbour-ci] No MSVC installation found via vswhere"
+}
+$vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+if (-not (Test-Path $vcvars)) {
+    Write-Error "[harbour-ci] vcvarsall.bat not found: $vcvars"
 }
 
-Write-Host "[harbour-ci] Building Harbour (Release) - this may take a while ..."
-cmake --build $build --config Release --target install
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "[harbour-ci] cmake build failed (exit $LASTEXITCODE)"
+New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+$prefix = $InstallRoot -replace '\\', '/'
+
+Write-Host "[harbour-ci] Building Harbour with win-make (install -> $InstallRoot) ..."
+Write-Host "[harbour-ci] This may take 45-90 minutes on a cold cache."
+
+$buildCmd = @"
+call "$vcvars" x64 && win-make install HB_INSTALL_PREFIX=$prefix
+"@
+
+Push-Location $src
+try {
+    cmd /c $buildCmd
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "[harbour-ci] win-make install failed (exit $LASTEXITCODE)"
+    }
+} finally {
+    Pop-Location
 }
 
 if (-not (Test-Path $hbmk2)) {
     Write-Error "[harbour-ci] hbmk2 not found after install: $hbmk2"
+}
+
+$rddads = Join-Path $InstallRoot "contrib\rddads\rddads.ch"
+if (-not (Test-Path $rddads)) {
+    Write-Warning "[harbour-ci] contrib\rddads not found at $rddads (smoke may still work via -inc)"
 }
 
 $env:HARBOUR_ROOT = $InstallRoot

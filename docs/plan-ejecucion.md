@@ -105,7 +105,7 @@ import SAP una sola vez vía `tools/import_dd`; no perseguir round-trip binario 
 
 1. Fase 3.2 — `import_dd` escribe formato nativo v2 (ver `docs/dd-v2-design.md` §8)
 2. Fase 3.3 — suite de tests DD v2
-3. CI: arreglar `harbour-smoke` bootstrap + build `msvc-x86` (fallan en último push)
+3. CI: verificar `harbour-smoke` verde tras fix bootstrap (`win-make`, no CMake) + x86 forward-decl
 4. Test live MSSQL con `OPENADS_TEST_MSSQL_CONNSTR` (read padding + write)
 
 ---

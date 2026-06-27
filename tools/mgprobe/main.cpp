@@ -13,19 +13,6 @@
 #include <cstdio>
 #include <cstring>
 
-extern "C" {
-UNSIGNED32 AdsMgConnect(UNSIGNED8*, UNSIGNED8*, UNSIGNED8*, ADSHANDLE*);
-UNSIGNED32 AdsMgDisconnect(ADSHANDLE);
-UNSIGNED32 AdsMgGetServerType(ADSHANDLE, UNSIGNED16*);
-UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE, void*, UNSIGNED16*);
-UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE, void*, UNSIGNED16*);
-UNSIGNED32 AdsMgGetCommStats(ADSHANDLE, void*, UNSIGNED16*);
-UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE, void*, UNSIGNED16*,
-                              void*, UNSIGNED16*);
-UNSIGNED32 AdsMgGetUserNames(ADSHANDLE, UNSIGNED8*, void*,
-                             UNSIGNED16*, UNSIGNED16*);
-}
-
 int main(int argc, char** argv) {
     const char* srv = (argc > 1) ? argv[1] : "local";
 
