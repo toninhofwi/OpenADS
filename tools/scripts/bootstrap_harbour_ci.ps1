@@ -75,39 +75,53 @@ Write-Host "[harbour-ci] Build log: $buildLog"
 Write-Host "[harbour-ci] This may take 45-90 minutes on a cold cache."
 
 $buildCmd = @"
-call "$vcvars" x64 && win-make install HB_INSTALL_PREFIX=$prefix
+cd /d "$src" && call "$vcvars" x64 && win-make install HB_INSTALL_PREFIX=$prefix 2>&1
 "@
 
-Push-Location $src
 try {
-    # Run build and capture output
-    cmd /c "$buildCmd" 2>&1 | Tee-Object -FilePath $buildLog
+    # Run build and capture output to file AND console
+    Write-Host "[harbour-ci] Executing: cmd /c $buildCmd"
+    cmd /c $buildCmd | Tee-Object -FilePath $buildLog
     $buildExitCode = $LASTEXITCODE
+    
+    Write-Host "[harbour-ci] Build exit code: $buildExitCode"
     
     if ($buildExitCode -ne 0) {
         Write-Host "[harbour-ci] Build failed with exit code $buildExitCode"
-        Write-Host "[harbour-ci] Last 100 lines of build output:"
-        Write-Host "---"
-        Get-Content -Path $buildLog -Tail 100
-        Write-Host "---"
-        Write-Error "[harbour-ci] win-make install failed (exit $buildExitCode)"
+        Write-Host "[harbour-ci] Last 150 lines of build output:"
+        Write-Host "=========================================="
+        Get-Content -Path $buildLog -Tail 150
+        Write-Host "=========================================="
     }
-} finally {
-    Pop-Location
+} catch {
+    Write-Error "[harbour-ci] Build execution failed: $_"
 }
 
 # Check if install was successful
 Write-Host "[harbour-ci] Checking installation at $InstallRoot ..."
 if (Test-Path (Join-Path $InstallRoot "bin")) {
     Write-Host "[harbour-ci] Contents of bin directory:"
-    Get-ChildItem -Path (Join-Path $InstallRoot "bin") -Recurse | ForEach-Object { Write-Host "  $_" }
+    Get-ChildItem -Path (Join-Path $InstallRoot "bin") -Recurse -ErrorAction SilentlyContinue | ForEach-Object { 
+        Write-Host "  $($_.FullName)" 
+    }
 } else {
-    Write-Error "[harbour-ci] No bin directory found in $InstallRoot"
+    Write-Host "[harbour-ci] WARNING: No bin directory found in $InstallRoot"
 }
 
-if (-not (Test-Path $hbmk2)) {
-    Write-Error "[harbour-ci] hbmk2 not found after install: $hbmk2"
+# Check lib directory as well
+if (Test-Path (Join-Path $InstallRoot "lib")) {
+    Write-Host "[harbour-ci] Contents of lib directory:"
+    Get-ChildItem -Path (Join-Path $InstallRoot "lib") -Recurse -ErrorAction SilentlyContinue | ForEach-Object { 
+        Write-Host "  $($_.FullName)" 
+    } | Select-Object -First 20
 }
+
+# Final check for hbmk2
+if (-not (Test-Path $hbmk2)) {
+    Write-Error "[harbour-ci] hbmk2 not found after install: $hbmk2`n`nInstallation may have failed. Check build log above for details.`n`nExpected at: $hbmk2"
+}
+
+Write-Host "[harbour-ci] hbmk2 found successfully: $hbmk2"
 
 $rddads = Join-Path $InstallRoot "contrib\rddads\rddads.ch"
 if (-not (Test-Path $rddads)) {
