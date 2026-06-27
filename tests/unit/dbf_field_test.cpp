@@ -113,3 +113,31 @@ TEST_CASE("Field parser computes record offset for each field") {
     CHECK(fields[1].record_offset == 1 + 5);
     CHECK(fields[2].record_offset == 1 + 5 + 7);
 }
+
+TEST_CASE("VFP 0x32 nullable fields shift offsets and add _NullFlags") {
+    auto buf = build_descriptors({
+        {"ID",   'I', 4, 0},
+        {"NAME", 'C', 10, 0},
+    });
+    // autoinc (0x0C) on ID, nullable (0x02) on NAME
+    buf[18]  = 0x0Cu;
+    buf[50]  = 0x02u;
+
+    auto parsed = parse_dbf_fields(buf.data(), buf.size(), 0x32);
+    REQUIRE(parsed.has_value());
+    auto fields = parsed.value();
+    REQUIRE(fields.size() == 3u);
+
+    CHECK(fields[0].name == "ID");
+    CHECK(fields[0].autoinc);
+    CHECK(fields[0].record_offset == 5);   // 1 del + 4 null bitmap
+
+    CHECK(fields[1].name == "NAME");
+    CHECK(fields[1].nullable);
+    CHECK(fields[1].null_bit == 0);
+    CHECK(fields[1].record_offset == 9);   // 5 + 4-byte ID
+
+    CHECK(fields[2].name == "_NullFlags");
+    CHECK(fields[2].record_offset == 1);
+    CHECK(fields[2].length == 4);
+}

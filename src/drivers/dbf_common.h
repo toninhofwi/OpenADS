@@ -82,7 +82,8 @@ struct DbfField {
 };
 
 util::Result<std::vector<DbfField>>
-parse_dbf_fields(const std::uint8_t* data, std::size_t size);
+parse_dbf_fields(const std::uint8_t* data, std::size_t size,
+                 std::uint8_t version = 0x03);
 
 struct DbfFieldValue {
     std::string  as_string;

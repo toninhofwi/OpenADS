@@ -80,7 +80,8 @@ DbfFieldType classify_field(char raw) {
 } // namespace
 
 util::Result<std::vector<DbfField>>
-parse_dbf_fields(const std::uint8_t* data, std::size_t size) {
+parse_dbf_fields(const std::uint8_t* data, std::size_t size,
+                 std::uint8_t version) {
     std::vector<DbfField> out;
     std::uint16_t offset = 1; // skip leading deletion byte
 
@@ -124,6 +125,24 @@ parse_dbf_fields(const std::uint8_t* data, std::size_t size) {
     for (auto& fd : out) {
         if (fd.nullable) fd.null_bit = nb++;
     }
+
+    // VFP tables (0x30/0x31/0x32) with nullable columns reserve a
+    // 4-byte null bitmap immediately after the deletion byte. Shift
+    // user-field offsets and append the synthetic _NullFlags column
+    // that maps to those bytes (see Table::is_field_null).
+    if (nb > 0 && classify(version) == DbfFamily::Vfp) {
+        for (auto& fd : out) {
+            fd.record_offset = static_cast<std::uint16_t>(fd.record_offset + 4);
+        }
+        DbfField nf;
+        nf.name          = "_NullFlags";
+        nf.raw_type      = '0';
+        nf.type          = DbfFieldType::Integer;
+        nf.length        = 4;
+        nf.record_offset = 1;
+        out.push_back(std::move(nf));
+    }
+
     return out;
 }
 

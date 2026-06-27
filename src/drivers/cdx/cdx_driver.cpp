@@ -101,7 +101,7 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     if (fd_got.value() < fd_buf.size()) {
         return util::Error{5103, 0, "field-descriptor block truncated", path};
     }
-    auto fields = parse_dbf_fields(fd_buf.data(), fd_buf.size());
+    auto fields = parse_dbf_fields(fd_buf.data(), fd_buf.size(), hdr_buf[0]);
     if (!fields) return fields.error();
     fields_ = std::move(fields).value();
     return {};
