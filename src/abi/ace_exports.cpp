@@ -124,6 +124,20 @@ UNSIGNED32 fail(int code, const char* msg) {
     return fail(openads::util::Error{code, 0, msg ? msg : "", ""});
 }
 
+// ── Tier-1 auto-commit hook ───────────────────────────────────────
+// After a successful DML operation on a SQL backend table, mark the
+// transaction dirty and fire auto-commit if the threshold is reached.
+// Returns the auto-commit result (ok or error from commit).
+template <typename TableT>
+UNSIGNED32 hook_auto_commit(TableT* tbl) {
+    if (tbl == nullptr || tbl->conn == nullptr) return ok();
+    auto& tx = tbl->conn->tx_manager();
+    if (!tx.in_transaction()) return ok();
+    tx.dirty = true;
+    tx.note_dml();
+    return ok();
+}
+
 openads::engine::TableType map_type(UNSIGNED16 t) {
     switch (t) {
         case ADS_NTX: return openads::engine::TableType::Ntx;
@@ -327,6 +341,14 @@ openads::sql_backend::SqliteTable* get_sqlite_table(ADSHANDLE h) {
     auto& s = state();
     return s.registry.lookup<openads::sql_backend::SqliteTable>(
         h, HandleKind::SqliteTable);
+}
+
+// ── SQL backend connection lookups ─────────────────────────────────
+// Returns the connection object for a SQL backend handle, or nullptr.
+openads::sql_backend::SqliteConnection* get_sqlite_conn(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::SqliteConnection>(
+        h, HandleKind::SqliteConnection);
 }
 
 std::unordered_map<Handle,
@@ -653,6 +675,12 @@ postgres_conns_map() {
     static std::unordered_map<Handle,
         std::unique_ptr<openads::sql_backend::PostgresConnection>> m;
     return m;
+}
+
+openads::sql_backend::PostgresConnection* get_postgres_conn(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::PostgresConnection>(
+        h, HandleKind::PostgresConnection);
 }
 
 std::unordered_map<Handle,
@@ -6078,7 +6106,7 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ft->conn->append_blank(ft);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(ft);
     }
 #endif
 #if defined(OPENADS_WITH_POSTGRESQL)
@@ -6087,7 +6115,7 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = pt->conn->append_blank(pt);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(pt);
     }
 #endif
 #if defined(OPENADS_WITH_MARIADB)
@@ -6096,7 +6124,7 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = mt->conn->append_blank(mt);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(mt);
     }
 #endif
 #if defined(OPENADS_WITH_ODBC)
@@ -6105,7 +6133,7 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ot->conn->append_blank(ot);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(ot);
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
@@ -6141,7 +6169,7 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ft->conn->flush_record(ft);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(ft);
     }
 #endif
 #if defined(OPENADS_WITH_POSTGRESQL)
@@ -6150,7 +6178,7 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = pt->conn->flush_record(pt);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(pt);
     }
 #endif
 #if defined(OPENADS_WITH_MARIADB)
@@ -6159,7 +6187,7 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = mt->conn->flush_record(mt);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(mt);
     }
 #endif
 #if defined(OPENADS_WITH_ODBC)
@@ -6168,7 +6196,7 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ot->conn->flush_table(ot);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(ot);
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
@@ -6241,7 +6269,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ft->conn->delete_record(ft);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(ft);
     }
 #endif
 #if defined(OPENADS_WITH_POSTGRESQL)
@@ -6250,7 +6278,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = pt->conn->delete_record(pt);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(pt);
     }
 #endif
 #if defined(OPENADS_WITH_MARIADB)
@@ -6259,7 +6287,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = mt->conn->delete_record(mt);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(mt);
     }
 #endif
 #if defined(OPENADS_WITH_ODBC)
@@ -6268,7 +6296,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ot->conn->delete_record(ot);
         if (!r) return fail(r.error());
-        return ok();
+        return hook_auto_commit(ot);
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
@@ -11458,48 +11486,166 @@ UNSIGNED32 ENTRYPOINT AdsBeginTransaction(ADSHANDLE hConnect) {
         if (!r) return fail(r.error());
         return ok();
     }
-    // SQL backend path: begin tx on all open tables for this connection
-    // (each table's BackendTableOps::begin_tx handles the actual SQL BEGIN)
-    auto kind = s.registry.kind_of(hConnect);
-    if (kind == HandleKind::SqliteConnection || kind == HandleKind::PostgresConnection ||
-        kind == HandleKind::MariaConnection  || kind == HandleKind::OdbcConnection  ||
-        kind == HandleKind::FirebirdConnection || kind == HandleKind::MssqlConnection) {
-        // For SQL backends, we track tx state on the connection itself.
-        // The actual BEGIN is deferred to the first DML on a table.
+    // SQL backend path: dispatch BEGIN to the connection's TxManager
+    if (auto* sqc = get_sqlite_conn(hConnect)) {
+        sqc->tx_manager().begin();
         return ok();
     }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        pgc->tx_manager().begin();
+        return ok();
+    }
+#endif
+    // Check if it's a table handle — get tx_manager from the table's connection
+    if (auto* st = get_sqlite_table(hConnect)) {
+        if (st->conn) { st->conn->tx_manager().begin(); return ok(); }
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hConnect)) {
+        if (pt->conn) { pt->conn->tx_manager().begin(); return ok(); }
+    }
+#endif
     return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
 }
 
 UNSIGNED32 ENTRYPOINT AdsCommitTransaction(ADSHANDLE hConnect) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
+    // Native connection path
     Connection* c = lookup_connection(hConnect);
-    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto r = c->commit_tx();
-    if (!r) return fail(r.error());
-    return ok();
+    if (c) {
+        auto r = c->commit_tx();
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    // SQL backend path
+    if (auto* sqc = get_sqlite_conn(hConnect)) {
+        sqc->tx_manager().commit();
+        return ok();
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        pgc->tx_manager().commit();
+        return ok();
+    }
+#endif
+    if (auto* st = get_sqlite_table(hConnect)) {
+        if (st->conn) { st->conn->tx_manager().commit(); return ok(); }
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hConnect)) {
+        if (pt->conn) { pt->conn->tx_manager().commit(); return ok(); }
+    }
+#endif
+    return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
 }
 
 UNSIGNED32 ENTRYPOINT AdsRollbackTransaction(ADSHANDLE hConnect) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
+    // Native connection path
     Connection* c = lookup_connection(hConnect);
-    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto r = c->rollback_tx();
-    if (!r) return fail(r.error());
-    return ok();
+    if (c) {
+        auto r = c->rollback_tx();
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    // SQL backend path
+    if (auto* sqc = get_sqlite_conn(hConnect)) {
+        sqc->tx_manager().rollback();
+        return ok();
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        pgc->tx_manager().rollback();
+        return ok();
+    }
+#endif
+    if (auto* st = get_sqlite_table(hConnect)) {
+        if (st->conn) { st->conn->tx_manager().rollback(); return ok(); }
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hConnect)) {
+        if (pt->conn) { pt->conn->tx_manager().rollback(); return ok(); }
+    }
+#endif
+    return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
 }
 
 UNSIGNED32 ENTRYPOINT AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
-    Connection* c = lookup_connection(hConnect);
-    if (!c || pbInTx == nullptr) {
+    if (pbInTx == nullptr) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     }
-    *pbInTx = c->in_tx() ? 1 : 0;
-    return ok();
+    // Native connection path
+    Connection* c = lookup_connection(hConnect);
+    if (c) {
+        *pbInTx = c->in_tx() ? 1 : 0;
+        return ok();
+    }
+    // SQL backend path
+    if (auto* sqc = get_sqlite_conn(hConnect)) {
+        *pbInTx = sqc->tx_manager().in_transaction() ? 1 : 0;
+        return ok();
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        *pbInTx = pgc->tx_manager().in_transaction() ? 1 : 0;
+        return ok();
+    }
+#endif
+    if (auto* st = get_sqlite_table(hConnect)) {
+        if (st->conn) {
+            *pbInTx = st->conn->tx_manager().in_transaction() ? 1 : 0;
+            return ok();
+        }
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hConnect)) {
+        if (pt->conn) {
+            *pbInTx = pt->conn->tx_manager().in_transaction() ? 1 : 0;
+            return ok();
+        }
+    }
+#endif
+    return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+}
+
+// M12.1 — set the auto-commit threshold on a SQL backend connection.
+// When threshold > 0, after threshold DML statements the connection
+// auto-commits. When threshold = 0, auto-commit is disabled.
+UNSIGNED32 ENTRYPOINT AdsSetAutoCommit(ADSHANDLE hConnect,
+                                       SIGNED32 nThreshold) {
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    // SQL backend path
+    if (auto* sqc = get_sqlite_conn(hConnect)) {
+        sqc->tx_manager().auto_commit_threshold = nThreshold;
+        return ok();
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        pgc->tx_manager().auto_commit_threshold = nThreshold;
+        return ok();
+    }
+#endif
+    if (auto* st = get_sqlite_table(hConnect)) {
+        if (st->conn) {
+            st->conn->tx_manager().auto_commit_threshold = nThreshold;
+            return ok();
+        }
+    }
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hConnect)) {
+        if (pt->conn) {
+            pt->conn->tx_manager().auto_commit_threshold = nThreshold;
+            return ok();
+        }
+    }
+#endif
+    return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
 }
 
 // M11.2 — set the encryption password on a connection. Affects
