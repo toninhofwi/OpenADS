@@ -87,7 +87,7 @@ jobs:
   harbour-smoke:
     name: Harbour smoke (Windows)
     runs-on: windows-2022
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
@@ -96,7 +96,7 @@ jobs:
         id: harbour-cache
         with:
           path: ${{ runner.temp }}/harbour-ci
-          key: harbour-core-master-msvc64-${{ hashFiles('tools/scripts/bootstrap_harbour_ci.ps1') }}
+          key: harbour-core-master-msvc64-v2-${{ hashFiles('tools/scripts/bootstrap_harbour_ci.ps1') }}
 
       - name: Configure OpenADS
         run: cmake --preset msvc-x64
@@ -107,7 +107,6 @@ jobs:
         shell: bash
 
       - name: Bootstrap Harbour
-        if: steps.harbour-cache.outputs.cache-hit != 'true'
         run: pwsh -File tools/scripts/bootstrap_harbour_ci.ps1
         env:
           HARBOUR_CI_ROOT: ${{ runner.temp }}/harbour-ci

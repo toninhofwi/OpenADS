@@ -3,7 +3,11 @@
 # Uses actions/cache keyed on this script's hash - first run builds from
 # source (~45-90 min); subsequent runs reuse the cache.
 #
-# Harbour does not ship a root CMakeLists.txt; it builds with win-make + MSVC.
+# Harbour builds with win-make (not CMake).  CI gotchas:
+#   - Do NOT set HB_COMPILER=msvc on x64 (breaks includes -> "No rule to make target '.mk'").
+#     Let vcvars x64 + ml64.exe auto-detect msvc64.
+#   - Force SHELL=cmd.exe so Git's usr/bin/sh.exe is not picked up.
+#   - HB_BUILD_3RDEXT=no skips bundled png/zlib/etc. (not needed for rddads smoke).
 
 param(
     [string]$InstallRoot = $(if ($env:HARBOUR_CI_ROOT) { $env:HARBOUR_CI_ROOT }
@@ -15,149 +19,89 @@ param(
 $ErrorActionPreference = "Stop"
 $env:GIT_TERMINAL_PROMPT = "0"
 
-# Try multiple possible locations for hbmk2
-$possibleHbmk2Paths = @(
-    (Join-Path $InstallRoot "bin\win\msvc64\hbmk2.exe"),
-    (Join-Path $InstallRoot "bin\win\mingw64\hbmk2.exe"),
-    (Join-Path $InstallRoot "bin\hbmk2.exe")
-)
-
-$hbmk2 = $null
-foreach ($path in $possibleHbmk2Paths) {
-    if (Test-Path $path) {
-        $hbmk2 = $path
-        break
+function Find-Hbmk2 {
+    param([string]$Root)
+    $candidates = @(
+        (Join-Path $Root "bin\win\msvc64\hbmk2.exe"),
+        (Join-Path $Root "bin\win\mingw64\hbmk2.exe"),
+        (Join-Path $Root "bin\hbmk2.exe")
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { return $p }
     }
+    return $null
 }
 
+$hbmk2 = Find-Hbmk2 $InstallRoot
 if ($hbmk2) {
-    Write-Host "[harbour-ci] Reusing cached toolchain at $InstallRoot"
-    Write-Host "[harbour-ci] Found hbmk2 at: $hbmk2"
+    Write-Host "[harbour-ci] Reusing toolchain at $InstallRoot"
+    Write-Host "[harbour-ci] hbmk2: $hbmk2"
     $env:HARBOUR_ROOT = $InstallRoot
-    $hbBin = Split-Path $hbmk2
-    $env:PATH = "$hbBin;$env:PATH"
+    $env:PATH = "$(Split-Path $hbmk2);$env:PATH"
     exit 0
 }
 
 $src = Join-Path $env:RUNNER_TEMP "harbour-src"
 $makefile = Join-Path $src "Makefile"
 if (-not (Test-Path $makefile)) {
-    Write-Host "[harbour-ci] Cloning Harbour ($HarbourRef) from $HarbourRepo ..."
+    Write-Host "[harbour-ci] Cloning Harbour ($HarbourRef) ..."
     if (Test-Path $src) { Remove-Item -Recurse -Force $src }
-    
     git clone --depth 1 --branch $HarbourRef $HarbourRepo $src
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "[harbour-ci] git clone failed with exit code $LASTEXITCODE"
+        Write-Error "[harbour-ci] git clone failed (exit $LASTEXITCODE)"
     }
-    
-    # Additional diagnostics if source directory is missing
-    if (-not (Test-Path $src)) {
-        Write-Error "[harbour-ci] Source directory not created after clone: $src"
-    }
-    
-    # List directory contents for debugging
-    if (Test-Path $src) {
-        $items = Get-ChildItem $src -ErrorAction SilentlyContinue | Measure-Object
-        Write-Host "[harbour-ci] Source directory contains $($items.Count) items"
-    }
-    
     if (-not (Test-Path $makefile)) {
-        Write-Error "[harbour-ci] Harbour source tree missing after clone (no Makefile): $src"
+        Write-Error "[harbour-ci] Clone missing Makefile: $src"
     }
 }
 
-# Locate MSVC vcvarsall.bat (VS 2017+ / Build Tools).
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) {
-    Write-Error "[harbour-ci] vswhere.exe not found - MSVC toolchain required"
+    Write-Error "[harbour-ci] vswhere.exe not found"
 }
 $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vsPath) {
-    Write-Error "[harbour-ci] No MSVC installation found via vswhere"
+    Write-Error "[harbour-ci] No MSVC installation found"
 }
 $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
 if (-not (Test-Path $vcvars)) {
     Write-Error "[harbour-ci] vcvarsall.bat not found: $vcvars"
 }
 
+# Drop a poisoned partial cache so the next save is clean.
+if (Test-Path $InstallRoot) {
+    Remove-Item -Recurse -Force $InstallRoot
+}
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $prefix = $InstallRoot -replace '\\', '/'
 
-# Create a log file for the build output
 $buildLog = Join-Path $env:RUNNER_TEMP "harbour-build.log"
-Write-Host "[harbour-ci] Building Harbour with win-make (install -> $InstallRoot) ..."
-Write-Host "[harbour-ci] Build log: $buildLog"
-Write-Host "[harbour-ci] This may take 45-90 minutes on a cold cache."
-Write-Host "[harbour-ci] VCVARS: $vcvars"
+Write-Host "[harbour-ci] Building Harbour (win-make install -> $InstallRoot)"
+Write-Host "[harbour-ci] Log: $buildLog"
+Write-Host "[harbour-ci] Cold build may take 45-90 minutes."
 
-# Build command that sets MSVC environment and compiles with MSVC
-$buildCmd = @"
-cd /d "$src" && call "$vcvars" x64 && set HB_COMPILER=msvc && win-make install HB_INSTALL_PREFIX=$prefix 2>&1
-"@
+# One cmd.exe line: vcvars x64, native shell, skip 3rd-party autodetect, install.
+$buildCmd = "cd /d `"$src`" && call `"$vcvars`" x64 && set SHELL=cmd.exe && set ComSpec=cmd.exe && set HB_BUILD_3RDEXT=no && win-make install HB_INSTALL_PREFIX=$prefix"
 
-try {
-    # Run build and capture output to file AND console
-    Write-Host "[harbour-ci] Executing build command..."
-    cmd /c $buildCmd | Tee-Object -FilePath $buildLog
-    $buildExitCode = $LASTEXITCODE
-    
-    Write-Host "[harbour-ci] Build exit code: $buildExitCode"
-    
-    if ($buildExitCode -ne 0) {
-        Write-Host "[harbour-ci] WARNING: Build completed with exit code $buildExitCode"
-        Write-Host "[harbour-ci] Last 150 lines of build output:"
-        Write-Host "=========================================="
-        Get-Content -Path $buildLog -Tail 150
-        Write-Host "=========================================="
-        Write-Host "[harbour-ci] Continuing to check for installed binaries..."
-    }
-} catch {
-    Write-Error "[harbour-ci] Build execution failed: $_"
+cmd /c "$buildCmd > `"$buildLog`" 2>&1"
+$buildExit = $LASTEXITCODE
+Write-Host "[harbour-ci] win-make exit code: $buildExit"
+if ($buildExit -ne 0) {
+    Write-Host "[harbour-ci] Last 80 lines of build log:"
+    Get-Content -Path $buildLog -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+    Write-Error "[harbour-ci] win-make install failed (exit $buildExit)"
 }
 
-# Check if install was successful - search for hbmk2 in multiple locations
-Write-Host "[harbour-ci] Checking installation at $InstallRoot ..."
-
-$hbmk2 = $null
-foreach ($path in $possibleHbmk2Paths) {
-    if (Test-Path $path) {
-        $hbmk2 = $path
-        Write-Host "[harbour-ci] Found hbmk2 at: $hbmk2"
-        break
-    }
-}
-
-if (Test-Path (Join-Path $InstallRoot "bin")) {
-    Write-Host "[harbour-ci] Contents of bin directory structure:"
-    Get-ChildItem -Path (Join-Path $InstallRoot "bin") -Recurse -ErrorAction SilentlyContinue | ForEach-Object { 
-        Write-Host "  $($_.FullName)" 
-    }
-} else {
-    Write-Host "[harbour-ci] WARNING: No bin directory found in $InstallRoot"
-}
-
-# Check lib directory as well
-if (Test-Path (Join-Path $InstallRoot "lib")) {
-    Write-Host "[harbour-ci] Contents of lib directory (first 20 items):"
-    Get-ChildItem -Path (Join-Path $InstallRoot "lib") -Recurse -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { 
-        Write-Host "  $($_.FullName)" 
-    }
-}
-
-# Final check for hbmk2
+$hbmk2 = Find-Hbmk2 $InstallRoot
 if (-not $hbmk2) {
-    Write-Error "[harbour-ci] hbmk2 not found after install!`n`nSearched in:`n  - $($possibleHbmk2Paths -join "`n  - ")`n`nInstallation may have failed. Check build log above for details."
+    Write-Error "[harbour-ci] hbmk2 not found under $InstallRoot after install"
 }
-
-Write-Host "[harbour-ci] SUCCESS: hbmk2 found at: $hbmk2"
 
 $rddads = Join-Path $InstallRoot "contrib\rddads\rddads.ch"
 if (-not (Test-Path $rddads)) {
-    Write-Warning "[harbour-ci] contrib\rddads not found at $rddads (smoke may still work via -inc)"
+    Write-Warning "[harbour-ci] contrib\rddads\rddads.ch missing (smoke uses -inc={HB_INSTALL}\contrib\rddads)"
 }
 
 $env:HARBOUR_ROOT = $InstallRoot
-$hbBin = Split-Path $hbmk2
-$env:PATH = "$hbBin;$env:PATH"
+$env:PATH = "$(Split-Path $hbmk2);$env:PATH"
 Write-Host "[harbour-ci] Ready: $hbmk2"
-Write-Host "[harbour-ci] PATH updated with: $hbBin"
