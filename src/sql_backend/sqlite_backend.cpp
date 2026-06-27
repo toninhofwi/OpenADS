@@ -130,6 +130,16 @@ util::Result<void> apply_cipher_key(sqlite3* db, const std::string& key) {
 #endif
 }
 
+std::string quote_ident_sqlite(const std::string& name) {
+    std::string out = "\"";
+    for (char c : name) {
+        if (c == '"') out += '"';
+        out += c;
+    }
+    out += '"';
+    return out;
+}
+
 std::size_t field_index_ci(const SqliteTable& tbl, const std::string& name) {
     std::string want = name;
     for (auto& c : want) {

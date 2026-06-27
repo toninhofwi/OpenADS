@@ -70,6 +70,14 @@ public:
     // classifies the statement, so no SQL keyword parsing is needed.
     util::Result<std::unique_ptr<SqliteTable>> run_sql(const std::string& sql);
 
+    // Navigational write (mirrors MariaDB / Firebird backends).
+    util::Result<void> append_blank(SqliteTable* tbl);
+    util::Result<void> set_field(SqliteTable* tbl,
+                                 const std::string& field_name,
+                                 const std::string& value);
+    util::Result<void> flush_record(SqliteTable* tbl);
+    util::Result<void> delete_record(SqliteTable* tbl);
+
     const std::string& db_path() const noexcept { return db_path_; }
 
     // Execute a simple SQL statement (no result set). Used by the

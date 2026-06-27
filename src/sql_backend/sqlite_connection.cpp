@@ -102,7 +102,8 @@ util::Result<void> load_current_row(sqlite3* db, SqliteTable* tbl) {
     // Use the field optimizer's select fragment (may be "*" or a column list).
     const std::string sel = tbl->field_optimizer.select_fragment();
     const std::string sql =
-        "SELECT " + sel + " FROM \"" + tbl->name + "\" WHERE rowid=?1";
+        "SELECT " + sel + " FROM " + quote_ident_sqlite(tbl->name) +
+        " WHERE rowid=?1";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db, sql.c_str(),
                            static_cast<int>(sql.size()),
@@ -235,7 +236,7 @@ namespace {
 // escapes string literals and only emits known functions), so it is spliced
 // into the SELECT verbatim — mirroring how the table name is here.
 util::Result<void> load_rowids(sqlite3* db, SqliteTable* tbl) {
-    std::string sql = "SELECT rowid FROM \"" + tbl->name + "\"";
+    std::string sql = "SELECT rowid FROM " + quote_ident_sqlite(tbl->name);
     if (!tbl->where_filter.empty()) {
         sql += " WHERE (" + tbl->where_filter + ")";
     }
@@ -673,6 +674,211 @@ SqliteConnection::run_sql(const std::string& sql) {
     return tbl;
 #else
     (void)sql;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::append_blank(SqliteTable* tbl) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid sqlite append", ""};
+    }
+    if (tbl->is_result) {
+        return util::Error{5004, 0, "write not supported on result cursor", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_table_impl(impl_->db, tbl); !d) return d.error();
+    }
+    const std::size_t n = tbl->fields.size();
+    tbl->staging_row.assign(n, std::string{});
+    tbl->staging_nulls.assign(n, true);
+    tbl->pending_append = true;
+    tbl->row_dirty      = true;
+    tbl->row_valid      = true;
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::set_field(
+    SqliteTable* tbl, const std::string& field_name, const std::string& value) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid sqlite set_field", ""};
+    }
+    if (tbl->is_result) {
+        return util::Error{5004, 0, "write not supported on result cursor", ""};
+    }
+    if (!tbl->row_valid && !tbl->pending_append) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    if (!tbl->fields_cached) {
+        return util::Error{5001, 0, "schema not cached", ""};
+    }
+    const std::size_t idx = field_index_ci(*tbl, field_name);
+    if (idx == static_cast<std::size_t>(-1)) {
+        return util::Error{5063, 0, "column not found", field_name};
+    }
+    if (!tbl->row_dirty && !tbl->pending_append) {
+        tbl->staging_row   = tbl->current_row;
+        tbl->staging_nulls = tbl->current_nulls;
+    }
+    if (tbl->staging_row.size() < tbl->fields.size()) {
+        tbl->staging_row.resize(tbl->fields.size());
+        tbl->staging_nulls.resize(tbl->fields.size(), true);
+    }
+    tbl->staging_row[idx]   = value;
+    tbl->staging_nulls[idx] = false;
+    tbl->row_dirty          = true;
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    (void)field_name;
+    (void)value;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::flush_record(SqliteTable* tbl) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid sqlite flush", ""};
+    }
+    if (tbl->is_result) {
+        return util::Error{5004, 0, "write not supported on result cursor", ""};
+    }
+    if (!tbl->row_dirty && !tbl->pending_append) return util::Result<void>{};
+    if (!tbl->fields_cached) {
+        return util::Error{5001, 0, "schema not cached", ""};
+    }
+
+    sqlite3* db = impl_->db;
+    const std::string qtbl = quote_ident_sqlite(tbl->name);
+
+    if (tbl->pending_append) {
+        std::string cols, marks;
+        std::vector<std::size_t> col_idxs;
+        for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+            if (i >= tbl->staging_nulls.size() || tbl->staging_nulls[i]) {
+                continue;
+            }
+            if (!cols.empty()) {
+                cols += ", ";
+                marks += ", ";
+            }
+            cols += quote_ident_sqlite(tbl->fields[i].name);
+            marks += "?";
+            col_idxs.push_back(i);
+        }
+        if (col_idxs.empty()) {
+            return util::Error{5001, 0, "insert has no columns", tbl->name};
+        }
+        const std::string sql =
+            "INSERT INTO " + qtbl + " (" + cols + ") VALUES (" + marks + ")";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(),
+                               static_cast<int>(sql.size()),
+                               &stmt, nullptr) != SQLITE_OK) {
+            return sqlite_error(db, "prepare insert");
+        }
+        for (std::size_t b = 0; b < col_idxs.size(); ++b) {
+            const std::string& v = tbl->staging_row[col_idxs[b]];
+            sqlite3_bind_text(stmt, static_cast<int>(b + 1), v.c_str(),
+                              static_cast<int>(v.size()), SQLITE_TRANSIENT);
+        }
+        const int rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) return sqlite_error(db, "insert");
+
+        const std::int64_t new_rowid = sqlite3_last_insert_rowid(db);
+        tbl->pending_append = false;
+        tbl->row_dirty      = false;
+        if (auto r = load_rowids(db, tbl); !r) return r.error();
+        return position_at_rowid(db, tbl, new_rowid);
+    }
+
+    if (!tbl->positioned || tbl->pos >= tbl->rowids.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    const std::int64_t rowid = tbl->rowids[tbl->pos];
+
+    std::string set_clause;
+    for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+        if (!set_clause.empty()) set_clause += ", ";
+        set_clause += quote_ident_sqlite(tbl->fields[i].name) + " = ?";
+    }
+    const std::string sql =
+        "UPDATE " + qtbl + " SET " + set_clause + " WHERE rowid = ?";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(),
+                           static_cast<int>(sql.size()),
+                           &stmt, nullptr) != SQLITE_OK) {
+        return sqlite_error(db, "prepare update");
+    }
+    for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+        const int bind_idx = static_cast<int>(i + 1);
+        if (i < tbl->staging_nulls.size() && tbl->staging_nulls[i]) {
+            sqlite3_bind_null(stmt, bind_idx);
+        } else if (i < tbl->staging_row.size()) {
+            const std::string& v = tbl->staging_row[i];
+            sqlite3_bind_text(stmt, bind_idx, v.c_str(),
+                              static_cast<int>(v.size()), SQLITE_TRANSIENT);
+        } else {
+            sqlite3_bind_null(stmt, bind_idx);
+        }
+    }
+    sqlite3_bind_int64(stmt, static_cast<int>(tbl->fields.size() + 1), rowid);
+
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) return sqlite_error(db, "update");
+
+    tbl->row_dirty = false;
+    tbl->current_rowid = rowid;
+    return load_current_row(db, tbl);
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::delete_record(SqliteTable* tbl) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid sqlite delete", ""};
+    }
+    if (tbl->is_result) {
+        return util::Error{5004, 0, "write not supported on result cursor", ""};
+    }
+    if (tbl->pending_append) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    if (!tbl->positioned || tbl->pos >= tbl->rowids.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    const std::int64_t rowid = tbl->rowids[tbl->pos];
+
+    const std::string sql =
+        "DELETE FROM " + quote_ident_sqlite(tbl->name) + " WHERE rowid = ?";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(impl_->db, sql.c_str(),
+                           static_cast<int>(sql.size()),
+                           &stmt, nullptr) != SQLITE_OK) {
+        return sqlite_error(impl_->db, "prepare delete");
+    }
+    sqlite3_bind_int64(stmt, 1, rowid);
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) return sqlite_error(impl_->db, "delete");
+
+    tbl->row_dirty      = false;
+    tbl->pending_append = false;
+    if (auto r = load_rowids(impl_->db, tbl); !r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl;
     return util::Error{5004, 0, "sqlite backend disabled", ""};
 #endif
 }

@@ -23,4 +23,6 @@ util::Result<void> apply_cipher_key(sqlite3* db, const std::string& key);
 
 std::size_t field_index_ci(const SqliteTable& tbl, const std::string& name);
 
+std::string quote_ident_sqlite(const std::string& name);
+
 } // namespace openads::sql_backend

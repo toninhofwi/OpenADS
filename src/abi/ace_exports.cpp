@@ -1662,6 +1662,9 @@ UNSIGNED32 mssql_get_field(ADSHANDLE hTable, UNSIGNED8* pucField,
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
     if (is_null) val.clear();
+    if (st->field_type(fi) == ADS_STRING) {
+        val = pad_char_field(std::move(val), st->field_length(fi));
+    }
     openads::abi::copy_to_caller(pucBuf, pulLen, val);
     return ok();
 }
@@ -6330,6 +6333,15 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
         return hook_auto_commit(ot);
     }
 #endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = st->conn->append_blank(st);
+        if (!r) return fail(r.error());
+        return hook_auto_commit(st);
+    }
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     if (auto* mt = get_mssql_table(hTable)) {
         if (mt->conn == nullptr)
@@ -6394,6 +6406,15 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
         auto r = ot->conn->flush_table(ot);
         if (!r) return fail(r.error());
         return hook_auto_commit(ot);
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = st->conn->flush_record(st);
+        if (!r) return fail(r.error());
+        return hook_auto_commit(st);
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
@@ -6497,6 +6518,15 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
         auto r = ot->conn->delete_record(ot);
         if (!r) return fail(r.error());
         return hook_auto_commit(ot);
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = st->conn->delete_record(st);
+        if (!r) return fail(r.error());
+        return hook_auto_commit(st);
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
@@ -6667,6 +6697,20 @@ UNSIGNED32 ENTRYPOINT AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (pucValue != nullptr && ulLen > 0)
             val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
         auto r = ot->conn->set_field(ot, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0)
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        auto r = st->conn->set_field(st, fname, val);
         if (!r) return fail(r.error());
         return ok();
     }

@@ -51,6 +51,13 @@ struct SqliteTable {
 
     bool last_seek_found = false;
 
+    // Write staging: append_blank/set_field stage values; flush_record emits
+    // INSERT (pending_append) or rowid-keyed UPDATE.
+    std::vector<std::string> staging_row;
+    std::vector<bool>        staging_nulls;
+    bool                     pending_append = false;
+    bool                     row_dirty      = false;
+
     // Result-set cursor mode (AdsExecuteSQLDirect SELECT passthrough): rows are
     // materialized in memory instead of fetched per-rowid from a base table, so
     // navigation serves `current_row` straight from `result_rows[pos]`.
