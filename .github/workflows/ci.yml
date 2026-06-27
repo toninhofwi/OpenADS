@@ -111,6 +111,7 @@ jobs:
         env:
           HARBOUR_CI_ROOT: ${{ runner.temp }}/harbour-ci
           OPENADS_ROOT: ${{ github.workspace }}
+          OPENADS_BUILD: ${{ github.workspace }}/build/msvc-x64
           GIT_TERMINAL_PROMPT: "0"
 
       - name: Run Harbour smoke

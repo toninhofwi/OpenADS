@@ -9,7 +9,10 @@ param(
     [string]$HarbourRepo = "https://github.com/harbour/core.git",
     [string]$HarbourRef  = "master",
     [string]$OpenAdsRoot  = $(if ($env:OPENADS_ROOT) { $env:OPENADS_ROOT }
-                              else { (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path })
+                              else { (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }),
+    [string]$OpenAdsBuild = $(if ($env:OPENADS_BUILD) { $env:OPENADS_BUILD }
+                               else { Join-Path $(if ($env:OPENADS_ROOT) { $env:OPENADS_ROOT }
+                                                  else { (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }) "build\msvc-x64" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,12 +79,28 @@ function Ensure-HarbourSrc {
     return $Src
 }
 
+function Resolve-OpenAdsAceLib {
+    param(
+        [string]$OpenAdsRoot,
+        [string]$OpenAdsBuild
+    )
+    $candidates = @(
+        (Join-Path $OpenAdsBuild "src\Release\openace64.lib"),
+        (Join-Path $OpenAdsRoot "dist\import-libs\x64\msvc\ace64.lib")
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
 function Install-RddadsContrib {
     param(
         [string]$HarbourSrc,
         [string]$InstallRoot,
         [string]$Hbmk2,
-        [string]$OpenAdsRoot
+        [string]$OpenAdsRoot,
+        [string]$OpenAdsBuild
     )
 
     $patch = Join-Path $OpenAdsRoot "tools\harbour_patch\rddads-compat.patch"
@@ -115,10 +134,11 @@ function Install-RddadsContrib {
     }
     Copy-Item $aceHdr (Join-Path $adsSdk "ace.h")
 
-    $aceLib = Join-Path $OpenAdsRoot "dist\import-libs\x64\msvc\ace64.lib"
-    if (-not (Test-Path $aceLib)) {
-        Write-Error "[harbour-ci] Missing OpenADS ace64 import lib: $aceLib"
+    $aceLib = Resolve-OpenAdsAceLib -OpenAdsRoot $OpenAdsRoot -OpenAdsBuild $OpenAdsBuild
+    if (-not $aceLib) {
+        Write-Error "[harbour-ci] Missing OpenADS ace import lib (build openads_ace first)"
     }
+    Write-Host "[harbour-ci] Using ace import lib: $aceLib"
     Copy-Item $aceLib (Join-Path $adsSdk "ace64.lib")
 
     $buildDir = Join-Path $env:RUNNER_TEMP "rddads-build"
@@ -180,7 +200,7 @@ if ($hbmk2) {
     Write-Host "[harbour-ci] Harbour core cached; building missing contrib/rddads ..."
     $src = Ensure-HarbourSrc $src $HarbourRepo $HarbourRef
     Install-RddadsContrib -HarbourSrc $src -InstallRoot $InstallRoot `
-        -Hbmk2 $hbmk2 -OpenAdsRoot $OpenAdsRoot
+        -Hbmk2 $hbmk2 -OpenAdsRoot $OpenAdsRoot -OpenAdsBuild $OpenAdsBuild
     $env:HARBOUR_ROOT = $InstallRoot
     $env:PATH = "$(Split-Path $hbmk2);$env:PATH"
     exit 0
@@ -240,7 +260,7 @@ if (-not $hbmk2) {
 }
 
 Install-RddadsContrib -HarbourSrc $src -InstallRoot $InstallRoot `
-    -Hbmk2 $hbmk2 -OpenAdsRoot $OpenAdsRoot
+    -Hbmk2 $hbmk2 -OpenAdsRoot $OpenAdsRoot -OpenAdsBuild $OpenAdsBuild
 
 if (-not (Test-RddadsInstalled $InstallRoot)) {
     Write-Error "[harbour-ci] contrib\rddads install verification failed"

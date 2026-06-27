@@ -90,12 +90,15 @@ if (-not (Test-Path $aceDll)) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $aceLibImport = Join-Path $smokeDir "ace64.lib"
-if (-not (Test-Path $aceLibImport)) {
-    $bundledAceLib = Join-Path $repoRoot "dist\import-libs\x64\msvc\ace64.lib"
-    if (Test-Path $bundledAceLib) {
-        Copy-Item $bundledAceLib $aceLibImport -Force
-        Write-Host "[harbour-smoke] Staged ace64.lib in smoke dir"
-    }
+$builtAceLib = Join-Path $aceLib "openace64.lib"
+$bundledAceLib = Join-Path $repoRoot "dist\import-libs\x64\msvc\ace64.lib"
+$aceLibSource = if (Test-Path $builtAceLib) { $builtAceLib } elseif (Test-Path $bundledAceLib) { $bundledAceLib } else { $null }
+if (-not $aceLibSource) {
+    Write-Error "[harbour-smoke] Missing ace import lib (expected openace64.lib or dist/import-libs)"
+}
+if (-not (Test-Path $aceLibImport) -or ((Get-Item $aceLibSource).LastWriteTimeUtc -gt (Get-Item $aceLibImport).LastWriteTimeUtc)) {
+    Copy-Item $aceLibSource $aceLibImport -Force
+    Write-Host "[harbour-smoke] Staged ace64.lib from $aceLibSource"
 }
 
 $rddadsHdr = Join-Path $HarbourRoot "contrib\rddads\rddads.h"
