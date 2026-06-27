@@ -182,6 +182,16 @@ enum class Opcode : std::uint8_t {
     Aggregate          = 0xA6,
     AggregateAck       = 0xA7,
 
+    // M12.25 — raw record image read/write (AdsGetRecord / AdsSetRecord).
+    // Request GetRecord:  [u32 tid]
+    // Reply GetRecordAck: [u16 len][record bytes]
+    // Request SetRecord:  [u32 tid][u16 len][record bytes]
+    // Reply SetRecordAck: (empty)
+    GetRecord          = 0xA8,
+    GetRecordAck       = 0xA9,
+    SetRecord          = 0xAA,
+    SetRecordAck       = 0xAB,
+
     Error              = 0xFF,
 };
 

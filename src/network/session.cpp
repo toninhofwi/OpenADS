@@ -1788,6 +1788,68 @@ DispatchResult Session::dispatch(const Frame& f) {
                     static_cast<std::uint8_t>(tbl->eof() ? 1 : 0));
                 break;
             }
+            case Opcode::GetRecord: {
+                if (f.payload.size() < 4) {
+                    reply = err("GetRecord: bad payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (cursor_tbls_.find(id) != cursor_tbls_.end()) {
+                    reply = err("GetRecord: not supported on SQL cursors");
+                    break;
+                }
+                auto it = tbls_.find(id);
+                if (it == tbls_.end() || !sess_conn_) {
+                    reply = err("GetRecord: bad table id"); break;
+                }
+                auto* tbl = sess_conn_->lookup_table(it->second);
+                if (!tbl) { reply = err("GetRecord: lookup failed"); break; }
+                if (!tbl->positioned() || tbl->eof() || tbl->bof() ||
+                    tbl->recno() == 0) {
+                    reply = err("GetRecord: no current record"); break;
+                }
+                const auto& buf = tbl->record_buffer();
+                if (buf.size() > 0xFFFFu) {
+                    reply = err("GetRecord: record too large"); break;
+                }
+                reply.opcode = Opcode::GetRecordAck;
+                auto write_u16 = [](std::vector<std::uint8_t>& out,
+                                    std::uint16_t v) {
+                    out.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+                    out.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+                };
+                write_u16(reply.payload,
+                          static_cast<std::uint16_t>(buf.size()));
+                reply.payload.insert(reply.payload.end(),
+                                     buf.begin(), buf.end());
+                break;
+            }
+            case Opcode::SetRecord: {
+                if (f.payload.size() < 6) {
+                    reply = err("SetRecord: bad payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint16_t rlen = static_cast<std::uint16_t>(
+                    static_cast<std::uint16_t>(f.payload[4]) |
+                    (static_cast<std::uint16_t>(f.payload[5]) << 8));
+                if (f.payload.size() < 6u + rlen) {
+                    reply = err("SetRecord: truncated record"); break;
+                }
+                if (cursor_tbls_.find(id) != cursor_tbls_.end()) {
+                    reply = err("SetRecord: not supported on SQL cursors");
+                    break;
+                }
+                auto it = tbls_.find(id);
+                if (it == tbls_.end() || !sess_conn_) {
+                    reply = err("SetRecord: bad table id"); break;
+                }
+                auto* tbl = sess_conn_->lookup_table(it->second);
+                if (!tbl) { reply = err("SetRecord: lookup failed"); break; }
+                auto r = tbl->set_record_raw(f.payload.data() + 6,
+                                             static_cast<std::size_t>(rlen));
+                if (!r) { reply = err("SetRecord: write failed"); break; }
+                reply.opcode = Opcode::SetRecordAck;
+                break;
+            }
             case Opcode::Aggregate: {
                 // Tier-3 server-side aggregation. Payload:
                 //   [u32 tid][u16 forlen][for_expr][u8 n_aggs]

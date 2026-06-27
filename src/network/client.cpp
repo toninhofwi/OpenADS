@@ -404,6 +404,49 @@ util::Result<void> RemoteConnection::append_blank(std::uint32_t id) {
     return {};
 }
 
+util::Result<std::vector<std::uint8_t>>
+RemoteConnection::get_record(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::GetRecord;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetRecordAck ||
+        rep.value().payload.size() < 2) {
+        return util::Error{5000, 0, "GetRecord: server error", ""};
+    }
+    const auto& pl = rep.value().payload;
+    std::uint16_t len = static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(pl[0]) |
+        (static_cast<std::uint16_t>(pl[1]) << 8));
+    if (pl.size() < 2u + len) {
+        return util::Error{5000, 0, "GetRecord: truncated payload", ""};
+    }
+    return std::vector<std::uint8_t>(pl.begin() + 2, pl.begin() + 2 + len);
+}
+
+util::Result<void> RemoteConnection::set_record(std::uint32_t id,
+                                                const std::uint8_t* bytes,
+                                                std::size_t len) {
+    if (len > 0xFFFFu) {
+        return util::Error{5000, 0, "SetRecord: record too large", ""};
+    }
+    Frame req;
+    req.opcode = Opcode::SetRecord;
+    write_u32_le(id, req.payload);
+    auto ulen = static_cast<std::uint16_t>(len);
+    write_u16_le(ulen, req.payload);
+    if (bytes != nullptr && len > 0) {
+        req.payload.insert(req.payload.end(), bytes, bytes + len);
+    }
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SetRecordAck) {
+        return util::Error{5000, 0, "SetRecord: server error", ""};
+    }
+    return {};
+}
+
 util::Result<void> RemoteConnection::set_field(std::uint32_t id,
                                                 const std::string& field_name,
                                                 const std::string& value) {

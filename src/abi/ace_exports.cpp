@@ -19775,9 +19775,27 @@ UNSIGNED32 ENTRYPOINT AdsGetNumOpenTables(UNSIGNED16* p) {
 UNSIGNED32 ENTRYPOINT AdsGetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
                         UNSIGNED32* pulLen) {
     if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    if (get_remote_table(hTable))
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsGetRecord: not available for remote tables");
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pucRecord == nullptr || *pulLen == 0) {
+            auto r = rt->conn->get_record_length(rt->id);
+            if (!r) return fail(r.error());
+            *pulLen = r.value();
+            return ok();
+        }
+        auto r = rt->conn->get_record(rt->id);
+        if (!r) return fail(r.error());
+        const auto& buf = r.value();
+        const std::uint32_t need =
+            static_cast<std::uint32_t>(buf.size());
+        if (*pulLen < need) {
+            *pulLen = need;
+            return fail(openads::AE_INSUFFICIENT_BUFFER,
+                        "record buffer too small");
+        }
+        std::memcpy(pucRecord, buf.data(), need);
+        *pulLen = need;
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     if (!t->positioned()) {
@@ -20171,9 +20189,15 @@ UNSIGNED32 ENTRYPOINT AdsSetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32) { ADS_
 UNSIGNED32 ENTRYPOINT AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
                         UNSIGNED32 ulLen) {
     if (pucRecord == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null record");
-    if (get_remote_table(hTable))
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsSetRecord: not available for remote tables");
+    if (auto* rt = get_remote_table(hTable)) {
+        remote_settle_cursor(rt);
+        rt->row_valid = false;
+        rt->prefetch_queue.clear();
+        auto r = rt->conn->set_record(rt->id, pucRecord,
+                                      static_cast<std::size_t>(ulLen));
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     auto r = t->set_record_raw(pucRecord, static_cast<std::size_t>(ulLen));

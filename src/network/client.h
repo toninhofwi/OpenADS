@@ -162,6 +162,11 @@ public:
     util::Result<void>          set_field(std::uint32_t id,
                                           const std::string& field_name,
                                           const std::string& value);
+    // M12.25 — raw DBF record image at the current cursor position.
+    util::Result<std::vector<std::uint8_t>> get_record(std::uint32_t id);
+    util::Result<void>          set_record(std::uint32_t id,
+                                           const std::uint8_t* bytes,
+                                           std::size_t len);
     util::Result<void>          delete_record(std::uint32_t id);
     util::Result<void>          recall_record(std::uint32_t id);
     util::Result<void>          goto_record(std::uint32_t id,
