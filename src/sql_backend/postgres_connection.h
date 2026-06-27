@@ -92,6 +92,10 @@ public:
 
     const std::string& conninfo() const noexcept { return conninfo_; }
 
+    // Execute a simple SQL statement (no result set). Used by the
+    // transaction manager for BEGIN/COMMIT/ROLLBACK/SAVEPOINT.
+    util::Result<void> exec_sql(const std::string& sql);
+
     // ── Tier 1: Transaction management (SQLRDD pattern) ─────────────
     BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
     const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }

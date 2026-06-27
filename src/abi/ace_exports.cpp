@@ -1165,23 +1165,30 @@ UNSIGNED32 sqlite_begin_tx(ADSHANDLE hTable) {
     auto& tx = st->conn->tx_manager();
     // Wire up the SQLite backend callbacks if not already done
     if (!tx.on_begin) {
-        tx.on_begin = [](bool is_nested) {
-            // SQLite uses BEGIN (or SAVEPOINT for nested)
+        auto* conn = st->conn;
+        tx.on_begin = [conn](bool is_nested) {
+            if (!is_nested) {
+                conn->exec_sql("BEGIN");
+            } else {
+                // Nested: use SAVEPOINT
+                conn->exec_sql("SAVEPOINT sp_" + std::to_string(conn->tx_manager().nesting));
+            }
+        };
+        tx.on_commit = [conn](bool is_nested) {
             (void)is_nested;
-            // Actual exec happens in the connection's exec helper
+            conn->exec_sql("COMMIT");
         };
-        tx.on_commit = [](bool is_nested) {
-            (void)is_nested;
+        tx.on_rollback = [conn]() {
+            conn->exec_sql("ROLLBACK");
         };
-        tx.on_rollback = []() {};
-        tx.on_savepoint = [](const std::string& name) {
-            (void)name;
+        tx.on_savepoint = [conn](const std::string& name) {
+            conn->exec_sql("SAVEPOINT " + name);
         };
-        tx.on_release_savepoint = [](const std::string& name) {
-            (void)name;
+        tx.on_release_savepoint = [conn](const std::string& name) {
+            conn->exec_sql("RELEASE SAVEPOINT " + name);
         };
-        tx.on_rollback_savepoint = [](const std::string& name) {
-            (void)name;
+        tx.on_rollback_savepoint = [conn](const std::string& name) {
+            conn->exec_sql("ROLLBACK TO SAVEPOINT " + name);
         };
     }
     tx.begin();
@@ -2395,21 +2402,30 @@ UNSIGNED32 postgres_begin_tx(ADSHANDLE hTable) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto& tx = st->conn->tx_manager();
     if (!tx.on_begin) {
-        tx.on_begin = [](bool is_nested) {
+        auto* conn = st->conn;
+        tx.on_begin = [conn](bool is_nested) {
+            if (!is_nested) {
+                conn->exec_sql("BEGIN");
+            } else {
+                conn->exec_sql("SAVEPOINT sp_" + std::to_string(conn->tx_manager().nesting));
+            }
+        };
+        tx.on_commit = [conn](bool is_nested) {
             (void)is_nested;
+            // PostgreSQL needs explicit BEGIN after COMMIT
+            conn->exec_sql("COMMIT");
         };
-        tx.on_commit = [](bool is_nested) {
-            (void)is_nested;
+        tx.on_rollback = [conn]() {
+            conn->exec_sql("ROLLBACK");
         };
-        tx.on_rollback = []() {};
-        tx.on_savepoint = [](const std::string& name) {
-            (void)name;
+        tx.on_savepoint = [conn](const std::string& name) {
+            conn->exec_sql("SAVEPOINT " + name);
         };
-        tx.on_release_savepoint = [](const std::string& name) {
-            (void)name;
+        tx.on_release_savepoint = [conn](const std::string& name) {
+            conn->exec_sql("RELEASE SAVEPOINT " + name);
         };
-        tx.on_rollback_savepoint = [](const std::string& name) {
-            (void)name;
+        tx.on_rollback_savepoint = [conn](const std::string& name) {
+            conn->exec_sql("ROLLBACK TO SAVEPOINT " + name);
         };
     }
     tx.begin();

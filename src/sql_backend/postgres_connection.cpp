@@ -177,12 +177,18 @@ util::Result<void> load_current_row(PGconn* conn, PostgresTable* tbl) {
         if (!d) return d.error();
     }
 
-    // Explicit column list in tbl->fields order (NOT "SELECT *"): keeps
-    // current_row[i] aligned with fields[i] regardless of physical column order.
+    // Use the field optimizer's select fragment (may be "*" or a column list).
+    // Explicit column list keeps current_row[i] aligned with fields[i].
+    const std::string sel = tbl->field_optimizer.select_fragment();
     std::string collist;
-    for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
-        if (i > 0) collist += ", ";
-        collist += quote_ident(tbl->fields[i].name);
+    if (sel == "*") {
+        // Build the full list from fields for alignment guarantee
+        for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+            if (i > 0) collist += ", ";
+            collist += quote_ident(tbl->fields[i].name);
+        }
+    } else {
+        collist = sel;  // optimizer produced a column list
     }
     const std::string sql =
         "SELECT " + collist + " FROM " + quote_ident(tbl->name) + " WHERE " +
@@ -272,6 +278,25 @@ util::Result<PostgresConnection> PostgresConnection::open(
                        "postgresql backend requires "
                        "OPENADS_WITH_POSTGRESQL=ON",
                        ""};
+#endif
+}
+
+util::Result<void>
+PostgresConnection::exec_sql(const std::string& sql) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid()) return util::Error{5001, 0, "postgres connection not open", ""};
+    PGresult* res = PQexec(impl_->conn, sql.c_str());
+    const auto status = PQresultStatus(res);
+    if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+        std::string msg = PQerrorMessage(impl_->conn);
+        PQclear(res);
+        return util::Error{5001, 0, msg, sql};
+    }
+    PQclear(res);
+    return util::Result<void>{};
+#else
+    (void)sql;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
 #endif
 }
 
@@ -386,7 +411,8 @@ PostgresConnection::set_filter(PostgresTable* tbl, const std::string& where) {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid postgres set_filter", ""};
     }
-    tbl->where_filter = where;
+    tbl->where_builder.aof_filter = where;
+    tbl->where_filter = tbl->where_builder.build();
     return load_pk_snapshot(impl_->conn, tbl);   // reload the (filtered) snapshot
 #else
     (void)tbl; (void)where;
@@ -682,6 +708,8 @@ util::Result<void> PostgresConnection::read_field(
     if (idx >= tbl->current_row.size()) {
         return util::Error{5001, 0, "row cache mismatch", ""};
     }
+    // Track column access for the field optimizer (learning mode).
+    tbl->field_optimizer.note_column_read(field_name);
     is_null = tbl->current_nulls[idx];
     buf     = tbl->current_row[idx];
     return util::Result<void>{};
