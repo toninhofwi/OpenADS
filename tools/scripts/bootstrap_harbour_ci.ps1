@@ -68,7 +68,10 @@ if (-not (Test-Path $vcvars)) {
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $prefix = $InstallRoot -replace '\\', '/'
 
+# Create a log file for the build output
+$buildLog = Join-Path $env:RUNNER_TEMP "harbour-build.log"
 Write-Host "[harbour-ci] Building Harbour with win-make (install -> $InstallRoot) ..."
+Write-Host "[harbour-ci] Build log: $buildLog"
 Write-Host "[harbour-ci] This may take 45-90 minutes on a cold cache."
 
 $buildCmd = @"
@@ -77,12 +80,29 @@ call "$vcvars" x64 && win-make install HB_INSTALL_PREFIX=$prefix
 
 Push-Location $src
 try {
-    cmd /c $buildCmd
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "[harbour-ci] win-make install failed (exit $LASTEXITCODE)"
+    # Run build and capture output
+    cmd /c "$buildCmd" 2>&1 | Tee-Object -FilePath $buildLog
+    $buildExitCode = $LASTEXITCODE
+    
+    if ($buildExitCode -ne 0) {
+        Write-Host "[harbour-ci] Build failed with exit code $buildExitCode"
+        Write-Host "[harbour-ci] Last 100 lines of build output:"
+        Write-Host "---"
+        Get-Content -Path $buildLog -Tail 100
+        Write-Host "---"
+        Write-Error "[harbour-ci] win-make install failed (exit $buildExitCode)"
     }
 } finally {
     Pop-Location
+}
+
+# Check if install was successful
+Write-Host "[harbour-ci] Checking installation at $InstallRoot ..."
+if (Test-Path (Join-Path $InstallRoot "bin")) {
+    Write-Host "[harbour-ci] Contents of bin directory:"
+    Get-ChildItem -Path (Join-Path $InstallRoot "bin") -Recurse | ForEach-Object { Write-Host "  $_" }
+} else {
+    Write-Error "[harbour-ci] No bin directory found in $InstallRoot"
 }
 
 if (-not (Test-Path $hbmk2)) {
