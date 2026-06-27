@@ -33,6 +33,9 @@ jobs:
             arch: x86
             preset: msvc-x86
             artifact_ext: zip
+            # x86 Harbour (rddads) expects __stdcall @N exports — see
+            # dist/import-libs/gen.ps1 and src/openads_ace_x86.def.
+            cmake_extra: '-DOPENADS_ACE_DEF=${{ github.workspace }}/src/openads_ace_x86.def'
           - os: ubuntu-24.04
             arch: x64
             preset: ninja-clang
@@ -142,7 +145,11 @@ jobs:
           Copy-Item "$build/tools/serverd/Release/openads_serverd.exe" "$stage/"
           Copy-Item "$build/tools/bench/Release/openads_bench.exe"     "$stage/"
           Copy-Item LICENSE,NOTICE,README.md                $stage/
-          Copy-Item src/openads_ace.def                     "$stage/"
+          if ("${{ matrix.arch }}" -eq "x86") {
+              Copy-Item src/openads_ace_x86.def               "$stage/"
+          } else {
+              Copy-Item src/openads_ace.def                   "$stage/"
+          }
           Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -Force
           Get-Item "$stage.zip"
           "ASSET=$stage.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -181,6 +188,29 @@ jobs:
           find dist -type f \( -name "*.zip" -o -name "*.tar.gz" \) \
             -exec cp {} out/ \;
           ls -la out
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          T="${{ steps.tag.outputs.tag }}"
+          echo "version=${T#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify required Windows release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          for asset in \
+            "openads-${V}-windows-x64.zip" \
+            "openads-${V}-windows-x86.zip"; do
+            if [ ! -f "out/${asset}" ]; then
+              echo "::error::Missing required release asset: ${asset}"
+              echo "Both Windows x64 and x86 archives must be present."
+              exit 1
+            fi
+          done
+          echo "Windows x64 + x86 assets present."
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

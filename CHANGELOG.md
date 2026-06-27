@@ -5,6 +5,22 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.5.2 — 2026-06-27
+
+### Release packaging
+
+- **Windows x86 (32-bit) archive restored** — v1.5.1 shipped only
+  `openads-*-windows-x64.zip` because the x86 MSVC leg failed at build
+  time (duplicate `ENTRYPOINT` declarations in `http_server.cpp` /
+  `mgprobe`). The release workflow now verifies both `windows-x64` and
+  `windows-x86` ZIPs before publishing, and the x86 leg builds with
+  `openads_ace_x86.def` for Harbour `rddads` stdcall compatibility.
+
+### CI
+
+- **Harbour smoke** — green on GitHub Actions (`contrib/rddads` bootstrap,
+  fresh `openace64.lib` link).
+
 ## 1.5.1 — 2026-06-27
 
 ### Security & remote hardening
