@@ -1,5 +1,8 @@
 #pragma once
 
+#include "sql_backend/backend_field_optimizer.h"
+#include "sql_backend/backend_where_builder.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -54,6 +57,14 @@ struct SqliteTable {
     bool                                  is_result = false;
     std::vector<std::vector<std::string>> result_rows;
     std::vector<std::vector<bool>>        result_nulls;
+
+    // ── Tier 1: SQLRDD field-access optimizer ───────────────────────
+    // Tracks which columns are read and learns when to switch to SELECT *.
+    BackendFieldOptimizer field_optimizer;
+
+    // ── Tier 1: WHERE clause composer ───────────────────────────────
+    // Combines For, Filter, Scope, Index, AOF into a single WHERE.
+    BackendWhereBuilder where_builder;
 };
 
 } // namespace openads::sql_backend

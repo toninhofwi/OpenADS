@@ -1,5 +1,8 @@
 #pragma once
 
+#include "sql_backend/backend_field_optimizer.h"
+#include "sql_backend/backend_where_builder.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -55,6 +58,12 @@ struct PostgresTable {
     // filters via its own indexes). Set by PostgresConnection::set_filter from
     // a translated SET FILTER / AOF predicate; empty = no filter.
     std::string where_filter;
+
+    // ── Tier 1: SQLRDD field-access optimizer ───────────────────────
+    BackendFieldOptimizer field_optimizer;
+
+    // ── Tier 1: WHERE clause composer ───────────────────────────────
+    BackendWhereBuilder where_builder;
 };
 
 } // namespace openads::sql_backend

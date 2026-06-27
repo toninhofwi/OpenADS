@@ -16,6 +16,28 @@ the [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md).
 
 ## v1.5.0 Highlights
 
+### SQL Backend — Transaction Management (SQLRDD Pattern)
+
+New `BackendTxManager` provides nested transaction support for SQL
+backends: BEGIN/COMMIT with SAVEPOINT emulation at nesting > 1,
+auto-commit after N DML statements (configurable), and dirty-flag
+tracking. Available on SQLite and PostgreSQL via `BackendTableOps`
+vtable (`begin_tx`/`commit_tx`/`rollback_tx`/`set_auto_commit`).
+
+### SQL Backend — Lazy Column Loading with Learning
+
+`BackendFieldOptimizer` tracks which columns are actually read per
+table. After 5 unique single-column fetches, it automatically
+switches to `SELECT *` — avoiding repeated demand-fetches for
+tables where many columns are eventually needed.
+
+### SQL Backend — Restrictor Composition
+
+`BackendWhereBuilder` combines For clause, user filter, scope
+bounds, index restrictions, AOF predicates, and recno filters into
+a single AND-ed WHERE clause. Handles exact seek (collapses to `=`)
+and range seek.
+
 ### SQL Push-Down — 50+ New Translatable Functions
 
 The `try_emit_sql_where()` emitter now translates STR, VAL, DTOS,

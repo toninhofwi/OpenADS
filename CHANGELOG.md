@@ -7,6 +7,29 @@ the real ACE SDK.
 
 ## 1.5.0 — 2026-06-27
 
+### SQL Backend Tier-1 Improvements (SQLRDD Patterns)
+
+- **`BackendTxManager`: nested transactions + auto-commit.**
+  Shared transaction manager embedded in every SQL backend connection.
+  Supports nested BEGIN/COMMIT with SAVEPOINT emulation, auto-commit
+  after N DML statements (configurable via connection string), and
+  dirty-flag tracking. SQLRDD reference: `SR_CONNECTION:nTransacCount`,
+  `nAutoCommit`, `nIteractions`.
+- **`BackendFieldOptimizer`: lazy column loading with learning.**
+  Tracks which columns are actually read per table. After
+  `LEARNING_THRESHOLD` (5) unique single-column fetches, switches to
+  `SELECT *` to avoid repeated demand-fetches. Integrated into
+  `SqliteTable` and `PostgresTable`. SQLRDD reference:
+  `SR_WORKAREA:sqlGetValue`, `FIELD_LIST_*`.
+- **`BackendWhereBuilder`: restrictor composition.** Combines For
+  clause, user filter, scope bounds, index restrictions, AOF
+  predicates, and recno filters into a single AND-ed WHERE clause.
+  Handles exact seek (lower == upper collapses to `=`) and range
+  seek. SQLRDD reference: `SR_WORKAREA:SolveRestrictors`.
+- **`BackendTableOps` vtable: transaction ops.** New `begin_tx`,
+  `commit_tx`, `rollback_tx`, `set_auto_commit` function pointers
+  in the backend vtable. SQLite and PostgreSQL adapters registered.
+
 ### SQL Push-Down Expansion
 
 - **50+ new translatable functions.** The `try_emit_sql_where()`

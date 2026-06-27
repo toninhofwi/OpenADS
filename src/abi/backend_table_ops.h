@@ -42,6 +42,16 @@ struct BackendTableOps {
                                     const char* /*where_sql, null=all*/,
                                     const std::vector<openads::engine::AggSpec>*,
                                     std::vector<openads::engine::AggValue>*);
+    // ── Transaction management (Tier 1, SQLRDD pattern) ─────────────
+    // begin_tx: begin a transaction (or SAVEPOINT when nested).
+    // commit_tx: commit (only fires actual COMMIT at nesting=0).
+    // rollback_tx: rollback (ROLLBACK at nesting=0, ROLLBACK TO at nesting>0).
+    // set_auto_commit: configure the auto-commit threshold (0=disabled).
+    // All null when the backend has no transaction support.
+    UNSIGNED32 (*begin_tx)         (ADSHANDLE);
+    UNSIGNED32 (*commit_tx)        (ADSHANDLE);
+    UNSIGNED32 (*rollback_tx)      (ADSHANDLE);
+    UNSIGNED32 (*set_auto_commit)  (ADSHANDLE, SIGNED32 /*threshold, 0=off*/);
 };
 
 }  // namespace openads::abi

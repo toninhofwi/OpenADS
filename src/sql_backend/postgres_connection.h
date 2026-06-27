@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sql_backend/backend_tx_manager.h"
 #include "sql_backend/postgres_table.h"
 #include "sql_backend/postgres_uri.h"
 #include "engine/aggregate.h"
@@ -91,10 +92,15 @@ public:
 
     const std::string& conninfo() const noexcept { return conninfo_; }
 
+    // ── Tier 1: Transaction management (SQLRDD pattern) ─────────────
+    BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
+    const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::string           conninfo_;
+    BackendTxManager      tx_mgr_;
 };
 
 } // namespace openads::sql_backend

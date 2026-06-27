@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sql_backend/backend_tx_manager.h"
 #include "sql_backend/sqlite_table.h"
 #include "sql_backend/uri.h"
 #include "util/result.h"
@@ -71,10 +72,15 @@ public:
 
     const std::string& db_path() const noexcept { return db_path_; }
 
+    // ── Tier 1: Transaction management (SQLRDD pattern) ─────────────
+    BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
+    const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::string           db_path_;
+    BackendTxManager      tx_mgr_;
 };
 
 } // namespace openads::sql_backend

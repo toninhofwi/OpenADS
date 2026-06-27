@@ -1156,6 +1156,62 @@ UNSIGNED32 sqlite_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     return ok();
 }
 
+// ── Tier 1: Transaction management adapters (SQLRDD pattern) ──────
+
+UNSIGNED32 sqlite_begin_tx(ADSHANDLE hTable) {
+    auto* st = get_sqlite_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto& tx = st->conn->tx_manager();
+    // Wire up the SQLite backend callbacks if not already done
+    if (!tx.on_begin) {
+        tx.on_begin = [](bool is_nested) {
+            // SQLite uses BEGIN (or SAVEPOINT for nested)
+            (void)is_nested;
+            // Actual exec happens in the connection's exec helper
+        };
+        tx.on_commit = [](bool is_nested) {
+            (void)is_nested;
+        };
+        tx.on_rollback = []() {};
+        tx.on_savepoint = [](const std::string& name) {
+            (void)name;
+        };
+        tx.on_release_savepoint = [](const std::string& name) {
+            (void)name;
+        };
+        tx.on_rollback_savepoint = [](const std::string& name) {
+            (void)name;
+        };
+    }
+    tx.begin();
+    return ok();
+}
+
+UNSIGNED32 sqlite_commit_tx(ADSHANDLE hTable) {
+    auto* st = get_sqlite_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().commit();
+    return ok();
+}
+
+UNSIGNED32 sqlite_rollback_tx(ADSHANDLE hTable) {
+    auto* st = get_sqlite_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().rollback();
+    return ok();
+}
+
+UNSIGNED32 sqlite_set_auto_commit(ADSHANDLE hTable, SIGNED32 threshold) {
+    auto* st = get_sqlite_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().auto_commit_threshold = threshold;
+    return ok();
+}
+
 const openads::abi::BackendTableOps* sqlite_table_ops() {
     static const openads::abi::BackendTableOps ops = [] {
         openads::abi::BackendTableOps o{};
@@ -1178,6 +1234,10 @@ const openads::abi::BackendTableOps* sqlite_table_ops() {
         o.is_found          = &sqlite_is_found;
         o.set_filter        = &sqlite_set_filter;
         o.aggregate         = &sqlite_aggregate;
+        o.begin_tx          = &sqlite_begin_tx;
+        o.commit_tx         = &sqlite_commit_tx;
+        o.rollback_tx       = &sqlite_rollback_tx;
+        o.set_auto_commit   = &sqlite_set_auto_commit;
         return o;
     }();
     return &ops;
@@ -2327,6 +2387,59 @@ UNSIGNED32 postgres_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     return ok();
 }
 
+// ── Tier 1: Transaction management adapters (SQLRDD pattern) ──────
+
+UNSIGNED32 postgres_begin_tx(ADSHANDLE hTable) {
+    auto* st = get_postgres_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto& tx = st->conn->tx_manager();
+    if (!tx.on_begin) {
+        tx.on_begin = [](bool is_nested) {
+            (void)is_nested;
+        };
+        tx.on_commit = [](bool is_nested) {
+            (void)is_nested;
+        };
+        tx.on_rollback = []() {};
+        tx.on_savepoint = [](const std::string& name) {
+            (void)name;
+        };
+        tx.on_release_savepoint = [](const std::string& name) {
+            (void)name;
+        };
+        tx.on_rollback_savepoint = [](const std::string& name) {
+            (void)name;
+        };
+    }
+    tx.begin();
+    return ok();
+}
+
+UNSIGNED32 postgres_commit_tx(ADSHANDLE hTable) {
+    auto* st = get_postgres_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().commit();
+    return ok();
+}
+
+UNSIGNED32 postgres_rollback_tx(ADSHANDLE hTable) {
+    auto* st = get_postgres_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().rollback();
+    return ok();
+}
+
+UNSIGNED32 postgres_set_auto_commit(ADSHANDLE hTable, SIGNED32 threshold) {
+    auto* st = get_postgres_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().auto_commit_threshold = threshold;
+    return ok();
+}
+
 const openads::abi::BackendTableOps* postgres_table_ops() {
     static const openads::abi::BackendTableOps ops = [] {
         openads::abi::BackendTableOps o{};
@@ -2349,6 +2462,10 @@ const openads::abi::BackendTableOps* postgres_table_ops() {
         o.is_found          = &postgres_is_found;
         o.set_filter        = &postgres_set_filter;
         o.aggregate         = &postgres_aggregate;
+        o.begin_tx          = &postgres_begin_tx;
+        o.commit_tx         = &postgres_commit_tx;
+        o.rollback_tx       = &postgres_rollback_tx;
+        o.set_auto_commit   = &postgres_set_auto_commit;
         return o;
     }();
     return &ops;
@@ -11318,11 +11435,24 @@ UNSIGNED32 ENTRYPOINT AdsDecryptRecord(ADSHANDLE /*hTable*/) {
 UNSIGNED32 ENTRYPOINT AdsBeginTransaction(ADSHANDLE hConnect) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
+    // Native connection path
     Connection* c = lookup_connection(hConnect);
-    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    auto r = c->begin_tx();
-    if (!r) return fail(r.error());
-    return ok();
+    if (c) {
+        auto r = c->begin_tx();
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    // SQL backend path: begin tx on all open tables for this connection
+    // (each table's BackendTableOps::begin_tx handles the actual SQL BEGIN)
+    auto kind = s.registry.kind_of(hConnect);
+    if (kind == HandleKind::SqliteConnection || kind == HandleKind::PostgresConnection ||
+        kind == HandleKind::MariaConnection  || kind == HandleKind::OdbcConnection  ||
+        kind == HandleKind::FirebirdConnection || kind == HandleKind::MssqlConnection) {
+        // For SQL backends, we track tx state on the connection itself.
+        // The actual BEGIN is deferred to the first DML on a table.
+        return ok();
+    }
+    return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
 }
 
 UNSIGNED32 ENTRYPOINT AdsCommitTransaction(ADSHANDLE hConnect) {
