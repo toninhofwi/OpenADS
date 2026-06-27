@@ -3830,6 +3830,29 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         auto tbl = openads::sql_backend::MssqlTable::open(*mc, name);
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
+        st->conn      = mc;
+        st->sql_table = name;
+        if (auto pk = mc->discover_pk(name); pk) {
+            for (const std::string& col : pk.value()) {
+                for (std::size_t i = 0; i < st->field_count(); ++i) {
+                    const std::string& fn = st->field_name(i);
+                    if (fn.size() == col.size()) {
+                        bool match = true;
+                        for (std::size_t j = 0; j < fn.size(); ++j) {
+                            if (std::tolower(static_cast<unsigned char>(fn[j])) !=
+                                std::tolower(static_cast<unsigned char>(col[j]))) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            st->pk_cols.push_back(i);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         Handle gh = s.registry.register_object(
             HandleKind::MssqlTable, st.get());
         mssql_tables_map().emplace(gh, std::move(st));
@@ -6308,9 +6331,12 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
-    if (get_mssql_table(hTable)) {
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "MssqlTable: write not available in v1");
+    if (auto* mt = get_mssql_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->append_blank(mt);
+        if (!r) return fail(r.error());
+        return hook_auto_commit(mt);
     }
 #endif
     Table* t = get_table(hTable);
@@ -6371,9 +6397,12 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
-    if (get_mssql_table(hTable)) {
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "MssqlTable: write not available in v1");
+    if (auto* mt = get_mssql_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->flush_record(mt);
+        if (!r) return fail(r.error());
+        return hook_auto_commit(mt);
     }
 #endif
     Table* t = get_table(hTable);
@@ -6471,9 +6500,12 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
-    if (get_mssql_table(hTable)) {
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "MssqlTable: write not available in v1");
+    if (auto* mt = get_mssql_table(hTable)) {
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mt->conn->delete_record(mt);
+        if (!r) return fail(r.error());
+        return hook_auto_commit(mt);
     }
 #endif
     Table* t = get_table(hTable);
@@ -6635,6 +6667,20 @@ UNSIGNED32 ENTRYPOINT AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (pucValue != nullptr && ulLen > 0)
             val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
         auto r = ot->conn->set_field(ot, fname, val);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mt = get_mssql_table(hTable)) {
+        if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (mt->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::string fname(reinterpret_cast<const char*>(pucField));
+        std::string val;
+        if (pucValue != nullptr && ulLen > 0)
+            val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
+        auto r = mt->conn->set_field(mt, fname, val);
         if (!r) return fail(r.error());
         return ok();
     }

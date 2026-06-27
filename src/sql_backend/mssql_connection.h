@@ -4,17 +4,21 @@
 // handshake over a TLS-in-TDS channel:
 //   TCP connect -> PRELOGIN -> tunnelled TLS handshake -> LOGIN7 -> LOGINACK.
 //
-// v1 scope: authentication only (open / disconnect).  Table navigation and
-// query execution build on this channel in later slices.
+// Table navigation buffers a SELECT * result set in memory; navigational
+// write (append / update / delete) stages field values and flushes one
+// INSERT / UPDATE / DELETE per record, then refetches the table.
 
 #if defined(OPENADS_WITH_MSSQL)
 
+#include "sql_backend/backend_tx_manager.h"
+#include "sql_backend/mssql_table.h"
 #include "sql_backend/tds_protocol.h"
 #include "sql_backend/tds_tls_channel.h"
 #include "util/result.h"
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace openads::sql_backend {
 
@@ -44,9 +48,25 @@ public:
     // SQL text is backend-generated; NEVER put secrets or credentials in sql.
     util::Result<tds::QueryResult> query(const std::string& sql);
 
+    // Discover primary-key column names via INFORMATION_SCHEMA.
+    util::Result<std::vector<std::string>>
+        discover_pk(const std::string& table_name);
+
+    // Navigational write surface (mirrors MariaDB / ODBC backends).
+    util::Result<void> append_blank(MssqlTable* tbl);
+    util::Result<void> set_field(MssqlTable* tbl,
+                                 const std::string& field_name,
+                                 const std::string& value);
+    util::Result<void> flush_record(MssqlTable* tbl);
+    util::Result<void> delete_record(MssqlTable* tbl);
+
+    BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
+    const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    BackendTxManager        tx_mgr_;
 };
 
 } // namespace openads::sql_backend

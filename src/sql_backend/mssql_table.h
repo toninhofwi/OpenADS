@@ -1,12 +1,10 @@
 #pragma once
 
-// Buffered read-only table over an MS SQL Server result set.
+// Buffered table over an MS SQL Server result set.
 // The entire SELECT * result is materialised in memory at open time;
 // navigation (GoTop / Skip / GoBottom / AtEOF / AtBOF) is pure
-// arithmetic over the in-memory buffer — zero wire round-trips after open.
-//
-// v1 scope: READ-ONLY.  Write / seek methods return AE_FUNCTION_NOT_AVAILABLE
-// via the ABI layer; they are not even declared here.
+// arithmetic over the in-memory buffer — zero wire round-trips after open
+// until a write triggers a refetch.
 
 #if defined(OPENADS_WITH_MSSQL)
 
@@ -16,12 +14,16 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace openads::sql_backend {
 
 class MssqlConnection;  // mssql_connection.h
 
 struct MssqlTable {
+    MssqlConnection* conn = nullptr;
+    std::string      sql_table;
+
     // Entire result set buffered in memory.
     tds::QueryResult data;
 
@@ -34,6 +36,16 @@ struct MssqlTable {
 
     // Last seek result — always false (no seek in v1).
     bool last_found = false;
+
+    // Primary-key column indices (resolved by name at open).
+    std::vector<std::size_t> pk_cols;
+
+    // Write staging: append_blank/set_field stage values; flush_record emits
+    // INSERT (pending_append) or PK-keyed UPDATE.
+    std::vector<std::string> staging_row;
+    std::vector<bool>        staging_nulls;
+    bool                     pending_append = false;
+    bool                     row_dirty      = false;
 
     // --------------------------------------------------------------------
     // Factory

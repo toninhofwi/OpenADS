@@ -4,10 +4,13 @@
 
 #include "openads/error.h"
 #include "sql_backend/mssql_uri.h"
+#include "sql_backend/sql_common.h"
 #include "sql_backend/tds_protocol.h"
 
+#include <cctype>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace openads::sql_backend {
 
@@ -120,6 +123,368 @@ util::Result<tds::QueryResult> MssqlConnection::query(const std::string& sql) {
         return util::Error{code, 0, msg, ""};
     }
     return qr;
+}
+
+namespace {
+
+bool ci_equal(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string quote_ident(const std::string& name) {
+    std::string out = "[";
+    for (char c : name) {
+        if (c == ']') out += ']';
+        out += c;
+    }
+    out += ']';
+    return out;
+}
+
+std::string quote_lit(const std::string& v) {
+    std::string out = "N'";
+    for (char c : v) {
+        if (c == '\'') out += '\'';
+        out += c;
+    }
+    out += '\'';
+    return out;
+}
+
+std::string quote_table_lit(const std::string& v) {
+    std::string out = "'";
+    for (char c : v) {
+        if (c == '\'') out += '\'';
+        out += c;
+    }
+    out += '\'';
+    return out;
+}
+
+std::size_t field_index_ci(const MssqlTable& tbl, const std::string& name) {
+    for (std::size_t i = 0; i < tbl.field_count(); ++i) {
+        if (ci_equal(tbl.field_name(i), name)) return i;
+    }
+    return static_cast<std::size_t>(-1);
+}
+
+std::vector<std::string> current_pk_values(const MssqlTable& tbl) {
+    std::vector<std::string> vals;
+    vals.reserve(tbl.pk_cols.size());
+    if (tbl.bof || tbl.eof || tbl.pos >= tbl.data.rows.size()) return vals;
+    const auto& row = tbl.data.rows[tbl.pos];
+    for (std::size_t pk : tbl.pk_cols) {
+        if (pk >= row.size() || row[pk].is_null) {
+            vals.push_back(std::string{});
+        } else {
+            vals.push_back(row[pk].value);
+        }
+    }
+    return vals;
+}
+
+std::string pk_where_clause(const MssqlTable& tbl,
+                            const std::vector<std::string>& pk_vals) {
+    std::string w;
+    for (std::size_t i = 0; i < tbl.pk_cols.size(); ++i) {
+        if (i) w += " AND ";
+        w += quote_ident(tbl.field_name(tbl.pk_cols[i])) + " = " +
+             quote_lit(pk_vals[i]);
+    }
+    return w;
+}
+
+void reset_cursor_bof(MssqlTable* tbl) {
+    tbl->pos = 0;
+    tbl->bof = true;
+    tbl->eof = tbl->data.rows.empty();
+}
+
+void position_last_row(MssqlTable* tbl) {
+    if (tbl->data.rows.empty()) {
+        reset_cursor_bof(tbl);
+        return;
+    }
+    tbl->pos = tbl->data.rows.size() - 1;
+    tbl->bof = false;
+    tbl->eof = false;
+}
+
+bool position_by_pk(MssqlTable* tbl, const std::vector<std::string>& pk_vals) {
+    for (std::size_t r = 0; r < tbl->data.rows.size(); ++r) {
+        bool match = true;
+        for (std::size_t i = 0; i < tbl->pk_cols.size(); ++i) {
+            const auto& cell = tbl->data.rows[r][tbl->pk_cols[i]];
+            const std::string v = cell.is_null ? std::string{} : cell.value;
+            if (v != pk_vals[i]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            tbl->pos = r;
+            tbl->bof = false;
+            tbl->eof = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+void copy_current_to_staging(MssqlTable* tbl) {
+    const std::size_t n = tbl->field_count();
+    tbl->staging_row.assign(n, std::string{});
+    tbl->staging_nulls.assign(n, true);
+    for (std::size_t i = 0; i < n; ++i) {
+        std::string v;
+        bool is_null = false;
+        if (tbl->get_field(i, v, is_null)) {
+            tbl->staging_row[i]   = v;
+            tbl->staging_nulls[i] = is_null;
+        }
+    }
+}
+
+util::Result<void> refetch(MssqlConnection& c, MssqlTable* tbl) {
+    if (tbl->sql_table.empty()) {
+        return util::Error{openads::AE_INTERNAL_ERROR, 0,
+                           "missing table name", ""};
+    }
+    const std::string sql = "SELECT * FROM " + quote_ident(tbl->sql_table);
+    auto qr = c.query(sql);
+    if (!qr) return qr.error();
+    tds::QueryResult result = std::move(qr).value();
+    if (!result.ok) {
+        return util::Error{
+            static_cast<std::int32_t>(result.error_number), 0,
+            result.message.empty() ? std::string("MSSQL refetch failed")
+                                   : result.message,
+            ""};
+    }
+    tbl->data = std::move(result);
+    return util::Result<void>{};
+}
+
+} // namespace
+
+util::Result<std::vector<std::string>>
+MssqlConnection::discover_pk(const std::string& table_name) {
+    if (!valid()) {
+        return util::Error{openads::AE_NO_CONNECTION, 0,
+                           "MSSQL not connected", ""};
+    }
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{openads::AE_INTERNAL_ERROR, 0,
+                           "unsafe table name", table_name};
+    }
+    const std::string sql =
+        "SELECT COLUMN_NAME "
+        "FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
+        "WHERE CONSTRAINT_NAME = ("
+        "  SELECT TOP 1 CONSTRAINT_NAME "
+        "  FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
+        "  WHERE TABLE_NAME = " + quote_table_lit(table_name) +
+        "    AND CONSTRAINT_TYPE = 'PRIMARY KEY'"
+        ") "
+        "ORDER BY ORDINAL_POSITION";
+    auto qr = query(sql);
+    if (!qr) return qr.error();
+    tds::QueryResult result = std::move(qr).value();
+    if (!result.ok) {
+        return util::Error{
+            static_cast<std::int32_t>(result.error_number), 0,
+            result.message.empty() ? std::string("MSSQL discover_pk failed")
+                                   : result.message,
+            ""};
+    }
+    std::vector<std::string> cols;
+    cols.reserve(result.rows.size());
+    for (const auto& row : result.rows) {
+        if (!row.empty() && !row[0].is_null) cols.push_back(row[0].value);
+    }
+    return cols;
+}
+
+util::Result<void> MssqlConnection::append_blank(MssqlTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql append", ""};
+    }
+    const std::size_t n = tbl->field_count();
+    tbl->staging_row.assign(n, std::string{});
+    tbl->staging_nulls.assign(n, true);
+    tbl->pending_append = true;
+    tbl->row_dirty      = true;
+    return util::Result<void>{};
+}
+
+util::Result<void> MssqlConnection::set_field(
+    MssqlTable* tbl, const std::string& field_name, const std::string& value) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql set_field", ""};
+    }
+    if (!tbl->pending_append &&
+        (tbl->bof || tbl->eof || tbl->pos >= tbl->data.rows.size())) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    const std::size_t idx = field_index_ci(*tbl, field_name);
+    if (idx == static_cast<std::size_t>(-1)) {
+        return util::Error{5063, 0, "column not found", field_name};
+    }
+    if (!tbl->row_dirty && !tbl->pending_append) {
+        copy_current_to_staging(tbl);
+    }
+    if (tbl->staging_row.size() < tbl->field_count()) {
+        tbl->staging_row.resize(tbl->field_count());
+        tbl->staging_nulls.resize(tbl->field_count(), true);
+    }
+    tbl->staging_row[idx]   = value;
+    tbl->staging_nulls[idx] = false;
+    tbl->row_dirty          = true;
+    return util::Result<void>{};
+}
+
+util::Result<void> MssqlConnection::flush_record(MssqlTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql flush", ""};
+    }
+    if (!tbl->row_dirty && !tbl->pending_append) return util::Result<void>{};
+    if (tbl->sql_table.empty()) {
+        return util::Error{5001, 0, "missing table name", ""};
+    }
+
+    const std::string qtbl = quote_ident(tbl->sql_table);
+
+    if (tbl->pending_append) {
+        std::string cols, vals;
+        bool any = false;
+        for (std::size_t i = 0; i < tbl->field_count(); ++i) {
+            if (i >= tbl->staging_nulls.size() || tbl->staging_nulls[i]) {
+                continue;
+            }
+            if (any) {
+                cols += ", ";
+                vals += ", ";
+            }
+            cols += quote_ident(tbl->field_name(i));
+            vals += quote_lit(tbl->staging_row[i]);
+            any = true;
+        }
+        if (!any) {
+            return util::Error{5001, 0, "insert has no columns", tbl->sql_table};
+        }
+        const std::string sql = "INSERT INTO " + qtbl +
+                                " (" + cols + ") VALUES (" + vals + ")";
+        auto ins = query(sql);
+        if (!ins) return ins.error();
+        const tds::QueryResult& qr = ins.value();
+        if (!qr.ok) {
+            return util::Error{
+                static_cast<std::int32_t>(qr.error_number), 0,
+                qr.message.empty() ? std::string("MSSQL insert failed")
+                                   : qr.message,
+                ""};
+        }
+        tbl->pending_append = false;
+        tbl->row_dirty      = false;
+        if (auto rf = refetch(*this, tbl); !rf) return rf.error();
+        position_last_row(tbl);
+        return util::Result<void>{};
+    }
+
+    if (tbl->pk_cols.empty()) {
+        return util::Error{5001, 0,
+                           "table has no primary key; UPDATE not supported",
+                           tbl->sql_table};
+    }
+    const std::vector<std::string> pk_vals = current_pk_values(*tbl);
+    if (pk_vals.size() != tbl->pk_cols.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+
+    std::vector<bool> is_pk(tbl->field_count(), false);
+    for (std::size_t pk : tbl->pk_cols) {
+        if (pk < is_pk.size()) is_pk[pk] = true;
+    }
+
+    std::string set_clause;
+    bool any = false;
+    for (std::size_t i = 0; i < tbl->field_count(); ++i) {
+        if (is_pk[i]) continue;
+        if (i >= tbl->staging_row.size()) continue;
+        if (any) set_clause += ", ";
+        if (i < tbl->staging_nulls.size() && tbl->staging_nulls[i]) {
+            set_clause += quote_ident(tbl->field_name(i)) + " = NULL";
+        } else {
+            set_clause += quote_ident(tbl->field_name(i)) + " = " +
+                          quote_lit(tbl->staging_row[i]);
+        }
+        any = true;
+    }
+    if (!any) {
+        tbl->row_dirty = false;
+        return util::Result<void>{};
+    }
+
+    const std::string sql = "UPDATE " + qtbl + " SET " + set_clause +
+                            " WHERE " + pk_where_clause(*tbl, pk_vals);
+    auto upd = query(sql);
+    if (!upd) return upd.error();
+    const tds::QueryResult& qr = upd.value();
+    if (!qr.ok) {
+        return util::Error{
+            static_cast<std::int32_t>(qr.error_number), 0,
+            qr.message.empty() ? std::string("MSSQL update failed") : qr.message,
+            ""};
+    }
+    tbl->row_dirty = false;
+    if (auto rf = refetch(*this, tbl); !rf) return rf.error();
+    if (!position_by_pk(tbl, pk_vals)) reset_cursor_bof(tbl);
+    return util::Result<void>{};
+}
+
+util::Result<void> MssqlConnection::delete_record(MssqlTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql delete", ""};
+    }
+    if (tbl->pending_append) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    if (tbl->pk_cols.empty()) {
+        return util::Error{5001, 0,
+                           "table has no primary key; DELETE not supported",
+                           tbl->sql_table};
+    }
+    if (tbl->bof || tbl->eof || tbl->pos >= tbl->data.rows.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    const std::vector<std::string> pk_vals = current_pk_values(*tbl);
+    if (pk_vals.size() != tbl->pk_cols.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+
+    const std::string sql = "DELETE FROM " + quote_ident(tbl->sql_table) +
+                            " WHERE " + pk_where_clause(*tbl, pk_vals);
+    auto del = query(sql);
+    if (!del) return del.error();
+    const tds::QueryResult& qr = del.value();
+    if (!qr.ok) {
+        return util::Error{
+            static_cast<std::int32_t>(qr.error_number), 0,
+            qr.message.empty() ? std::string("MSSQL delete failed") : qr.message,
+            ""};
+    }
+    tbl->row_dirty      = false;
+    tbl->pending_append = false;
+    if (auto rf = refetch(*this, tbl); !rf) return rf.error();
+    reset_cursor_bof(tbl);
+    return util::Result<void>{};
 }
 
 } // namespace openads::sql_backend
