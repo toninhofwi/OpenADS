@@ -29,10 +29,23 @@ $makefile = Join-Path $src "Makefile"
 if (-not (Test-Path $makefile)) {
     Write-Host "[harbour-ci] Cloning Harbour ($HarbourRef) from $HarbourRepo ..."
     if (Test-Path $src) { Remove-Item -Recurse -Force $src }
+    
     git clone --depth 1 --branch $HarbourRef $HarbourRepo $src
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "[harbour-ci] git clone failed (exit $LASTEXITCODE)"
+        Write-Error "[harbour-ci] git clone failed with exit code $LASTEXITCODE"
     }
+    
+    # Additional diagnostics if source directory is missing
+    if (-not (Test-Path $src)) {
+        Write-Error "[harbour-ci] Source directory not created after clone: $src"
+    }
+    
+    # List directory contents for debugging
+    if (Test-Path $src) {
+        $items = Get-ChildItem $src -ErrorAction SilentlyContinue | Measure-Object
+        Write-Host "[harbour-ci] Source directory contains $($items.Count) items"
+    }
+    
     if (-not (Test-Path $makefile)) {
         Write-Error "[harbour-ci] Harbour source tree missing after clone (no Makefile): $src"
     }
