@@ -1,39 +1,105 @@
-# OpenADS Plus — PostgreSQL
+# OpenADS Plus — SQL backends (SQLRDD parity)
 
-Extensão aditiva do [OpenADS](https://github.com/FiveTechSoft/OpenADS): tabelas PostgreSQL atrás da ABI ACE. DBF e wire inalterados.
+OpenADS extends the ACE ABI with navigational SQL table drivers behind URI connections. Harbour `rddads` and X# `VOAds` apps can use the same `db*` / `Ads*` API against DBF files **or** SQL engines — the pattern popularized by xHarbour **SQLRDD**.
 
-## Deploy rápido
+## Connection URIs
 
-```bat
-set OPENADS_TOOLCHAIN_ROOT=<dir com MSVC e pgsql\include/lib>
-tools\scripts\build_nmake_postgres.bat
+| Backend | URI examples |
+|---------|----------------|
+| SQLite | `sqlite:///path/to/app.db` |
+| PostgreSQL | `postgresql://user:pass@host:5432/dbname` |
+| MariaDB / MySQL | `mariadb://user:pass@host:3306/dbname` |
+| Microsoft SQL Server | `mssql://user:pass@host:1433/dbname` |
+| Firebird | `firebird://user:pass@host:3050/dbname` |
+| ODBC gateway | `odbc://DSN` or `odbc://user:pass@DSN` |
+
+```c
+AdsConnect60("sqlite://C:/data/app.db", ADS_LOCAL_SERVER, NULL, NULL, 0, &hConn);
+AdsOpenTable(hConn, "customers", "customers", ADS_DEFAULT, 0, 0, 0, ADS_READONLY, &hTable);
 ```
 
-Saída: `build\pg\src\openace32.dll` — copiar para a pasta do `.exe` Harbour antes de outra `ace*.dll`.
+## SQLRDD parity matrix (2026-06)
 
-## Conexão
+Capabilities below are wired through the **navigational ABI** (`AdsGotoTop`, `AdsSeek`, `AdsAppendRecord`, `AdsLockRecord`, …), not only via `AdsExecuteSQLDirect` passthrough.
 
-`AdsConnect60("postgresql://user:pass@host:5432/dbname")`
+| Capability | SQLite | PostgreSQL | MariaDB | MSSQL | Firebird | ODBC |
+|------------|--------|------------|---------|-------|----------|------|
+| Read + navigation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `dbSeek` / column index | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Write (`dbAppend` / REPLACE / `dbDelete`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Transactions (`AdsBeginTransaction` …) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `SET FILTER` / AOF push-down | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Aggregates push-down | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `rLock()` / `fLock()` emulation | ✅ | ✅ | ✅ | ✅ (app lock) | ✅ | ✅ |
+| `AdsSetRelation` / scoped | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsCreateTable` (SQL DDL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsRestructureTable` ADD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsRestructureTable` DROP/CHANGE | ✅ | ✅ | ✅ | ✅ | ✅ | ✅* |
+| SQL passthrough cursor (`AdsExecuteSQLDirect` SELECT) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-## Teste ponta a ponta
+\* SQLite `CHANGE` is a no-op at the SQL layer (length not enforced on TEXT). Use passthrough DDL for complex SQLite schema migrations.
 
-```bat
-set OPENADS_TEST_PG_URI=postgresql://user:pass@127.0.0.1:5432/testdb
-build\pg\tests\openads_unit_tests.exe --test-case="*postgresql*"
+### Issue #103 — resolved
+
+[GitHub #103](https://github.com/FiveTechSoft/OpenADS/issues/103) tracked write + lock parity. As of 1.5.x:
+
+- `AdsAppendRecord` / `AdsSetString` / `AdsWriteRecord` / `AdsDeleteRecord` dispatch to all six SQL backends.
+- `AdsLockRecord` / `AdsLockTable` use backend-specific lock tables or `sp_getapplock` (MSSQL).
+- CI runs `sql_uri_smoke`, `sqlite_filter_pushdown`, and `sqlite_seek_smoke` on every push.
+
+Remaining gaps vs full xHarbour SQLRDD (not #103):
+
+- Harbour-level `SR_*` / `SR_MGMNT*` catalog workareas (schema introspection tables).
+- Oracle native OCI (ODBC only today).
+- `AdsDropTable` as a first-class ABI helper on SQL connections (use `AdsExecuteSQLDirect` or passthrough `DROP TABLE` today).
+
+## DDL via navigational API
+
+```c
+// CREATE — field list is rddads format (NAME,Type,Len,Dec;…)
+AdsCreateTable(hConn, "items", NULL, ADS_CDX, 0, 0, 0, 0,
+               "ID,AutoIncrement;NAME,Character,40", &hTable);
+
+// ADD column
+AdsRestructureTable(hConn, "items", NULL, 0, 0, 0, 0,
+                    "NOTE,Character,20", NULL, NULL);
+
+// DROP column (delete list = bare names, semicolon-separated)
+AdsRestructureTable(hConn, "items", NULL, 0, 0, 0, 0,
+                    NULL, "NOTE", NULL);
+
+// CHANGE length/decimals (same type)
+AdsRestructureTable(hConn, "items", NULL, 0, 0, 0, 0,
+                    NULL, NULL, "NAME,Character,80");
 ```
 
-O teste cria/derruba a tabela `clientes`, insere 3 linhas e valida navegação + SEEK pela ABI. Sem URI definida, os casos E2E fazem SKIP (CI não quebra).
+Passthrough DDL/DML also works:
 
-## Segurança
+```c
+AdsCreateSQLStatement(hConn, &hStmt);
+AdsExecuteSQLDirect(hStmt, "CREATE TABLE t(id INTEGER PRIMARY KEY)", &hCur);
+```
 
-- Nomes de tabela/coluna: só identificadores ASCII seguros (`[A-Za-z0-9_]`).
-- Valores de SEEK e chaves: parâmetros preparados (`$1`), nunca concatenados.
-- URI montada em runtime no app — sem paths hardcoded no código.
+## Build (Windows)
 
-## Capacidades
+```bat
+cmake --preset msvc-x64
+cmake --build build/msvc-x64 --config Release --target openads_ace
+```
 
-| Recurso | Status |
-|---------|--------|
-| Read + navegação | Sim |
-| SEEK por coluna | Sim |
-| Write | Planejado |
+Copy `build\msvc-x64\src\Release\openace64.dll` as `ace64.dll` next to your Harbour / X# executable.
+
+## Tests
+
+```bat
+cmake --build build\default --config Release --target openads_unit_tests
+ctest -C Release -R "sql_uri|sqlite_"
+```
+
+PostgreSQL / MariaDB / MSSQL live tests skip unless `OPENADS_TEST_PG_URI`, `OPENADS_TEST_MARIADB_URI`, or `OPENADS_TEST_MSSQL_CONNSTR` is set.
+
+## Security
+
+- Table/column identifiers: ASCII `[A-Za-z0-9_]` only (`is_safe_identifier`).
+- Filter / AOF SQL fragments: produced by `try_emit_sql_where` (trusted subset).
+- Connection URIs: assemble at runtime; never hardcode credentials in source.

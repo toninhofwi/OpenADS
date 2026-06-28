@@ -5630,78 +5630,87 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
 
     auto rel = openads::abi::to_internal(pucTableName, 0);
 
-    if (!del_set.empty() || !change_fields.empty()) {
-        bool on_sql_conn = false;
-#if defined(OPENADS_WITH_SQLITE)
-        on_sql_conn = on_sql_conn || get_sqlite_conn(hConnect) != nullptr;
-#endif
-#if defined(OPENADS_WITH_POSTGRESQL)
-        on_sql_conn = on_sql_conn || get_postgres_conn(hConnect) != nullptr;
-#endif
-#if defined(OPENADS_WITH_MARIADB)
-        on_sql_conn = on_sql_conn || get_maria_conn(hConnect) != nullptr;
-#endif
-#if defined(OPENADS_WITH_ODBC)
-        on_sql_conn = on_sql_conn || get_odbc_conn(hConnect) != nullptr;
-#endif
-#if defined(OPENADS_WITH_FIREBIRD)
-        on_sql_conn = on_sql_conn || get_firebird_conn(hConnect) != nullptr;
-#endif
-#if defined(OPENADS_WITH_MSSQL)
-        on_sql_conn = on_sql_conn || get_mssql_conn(hConnect) != nullptr;
-#endif
-        if (on_sql_conn) {
-            return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                        "SQL ALTER: DROP/CHANGE not yet supported");
-        }
-    }
-
-    if (!add_fields.empty()) {
-        std::vector<openads::sql_backend::SqlDdlColumn> ddl_cols;
-        ddl_cols.reserve(add_fields.size());
+    {
+        std::vector<openads::sql_backend::SqlDdlColumn> add_cols;
+        add_cols.reserve(add_fields.size());
         for (const auto& f : add_fields) {
-            ddl_cols.push_back({f.name, f.type, f.length, f.dec});
+            add_cols.push_back({f.name, f.type, f.length, f.dec});
         }
-        auto run_alter = [&](auto* conn,
-                             openads::sql_backend::SqlDdlDialect dialect)
+        std::vector<openads::sql_backend::SqlDdlColumn> chg_cols;
+        chg_cols.reserve(change_fields.size());
+        for (const auto& f : change_fields) {
+            chg_cols.push_back({f.name, f.type, f.length, f.dec});
+        }
+        std::vector<std::string> drop_cols(del_set.begin(), del_set.end());
+
+        auto run_sql_restructure =
+            [&](auto* conn, openads::sql_backend::SqlDdlDialect dialect)
             -> UNSIGNED32 {
-            auto stmts = openads::sql_backend::build_alter_table_add_ddl(
-                dialect, rel, ddl_cols);
-            if (!stmts) return fail(stmts.error());
-            for (const auto& sql : stmts.value()) {
-                auto ex = conn->exec_sql(sql);
-                if (!ex) return fail(ex.error());
+            auto exec_vec = [&](const std::vector<std::string>& stmts)
+                -> UNSIGNED32 {
+                for (const auto& sql : stmts) {
+                    auto ex = conn->exec_sql(sql);
+                    if (!ex) return fail(ex.error());
+                }
+                return ok();
+            };
+            if (!add_cols.empty()) {
+                auto ddl = openads::sql_backend::build_alter_table_add_ddl(
+                    dialect, rel, add_cols);
+                if (!ddl) return fail(ddl.error());
+                auto rc = exec_vec(ddl.value());
+                if (rc != openads::AE_SUCCESS) return rc;
+            }
+            if (!chg_cols.empty()) {
+                auto ddl = openads::sql_backend::build_alter_table_change_ddl(
+                    dialect, rel, chg_cols);
+                if (!ddl) return fail(ddl.error());
+                auto rc = exec_vec(ddl.value());
+                if (rc != openads::AE_SUCCESS) return rc;
+            }
+            if (!drop_cols.empty()) {
+                auto ddl = openads::sql_backend::build_alter_table_drop_ddl(
+                    dialect, rel, drop_cols);
+                if (!ddl) return fail(ddl.error());
+                auto rc = exec_vec(ddl.value());
+                if (rc != openads::AE_SUCCESS) return rc;
             }
             return ok();
         };
 #if defined(OPENADS_WITH_SQLITE)
         if (auto* sc = get_sqlite_conn(hConnect)) {
-            return run_alter(sc, openads::sql_backend::SqlDdlDialect::Sqlite);
+            return run_sql_restructure(sc,
+                openads::sql_backend::SqlDdlDialect::Sqlite);
         }
 #endif
 #if defined(OPENADS_WITH_POSTGRESQL)
         if (auto* pc = get_postgres_conn(hConnect)) {
-            return run_alter(pc, openads::sql_backend::SqlDdlDialect::Postgres);
+            return run_sql_restructure(pc,
+                openads::sql_backend::SqlDdlDialect::Postgres);
         }
 #endif
 #if defined(OPENADS_WITH_MARIADB)
         if (auto* mc = get_maria_conn(hConnect)) {
-            return run_alter(mc, openads::sql_backend::SqlDdlDialect::Maria);
+            return run_sql_restructure(mc,
+                openads::sql_backend::SqlDdlDialect::Maria);
         }
 #endif
 #if defined(OPENADS_WITH_ODBC)
         if (auto* oc = get_odbc_conn(hConnect)) {
-            return run_alter(oc, openads::sql_backend::SqlDdlDialect::Postgres);
+            return run_sql_restructure(oc,
+                openads::sql_backend::SqlDdlDialect::Postgres);
         }
 #endif
 #if defined(OPENADS_WITH_FIREBIRD)
         if (auto* fc = get_firebird_conn(hConnect)) {
-            return run_alter(fc, openads::sql_backend::SqlDdlDialect::Firebird);
+            return run_sql_restructure(fc,
+                openads::sql_backend::SqlDdlDialect::Firebird);
         }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
         if (auto* msc = get_mssql_conn(hConnect)) {
-            return run_alter(msc, openads::sql_backend::SqlDdlDialect::Mssql);
+            return run_sql_restructure(msc,
+                openads::sql_backend::SqlDdlDialect::Mssql);
         }
 #endif
     }

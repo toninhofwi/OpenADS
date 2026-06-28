@@ -118,6 +118,7 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
     CHECK(record_count(hC) == 4u);
 
     // ALTER ADD via AdsRestructureTable.
+    REQUIRE(AdsCloseIndex(hIdx) == 0);
     REQUIRE(AdsCloseTable(hC) == 0);
     UNSIGNED8 add[] = "NOTE,Character,4";
     REQUIRE(AdsRestructureTable(hConn, cname, nullptr, 0, 0, 0, 0, add,
@@ -126,7 +127,32 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
                          ADS_READONLY, &hC) == 0);
     CHECK(record_count(hC) == 4u);
 
-    REQUIRE(AdsCloseIndex(hIdx) == 0);
+    UNSIGNED16 nfields = 0;
+    REQUIRE(AdsGetNumFields(hC, &nfields) == 0);
+    CHECK(nfields == 3u);
+
+    // ALTER DROP via AdsRestructureTable.
+    REQUIRE(AdsCloseTable(hC) == 0);
+    UNSIGNED8 drop[] = "NOTE";
+    REQUIRE(AdsRestructureTable(hConn, cname, nullptr, 0, 0, 0, 0, nullptr,
+                                drop, nullptr) == 0);
+    REQUIRE(AdsOpenTable(hConn, cname, cname, ADS_DEFAULT, 0, 0, 0,
+                         ADS_READONLY, &hC) == 0);
+    REQUIRE(AdsGetNumFields(hC, &nfields) == 0);
+    CHECK(nfields == 2u);
+
+    // Navigational write smoke (dbAppend path).
+    REQUIRE(AdsCloseTable(hC) == 0);
+    REQUIRE(AdsOpenTable(hConn, cname, cname, ADS_DEFAULT, 0, 0, 0, 0,
+                         &hC) == 0);
+    REQUIRE(AdsAppendRecord(hC) == 0);
+    UNSIGNED8 fg[8] = "GRP";
+    UNSIGNED8 fd[8] = "DATA";
+    REQUIRE(AdsSetString(hC, fg, (UNSIGNED8*)"A", 1) == 0);
+    REQUIRE(AdsSetString(hC, fd, (UNSIGNED8*)"a4", 2) == 0);
+    REQUIRE(AdsWriteRecord(hC) == 0);
+    CHECK(record_count(hC) == 5u);
+
     REQUIRE(AdsCloseTable(hC) == 0);
     REQUIRE(AdsCloseTable(hP) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);

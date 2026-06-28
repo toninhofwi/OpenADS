@@ -125,4 +125,75 @@ util::Result<std::vector<std::string>> build_alter_table_add_ddl(
     return stmts;
 }
 
+util::Result<std::vector<std::string>> build_alter_table_drop_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::vector<std::string>& column_names) {
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{5001, 0, "unsafe table name", table_name};
+    }
+    if (column_names.empty()) {
+        return util::Error{5001, 0, "ALTER TABLE DROP: no columns", ""};
+    }
+    std::vector<std::string> stmts;
+    stmts.reserve(column_names.size());
+    for (const auto& name : column_names) {
+        if (!is_safe_identifier(name)) {
+            return util::Error{5001, 0, "unsafe column name", name};
+        }
+        const char* drop_kw =
+            (dialect == SqlDdlDialect::Firebird) ? "DROP " : "DROP COLUMN ";
+        std::string sql = "ALTER TABLE " + quote_table(dialect, table_name) +
+                          " " + drop_kw + quote_col(dialect, name);
+        stmts.push_back(std::move(sql));
+    }
+    return stmts;
+}
+
+util::Result<std::vector<std::string>> build_alter_table_change_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::vector<SqlDdlColumn>& columns) {
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{5001, 0, "unsafe table name", table_name};
+    }
+    if (columns.empty()) {
+        return util::Error{5001, 0, "ALTER TABLE CHANGE: no columns", ""};
+    }
+    std::vector<std::string> stmts;
+    stmts.reserve(columns.size());
+    for (const auto& c : columns) {
+        if (!is_safe_identifier(c.name)) {
+            return util::Error{5001, 0, "unsafe column name", c.name};
+        }
+        const std::string typ = sql_type_for(dialect, c);
+        const std::string qtab = quote_table(dialect, table_name);
+        const std::string qcol = quote_col(dialect, c.name);
+        std::string sql;
+        switch (dialect) {
+            case SqlDdlDialect::Maria:
+                sql = "ALTER TABLE " + qtab + " MODIFY " + qcol + " " + typ;
+                break;
+            case SqlDdlDialect::Mssql:
+                sql = "ALTER TABLE " + qtab + " ALTER COLUMN " + qcol + " " +
+                      typ;
+                break;
+            case SqlDdlDialect::Firebird:
+                sql = "ALTER TABLE " + qtab + " ALTER COLUMN " + qcol +
+                      " TYPE " + typ;
+                break;
+            case SqlDdlDialect::Sqlite:
+                // SQLite does not enforce CHAR lengths; CHANGE is a no-op.
+                continue;
+            case SqlDdlDialect::Postgres:
+            default:
+                sql = "ALTER TABLE " + qtab + " ALTER COLUMN " + qcol +
+                      " TYPE " + typ;
+                break;
+        }
+        if (!sql.empty()) stmts.push_back(std::move(sql));
+    }
+    return stmts;
+}
+
 }  // namespace openads::sql_backend

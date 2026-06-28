@@ -34,4 +34,16 @@ util::Result<std::vector<std::string>> build_alter_table_add_ddl(
     const std::string& table_name,
     const std::vector<SqlDdlColumn>& columns);
 
+util::Result<std::vector<std::string>> build_alter_table_drop_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::vector<std::string>& column_names);
+
+// CHANGE: adjust length/decimals (same xBase type). SQLite TEXT/INTEGER
+// columns treat length changes as no-ops at the SQL layer.
+util::Result<std::vector<std::string>> build_alter_table_change_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::vector<SqlDdlColumn>& columns);
+
 }  // namespace openads::sql_backend
