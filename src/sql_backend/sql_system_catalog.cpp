@@ -428,13 +428,13 @@ ORDER BY rc.rdb$constraint_name)";
         "'2' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
         "'2' AS \"DROP\"";
     if (sys_name == "usergroups") {
-        return "SELECT 'PUBLIC' AS \"GROUP_NAME\"";
+        return acl_groups_catalog_sql(dialect);
     }
     if (sys_name == "users") {
-        return "SELECT 'PUBLIC' AS \"USER_NAME\"";
+        return acl_users_catalog_sql(dialect);
     }
     if (sys_name == "usergroupmembers") {
-        return "SELECT 'PUBLIC' AS \"GROUP_NAME\", 'PUBLIC' AS \"USER_NAME\"";
+        return acl_members_catalog_sql(dialect);
     }
     if (sys_name == "permissions") {
         const std::string acl_union =

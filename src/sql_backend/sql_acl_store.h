@@ -28,6 +28,11 @@ std::string member_table_ddl(SqlDdlDialect dialect);
 // SELECT fragment (system.permissions column layout) from OPENADS$ACL.
 std::string acl_permissions_select_sql(SqlDdlDialect dialect);
 
+// system.users / system.usergroups / system.usergroupmembers for SQL URI.
+std::string acl_users_catalog_sql(SqlDdlDialect dialect);
+std::string acl_groups_catalog_sql(SqlDdlDialect dialect);
+std::string acl_members_catalog_sql(SqlDdlDialect dialect);
+
 // If `sql` is GRANT/REVOKE, apply it via `exec_sql` and return the result;
 // otherwise return std::nullopt so the caller continues normal dispatch.
 std::optional<util::Result<void>> try_sql_acl_statement(

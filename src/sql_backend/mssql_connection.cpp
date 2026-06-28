@@ -87,6 +87,7 @@ util::Result<MssqlConnection> MssqlConnection::open(const MssqlUri& uri) {
 
     conn.impl_->authenticated = true;
     (void)conn.exec_sql(acl_table_ddl(SqlDdlDialect::Mssql));
+    (void)conn.exec_sql(member_table_ddl(SqlDdlDialect::Mssql));
     return conn;
 }
 

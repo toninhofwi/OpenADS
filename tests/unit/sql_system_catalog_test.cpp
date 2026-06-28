@@ -67,4 +67,71 @@ TEST_CASE("sql_system_catalog: rewritten permissions WHERE executes on SQLite") 
     sqlite3_close(db);
     CHECK(rows == 1);
 }
+
+TEST_CASE("sql_system_catalog: users/groups/members catalog SQL on SQLite") {
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open(":memory:", &db) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+        db, openads::sql_backend::acl_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+        db, openads::sql_backend::member_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+        db, "INSERT INTO OPENADS$MEMBER (user_name, group_name) "
+            "VALUES ('carol', 'SALES')",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+
+    auto users = build_system_catalog_sql(SqlDdlDialect::Sqlite, "users");
+    auto groups = build_system_catalog_sql(SqlDdlDialect::Sqlite, "usergroups");
+    auto members =
+        build_system_catalog_sql(SqlDdlDialect::Sqlite, "usergroupmembers");
+    REQUIRE(users.has_value());
+    REQUIRE(groups.has_value());
+    REQUIRE(members.has_value());
+
+    sqlite3_stmt* stmt = nullptr;
+    REQUIRE(sqlite3_prepare_v2(db, users->c_str(),
+                               static_cast<int>(users->size()),
+                               &stmt, nullptr) == SQLITE_OK);
+    bool saw_carol = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* u =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (u && std::string(u) == "carol") saw_carol = true;
+    }
+    sqlite3_finalize(stmt);
+    CHECK(saw_carol);
+
+    REQUIRE(sqlite3_prepare_v2(db, groups->c_str(),
+                               static_cast<int>(groups->size()),
+                               &stmt, nullptr) == SQLITE_OK);
+    bool saw_sales = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* g =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (g && std::string(g) == "SALES") saw_sales = true;
+    }
+    sqlite3_finalize(stmt);
+    CHECK(saw_sales);
+
+    REQUIRE(sqlite3_prepare_v2(db, members->c_str(),
+                               static_cast<int>(members->size()),
+                               &stmt, nullptr) == SQLITE_OK);
+    bool saw_pair = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* g =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        const char* u =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (g && u && std::string(g) == "SALES" &&
+            std::string(u) == "carol") {
+            saw_pair = true;
+        }
+    }
+    sqlite3_finalize(stmt);
+    CHECK(saw_pair);
+
+    sqlite3_close(db);
+}
 #endif

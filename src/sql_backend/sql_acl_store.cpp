@@ -419,6 +419,33 @@ std::string member_table_ddl(SqlDdlDialect dialect) {
     }
 }
 
+std::string acl_users_catalog_sql(SqlDdlDialect dialect) {
+    const std::string qacl = quote_ident(dialect, kAclTable);
+    const std::string qmem = quote_ident(dialect, kMemberTable);
+    return std::string("SELECT 'PUBLIC' AS \"USER_NAME\" UNION SELECT DISTINCT "
+                       "user_name AS \"USER_NAME\" FROM ") +
+           qmem + " UNION SELECT DISTINCT grantee AS \"USER_NAME\" FROM " +
+           qacl + " WHERE is_group = 0";
+}
+
+std::string acl_groups_catalog_sql(SqlDdlDialect dialect) {
+    const std::string qacl = quote_ident(dialect, kAclTable);
+    const std::string qmem = quote_ident(dialect, kMemberTable);
+    return std::string("SELECT 'PUBLIC' AS \"GROUP_NAME\" UNION SELECT DISTINCT "
+                       "group_name AS \"GROUP_NAME\" FROM ") +
+           qmem + " UNION SELECT DISTINCT grantee AS \"GROUP_NAME\" FROM " +
+           qacl + " WHERE is_group != 0";
+}
+
+std::string acl_members_catalog_sql(SqlDdlDialect dialect) {
+    const std::string qmem = quote_ident(dialect, kMemberTable);
+    return std::string(
+               "SELECT group_name AS \"GROUP_NAME\", user_name AS \"USER_NAME\" "
+               "FROM ") +
+           qmem +
+           " UNION SELECT 'PUBLIC' AS \"GROUP_NAME\", 'PUBLIC' AS \"USER_NAME\"";
+}
+
 std::string acl_permissions_select_sql(SqlDdlDialect dialect) {
     const std::string qtab = quote_ident(dialect, kAclTable);
     return std::string(

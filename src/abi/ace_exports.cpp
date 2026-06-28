@@ -4539,6 +4539,13 @@ void sql_uri_bind_table_acl(TableT* tbl, ADSHANDLE hConnect,
     tbl->check_rights   = usCheckRights;
 }
 
+template<typename TableT>
+void sql_uri_mark_index_full(TableT* tbl) {
+    if (tbl != nullptr) {
+        tbl->aof_opt_level = static_cast<std::uint16_t>(ADS_OPTIMIZED_FULL);
+    }
+}
+
 bool sql_uri_system_suffix(const std::string& name, std::string& suffix) {
     if (name.size() <= 7) return false;
     std::string px = name.substr(0, 7);
@@ -12910,6 +12917,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             si->parent, si->column, key, soft, /*last=*/false);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -12929,6 +12937,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             /*last=*/false);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -12948,6 +12957,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             /*last=*/false);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -12966,6 +12976,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             si->parent, si->column, key, soft, /*last=*/false);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -12983,6 +12994,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             si->parent, si->column, key, soft, /*last=*/false);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         si->parent->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
@@ -13002,6 +13014,7 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             si->parent, si->column, key, soft, /*last=*/false);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -13161,6 +13174,7 @@ UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
             si->parent, si->column, key, /*soft=*/false, /*last=*/true);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -13179,6 +13193,7 @@ UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
             /*soft=*/false, /*last=*/true);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -13197,6 +13212,7 @@ UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
             /*soft=*/false, /*last=*/true);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
@@ -13214,7 +13230,26 @@ UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
             si->parent, si->column, key, /*soft=*/false, /*last=*/true);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* si = get_mssql_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "mssql index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, key, /*soft=*/false, /*last=*/true);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
+        si->last_seek_found = found;
+        si->parent->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;
         return ok();
@@ -13231,6 +13266,7 @@ UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
             si->parent, si->column, key, /*soft=*/false, /*last=*/true);
         if (!r) return fail(r.error());
         const bool found = r.value();
+        sql_uri_mark_index_full(si->parent);
         si->last_seek_found = found;
         if (pbFound) *pbFound = found ? 1 : 0;
         (void)u16KeyType;

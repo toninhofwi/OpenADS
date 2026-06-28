@@ -536,6 +536,7 @@ static bool read_type_info(const uint8_t* p, size_t n, size_t& pos,
         case 0x3C:  // MONEY
         case 0x3B:  // FLT4
         case 0x3E:  // FLT8
+        case 0x24:  // GUIDTYPE (fixed 16-byte payload)
             // No extra bytes; length is implicit (could be set per type if needed).
             return true;
 
@@ -565,6 +566,15 @@ static bool read_type_info(const uint8_t* p, size_t n, size_t& pos,
             return true;
         }
 
+        // ---- TIMEN: 1-byte scale ----
+        case 0x29:  // TIMEN
+        {
+            uint8_t scale = 0;
+            if (!read_u8(p, n, pos, scale)) return false;
+            col.scale = scale;
+            return true;
+        }
+
         // ---- DECIMALN / NUMERICN: max-len(1) + precision(1) + scale(1) ----
         case 0x6A:  // DECIMALN
         case 0x6C:  // NUMERICN
@@ -582,6 +592,17 @@ static bool read_type_info(const uint8_t* p, size_t n, size_t& pos,
         // ---- BIGCHAR/BIGVARCHR/NCHAR/NVARCHAR: max-len(2 LE) + 5-byte COLLATION ----
         case 0xAF:  // BIGCHAR
         case 0xA7:  // BIGVARCHR
+        case 0xA5:  // BIGVARBIN
+        case 0xAD:  // BIGBINARY
+        case 0x23:  // BINARY
+        case 0x25:  // VARBINARY
+        {
+            uint16_t maxlen = 0;
+            if (!read_u16le(p, n, pos, maxlen)) return false;
+            col.length = maxlen;
+            return true;
+        }
+
         case 0xEF:  // NCHAR
         case 0xE7:  // NVARCHAR
         {
@@ -705,6 +726,17 @@ static int64_t read_le_int(const uint8_t* data, size_t len) {
 }
 
 // Read little-endian unsigned integer from |data|[0..len-1].
+static std::string hex_encode(const uint8_t* data, size_t len) {
+    static const char* kHex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(len * 2);
+    for (size_t i = 0; i < len; ++i) {
+        out.push_back(kHex[(data[i] >> 4) & 0x0F]);
+        out.push_back(kHex[data[i] & 0x0F]);
+    }
+    return out;
+}
+
 static uint64_t read_le_uint(const uint8_t* data, size_t len) {
     uint64_t v = 0;
     for (size_t i = 0; i < len && i < 8; ++i)
@@ -996,6 +1028,52 @@ std::string decode_cell(const TdsColumn& col, const uint8_t* data, size_t len) {
             return r;
         }
 
+        // ---- GUIDTYPE: 16-byte mixed-endian uniqueidentifier ----
+        case 0x24:  // GUIDTYPE
+        {
+            if (len < 16) return "";
+            uint32_t d1 = static_cast<uint32_t>(data[0])
+                        | (static_cast<uint32_t>(data[1]) << 8)
+                        | (static_cast<uint32_t>(data[2]) << 16)
+                        | (static_cast<uint32_t>(data[3]) << 24);
+            uint16_t d2 = static_cast<uint16_t>(data[4] | (data[5] << 8));
+            uint16_t d3 = static_cast<uint16_t>(data[6] | (data[7] << 8));
+            char buf[40];
+            std::snprintf(buf, sizeof(buf),
+                          "%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                          d1, d2, d3,
+                          data[8], data[9], data[10], data[11],
+                          data[12], data[13], data[14], data[15]);
+            return buf;
+        }
+
+        // ---- TIMEN: time-of-day (3-5 bytes per scale), no date ----
+        case 0x29:  // TIMEN
+        {
+            uint8_t sc = col.scale;
+            size_t time_bytes = (sc <= 2) ? 3 : (sc <= 4) ? 4 : 5;
+            if (len < time_bytes) return "";
+            uint64_t time_ticks = read_le_uint(data, time_bytes);
+            uint64_t pow10 = 1;
+            for (int i = 0; i < sc; ++i) pow10 *= 10;
+            uint64_t total_sec = (pow10 > 0) ? (time_ticks / pow10) : time_ticks;
+            uint32_t hh = static_cast<uint32_t>(total_sec / 3600);
+            uint32_t mm = static_cast<uint32_t>((total_sec % 3600) / 60);
+            uint32_t ss = static_cast<uint32_t>(total_sec % 60);
+            std::string r;
+            append_upadded(r, hh, 2);
+            append_upadded(r, mm, 2);
+            append_upadded(r, ss, 2);
+            return r;
+        }
+
+        // ---- Binary types: hex-encoded payload ----
+        case 0xA5:  // BIGVARBIN
+        case 0x25:  // VARBINARY
+        case 0xAD:  // BIGBINARY
+        case 0x23:  // BINARY
+            return hex_encode(data, len);
+
         // ---- DATETIME2N: time(3-5 bytes per scale)+date(3 bytes) since 0001-01-01 ----
         // Time part byte count per scale:
         //   scale 0-2 → 3 bytes, scale 3-4 → 4 bytes, scale 5-7 → 5 bytes
@@ -1079,6 +1157,7 @@ static size_t fixed_type_size(uint8_t tok) {
         case 0x3C: return 8;   // MONEY
         case 0x3B: return 4;   // FLT4
         case 0x3E: return 8;   // FLT8
+        case 0x24: return 16;  // GUIDTYPE
         default:   return 0;
     }
 }
@@ -1102,7 +1181,7 @@ static bool read_column_value(const uint8_t* p, size_t n, size_t& pos,
     // ---- 1-byte length prefix (*N / DATE / DATETIME2N / DECIMAL / NUMERIC) ----
     switch (tok) {
         case 0x26: case 0x68: case 0x6E: case 0x6D: case 0x6F:
-        case 0x28: case 0x2A: case 0x6A: case 0x6C:
+        case 0x28: case 0x2A: case 0x29: case 0x6A: case 0x6C:
         {
             if (pos >= n) return false;
             uint8_t vlen = p[pos++];
@@ -1117,8 +1196,9 @@ static bool read_column_value(const uint8_t* p, size_t n, size_t& pos,
             return true;
         }
 
-        // ---- 2-byte LE length prefix (char / nchar) ----
+        // ---- 2-byte LE length prefix (char / nchar / varbinary) ----
         case 0xAF: case 0xA7: case 0xEF: case 0xE7:
+        case 0xA5: case 0x25:
         {
             if (pos + 2 > n) return false;
             uint16_t vlen = static_cast<uint16_t>(p[pos] | (uint16_t(p[pos+1]) << 8));
@@ -1131,6 +1211,18 @@ static bool read_column_value(const uint8_t* p, size_t n, size_t& pos,
             cell.value   = decode_cell(col, p + pos, vlen);
             cell.is_null = false;
             pos += vlen;
+            return true;
+        }
+
+        // ---- Fixed-length binary (BINARY/BIGBINARY) ----
+        case 0xAD: case 0x23:
+        {
+            const size_t bin_len =
+                col.length > 0 ? static_cast<size_t>(col.length) : 0;
+            if (bin_len == 0 || pos + bin_len > n) return false;
+            cell.value   = hex_encode(p + pos, bin_len);
+            cell.is_null = false;
+            pos += bin_len;
             return true;
         }
 

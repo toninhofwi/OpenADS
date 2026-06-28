@@ -475,6 +475,48 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         REQUIRE(AdsExecuteSQLDirect(hStmtGrp, grant_sales, &hCurGrp) == 0);
         UNSIGNED8 grant_sel_pub[] = "GRANT SELECT ON item TO PUBLIC";
         REQUIRE(AdsExecuteSQLDirect(hStmtGrp, grant_sel_pub, &hCurGrp) == 0);
+
+        // Persisted membership surfaces in system.usergroupmembers / users.
+        UNSIGNED8 smem[] =
+            "SELECT USER_NAME, GROUP_NAME FROM system.usergroupmembers "
+            "WHERE USER_NAME = 'carol'";
+        REQUIRE(AdsExecuteSQLDirect(hStmtGrp, smem, &hCurGrp) == 0);
+        REQUIRE(hCurGrp != 0);
+        REQUIRE(AdsGotoTop(hCurGrp) == 0);
+        UNSIGNED16 eof_mem = 0;
+        REQUIRE(AdsAtEOF(hCurGrp, &eof_mem) == 0);
+        CHECK(eof_mem == 0);
+        UNSIGNED8 ufn[16] = "USER_NAME";
+        UNSIGNED8 gfn2[16] = "GROUP_NAME";
+        UNSIGNED8 ubuf[64] = {};
+        UNSIGNED8 gbuf2[64] = {};
+        UNSIGNED32 ulen = sizeof(ubuf) - 1;
+        UNSIGNED32 glen2 = sizeof(gbuf2) - 1;
+        REQUIRE(AdsGetField(hCurGrp, ufn, ubuf, &ulen, 0) == 0);
+        REQUIRE(AdsGetField(hCurGrp, gfn2, gbuf2, &glen2, 0) == 0);
+        std::string uname(reinterpret_cast<const char*>(ubuf), ulen);
+        std::string gname(reinterpret_cast<const char*>(gbuf2), glen2);
+        while (!uname.empty() && uname.back() == ' ') uname.pop_back();
+        while (!gname.empty() && gname.back() == ' ') gname.pop_back();
+        CHECK(uname == "carol");
+        CHECK(gname == "SALES");
+        REQUIRE(AdsCloseTable(hCurGrp) == 0);
+
+        UNSIGNED8 susers[] =
+            "SELECT USER_NAME FROM system.users WHERE USER_NAME = 'carol'";
+        REQUIRE(AdsExecuteSQLDirect(hStmtGrp, susers, &hCurGrp) == 0);
+        REQUIRE(hCurGrp != 0);
+        REQUIRE(AdsGotoTop(hCurGrp) == 0);
+        UNSIGNED16 eof_usr = 0;
+        REQUIRE(AdsAtEOF(hCurGrp, &eof_usr) == 0);
+        CHECK(eof_usr == 0);
+        ulen = sizeof(ubuf) - 1;
+        REQUIRE(AdsGetField(hCurGrp, ufn, ubuf, &ulen, 0) == 0);
+        uname = std::string(reinterpret_cast<const char*>(ubuf), ulen);
+        while (!uname.empty() && uname.back() == ' ') uname.pop_back();
+        CHECK(uname == "carol");
+        REQUIRE(AdsCloseTable(hCurGrp) == 0);
+
         AdsCloseSQLStatement(hStmtGrp);
 
         UNSIGNED8 user_carol[] = "carol";

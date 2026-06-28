@@ -224,17 +224,34 @@ TEST_CASE("parse_colmetadata: int + nvarchar columns") {
     CHECK(pos == p.size());
 }
 
-TEST_CASE("parse_colmetadata: unsupported type fails closed") {
-    // GUIDTYPE 0x24 is not in our supported set → must return false.
-    // Count=1, one column with type 0x24, followed by a length byte and name.
+TEST_CASE("parse_colmetadata: GUIDTYPE 0x24 is supported") {
+    // GUIDTYPE 0x24 has no extra TYPE_INFO bytes (fixed 16-byte payload).
     std::vector<uint8_t> p = {
         0x01,0x00,                              // Count = 1
         0x00,0x00,0x00,0x00,                   // UserType
         0x00,0x00,                              // Flags
-        0x24,                                   // GUIDTYPE = unsupported
-        0x10,                                   // (would-be length byte, but we return false first)
+        0x24,                                   // GUIDTYPE
         0x01,                                   // ColName len = 1
         'g',0x00                               // "g" UCS-2LE
+    };
+    std::vector<TdsColumn> cols;
+    size_t pos = 0;
+    REQUIRE(parse_colmetadata(p.data(), p.size(), pos, cols));
+    REQUIRE(cols.size() == 1);
+    CHECK(cols[0].type_token == 0x24);
+    CHECK(cols[0].name == "g");
+    CHECK(pos == p.size());
+}
+
+TEST_CASE("parse_colmetadata: unsupported type fails closed") {
+    // Unknown token 0x99 → must return false.
+    std::vector<uint8_t> p = {
+        0x01,0x00,
+        0x00,0x00,0x00,0x00,
+        0x00,0x00,
+        0x99,
+        0x01,
+        'x',0x00
     };
     std::vector<TdsColumn> cols;
     size_t pos = 0;
@@ -263,6 +280,23 @@ TEST_CASE("decode decimal scale and datetime epoch") {
     // Native ADS convention: YYYYMMDDHHMMSS (14 chars, no separators).
     uint8_t dt[] = {0x01,0x00,0x00,0x00, 0x00,0x00,0x00,0x00};
     CHECK(decode_cell(col(0x3D), dt, 8) == "19000102000000");
+}
+
+TEST_CASE("decode GUID / TIMEN / binary edge types") {
+    // GUID {6BA7B810-9DAD-11D1-80B4-00C04FD430C8} wire bytes (mixed endian).
+    uint8_t guid[] = {
+        0x10,0xB8,0xA7,0x6B, 0xAD,0x9D, 0xD1,0x11,
+        0x80,0xB4, 0x00,0xC0,0x4F,0xD4,0x30,0xC8
+    };
+    CHECK(decode_cell(col(0x24), guid, 16) == "6BA7B810-9DAD-11D1-80B4-00C04FD430C8");
+
+    // TIMEN scale=0, 12:34:56 → 45296 seconds, LE3 = 0x10 0xB0 0x00.
+    uint8_t timen[] = {0x10, 0xB0, 0x00};
+    CHECK(decode_cell(col(0x29, 0), timen, 3) == "123456");
+
+    uint8_t bin[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    CHECK(decode_cell(col(0xA5), bin, 4) == "DEADBEEF");
+    CHECK(decode_cell(col(0x23), bin, 4) == "DEADBEEF");
 }
 
 TEST_CASE("decode DATEN: known day-count → YYYYMMDD (ADS native)") {
@@ -371,6 +405,21 @@ TEST_CASE("parse_query_response: malformed length terminates fail-closed (no OOB
     push({0xD1, 0x04, 0x2A});                                 // ROW, len 4 but 1 byte left
     auto r = parse_query_response(s.data(), s.size());
     CHECK(r.ok == false);                                     // returned, no crash
+}
+
+TEST_CASE("parse_query_response: GUID column row") {
+    std::vector<uint8_t> s;
+    auto push = [&](std::initializer_list<uint8_t> b){ for (auto x:b) s.push_back(x); };
+    push({0x81, 0x01,0x00});
+    push({0,0,0,0, 0,0, 0x24, 0x01,'i',0,'d',0});
+    push({0xD1});
+    push({0x10,0xB8,0xA7,0x6B, 0xAD,0x9D, 0xD1,0x11,
+          0x80,0xB4, 0x00,0xC0,0x4F,0xD4,0x30,0xC8});
+    push({0xFD, 0x10,0x00, 0x00,0x00, 0,0,0,0,0,0,0,0});
+    auto r = parse_query_response(s.data(), s.size());
+    REQUIRE(r.ok);
+    REQUIRE(r.rows.size() == 1);
+    CHECK(r.rows[0][0].value == "6BA7B810-9DAD-11D1-80B4-00C04FD430C8");
 }
 
 TEST_CASE("parse_query_response: NBCROW with null bitmap") {

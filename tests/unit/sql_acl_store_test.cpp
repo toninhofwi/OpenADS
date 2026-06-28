@@ -106,4 +106,63 @@ TEST_CASE("sql_acl_store: group membership expands effective_ops") {
     sqlite3_close(db);
 }
 
+TEST_CASE("sql_acl_store: catalog SQL lists members and users") {
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open(":memory:", &db) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+        db, openads::sql_backend::acl_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+        db, openads::sql_backend::member_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+
+    auto exec = [db](const std::string& sql) -> openads::util::Result<void> {
+        if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK) {
+            return openads::util::Result<void>{};
+        }
+        return openads::util::Error{5001, 0, sqlite3_errmsg(db), sql};
+    };
+
+    REQUIRE(openads::sql_backend::try_sql_acl_statement(
+        "GRANT GROUP SALES TO carol", SqlDdlDialect::Sqlite, exec));
+    REQUIRE(openads::sql_backend::try_sql_acl_statement(
+        "GRANT SELECT ON item TO carol", SqlDdlDialect::Sqlite, exec));
+
+    const auto members_sql =
+        openads::sql_backend::acl_members_catalog_sql(SqlDdlDialect::Sqlite);
+    sqlite3_stmt* stmt = nullptr;
+    REQUIRE(sqlite3_prepare_v2(db, members_sql.c_str(),
+                               static_cast<int>(members_sql.size()),
+                               &stmt, nullptr) == SQLITE_OK);
+    bool saw_carol = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* user =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        const char* group =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (user && group && std::string(user) == "carol" &&
+            std::string(group) == "SALES") {
+            saw_carol = true;
+        }
+    }
+    sqlite3_finalize(stmt);
+    CHECK(saw_carol);
+
+    const auto users_sql =
+        openads::sql_backend::acl_users_catalog_sql(SqlDdlDialect::Sqlite);
+    REQUIRE(sqlite3_prepare_v2(db, users_sql.c_str(),
+                             static_cast<int>(users_sql.size()),
+                             &stmt, nullptr) == SQLITE_OK);
+    bool saw_carol_user = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* user =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (user && std::string(user) == "carol") saw_carol_user = true;
+    }
+    sqlite3_finalize(stmt);
+    CHECK(saw_carol_user);
+
+    sqlite3_close(db);
+}
+
 #endif
