@@ -195,7 +195,7 @@ jobs:
         uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Configure (MSSQL)
-        run: cmake --preset ninja-clang -DOPENADS_WITH_MSSQL=ON
+        run: cmake --preset ninja-clang -DOPENADS_WITH_MSSQL=ON -DOPENADS_WITH_TLS=ON
         shell: bash
 
       - name: Build unit tests
@@ -220,7 +220,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build firebird3.0-dev firebird3.0-utils
+          sudo apt-get install -y ninja-build firebird-dev firebird3.0-utils
 
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@v6

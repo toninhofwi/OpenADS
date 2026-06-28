@@ -1,11 +1,13 @@
-/* OpenADS Harbour smoke — sqlite:// SQL URI backend (SQLRDD parity). */
+/* OpenADS Harbour smoke — sqlite:// SQL URI backend (SQLRDD parity).
+ * Uses rddads SQL workarea helpers (AdsCreateSQLStatement / AdsExecuteSQLDirect)
+ * rather than low-level ACE navigational entry points not exported by Harbour. */
 #include "ads.ch"
 
 REQUEST ADS
 
 PROCEDURE Main()
-   LOCAL hConn := 0, hT := 0, hStmt := 0, hCur := 0
-   LOCAL cDb, cUri, n := 0, cName := Space( 200 ), nLen := 200
+   LOCAL hConn := 0, n := 0, cName := Space( 200 )
+   LOCAL cDb, cUri
 
    ErrorBlock( {|oErr| MyHandler( oErr ) } )
 
@@ -21,45 +23,57 @@ PROCEDURE Main()
       RETURN
    ENDIF
 
-   IF AdsCreateTable( hConn, "items", NIL, ADS_CDX, 0, 0, 0, 0, ;
-         "ID,AutoIncrement;NAME,Character,20", @hT ) != 0
-      ? "AdsCreateTable failed"
-      RETURN
-   ENDIF
-
-   IF AdsAppendRecord( hT ) != 0
-      ? "AdsAppendRecord failed"
-      RETURN
-   ENDIF
-   AdsSetString( hT, "NAME", "alpha", 5 )
-   AdsWriteRecord( hT )
-
-   AdsSetFilter( hT, "NAME = 'alpha'" )
-   AdsGetRecordCount( hT, 0, @n )
-   ? "Filtered count:", n
-   AdsClearFilter( hT )
-   AdsGetRecordCount( hT, 0, @n )
-   ? "After AdsClearFilter:", n
-
-   AdsCloseTable( hT )
-
-   IF AdsCreateSQLStatement( hConn, @hStmt ) != 0
-      ? "AdsCreateSQLStatement failed"
-      RETURN
-   ENDIF
-   IF AdsExecuteSQLDirect( hStmt, "SELECT * FROM system.tables", @hCur ) == 0 .AND. hCur > 0
-      AdsGotoTop( hCur )
-      AdsGetField( hCur, "Name", @cName, @nLen, 0 )
-      ? "system.tables first:", Left( cName, nLen )
-      AdsCloseTable( hCur )
-   ELSE
-      ? "system.tables query failed"
-   ENDIF
-   IF AdsCreateSQLStatement( hConn, @hStmt ) == 0
-      IF AdsExecuteSQLDirect( hStmt, "DROP TABLE items", @hCur ) != 0
-         ? "DROP TABLE failed"
+   IF AdsCreateSQLStatement( "ddl", ADS_ADT )
+      IF ! AdsExecuteSQLDirect( ;
+            "CREATE TABLE items (NAME TEXT)" )
+         ? "CREATE TABLE failed"
       ENDIF
-      AdsCloseSQLStatement( hStmt )
+      USE
+   ENDIF
+
+   IF AdsCreateSQLStatement( "dml", ADS_ADT )
+      IF ! AdsExecuteSQLDirect( ;
+            "INSERT INTO items (NAME) VALUES ('alpha')" )
+         ? "INSERT failed"
+      ENDIF
+      USE
+   ENDIF
+
+   IF AdsCreateSQLStatement( "flt", ADS_ADT )
+      IF AdsExecuteSQLDirect( ;
+            "SELECT COUNT(*) AS CNT FROM items WHERE NAME = 'alpha'" )
+         dbGoTop()
+         n := FIELD->CNT
+         ? "Filtered count:", n
+      ELSE
+         ? "Filter count query failed"
+      ENDIF
+      USE
+   ENDIF
+
+   IF AdsCreateSQLStatement( "all", ADS_ADT )
+      IF AdsExecuteSQLDirect( "SELECT COUNT(*) AS CNT FROM items" )
+         dbGoTop()
+         n := FIELD->CNT
+         ? "Total count:", n
+      ENDIF
+      USE
+   ENDIF
+
+   IF AdsCreateSQLStatement( "sys", ADS_ADT )
+      IF AdsExecuteSQLDirect( "SELECT * FROM system.tables" )
+         dbGoTop()
+         cName := FIELD->Name
+         ? "system.tables first:", AllTrim( cName )
+      ELSE
+         ? "system.tables query failed"
+      ENDIF
+      USE
+   ENDIF
+
+   IF AdsCreateSQLStatement( "drop", ADS_ADT )
+      AdsExecuteSQLDirect( "DROP TABLE items" )
+      USE
    ENDIF
 
    AdsDisconnect( hConn )
