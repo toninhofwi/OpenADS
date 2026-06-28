@@ -75,8 +75,8 @@ util::Result<Table> Table::open(const std::string& path,
             drv = std::make_unique<drivers::adt::AdtDriver>();
             break;
         case TableType::Vfp:
-            return util::Error{5004, 0,
-                               "VFP table type not yet supported", path};
+            drv = std::make_unique<drivers::cdx::CdxDriver>();
+            break;
     }
     drivers::DriverOpenMode dmode = drivers::DriverOpenMode::ReadOnly;
     switch (mode) {

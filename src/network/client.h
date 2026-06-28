@@ -167,6 +167,7 @@ public:
                                           const std::string& value);
     // M12.25 — raw DBF record image at the current cursor position.
     util::Result<std::vector<std::uint8_t>> get_record(std::uint32_t id);
+    util::Result<std::uint32_t> get_record_crc(std::uint32_t id);
     util::Result<void>          set_record(std::uint32_t id,
                                            const std::uint8_t* bytes,
                                            std::size_t len);

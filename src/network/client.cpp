@@ -425,6 +425,24 @@ RemoteConnection::get_record(std::uint32_t id) {
     return std::vector<std::uint8_t>(pl.begin() + 2, pl.begin() + 2 + len);
 }
 
+util::Result<std::uint32_t>
+RemoteConnection::get_record_crc(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::GetRecordCRC;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetRecordCRAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0, "GetRecordCRC: server error", ""};
+    }
+    const auto& pl = rep.value().payload;
+    return static_cast<std::uint32_t>(pl[0]) |
+           (static_cast<std::uint32_t>(pl[1]) << 8) |
+           (static_cast<std::uint32_t>(pl[2]) << 16) |
+           (static_cast<std::uint32_t>(pl[3]) << 24);
+}
+
 util::Result<void> RemoteConnection::set_record(std::uint32_t id,
                                                 const std::uint8_t* bytes,
                                                 std::size_t len) {

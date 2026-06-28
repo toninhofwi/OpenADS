@@ -62,6 +62,13 @@ std::string ci_compare_sql(const std::string& col, const std::string& value) {
     return "LOWER(" + col + ") = LOWER(" + sql_escape(value) + ")";
 }
 
+std::string limit_one_suffix(SqlDdlDialect dialect) {
+    if (dialect == SqlDdlDialect::Oracle) {
+        return " FETCH FIRST 1 ROW ONLY";
+    }
+    return " LIMIT 1";
+}
+
 uint32_t bits_from_right(const std::string& right) {
     const std::string r = upper_copy(right);
     if      (r == "ALL")       return DD::DD_PERM_FULL;
@@ -215,6 +222,16 @@ std::string member_grant_sql(SqlDdlDialect dialect,
                    " (user_name, group_name) VALUES (" + u + ", " + g +
                    ") ON CONFLICT (user_name, group_name) DO NOTHING";
         case SqlDdlDialect::Maria:
+            return "INSERT IGNORE INTO " + qtab +
+                   " (user_name, group_name) VALUES (" + u + ", " + g + ")";
+        case SqlDdlDialect::Oracle:
+            return "MERGE INTO " + qtab + " t USING (SELECT " + u +
+                   " AS user_name, " + g +
+                   " AS group_name FROM dual) s "
+                   "ON (LOWER(t.user_name) = LOWER(s.user_name) AND "
+                   "t.group_name = s.group_name) "
+                   "WHEN NOT MATCHED THEN INSERT (user_name, group_name) "
+                   "VALUES (s.user_name, s.group_name)";
         default:
             return "INSERT IGNORE INTO " + qtab +
                    " (user_name, group_name) VALUES (" + u + ", " + g + ")";
@@ -246,6 +263,11 @@ std::string groups_for_user_sql(SqlDdlDialect dialect,
                    " WHERE " + where;
         case SqlDdlDialect::Maria:
         case SqlDdlDialect::Sqlite:
+            return "SELECT GROUP_CONCAT(group_name) FROM " + qtab +
+                   " WHERE " + where;
+        case SqlDdlDialect::Oracle:
+            return "SELECT LISTAGG(group_name, ',') WITHIN GROUP "
+                   "(ORDER BY group_name) FROM " + qtab + " WHERE " + where;
         default:
             return "SELECT GROUP_CONCAT(group_name) FROM " + qtab +
                    " WHERE " + where;
@@ -336,6 +358,22 @@ std::string grant_upsert_sql(SqlDdlDialect dialect,
                    "(obj_type, obj_name, parent, grantee, is_group, bitmask) "
                    "VALUES (s.obj_type, s.obj_name, s.parent, s.grantee, "
                    "s.is_group, s.add_bits)";
+        case SqlDdlDialect::Oracle:
+            return "MERGE INTO " + qtab + " t "
+                   "USING (SELECT " + sql_escape(obj_type) +
+                   " AS obj_type, " + sql_escape(obj_name) + " AS obj_name, " +
+                   sql_escape(grantee) + " AS grantee, " + bits +
+                   " AS add_bits, " + sql_escape(parent) + " AS parent, " + ig +
+                   " AS is_group FROM dual) s "
+                   "ON (t.obj_type = s.obj_type AND t.obj_name = s.obj_name "
+                   "AND t.grantee = s.grantee) "
+                   "WHEN MATCHED THEN UPDATE SET "
+                   "bitmask = t.bitmask + s.add_bits - BITAND(t.bitmask, s.add_bits), "
+                   "parent = s.parent, is_group = s.is_group "
+                   "WHEN NOT MATCHED THEN INSERT "
+                   "(obj_type, obj_name, parent, grantee, is_group, bitmask) "
+                   "VALUES (s.obj_type, s.obj_name, s.parent, s.grantee, "
+                   "s.is_group, s.add_bits)";
     }
     return {};
 }
@@ -355,6 +393,10 @@ std::string revoke_sql(SqlDdlDialect dialect,
         case SqlDdlDialect::Firebird:
             return "UPDATE " + qtab + " SET bitmask = BIN_AND(bitmask, -1 - " +
                    mask + ")" + where;
+        case SqlDdlDialect::Oracle:
+            return "UPDATE " + qtab +
+                   " SET bitmask = bitmask - BITAND(bitmask, " + mask + ")" +
+                   where;
         default:
             return "UPDATE " + qtab + " SET bitmask = bitmask & ~" + mask +
                    where;
@@ -397,6 +439,18 @@ std::string acl_table_ddl(SqlDdlDialect dialect) {
                    "is_group SMALLINT DEFAULT 0, "
                    "bitmask INTEGER DEFAULT 0, "
                    "PRIMARY KEY (obj_type, obj_name, grantee))'; END";
+        case SqlDdlDialect::Oracle:
+            return "DECLARE v_cnt NUMBER; BEGIN SELECT COUNT(*) INTO v_cnt "
+                   "FROM user_tables WHERE table_name = '" +
+                   std::string(kAclTable) + "'; IF v_cnt = 0 THEN "
+                   "EXECUTE IMMEDIATE 'CREATE TABLE " + qtab +
+                   " (obj_type VARCHAR2(8) NOT NULL, "
+                   "obj_name VARCHAR2(200) NOT NULL, "
+                   "parent VARCHAR2(200) DEFAULT '''' NOT NULL, "
+                   "grantee VARCHAR2(200) NOT NULL, "
+                   "is_group NUMBER(1) DEFAULT 0 NOT NULL, "
+                   "bitmask NUMBER(10) DEFAULT 0 NOT NULL, "
+                   "PRIMARY KEY (obj_type, obj_name, grantee))'; END IF; END";
         case SqlDdlDialect::Postgres:
         case SqlDdlDialect::Sqlite:
         default:
@@ -427,6 +481,13 @@ std::string user_table_ddl(SqlDdlDialect dialect) {
                    std::string(kUserTable) + "')) THEN EXECUTE STATEMENT '" +
                    "CREATE TABLE " + qtab +
                    " (user_name VARCHAR(200) NOT NULL PRIMARY KEY)'; END";
+        case SqlDdlDialect::Oracle:
+            return "DECLARE v_cnt NUMBER; BEGIN SELECT COUNT(*) INTO v_cnt "
+                   "FROM user_tables WHERE table_name = '" +
+                   std::string(kUserTable) + "'; IF v_cnt = 0 THEN "
+                   "EXECUTE IMMEDIATE 'CREATE TABLE " + qtab +
+                   " (user_name VARCHAR2(200) NOT NULL PRIMARY KEY)'; "
+                   "END IF; END";
         case SqlDdlDialect::Postgres:
         case SqlDdlDialect::Sqlite:
         default:
@@ -452,6 +513,14 @@ std::string connect_user_register_sql(SqlDdlDialect dialect,
             return "INSERT INTO " + qtab + " (user_name) VALUES (" + u +
                    ") ON CONFLICT (user_name) DO NOTHING";
         case SqlDdlDialect::Maria:
+            return "INSERT IGNORE INTO " + qtab + " (user_name) VALUES (" +
+                   u + ")";
+        case SqlDdlDialect::Oracle:
+            return "MERGE INTO " + qtab + " t USING (SELECT " + u +
+                   " AS user_name FROM dual) s "
+                   "ON (LOWER(t.user_name) = LOWER(s.user_name)) "
+                   "WHEN NOT MATCHED THEN INSERT (user_name) "
+                   "VALUES (s.user_name)";
         default:
             return "INSERT IGNORE INTO " + qtab + " (user_name) VALUES (" +
                    u + ")";
@@ -480,6 +549,14 @@ std::string member_table_ddl(SqlDdlDialect dialect) {
                    " (user_name VARCHAR(200) NOT NULL, "
                    "group_name VARCHAR(200) NOT NULL, "
                    "PRIMARY KEY (user_name, group_name))'; END";
+        case SqlDdlDialect::Oracle:
+            return "DECLARE v_cnt NUMBER; BEGIN SELECT COUNT(*) INTO v_cnt "
+                   "FROM user_tables WHERE table_name = '" +
+                   std::string(kMemberTable) + "'; IF v_cnt = 0 THEN "
+                   "EXECUTE IMMEDIATE 'CREATE TABLE " + qtab +
+                   " (user_name VARCHAR2(200) NOT NULL, "
+                   "group_name VARCHAR2(200) NOT NULL, "
+                   "PRIMARY KEY (user_name, group_name))'; END IF; END";
         case SqlDdlDialect::Postgres:
         case SqlDdlDialect::Sqlite:
         default:
@@ -653,7 +730,8 @@ std::optional<std::string> query_cell(const SqlQueryFn& query,
 
 bool sql_acl_has_any(SqlDdlDialect dialect, const SqlQueryFn& query) {
     const std::string qtab = quote_ident(dialect, kAclTable);
-    return query_cell(query, "SELECT 1 FROM " + qtab + " LIMIT 1").has_value();
+    return query_cell(query, "SELECT 1 FROM " + qtab + limit_one_suffix(dialect))
+        .has_value();
 }
 
 openads::engine::DataDict::EffectiveOps sql_acl_effective_ops(
@@ -668,7 +746,7 @@ openads::engine::DataDict::EffectiveOps sql_acl_effective_ops(
     const std::string obj_sql = sql_escape(object_name);
     const std::string probe =
         "SELECT 1 FROM " + qtab +
-        " WHERE obj_type = '1' AND obj_name = " + obj_sql + " LIMIT 1";
+        " WHERE obj_type = '1' AND obj_name = " + obj_sql + limit_one_suffix(dialect);
     if (!query_cell(query, probe).has_value()) {
         return full_ops();
     }
@@ -678,7 +756,7 @@ openads::engine::DataDict::EffectiveOps sql_acl_effective_ops(
         const std::string sql =
             "SELECT bitmask FROM " + qtab +
             " WHERE obj_type = '1' AND obj_name = " + obj_sql +
-            " AND " + ci_compare_sql("grantee", principal) + " LIMIT 1";
+            " AND " + ci_compare_sql("grantee", principal) + limit_one_suffix(dialect);
         if (auto cell = query_cell(query, sql); cell && !cell->empty()) {
             try {
                 bits |= static_cast<uint32_t>(std::stoul(*cell));

@@ -87,6 +87,15 @@ std::optional<std::string> catalog_sql(SqlDdlDialect dialect,
                        "WHERE rdb$view_blr IS NULL "
                        "AND rdb$system_flag = 0 "
                        "ORDER BY rdb$relation_name";
+            case SqlDdlDialect::Oracle:
+                return std::string(
+                    "SELECT table_name AS \"Name\", "
+                    "table_name AS \"Table_Relative_Path\", "
+                    "'1' AS \"Table_Type\"") +
+                       k_tables_tail +
+                       " FROM user_tables "
+                       "WHERE table_name NOT LIKE 'OPENADS$%' "
+                       "ORDER BY table_name";
         }
     }
     if (sys_name == "columns") {
@@ -159,6 +168,25 @@ FROM rdb$relation_fields rf
 JOIN rdb$relations r ON r.rdb$relation_name = rf.rdb$relation_name
 WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0
 ORDER BY rf.rdb$relation_name, rf.rdb$field_position)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT utc.table_name AS "TABLE_NAME",
+       utc.column_name AS "COL_NAME",
+       CAST(utc.column_id AS VARCHAR2(10)) AS "COL_NUM",
+       CASE
+         WHEN utc.data_type IN ('NUMBER','FLOAT','BINARY_FLOAT',
+                                'BINARY_DOUBLE') THEN 'N'
+         ELSE 'C'
+       END AS "COL_TYPE",
+       CAST(COALESCE(utc.data_length,
+         CASE WHEN utc.data_type IN ('NUMBER','FLOAT','BINARY_FLOAT',
+                                     'BINARY_DOUBLE') THEN 0 ELSE 10 END)
+         AS VARCHAR2(10)) AS "COL_LEN",
+       CAST(COALESCE(utc.data_scale, 0) AS VARCHAR2(10)) AS "COL_DEC"
+FROM user_tab_columns utc
+JOIN user_tables ut ON ut.table_name = utc.table_name
+WHERE ut.table_name NOT LIKE 'OPENADS$%'
+ORDER BY utc.table_name, utc.column_id)";
         }
     }
     if (sys_name == "primarykeys") {
@@ -221,6 +249,17 @@ JOIN rdb$indices i ON i.rdb$index_name = rc.rdb$index_name
 JOIN rdb$index_segments s ON s.rdb$index_name = i.rdb$index_name
 WHERE rc.rdb$constraint_type = 'PRIMARY KEY'
 ORDER BY rc.rdb$relation_name, s.rdb$field_position)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT ucc.table_name AS "TABLE_NAME",
+       ucc.column_name AS "COLUMN_NAME",
+       CAST(ucc.position AS VARCHAR2(10)) AS "KEY_SEQ",
+       uc.constraint_name AS "PK_NAME"
+FROM user_constraints uc
+JOIN user_cons_columns ucc
+  ON uc.constraint_name = ucc.constraint_name
+WHERE uc.constraint_type = 'P'
+ORDER BY ucc.table_name, ucc.position)";
         }
     }
     if (sys_name == "indexes") {
@@ -262,6 +301,13 @@ FROM rdb$indices i
 JOIN rdb$relations r ON r.rdb$relation_name = i.rdb$relation_name
 WHERE r.rdb$system_flag = 0
 ORDER BY r.rdb$relation_name, i.rdb$index_name)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT ui.table_name AS "TABLE_NAME",
+       ui.index_name AS "INDEX_FILE",
+       '' AS "COMMENT"
+FROM user_indexes ui
+ORDER BY ui.table_name, ui.index_name)";
         }
     }
     if (sys_name == "relations") {
@@ -341,6 +387,21 @@ SELECT TRIM(rc.rdb$constraint_name) AS "RI_NAME",
 FROM rdb$relation_constraints rc
 WHERE rc.rdb$constraint_type = 'FOREIGN KEY'
 ORDER BY rc.rdb$constraint_name)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT fk.constraint_name AS "RI_NAME",
+       pk.table_name AS "PARENT",
+       fk.table_name AS "CHILD",
+       '' AS "PARENT_TAG",
+       '' AS "CHILD_TAG",
+       '' AS "UPDATE_OPT",
+       fk.delete_rule AS "DELETE_OPT",
+       '' AS "FAIL_TABLE"
+FROM user_constraints fk
+JOIN user_constraints pk
+  ON pk.constraint_name = fk.r_constraint_name
+WHERE fk.constraint_type = 'R'
+ORDER BY fk.constraint_name)";
         }
     }
     if (sys_name == "referentialintegrity") {
@@ -418,6 +479,21 @@ SELECT TRIM(rc.rdb$constraint_name) AS "RI_NAME",
 FROM rdb$relation_constraints rc
 WHERE rc.rdb$constraint_type = 'FOREIGN KEY'
 ORDER BY rc.rdb$constraint_name)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT fk.constraint_name AS "RI_NAME",
+       pk.table_name AS "PARENT_TABLE",
+       fk.table_name AS "CHILD_TABLE",
+       '' AS "PARENT_TAG",
+       '' AS "CHILD_TAG",
+       '0' AS "UPDATE_RULE",
+       '0' AS "DELETE_RULE",
+       '' AS "FAIL_TABLE"
+FROM user_constraints fk
+JOIN user_constraints pk
+  ON pk.constraint_name = fk.r_constraint_name
+WHERE fk.constraint_type = 'R'
+ORDER BY fk.constraint_name)";
         }
     }
     // SR_MGMNT: synthetic open-access ACL (no SQL DD on URI connections).
@@ -529,6 +605,22 @@ ORDER BY rc.rdb$constraint_name)";
                        "rf.rdb$relation_name "
                        "WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0" +
                        acl_union;
+            case SqlDdlDialect::Oracle:
+                return std::string(
+                    "SELECT table_name AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
+                       k_perm_tail +
+                       " FROM user_tables "
+                       "WHERE table_name NOT LIKE 'OPENADS$%' "
+                       "UNION ALL "
+                       "SELECT column_name AS \"OBJ_NAME\", '4' AS \"OBJ_TYPE\", "
+                       "table_name AS \"PARENT\", 'PUBLIC' AS \"GRANTEE\", "
+                       "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+                       "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+                       "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+                       "'2' AS \"DROP\" "
+                       "FROM user_tab_columns "
+                       "WHERE table_name NOT LIKE 'OPENADS$%'" +
+                       acl_union;
         }
     }
     if (sys_name == "effectivepermissions") {
@@ -578,6 +670,14 @@ SELECT TRIM(r.rdb$relation_name) AS "OBJ_NAME", '1' AS "OBJ_TYPE",
        '2' AS "CREATE", '2' AS "ALTER", '2' AS "DROP"
 FROM rdb$relations r
 WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT table_name AS "OBJ_NAME", '1' AS "OBJ_TYPE", 'PUBLIC' AS "GRANTEE",
+       '2' AS "SELECT", '2' AS "UPDATE", '2' AS "INSERT", '2' AS "DELETE",
+       '' AS "EXECUTE", '2' AS "ACCESS", '2' AS "INHERIT",
+       '2' AS "CREATE", '2' AS "ALTER", '2' AS "DROP"
+FROM user_tables
+WHERE table_name NOT LIKE 'OPENADS$%')";
         }
     }
     if (sys_name == "links") {
@@ -619,6 +719,12 @@ SELECT TRIM(r.rdb$relation_name) AS "VIEW_NAME",
 FROM rdb$relations r
 WHERE r.rdb$view_blr IS NOT NULL AND r.rdb$system_flag = 0
 ORDER BY r.rdb$relation_name)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT view_name AS "VIEW_NAME",
+       COALESCE(text, '') AS "VIEW_SQL", '' AS "COMMENT"
+FROM user_views
+ORDER BY view_name)";
         }
     }
     if (sys_name == "triggers") {
@@ -684,6 +790,21 @@ SELECT TRIM(tg.rdb$trigger_name) AS "TRIG_NAME",
 FROM rdb$triggers tg
 WHERE tg.rdb$system_flag = 0
 ORDER BY tg.rdb$trigger_name)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT trigger_name AS "TRIG_NAME",
+       table_name AS "TABLE_NAME",
+       '0' AS "EVENT_MASK",
+       CASE triggering_event
+         WHEN 'INSERT' THEN 'BEFORE'
+         WHEN 'UPDATE' THEN 'BEFORE'
+         WHEN 'DELETE' THEN 'BEFORE'
+         ELSE '' END AS "TIMING",
+       triggering_event AS "EVENT",
+       '' AS "CONTAINER", '' AS "PROC",
+       '0' AS "PRIORITY", 'T' AS "ENABLED", '0' AS "TRIG_OPTIONS"
+FROM user_triggers
+ORDER BY trigger_name)";
         }
     }
     if (sys_name == "storedprocedures") {
@@ -722,6 +843,13 @@ SELECT TRIM(p.rdb$procedure_name) AS "PROC_NAME", '' AS "CONTAINER",
 FROM rdb$procedures p
 WHERE p.rdb$system_flag = 0
 ORDER BY p.rdb$procedure_name)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT object_name AS "PROC_NAME", '' AS "CONTAINER",
+       object_name AS "PROCEDURE", '' AS "INPUT", '' AS "OUTPUT"
+FROM user_procedures
+WHERE object_type = 'PROCEDURE'
+ORDER BY object_name)";
         }
     }
     if (sys_name == "functions") {
@@ -764,6 +892,14 @@ SELECT TRIM(f.rdb$function_name) AS "FUNC_NAME", '' AS "CONTAINER",
 FROM rdb$functions f
 WHERE f.rdb$system_flag = 0
 ORDER BY f.rdb$function_name)";
+            case SqlDdlDialect::Oracle:
+                return R"(
+SELECT object_name AS "FUNC_NAME", '' AS "CONTAINER",
+       '' AS "RET_TYPE", '' AS "IN_PARAMS",
+       '' AS "FUNC_BODY", '' AS "COMMENT"
+FROM user_objects
+WHERE object_type = 'FUNCTION'
+ORDER BY object_name)";
         }
     }
     return std::nullopt;

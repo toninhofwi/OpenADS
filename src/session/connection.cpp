@@ -178,7 +178,7 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     if (encryption_key_set_) {
         if (auto* cdx = dynamic_cast<
                 openads::drivers::cdx::CdxDriver*>(holder->driver())) {
-            if (cdx->encrypted()) {
+            if (cdx->encrypted() || cdx->partial_encrypted()) {
                 (void)cdx->set_encryption_key(encryption_key_);
             }
         }

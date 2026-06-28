@@ -168,6 +168,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_agg_test.cpp
     unit/dbf_vfp_autoinc_test.cpp
     unit/dbf_vfp_0x32_combined_test.cpp
+    unit/abi_vfp_create_test.cpp
     unit/abi_sql_join_test.cpp
     unit/abi_sql_in_test.cpp
     unit/abi_sql_exists_test.cpp
@@ -219,6 +220,7 @@ add_executable(openads_unit_tests
     unit/proc_test.cpp
     unit/sql_common_test.cpp
     unit/sql_system_catalog_test.cpp
+    unit/sql_oracle_dialect_test.cpp
     unit/sql_acl_store_test.cpp
     unit/enterprise_config_test.cpp
     unit/legacy_crt_shims_test.cpp

@@ -137,3 +137,71 @@ TEST_CASE("M11.2 wrong password produces garbage (not the plaintext)") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("M11.2 record-level encrypt: single record encrypted, others plain") {
+    auto dir = fs::temp_directory_path() / "openads_m11_2_re";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    write_plain_dbf(dir / "data.dbf", {"AAAAA", "BBBBB", "CCCCC"});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+    UNSIGNED8 pw[64]   = "swordfish";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    REQUIRE(AdsSetEncryptionPassword(hConn, pw) == 0);
+
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+
+    UNSIGNED16 enc = 0;
+    CHECK(AdsIsTableEncrypted(hTable, &enc) == 0);
+    CHECK(enc == 0);
+
+    REQUIRE(AdsGotoRecord(hTable, 2) == 0);
+    REQUIRE(AdsEncryptRecord(hTable) == 0);
+
+    CHECK(AdsIsTableEncrypted(hTable, &enc) == 0);
+    CHECK(enc == 1);
+    UNSIGNED16 rec_enc = 0;
+    CHECK(AdsIsRecordEncrypted(hTable, &rec_enc) == 0);
+    CHECK(rec_enc == 1);
+
+    REQUIRE(AdsGotoRecord(hTable, 1) == 0);
+    rec_enc = 1;
+    CHECK(AdsIsRecordEncrypted(hTable, &rec_enc) == 0);
+    CHECK(rec_enc == 0);
+    CHECK(read_first_tag(hTable) == "AAAAA");
+
+    REQUIRE(AdsGotoRecord(hTable, 2) == 0);
+    CHECK(read_first_tag(hTable) == "BBBBB");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    REQUIRE(AdsSetEncryptionPassword(hConn, pw) == 0);
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+    REQUIRE(AdsGotoRecord(hTable, 2) == 0);
+    CHECK(read_first_tag(hTable) == "BBBBB");
+    REQUIRE(AdsGotoRecord(hTable, 1) == 0);
+    CHECK(read_first_tag(hTable) == "AAAAA");
+
+    {
+        std::ifstream f(dir / "data.dbf", std::ios::binary);
+        char ver = 0;
+        f.read(&ver, 1);
+        CHECK(static_cast<std::uint8_t>(ver) != 0xC3);
+    }
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}

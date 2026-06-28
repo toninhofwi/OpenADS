@@ -45,12 +45,20 @@ public:
     // to transparently encrypt / decrypt record bodies. Encrypts
     // every existing record on demand for plain → encrypted upgrade.
     bool encrypted() const noexcept { return encrypted_; }
+    bool partial_encrypted() const noexcept { return partial_enc_; }
+    bool record_encrypted(std::uint32_t recno) const noexcept;
     util::Result<void>
         set_encryption_key(const std::array<std::uint8_t, 32>& key);
     util::Result<void> encrypt_in_place(
         const std::array<std::uint8_t, 32>& key);
+    util::Result<void> encrypt_record_at(std::uint32_t recno);
+    util::Result<void> decrypt_record_at(std::uint32_t recno);
 
 private:
+    util::Result<void> load_enc_bitmap_();
+    util::Result<void> save_enc_bitmap_();
+    bool               record_encrypted_(std::uint32_t recno) const noexcept;
+    void               set_record_encrypted_(std::uint32_t recno, bool on);
     util::Result<void> rewrite_header_();
     // Read-ahead block cache (#4 perf). Sequential scans otherwise pay
     // one positioned ReadFile + one heap alloc PER record in
@@ -82,6 +90,9 @@ private:
     // Best-effort — falls back to an unlocked refresh if the lock can't
     // be taken in time, never leaving rec_count_ worse than it was.
     util::Result<void> refresh_count_shared_();
+    // Raw on-disk bytes — no CTR transform (used by record-level encrypt).
+    util::Result<std::vector<std::uint8_t>>
+        read_record_disk_(std::uint32_t recno);
     void               apply_ctr_(std::uint8_t* buf, std::size_t n,
                                   std::uint32_t recno) const;
 
@@ -94,6 +105,9 @@ private:
     // M11.2 — encryption state. encrypted_ mirrors the header byte;
     // aes_ is populated once the connection's password key is bound.
     bool                        encrypted_ = false;
+    bool                        partial_enc_ = false;
+    std::uint32_t               enc_bitmap_offset_ = 0;
+    std::vector<std::uint8_t>   enc_bitmap_;
     std::optional<engine::Aes>  aes_;
     // Read-ahead block cache state (raw file bytes). read_cache_first_ == 0
     // means empty; otherwise it holds records [first .. first+recs-1].

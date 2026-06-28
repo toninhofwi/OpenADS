@@ -4,8 +4,8 @@
 
 namespace openads::sql_backend {
 
-// `oracle://user:pass@host[:port]/service` — SQLRDD-style alias that routes
-// through the ODBC backend using a standard Oracle ODBC connection string.
+// `oracle://user:pass@host[:port]/service` — SQLRDD-style URI that routes
+// through the ODBC backend with SqlDdlDialect::Oracle (catalog, DDL, ACL).
 // Requires OPENADS_WITH_ODBC=ON and an installed Oracle ODBC driver.
 struct OracleUri {
     std::string user;

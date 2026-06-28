@@ -11,6 +11,7 @@ OpenADS extends the ACE ABI with navigational SQL table drivers behind URI conne
 | MariaDB / MySQL | `mariadb://user:pass@host:3306/dbname` |
 | Microsoft SQL Server | `mssql://user:pass@host:1433/dbname` |
 | Firebird | `firebird://user:pass@host:3050/dbname` |
+| Oracle (ODBC) | `oracle://user:pass@host:1521/service` |
 | ODBC gateway | `odbc://DSN` or `odbc://user:pass@DSN` |
 
 ```c
@@ -22,23 +23,23 @@ AdsOpenTable(hConn, "customers", "customers", ADS_DEFAULT, 0, 0, 0, ADS_READONLY
 
 Capabilities below are wired through the **navigational ABI** (`AdsGotoTop`, `AdsSeek`, `AdsAppendRecord`, `AdsLockRecord`, …), not only via `AdsExecuteSQLDirect` passthrough.
 
-| Capability | SQLite | PostgreSQL | MariaDB | MSSQL | Firebird | ODBC |
-|------------|--------|------------|---------|-------|----------|------|
-| Read + navigation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `dbSeek` / column index | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Write (`dbAppend` / REPLACE / `dbDelete`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Transactions (`AdsBeginTransaction` …) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `SET FILTER` / AOF push-down | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Aggregates push-down | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `rLock()` / `fLock()` emulation | ✅ | ✅ | ✅ | ✅ (app lock) | ✅ | ✅ |
-| `AdsSetRelation` / scoped | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `AdsCreateTable` (SQL DDL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `AdsRestructureTable` ADD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `AdsRestructureTable` DROP/CHANGE | ✅ | ✅ | ✅ | ✅ | ✅ | ✅* |
-| `AdsDropTable` (navigational DDL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `AdsClearFilter` (SQL push-down clear) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `system.tables` / `system.columns` catalog | ✅ | ✅† | ✅† | ✅† | ✅† | ✅† |
-| SQL passthrough cursor (`AdsExecuteSQLDirect` SELECT) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Capability | SQLite | PostgreSQL | MariaDB | MSSQL | Firebird | Oracle | ODBC |
+|------------|--------|------------|---------|-------|----------|--------|------|
+| Read + navigation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `dbSeek` / column index | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Write (`dbAppend` / REPLACE / `dbDelete`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Transactions (`AdsBeginTransaction` …) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `SET FILTER` / AOF push-down | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Aggregates push-down | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `rLock()` / `fLock()` emulation | ✅ | ✅ | ✅ | ✅ (app lock) | ✅ | ✅ | ✅ |
+| `AdsSetRelation` / scoped | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsCreateTable` (SQL DDL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsRestructureTable` ADD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsRestructureTable` DROP/CHANGE | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅* |
+| `AdsDropTable` (navigational DDL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsClearFilter` (SQL push-down clear) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `system.tables` / `system.columns` catalog | ✅ | ✅† | ✅† | ✅† | ✅† | ✅† | ✅† |
+| SQL passthrough cursor (`AdsExecuteSQLDirect` SELECT) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 \* SQLite `CHANGE` is a no-op at the SQL layer (length not enforced on TEXT). Use passthrough DDL for complex SQLite schema migrations.
 
@@ -54,8 +55,8 @@ Capabilities below are wired through the **navigational ABI** (`AdsGotoTop`, `Ad
 
 Remaining gaps vs full xHarbour SQLRDD (not #103):
 
-- Oracle native OCI (ODBC only today).
-- Live CI for MSSQL / Firebird (set `OPENADS_TEST_MSSQL_CONNSTR` locally).
+- Oracle native OCI (use `oracle://` via ODBC today; dialect-aware catalog/DDL/ACL).
+- Live CI for MSSQL / Firebird / Oracle (set `OPENADS_TEST_MSSQL_CONNSTR` or Oracle ODBC locally).
 
 `SR_MGMNT*` parity: open `system.tables` / `system.columns` / `system.iota` as navigational workareas on SQL URI connections (`AdsOpenTable` or `AdsExecuteSQLDirect`). `AdsPrepareSQL` + `AdsExecuteSQL` named parameters work on all SQL backends. CI job `sql-live-pg-maria` runs against service containers on every push.
 

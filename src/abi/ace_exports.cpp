@@ -18,6 +18,7 @@
 #include "sql_backend/sql_ddl.h"
 #include "sql_backend/sql_system_catalog.h"
 #include "engine/index_expr.h"
+#include "engine/record_crc.h"
 #include "engine/table.h"
 
 #include "network/client.h"
@@ -982,6 +983,18 @@ Table* get_table(ADSHANDLE h) {
         (void)activate_binding(h);
     }
     return via_idx;
+}
+
+Connection* find_owning_connection(Table* t) {
+    if (t == nullptr) return nullptr;
+    auto& s = state();
+    Connection* owning = nullptr;
+    s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
+        if (k != HandleKind::Connection || owning) return;
+        auto* cc = static_cast<Connection*>(p);
+        if (cc->owns_table_ptr(t)) owning = cc;
+    });
+    return owning;
 }
 
 // DBF/xbase CHARACTER fields are fixed-width space-padded. The internal
@@ -4358,6 +4371,30 @@ void sql_uri_forget_user(ADSHANDLE hConnect) {
     sql_uri_usernames().erase(hConnect);
 }
 
+#if defined(OPENADS_WITH_ODBC)
+std::unordered_map<ADSHANDLE, openads::sql_backend::SqlDdlDialect>&
+odbc_conn_dialects() {
+    static std::unordered_map<ADSHANDLE, openads::sql_backend::SqlDdlDialect> m;
+    return m;
+}
+
+void sql_uri_remember_odbc_dialect(
+    ADSHANDLE hConnect,
+    openads::sql_backend::SqlDdlDialect dialect) {
+    odbc_conn_dialects()[hConnect] = dialect;
+}
+
+void sql_uri_forget_odbc_dialect(ADSHANDLE hConnect) {
+    odbc_conn_dialects().erase(hConnect);
+}
+
+openads::sql_backend::SqlDdlDialect odbc_dialect_for(ADSHANDLE hConnect) {
+    auto it = odbc_conn_dialects().find(hConnect);
+    if (it != odbc_conn_dialects().end()) return it->second;
+    return openads::sql_backend::SqlDdlDialect::Postgres;
+}
+#endif
+
 template<typename ConnT>
 void sql_uri_connect_register_user(ADSHANDLE hConnect, UNSIGNED8* pucUser,
                                    ConnT* conn,
@@ -4705,8 +4742,10 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::OdbcConnection, raw);
             odbc_conns_map().emplace(h, std::move(holder));
+            sql_uri_remember_odbc_dialect(
+                h, openads::sql_backend::SqlDdlDialect::Oracle);
             sql_uri_connect_register_user(h, pucUser, raw,
-                                          openads::sql_backend::SqlDdlDialect::Postgres);
+                                          openads::sql_backend::SqlDdlDialect::Oracle);
             *phConnect = h;
             return ok();
         }
@@ -4725,6 +4764,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::OdbcConnection, raw);
             odbc_conns_map().emplace(h, std::move(holder));
+            sql_uri_remember_odbc_dialect(
+                h, openads::sql_backend::SqlDdlDialect::Postgres);
             sql_uri_connect_register_user(h, pucUser, raw,
                                           openads::sql_backend::SqlDdlDialect::Postgres);
             *phConnect = h;
@@ -4981,6 +5022,7 @@ UNSIGNED32 ENTRYPOINT AdsDisconnect(ADSHANDLE hConnect) {
             sc->disconnect();
             odbc_conns_map().erase(hConnect);
             sql_uri_forget_user(hConnect);
+            sql_uri_forget_odbc_dialect(hConnect);
             s_local.registry.release(hConnect);
             return ok();
         }
@@ -5190,7 +5232,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                     return odbc_acl_query(sc, sql);
                 };
             if (sql_uri_table_denied(hConnect, usCheckRights, usMode, name,
-                    openads::sql_backend::SqlDdlDialect::Postgres, qfn)) {
+                    odbc_dialect_for(hConnect), qfn)) {
                 return fail(openads::AE_ACCESS_DENIED, name.c_str());
             }
         }
@@ -5717,9 +5759,52 @@ struct FieldOut {
     char         type   = 'C';
     std::uint8_t length = 0;
     std::uint8_t dec    = 0;
+    bool         nullable = false;
+    bool         autoinc  = false;
 };
 
-std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs) {
+DbfTypeSpec vfp_type_for(const std::string& name) {
+    auto eq = [&](const char* k) {
+        if (name.size() != std::strlen(k)) return false;
+        for (std::size_t i = 0; i < name.size(); ++i) {
+            char a = static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(name[i])));
+            char b = static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(k[i])));
+            if (a != b) return false;
+        }
+        return true;
+    };
+    if (name.size() == 1) {
+        char c = static_cast<char>(std::toupper(
+                     static_cast<unsigned char>(name[0])));
+        switch (c) {
+            case 'I': return {'I', 4, 0, false};
+            case 'Y': return {'Y', 8, 0, false};
+            case 'B': return {'B', 8, 0, false};
+            case 'V': return {'V', 10, 0, false};
+            case 'Q': return {'Q', 10, 0, false};
+            case 'M': return {'M', 4, 0, true};
+            default:  break;
+        }
+    }
+    if (eq("Integer") || eq("LongLong"))
+        return {'I', 4, 0, false};
+    if (eq("Currency") || eq("Money"))
+        return {'Y', 8, 0, false};
+    if (eq("Double") || eq("CurDouble"))
+        return {'B', 8, 0, false};
+    if (eq("Varchar"))
+        return {'V', 10, 0, false};
+    if (eq("Varbinary"))
+        return {'Q', 10, 0, false};
+    if (eq("AutoInc"))
+        return {'I', 4, 0, false};
+    return dbf_type_for(name);
+}
+
+std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs,
+                                              bool vfp = false) {
     std::vector<FieldOut> fields;
     std::string buf;
     auto flush = [&] {
@@ -5732,7 +5817,8 @@ std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs) {
         }
         parts.push_back(trim(p));
         if (parts.size() >= 2) {
-            DbfTypeSpec ts = dbf_type_for(parts[1]);
+            DbfTypeSpec ts = vfp ? vfp_type_for(parts[1])
+                                 : dbf_type_for(parts[1]);
             FieldOut f;
             f.name = parts[0];
             // Each write path enforces its own limit:
@@ -5742,6 +5828,8 @@ std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs) {
             f.type = ts.type;
             f.length = ts.length;
             f.dec    = ts.dec;
+            if (vfp && (parts[1] == "AutoInc" || parts[1] == "autoinc"))
+                f.autoinc = true;
             if (parts.size() >= 3) {
                 int n = std::atoi(parts[2].c_str());
                 if (n > 0 && n < 256) f.length = static_cast<std::uint8_t>(n);
@@ -5749,6 +5837,15 @@ std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs) {
             if (parts.size() >= 4) {
                 int d = std::atoi(parts[3].c_str());
                 if (d >= 0 && d < 256) f.dec = static_cast<std::uint8_t>(d);
+            }
+            if (parts.size() >= 5) {
+                std::string fl = parts[4];
+                for (char& ch : fl) {
+                    ch = static_cast<char>(std::toupper(
+                        static_cast<unsigned char>(ch)));
+                }
+                if (fl == "NULL" || fl == "NULLABLE") f.nullable = true;
+                else if (fl == "AUTOINC" || fl == "AUTO") f.autoinc = true;
             }
             if (f.length == 0) f.length = 10;
             fields.push_back(std::move(f));
@@ -5814,7 +5911,8 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
     }
     const auto rel  = openads::abi::to_internal(pucName, 0);
     const auto defs = openads::abi::to_internal(pucFields, 0);
-    auto fields = parse_rddads_field_defs(defs);
+    const bool is_vfp = (usTableType == ADS_VFP);
+    auto fields = parse_rddads_field_defs(defs, is_vfp);
     if (fields.empty()) {
         return fail(openads::AE_INTERNAL_ERROR, "no fields");
     }
@@ -5857,7 +5955,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
 #endif
 #if defined(OPENADS_WITH_ODBC)
     if (auto* oc = get_odbc_conn(hConn)) {
-        return run_sql_ddl(oc, openads::sql_backend::SqlDdlDialect::Postgres);
+        return run_sql_ddl(oc, odbc_dialect_for(hConn));
     }
 #endif
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -6006,6 +6104,88 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
                             ADS_ADT, 0, 0, 0, 1, phTable);
     }
 
+    if (is_vfp) {
+        // ── VFP DBF creation (0x30 / 0x31 / 0x32) ───────────────────────────
+        bool has_memo = false;
+        bool has_autoinc = false;
+        std::uint16_t nullable_count = 0;
+        for (const auto& f : fields) {
+            if (f.type == 'M' || f.type == 'm') has_memo = true;
+            if (f.autoinc) has_autoinc = true;
+            if (f.nullable) ++nullable_count;
+        }
+        const bool has_null = nullable_count > 0;
+        const std::uint8_t ver =
+            has_autoinc ? 0x32 : (has_memo ? 0x31 : 0x30);
+
+        std::uint16_t header_len = static_cast<std::uint16_t>(
+            32 + 32 * fields.size() + 1);
+        std::uint32_t rec_len = 1;
+        if (has_null) rec_len += 4;
+        for (const auto& f : fields) rec_len += f.length;
+        if (rec_len > 0xFFFF) {
+            return fail(openads::AE_INTERNAL_ERROR, "record too long");
+        }
+
+        std::vector<std::uint8_t> hdr(32, 0);
+        hdr[0]  = ver;
+        stamp_dbf_header_today(hdr.data());
+        hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
+        hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+        hdr[10] = static_cast<std::uint8_t>(rec_len & 0xFFu);
+        hdr[11] = static_cast<std::uint8_t>((rec_len >> 8) & 0xFFu);
+
+        std::vector<std::uint8_t> file = hdr;
+        for (const auto& f : fields) {
+            std::vector<std::uint8_t> fd(32, 0);
+            std::size_t n = std::min<std::size_t>(f.name.size(), 10);
+            std::memcpy(fd.data(), f.name.data(), n);
+            fd[11] = static_cast<std::uint8_t>(f.type);
+            fd[16] = f.length;
+            fd[17] = f.dec;
+            std::uint8_t flags = 0;
+            if (f.nullable) flags |= 0x02u;
+            if (f.autoinc) {
+                flags |= 0x0Cu;
+                fd[19] = 1;   // next value to issue
+                fd[23] = 1;   // step
+            }
+            fd[18] = flags;
+            file.insert(file.end(), fd.begin(), fd.end());
+        }
+        file.push_back(0x0D);
+        file.push_back(0x1A);
+
+        {
+            std::error_code ec;
+            fs::remove(full, ec);
+        }
+        {
+            std::ofstream out(full, std::ios::binary);
+            if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                  "AdsCreateTable: VFP open for write failed");
+            out.write(reinterpret_cast<const char*>(file.data()),
+                      static_cast<std::streamsize>(file.size()));
+            if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                  "AdsCreateTable: VFP write failed");
+        }
+
+        if (has_memo) {
+            fs::path fpt = full;
+            fpt.replace_extension(".fpt");
+            { std::error_code ec; fs::remove(fpt, ec); }
+            std::uint16_t bs = usMemoBlockSize != 0 ? usMemoBlockSize : 512;
+            auto mr = openads::drivers::fpt::FptMemo::create(fpt.string(), bs);
+            if (!mr) return fail(mr.error());
+        }
+
+        UNSIGNED8 namebuf[260] = {0};
+        std::size_t nb = std::min<std::size_t>(rel.size(), sizeof(namebuf) - 1);
+        std::memcpy(namebuf, rel.data(), nb);
+        return AdsOpenTable(hConn, namebuf, namebuf,
+                            ADS_VFP, 0, 0, 0, 1, phTable);
+    }
+
     // ── DBF creation path (existing) ────────────────────────────────────────
     // Compute header + record sizes.
     std::uint16_t header_len = static_cast<std::uint16_t>(
@@ -6130,7 +6310,7 @@ UNSIGNED32 ENTRYPOINT AdsDropTable(ADSHANDLE     hConnect,
 #endif
 #if defined(OPENADS_WITH_ODBC)
     if (auto* oc = get_odbc_conn(hConnect)) {
-        return run_sql_drop(oc, openads::sql_backend::SqlDdlDialect::Postgres);
+        return run_sql_drop(oc, odbc_dialect_for(hConnect));
     }
 #endif
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -6323,8 +6503,7 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
 #endif
 #if defined(OPENADS_WITH_ODBC)
         if (auto* oc = get_odbc_conn(hConnect)) {
-            return run_sql_restructure(oc,
-                openads::sql_backend::SqlDdlDialect::Postgres, chg_cols);
+            return run_sql_restructure(oc, odbc_dialect_for(hConnect), chg_cols);
         }
 #endif
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -8099,7 +8278,7 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
         if (UNSIGNED32 rc = sql_uri_check_dml(
                 ot->connect_handle, ot->check_rights, ot->name,
                 SqlUriDmlOp::Insert,
-                openads::sql_backend::SqlDdlDialect::Postgres, ot->conn,
+                odbc_dialect_for(ot->connect_handle), ot->conn,
                 odbc_acl_query);
             rc != openads::AE_SUCCESS) {
             return rc;
@@ -8222,7 +8401,7 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
         if (UNSIGNED32 rc = sql_uri_check_dml(
                 ot->connect_handle, ot->check_rights, ot->name,
                 ot->appending ? SqlUriDmlOp::Insert : SqlUriDmlOp::Update,
-                openads::sql_backend::SqlDdlDialect::Postgres, ot->conn,
+                odbc_dialect_for(ot->connect_handle), ot->conn,
                 odbc_acl_query);
             rc != openads::AE_SUCCESS) {
             return rc;
@@ -8382,7 +8561,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
         if (UNSIGNED32 rc = sql_uri_check_dml(
                 ot->connect_handle, ot->check_rights, ot->name,
                 SqlUriDmlOp::Delete,
-                openads::sql_backend::SqlDdlDialect::Postgres, ot->conn,
+                odbc_dialect_for(ot->connect_handle), ot->conn,
                 odbc_acl_query);
             rc != openads::AE_SUCCESS) {
             return rc;
@@ -14170,13 +14349,27 @@ UNSIGNED32 ENTRYPOINT AdsIsEncryptionEnabled(ADSHANDLE /*hConnect*/, UNSIGNED16*
     return ok();
 }
 
-UNSIGNED32 ENTRYPOINT AdsIsTableEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
-    if (pbEncrypted != nullptr) *pbEncrypted = 0;
+UNSIGNED32 ENTRYPOINT AdsIsTableEncrypted(ADSHANDLE hTable, UNSIGNED16* pbEncrypted) {
+    if (pbEncrypted == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pbEncrypted = 0;
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "invalid table");
+    auto* cdx = dynamic_cast<openads::drivers::cdx::CdxDriver*>(t->driver());
+    if (!cdx) return ok();
+    if (cdx->encrypted() || cdx->partial_encrypted()) *pbEncrypted = 1;
     return ok();
 }
 
-UNSIGNED32 ENTRYPOINT AdsIsRecordEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
-    if (pbEncrypted != nullptr) *pbEncrypted = 0;
+UNSIGNED32 ENTRYPOINT AdsIsRecordEncrypted(ADSHANDLE hTable, UNSIGNED16* pbEncrypted) {
+    if (pbEncrypted == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pbEncrypted = 0;
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "invalid table");
+    if (!t->positioned())
+        return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
+    auto* cdx = dynamic_cast<openads::drivers::cdx::CdxDriver*>(t->driver());
+    if (!cdx) return ok();
+    if (cdx->encrypted() || cdx->record_encrypted(t->recno())) *pbEncrypted = 1;
     return ok();
 }
 
@@ -14189,12 +14382,7 @@ UNSIGNED32 ENTRYPOINT AdsEncryptTable(ADSHANDLE hTable) {
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "invalid table handle");
-    Connection* owning = nullptr;
-    s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
-        if (k != HandleKind::Connection || owning) return;
-        auto* cc = static_cast<Connection*>(p);
-        if (cc->owns_table_ptr(t)) owning = cc;
-    });
+    Connection* owning = find_owning_connection(t);
     if (!owning) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
                              "table not owned by any connection");
     if (!owning->has_encryption_key()) {
@@ -14218,14 +14406,56 @@ UNSIGNED32 ENTRYPOINT AdsDecryptTable(ADSHANDLE /*hTable*/) {
                 "AdsDecryptTable pending ADS encryption-mode RE");
 }
 
-UNSIGNED32 ENTRYPOINT AdsEncryptRecord(ADSHANDLE /*hTable*/) {
-    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "AdsEncryptRecord pending ADS encryption-mode RE");
+UNSIGNED32 ENTRYPOINT AdsEncryptRecord(ADSHANDLE hTable) {
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "invalid table handle");
+    if (!t->positioned())
+        return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
+    Connection* owning = find_owning_connection(t);
+    if (!owning) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
+                             "table not owned by any connection");
+    if (!owning->has_encryption_key()) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsSetEncryptionPassword required first");
+    }
+    auto* cdx = dynamic_cast<openads::drivers::cdx::CdxDriver*>(t->driver());
+    if (!cdx) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "encryption supported on CdxDriver tables only");
+    }
+    if (cdx->encrypted()) return ok();
+    auto r = cdx->encrypt_record_at(t->recno());
+    if (!r) return fail(r.error());
+    if (auto fl = t->flush(); !fl) return fail(fl.error());
+    return ok();
 }
 
-UNSIGNED32 ENTRYPOINT AdsDecryptRecord(ADSHANDLE /*hTable*/) {
-    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "AdsDecryptRecord pending ADS encryption-mode RE");
+UNSIGNED32 ENTRYPOINT AdsDecryptRecord(ADSHANDLE hTable) {
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "invalid table handle");
+    if (!t->positioned())
+        return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
+    Connection* owning = find_owning_connection(t);
+    if (!owning) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
+                             "table not owned by any connection");
+    if (!owning->has_encryption_key()) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsSetEncryptionPassword required first");
+    }
+    auto* cdx = dynamic_cast<openads::drivers::cdx::CdxDriver*>(t->driver());
+    if (!cdx) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "encryption supported on CdxDriver tables only");
+    }
+    auto r = cdx->decrypt_record_at(t->recno());
+    if (!r) return fail(r.error());
+    if (auto rf = t->refresh_record_buffer(); !rf) return fail(rf.error());
+    if (auto fl = t->flush(); !fl) return fail(fl.error());
+    return ok();
 }
 
 // --- M5 transaction surface -------------------------------------------------
@@ -14983,6 +15213,8 @@ struct SqlStatement {
 #endif
 #if defined(OPENADS_WITH_ODBC)
     openads::sql_backend::OdbcConnection* odbc = nullptr;
+    openads::sql_backend::SqlDdlDialect odbc_dialect =
+        openads::sql_backend::SqlDdlDialect::Postgres;
 #endif
 #if defined(OPENADS_WITH_FIREBIRD)
     openads::sql_backend::FirebirdConnection* firebird = nullptr;
@@ -15149,6 +15381,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::OdbcConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->odbc = oc;
+        stmt->odbc_dialect = odbc_dialect_for(hConnect);
         stmt->sql_username = sql_uri_username(hConnect);
         *phStatement = stmt_register(std::move(stmt));
         return ok();
@@ -16854,10 +17087,11 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_ODBC)
     if (it->second->odbc != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        const auto odbc_dialect = it->second->odbc_dialect;
         {
             UNSIGNED32 acl_rc = 0;
             if (dispatch_sql_uri_acl(
-                    sqlstr, openads::sql_backend::SqlDdlDialect::Postgres,
+                    sqlstr, odbc_dialect,
                     [&](const std::string& s) {
                         return it->second->odbc->exec_sql(s);
                     },
@@ -16873,7 +17107,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             if (UNSIGNED32 rc = sql_uri_check_sql_rights(
                     sqlstr, it->second->check_rights,
                     it->second->sql_username,
-                    openads::sql_backend::SqlDdlDialect::Postgres, qfn);
+                    odbc_dialect, qfn);
                 rc != openads::AE_SUCCESS) {
                 return rc;
             }
@@ -16888,6 +17122,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             *phCursor = 0;
             return ok();
         }
+        if (auto rewritten =
+                openads::sql_backend::rewrite_system_select_sql(
+                    odbc_dialect, sqlstr)) {
+            sqlstr = *rewritten;
+        }
+        if (auto r = it->second->odbc->exec_sql(sqlstr); !r) {
+            return fail(r.error());
+        }
+        invalidate_odbc_nav_after_dml(it->second->odbc);
+        *phCursor = 0;
+        return ok();
     }
 #endif
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -24450,25 +24695,17 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCRC(ADSHANDLE hTable, UNSIGNED32* pulCRC,
                            UNSIGNED32 /*ulOption*/) {
     if (pulCRC == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulCRC = 0;
-    if (get_remote_table(hTable))
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsGetRecordCRC: not available for remote tables");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_record_crc(rt->id);
+        if (!r) return fail(r.error());
+        *pulCRC = r.value();
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     if (!t->positioned())
         return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
-    // Standard IEEE CRC-32 (reflected, poly 0xEDB88320) over the raw record
-    // image — the same bytes AdsGetRecord returns, deletion flag included.
-    const auto& buf = t->record_buffer();
-    std::uint32_t crc = 0xFFFFFFFFu;
-    for (std::uint8_t b : buf) {
-        crc ^= b;
-        for (int i = 0; i < 8; ++i) {
-            std::uint32_t mask = 0u - (crc & 1u);
-            crc = (crc >> 1) ^ (0xEDB88320u & mask);
-        }
-    }
-    *pulCRC = ~crc;
+    *pulCRC = openads::engine::crc32_record(t->record_buffer());
     return ok();
 }
 UNSIGNED32 ENTRYPOINT AdsInitRawKey(ADSHANDLE) { return ok(); }

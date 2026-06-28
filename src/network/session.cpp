@@ -4,6 +4,7 @@
 #include "engine/index_expr.h"
 #include "engine/aof_expr.h"
 #include "engine/aggregate.h"
+#include "engine/record_crc.h"
 #include "engine/table.h"
 #include "mgmt/mg_collector.h"
 #include "mgmt/mg_stats.h"
@@ -1860,6 +1861,34 @@ DispatchResult Session::dispatch(const Frame& f) {
                           static_cast<std::uint16_t>(buf.size()));
                 reply.payload.insert(reply.payload.end(),
                                      buf.begin(), buf.end());
+                break;
+            }
+            case Opcode::GetRecordCRC: {
+                if (f.payload.size() < 4) {
+                    reply = err("GetRecordCRC: bad payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (cursor_tbls_.find(id) != cursor_tbls_.end()) {
+                    reply = err("GetRecordCRC: not supported on SQL cursors");
+                    break;
+                }
+                auto it = tbls_.find(id);
+                if (it == tbls_.end() || !sess_conn_) {
+                    reply = err("GetRecordCRC: bad table id"); break;
+                }
+                auto* tbl = sess_conn_->lookup_table(it->second);
+                if (!tbl) { reply = err("GetRecordCRC: lookup failed"); break; }
+                if (!tbl->positioned() || tbl->eof() || tbl->bof() ||
+                    tbl->recno() == 0) {
+                    reply = err("GetRecordCRC: no current record"); break;
+                }
+                const std::uint32_t crc =
+                    openads::engine::crc32_record(tbl->record_buffer());
+                reply.opcode = Opcode::GetRecordCRAck;
+                reply.payload.push_back(static_cast<std::uint8_t>( crc        & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((crc >>  8) & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((crc >> 16) & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((crc >> 24) & 0xFFu));
                 break;
             }
             case Opcode::SetRecord: {

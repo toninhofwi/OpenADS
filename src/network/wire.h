@@ -199,6 +199,11 @@ enum class Opcode : std::uint8_t {
     CustomizeAOF       = 0xAC,
     CustomizeAOFAck    = 0xAD,
 
+    // M12.27 — AdsGetRecordCRC over the wire. Request: [u32 tid]
+    // Reply GetRecordCRAck: [u32 crc LE] (IEEE CRC-32 over record_buffer).
+    GetRecordCRC       = 0xAE,
+    GetRecordCRAck     = 0xAF,
+
     Error              = 0xFF,
 };
 

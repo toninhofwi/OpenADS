@@ -104,6 +104,14 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     auto fields = parse_dbf_fields(fd_buf.data(), fd_buf.size(), hdr_buf[0]);
     if (!fields) return fields.error();
     fields_ = std::move(fields).value();
+    partial_enc_ = (hdr_buf[12] == 0x4F);
+    enc_bitmap_offset_ = static_cast<std::uint32_t>(hdr_buf[28]) |
+                         (static_cast<std::uint32_t>(hdr_buf[29]) << 8) |
+                         (static_cast<std::uint32_t>(hdr_buf[30]) << 16) |
+                         (static_cast<std::uint32_t>(hdr_buf[31]) << 24);
+    if (partial_enc_ && enc_bitmap_offset_ != 0) {
+        if (auto lr = load_enc_bitmap_(); !lr) return lr.error();
+    }
     return {};
 }
 
@@ -146,7 +154,7 @@ CdxDriver::read_record_raw(std::uint32_t recno) {
         std::size_t pos = static_cast<std::size_t>(recno - read_cache_first_) *
                           rec_len_;
         std::memcpy(buf.data(), read_cache_.data() + pos, rec_len_);
-        if (encrypted_ && aes_) {
+        if (aes_ && (encrypted_ || record_encrypted_(recno))) {
             apply_ctr_(buf.data(), buf.size(), recno);
         }
         return buf;
@@ -187,7 +195,7 @@ CdxDriver::read_record_raw(std::uint32_t recno) {
 
     std::size_t pos = static_cast<std::size_t>(recno - first) * rec_len_;
     std::memcpy(buf.data(), read_cache_.data() + pos, rec_len_);
-    if (encrypted_ && aes_) {
+    if (aes_ && (encrypted_ || record_encrypted_(recno))) {
         apply_ctr_(buf.data(), buf.size(), recno);
     }
     return buf;
@@ -217,7 +225,7 @@ CdxDriver::write_record_raw(std::uint32_t recno,
     std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
                            static_cast<std::uint64_t>(recno - 1) *
                            static_cast<std::uint64_t>(rec_len_);
-    if (encrypted_ && aes_) {
+    if (aes_ && (encrypted_ || record_encrypted_(recno))) {
         std::vector<std::uint8_t> tmp(buf, buf + n);
         apply_ctr_(tmp.data(), tmp.size(), recno);
         auto wrote = file_.write_at(offset, tmp.data(), tmp.size());
@@ -463,6 +471,154 @@ CdxDriver::encrypt_in_place(const std::array<std::uint8_t, 32>& key) {
     auto wh = file_.write_at(0, &v, 1);
     if (!wh) return wh.error();
     return {};
+}
+
+bool CdxDriver::record_encrypted_(std::uint32_t recno) const noexcept {
+    if (recno == 0) return false;
+    const std::size_t bit = static_cast<std::size_t>(recno - 1);
+    const std::size_t byte = bit / 8;
+    const std::size_t mask = static_cast<std::size_t>(1u) << (bit % 8);
+    return byte < enc_bitmap_.size() && (enc_bitmap_[byte] & mask) != 0;
+}
+
+bool CdxDriver::record_encrypted(std::uint32_t recno) const noexcept {
+    return encrypted_ || record_encrypted_(recno);
+}
+
+void CdxDriver::set_record_encrypted_(std::uint32_t recno, bool on) {
+    if (recno == 0) return;
+    const std::size_t bit = static_cast<std::size_t>(recno - 1);
+    const std::size_t byte = bit / 8;
+    const std::uint8_t mask =
+        static_cast<std::uint8_t>(static_cast<std::size_t>(1u) << (bit % 8));
+    if (enc_bitmap_.size() <= byte) {
+        enc_bitmap_.resize(byte + 1, 0);
+    }
+    if (on) enc_bitmap_[byte] |= mask;
+    else    enc_bitmap_[byte] &= static_cast<std::uint8_t>(~mask);
+}
+
+util::Result<void> CdxDriver::load_enc_bitmap_() {
+    if (enc_bitmap_offset_ == 0) return {};
+    const std::size_t need =
+        (static_cast<std::size_t>(rec_count_) + 7) / 8;
+    enc_bitmap_.assign(need, 0);
+    auto got = file_.read_at(enc_bitmap_offset_, enc_bitmap_.data(), need);
+    if (!got) return got.error();
+    if (got.value() < need) {
+        return util::Error{5000, 0, "encryption bitmap truncated", ""};
+    }
+    return {};
+}
+
+util::Result<void> CdxDriver::save_enc_bitmap_() {
+    if (!partial_enc_ || enc_bitmap_.empty()) return {};
+    if (enc_bitmap_offset_ == 0) {
+        auto sz = file_.size();
+        if (!sz) return sz.error();
+        enc_bitmap_offset_ = static_cast<std::uint32_t>(sz.value());
+        if (enc_bitmap_offset_ > 0) {
+            --enc_bitmap_offset_;  // insert before trailing 0x1A
+        }
+    }
+    auto wrote = file_.write_at(enc_bitmap_offset_,
+                                enc_bitmap_.data(), enc_bitmap_.size());
+    if (!wrote) return wrote.error();
+    if (wrote.value() != enc_bitmap_.size()) {
+        return util::Error{5000, 0, "short write on encryption bitmap", ""};
+    }
+    std::uint8_t hdr[32]{};
+    auto got = file_.read_at(0, hdr, sizeof(hdr));
+    if (!got) return got.error();
+    hdr[12] = 0x4F;
+    hdr[28] = static_cast<std::uint8_t>( enc_bitmap_offset_        & 0xFFu);
+    hdr[29] = static_cast<std::uint8_t>((enc_bitmap_offset_ >>  8) & 0xFFu);
+    hdr[30] = static_cast<std::uint8_t>((enc_bitmap_offset_ >> 16) & 0xFFu);
+    hdr[31] = static_cast<std::uint8_t>((enc_bitmap_offset_ >> 24) & 0xFFu);
+    auto wh = file_.write_at(0, hdr, sizeof(hdr));
+    if (!wh) return wh.error();
+    return {};
+}
+
+util::Result<std::vector<std::uint8_t>>
+CdxDriver::read_record_disk_(std::uint32_t recno) {
+    if (recno == 0) {
+        return util::Error{5000, 0, "record number out of range", ""};
+    }
+    if (recno > rec_count_) {
+        if (auto rh = refresh_count_shared_(); !rh) return rh.error();
+        if (recno > rec_count_) {
+            return util::Error{5000, 0, "record number out of range", ""};
+        }
+    }
+    std::vector<std::uint8_t> buf(rec_len_, 0);
+    std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
+                           static_cast<std::uint64_t>(recno - 1) *
+                           static_cast<std::uint64_t>(rec_len_);
+    auto got = file_.read_at(offset, buf.data(), rec_len_);
+    if (!got) return got.error();
+    if (got.value() < rec_len_) {
+        return util::Error{5000, 0, "short read on record body", ""};
+    }
+    return buf;
+}
+
+util::Result<void> CdxDriver::encrypt_record_at(std::uint32_t recno) {
+    if (mode_ == DriverOpenMode::ReadOnly) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (!aes_) {
+        return util::Error{5000, 0, "encryption key not set", ""};
+    }
+    if (encrypted_) return {};
+    if (recno == 0 || recno > rec_count_) {
+        return util::Error{5000, 0, "record number out of range", ""};
+    }
+    if (record_encrypted_(recno)) return {};
+    auto plain = read_record_disk_(recno);
+    if (!plain) return plain.error();
+    partial_enc_ = true;
+    set_record_encrypted_(recno, true);
+    invalidate_read_cache_();
+    std::vector<std::uint8_t> enc = plain.value();
+    apply_ctr_(enc.data(), enc.size(), recno);
+    std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
+                           static_cast<std::uint64_t>(recno - 1) *
+                           static_cast<std::uint64_t>(rec_len_);
+    auto wrote = file_.write_at(offset, enc.data(), enc.size());
+    if (!wrote) return wrote.error();
+    return save_enc_bitmap_();
+}
+
+util::Result<void> CdxDriver::decrypt_record_at(std::uint32_t recno) {
+    if (mode_ == DriverOpenMode::ReadOnly) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (!aes_) {
+        return util::Error{5000, 0, "encryption key not set", ""};
+    }
+    if (encrypted_) {
+        return util::Error{5000, 0,
+                           "decrypt single record not supported on fully "
+                           "encrypted tables; use AdsDecryptTable",
+                           ""};
+    }
+    if (recno == 0 || recno > rec_count_) {
+        return util::Error{5000, 0, "record number out of range", ""};
+    }
+    if (!record_encrypted_(recno)) return {};
+    auto enc = read_record_disk_(recno);
+    if (!enc) return enc.error();
+    set_record_encrypted_(recno, false);
+    invalidate_read_cache_();
+    std::vector<std::uint8_t> plain = enc.value();
+    apply_ctr_(plain.data(), plain.size(), recno);
+    std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
+                           static_cast<std::uint64_t>(recno - 1) *
+                           static_cast<std::uint64_t>(rec_len_);
+    auto wrote = file_.write_at(offset, plain.data(), plain.size());
+    if (!wrote) return wrote.error();
+    return save_enc_bitmap_();
 }
 
 } // namespace openads::drivers::cdx

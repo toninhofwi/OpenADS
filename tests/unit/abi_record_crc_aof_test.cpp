@@ -189,6 +189,59 @@ TEST_CASE("AdsCustomizeAOF remote wire: add/remove records from AOF set") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("AdsGetRecordCRC remote wire matches local CRC") {
+    const auto dir = fs::temp_directory_path() / "openads_record_crc_wire";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    ADSHANDLE hConn = open_conn(dir);
+
+    UNSIGNED8 def[]   = "ID,Numeric,4,0;NAME,Character,8";
+    UNSIGNED8 tname[] = "crc";
+    ADSHANDLE hLocal = 0;
+    REQUIRE(AdsCreateTable(hConn, tname, nullptr, ADS_CDX, 0, 0, 0, 0, def, &hLocal)
+            == openads::AE_SUCCESS);
+
+    UNSIGNED8 fID[8]   = "ID";
+    UNSIGNED8 fNAME[8] = "NAME";
+    REQUIRE(AdsAppendRecord(hLocal) == openads::AE_SUCCESS);
+    REQUIRE(AdsSetDouble(hLocal, fID, 42.0) == openads::AE_SUCCESS);
+    REQUIRE(AdsSetString(hLocal, fNAME, (UNSIGNED8*)"REMOTE", 6) == openads::AE_SUCCESS);
+    REQUIRE(AdsWriteRecord(hLocal) == openads::AE_SUCCESS);
+
+    UNSIGNED32 local_crc = 0;
+    REQUIRE(AdsGetRecordCRC(hLocal, &local_crc, 0) == openads::AE_SUCCESS);
+    REQUIRE(AdsCloseTable(hLocal) == openads::AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hConn) == openads::AE_SUCCESS);
+
+    openads::network::Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    std::string path = dir.string();
+    std::replace(path.begin(), path.end(), '\\', '/');
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(srv.port()) + "/" + path;
+
+    UNSIGNED8 srvbuf[512]{};
+    std::memcpy(srvbuf, uri.c_str(), uri.size() + 1);
+    hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER, nullptr, nullptr, 0, &hConn)
+            == openads::AE_SUCCESS);
+
+    ADSHANDLE hT = 0;
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI, ADS_SHARED,
+                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hT)
+            == openads::AE_SUCCESS);
+    REQUIRE(AdsGotoTop(hT) == openads::AE_SUCCESS);
+
+    UNSIGNED32 remote_crc = 0;
+    REQUIRE(AdsGetRecordCRC(hT, &remote_crc, 0) == openads::AE_SUCCESS);
+    CHECK(remote_crc == local_crc);
+
+    REQUIRE(AdsCloseTable(hT) == openads::AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hConn) == openads::AE_SUCCESS);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("AdsSetServerType accepts a server-type mask") {
     CHECK(AdsSetServerType(ADS_LOCAL_SERVER) == openads::AE_SUCCESS);
     CHECK(AdsSetServerType(ADS_REMOTE_SERVER) == openads::AE_SUCCESS);

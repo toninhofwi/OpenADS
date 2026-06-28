@@ -15,6 +15,7 @@ enum class SqlDdlDialect {
     Maria,
     Mssql,
     Firebird,
+    Oracle,
 };
 
 struct SqlDdlColumn {

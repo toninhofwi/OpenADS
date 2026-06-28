@@ -48,12 +48,10 @@ supports `--http-user user:password`.
 
 ### Remote ABI gaps
 
-Some `Ads*` entry points still return `AE_FUNCTION_NOT_AVAILABLE` on
-`tcp://` remote tables while the local path works:
-
-- `AdsGetRecordCRC`
-- `AdsAggregate` / `AdsFetchWhere` on remote `tcp://` (local DBF + SQL
-  backends work; wire dispatch not wired yet)
+Most navigational and DML entry points work over `tcp://` remote tables.
+`AdsAggregate` / `AdsFetchWhere` and `AdsGetRecordCRC` are wired on the
+OpenADS wire protocol (v1.5.2+). Remaining remote gaps are documented in
+`CHANGELOG.md` as they close.
 
 ### DDL execution
 
