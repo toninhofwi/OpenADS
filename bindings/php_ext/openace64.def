@@ -114,6 +114,7 @@ EXPORTS
     AdsFTSSearch
     AdsCreateIndex61
     AdsCreateTable
+    AdsDropTable
     AdsCustomizeAOF
     AdsDDAddIndexFile
     AdsDDAddUserToGroup

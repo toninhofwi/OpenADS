@@ -35,9 +35,14 @@ Capabilities below are wired through the **navigational ABI** (`AdsGotoTop`, `Ad
 | `AdsCreateTable` (SQL DDL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `AdsRestructureTable` ADD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `AdsRestructureTable` DROP/CHANGE | ✅ | ✅ | ✅ | ✅ | ✅ | ✅* |
+| `AdsDropTable` (navigational DDL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AdsClearFilter` (SQL push-down clear) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `system.tables` / `system.columns` catalog | ✅ | ✅† | ✅† | ✅† | ✅† | ✅† |
 | SQL passthrough cursor (`AdsExecuteSQLDirect` SELECT) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 \* SQLite `CHANGE` is a no-op at the SQL layer (length not enforced on TEXT). Use passthrough DDL for complex SQLite schema migrations.
+
+† Catalog queries are rewritten to `information_schema` / `sqlite_master` when you `SELECT * FROM system.tables` (or `system.columns`, `system.iota`) on a SQL URI connection.
 
 ### Issue #103 — resolved
 
@@ -49,9 +54,9 @@ Capabilities below are wired through the **navigational ABI** (`AdsGotoTop`, `Ad
 
 Remaining gaps vs full xHarbour SQLRDD (not #103):
 
-- Harbour-level `SR_*` / `SR_MGMNT*` catalog workareas (schema introspection tables).
+- Harbour-level `SR_*` / `SR_MGMNT*` dedicated workareas (beyond `system.*` SQL catalog).
 - Oracle native OCI (ODBC only today).
-- `AdsDropTable` as a first-class ABI helper on SQL connections (use `AdsExecuteSQLDirect` or passthrough `DROP TABLE` today).
+- Live CI for PostgreSQL / MariaDB / MSSQL (set `OPENADS_TEST_*_URI` locally).
 
 ## DDL via navigational API
 
@@ -71,6 +76,17 @@ AdsRestructureTable(hConn, "items", NULL, 0, 0, 0, 0,
 // CHANGE length/decimals (same type)
 AdsRestructureTable(hConn, "items", NULL, 0, 0, 0, 0,
                     NULL, NULL, "NAME,Character,80");
+
+// DROP table
+AdsDropTable(hConn, "items", 0);
+```
+
+Schema introspection on SQL URI connections:
+
+```c
+AdsCreateSQLStatement(hConn, &hStmt);
+AdsExecuteSQLDirect(hStmt, "SELECT * FROM system.tables", &hCur);
+AdsExecuteSQLDirect(hStmt, "SELECT * FROM system.columns", &hCur);
 ```
 
 Passthrough DDL/DML also works:

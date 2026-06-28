@@ -46,4 +46,9 @@ util::Result<std::vector<std::string>> build_alter_table_change_ddl(
     const std::string& table_name,
     const std::vector<SqlDdlColumn>& columns);
 
+util::Result<std::string> build_drop_table_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    bool if_exists = false);
+
 }  // namespace openads::sql_backend

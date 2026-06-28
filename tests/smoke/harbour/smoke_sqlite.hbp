@@ -1,0 +1,9 @@
+# OpenADS Harbour sqlite:// URI smoke — hbmk2 project file
+
+smoke_sqlite.prg
+
+-lrddads
+-L={OPENADS_LIB}
+-lace64
+-llegacy_stdio_definitions
+-loldnames

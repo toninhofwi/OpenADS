@@ -114,7 +114,7 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
     UNSIGNED8 filt[] = "GRP = 'A'";
     REQUIRE(AdsSetFilter(hC, filt) == 0);
     CHECK(record_count(hC) == 3u);
-    REQUIRE(AdsClearAOF(hC) == 0);
+    REQUIRE(AdsClearFilter(hC) == 0);
     CHECK(record_count(hC) == 4u);
 
     // ALTER ADD via AdsRestructureTable.
@@ -153,8 +153,68 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
     REQUIRE(AdsWriteRecord(hC) == 0);
     CHECK(record_count(hC) == 5u);
 
+    // system.tables / system.columns catalog (SQL URI).
+    {
+        ADSHANDLE hStmt = 0;
+        REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+        UNSIGNED8 stbl[] = "SELECT * FROM system.tables";
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, stbl, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        std::set<std::string> names;
+        REQUIRE(AdsGotoTop(hCur) == 0);
+        for (;;) {
+            UNSIGNED16 eof = 0;
+            REQUIRE(AdsAtEOF(hCur, &eof) == 0);
+            if (eof) break;
+            UNSIGNED8 fname[8] = "Name";
+            UNSIGNED8 vbuf[256] = {};
+            UNSIGNED32 vlen = sizeof(vbuf) - 1;
+            REQUIRE(AdsGetField(hCur, fname, vbuf, &vlen, 0) == 0);
+            std::string n(reinterpret_cast<const char*>(vbuf), vlen);
+            while (!n.empty() && n.back() == ' ') n.pop_back();
+            names.insert(n);
+            REQUIRE(AdsSkip(hCur, 1) == 0);
+        }
+        CHECK(names.count("grp") == 1);
+        CHECK(names.count("item") == 1);
+        REQUIRE(AdsCloseTable(hCur) == 0);
+
+        UNSIGNED8 scol[] = "SELECT * FROM system.columns";
+        hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, scol, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        int item_cols = 0;
+        REQUIRE(AdsGotoTop(hCur) == 0);
+        for (;;) {
+            UNSIGNED16 eof = 0;
+            REQUIRE(AdsAtEOF(hCur, &eof) == 0);
+            if (eof) break;
+            UNSIGNED8 tfn[16] = "TABLE_NAME";
+            UNSIGNED8 cfn[16] = "COL_NAME";
+            UNSIGNED8 tbuf[64] = {};
+            UNSIGNED8 cbuf[64] = {};
+            UNSIGNED32 tlen = sizeof(tbuf) - 1;
+            UNSIGNED32 clen = sizeof(cbuf) - 1;
+            REQUIRE(AdsGetField(hCur, tfn, tbuf, &tlen, 0) == 0);
+            REQUIRE(AdsGetField(hCur, cfn, cbuf, &clen, 0) == 0);
+            std::string tbl(reinterpret_cast<const char*>(tbuf), tlen);
+            while (!tbl.empty() && tbl.back() == ' ') tbl.pop_back();
+            if (tbl == "item") ++item_cols;
+            REQUIRE(AdsSkip(hCur, 1) == 0);
+        }
+        CHECK(item_cols == 2);
+        REQUIRE(AdsCloseTable(hCur) == 0);
+        AdsCloseSQLStatement(hStmt);
+    }
+
     REQUIRE(AdsCloseTable(hC) == 0);
     REQUIRE(AdsCloseTable(hP) == 0);
+
+    // AdsDropTable on SQL connection.
+    REQUIRE(AdsDropTable(hConn, cname, 0) == 0);
+    REQUIRE(AdsDropTable(hConn, pname, 0) == 0);
+
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }

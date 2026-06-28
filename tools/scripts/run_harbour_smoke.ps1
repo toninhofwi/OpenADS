@@ -155,8 +155,43 @@ try {
             Write-Host $errText
         }
     }
-    Write-Host "[harbour-smoke] EXIT=$code"
-    exit $code
+    Write-Host "[harbour-smoke] CDX smoke EXIT=$code"
+    if ($code -ne 0) { exit $code }
+
+    Write-Host "[harbour-smoke] hbmk2 build smoke_sqlite ..."
+    $ErrorActionPreference = "Continue"
+    try {
+        $rddadsInc = Join-Path $HarbourRoot "contrib\rddads"
+        & $hbmk2 -comp=msvc64 "-incpath=$rddadsInc" smoke_sqlite.hbp 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+
+    Write-Host "[harbour-smoke] Running smoke_sqlite.exe ..."
+    $sqliteExe = Join-Path $smokeDir "smoke_sqlite.exe"
+    if (-not (Test-Path $sqliteExe)) {
+        Write-Error "[harbour-smoke] smoke_sqlite.exe missing after hbmk2 build: $sqliteExe"
+    }
+
+    $sqliteOut = Join-Path $smokeDir "smoke_sqlite.out.txt"
+    $sqliteErr = Join-Path $smokeDir "smoke_sqlite.err.txt"
+    $proc2 = Start-Process -FilePath $sqliteExe -WorkingDirectory $smokeDir `
+        -RedirectStandardOutput $sqliteOut -RedirectStandardError $sqliteErr `
+        -NoNewWindow -Wait -PassThru
+    $code2 = $proc2.ExitCode
+    if (Test-Path $sqliteOut) {
+        Get-Content $sqliteOut | ForEach-Object { Write-Host $_ }
+    }
+    if (Test-Path $sqliteErr) {
+        $errText2 = Get-Content $sqliteErr -Raw
+        if ($errText2) {
+            Write-Host "[harbour-smoke] smoke_sqlite stderr:"
+            Write-Host $errText2
+        }
+    }
+    Write-Host "[harbour-smoke] SQLite URI smoke EXIT=$code2"
+    exit $code2
 }
 finally {
     Pop-Location

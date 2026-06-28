@@ -196,4 +196,17 @@ util::Result<std::vector<std::string>> build_alter_table_change_ddl(
     return stmts;
 }
 
+util::Result<std::string> build_drop_table_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    bool if_exists) {
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{5001, 0, "unsafe table name", table_name};
+    }
+    std::string sql = "DROP TABLE ";
+    if (if_exists) sql += "IF EXISTS ";
+    sql += quote_table(dialect, table_name);
+    return sql;
+}
+
 }  // namespace openads::sql_backend

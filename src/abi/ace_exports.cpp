@@ -15,6 +15,7 @@
 #include "engine/aggregate.h"
 #include "sql_backend/backend_tx_manager.h"
 #include "sql_backend/sql_ddl.h"
+#include "sql_backend/sql_system_catalog.h"
 #include "engine/index_expr.h"
 #include "engine/table.h"
 
@@ -5549,6 +5550,81 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
                         ADS_CDX,    // table type
                         0, 0, 0, 1, // char/lock/checkrights/mode
                         phTable);
+}
+
+UNSIGNED32 ENTRYPOINT AdsDropTable(ADSHANDLE     hConnect,
+                        UNSIGNED8*    pucName,
+                        UNSIGNED16    /*usDeleteFiles*/) {
+    if (pucName == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null table name");
+    }
+    const auto rel = openads::abi::to_internal(pucName, 0);
+    auto run_sql_drop = [&](auto* conn,
+                            openads::sql_backend::SqlDdlDialect dialect)
+        -> UNSIGNED32 {
+        auto ddl = openads::sql_backend::build_drop_table_ddl(
+            dialect, rel, false);
+        if (!ddl) return fail(ddl.error());
+        auto ex = conn->exec_sql(ddl.value());
+        if (!ex) return fail(ex.error());
+        return ok();
+    };
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* sc = get_sqlite_conn(hConnect)) {
+        return run_sql_drop(sc, openads::sql_backend::SqlDdlDialect::Sqlite);
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pc = get_postgres_conn(hConnect)) {
+        return run_sql_drop(pc, openads::sql_backend::SqlDdlDialect::Postgres);
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = get_maria_conn(hConnect)) {
+        return run_sql_drop(mc, openads::sql_backend::SqlDdlDialect::Maria);
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = get_odbc_conn(hConnect)) {
+        return run_sql_drop(oc, openads::sql_backend::SqlDdlDialect::Postgres);
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = get_firebird_conn(hConnect)) {
+        return run_sql_drop(fc, openads::sql_backend::SqlDdlDialect::Firebird);
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* msc = get_mssql_conn(hConnect)) {
+        return run_sql_drop(msc, openads::sql_backend::SqlDdlDialect::Mssql);
+    }
+#endif
+
+    auto& s = state();
+    Connection* c = s.registry.lookup<Connection>(hConnect,
+                            HandleKind::Connection);
+    if (c == nullptr) {
+        ADSHANDLE def = get_or_create_default_connection();
+        c = s.registry.lookup<Connection>(def, HandleKind::Connection);
+        if (c == nullptr) {
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        }
+    }
+    namespace fs = std::filesystem;
+    fs::path full = fs::path(c->data_dir()) / rel;
+    if (!full.has_extension()) full.replace_extension(".dbf");
+    if (!fs::exists(full)) {
+        return fail(openads::AE_NO_FILE_FOUND, rel.c_str());
+    }
+    std::error_code ec;
+    fs::remove(full, ec);
+    auto cdx = full; cdx.replace_extension(".cdx");
+    fs::remove(cdx, ec);
+    auto fpt = full; fpt.replace_extension(".fpt");
+    fs::remove(fpt, ec);
+    auto dbt = full; dbt.replace_extension(".dbt");
+    fs::remove(dbt, ec);
+    return ok();
 }
 
 // --- M9.26 AdsRestructureTable (ADD-only) ----------------------------------
@@ -12815,6 +12891,22 @@ UNSIGNED32 ENTRYPOINT AdsClearAOF(ADSHANDLE hTable) {
     return ok();
 }
 
+UNSIGNED32 ENTRYPOINT AdsClearFilter(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        rt->filter_expr.clear();
+        return ok();
+    }
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable);
+        ops && ops->set_filter) {
+        return ops->set_filter(hTable, nullptr);
+    }
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    t->set_filter(nullptr);
+    t->set_filter_expr("");
+    return ok();
+}
+
 // --- M4 memo + autoinc + encryption ----------------------------------------
 
 UNSIGNED32 ENTRYPOINT AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
@@ -15556,6 +15648,10 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_SQLITE)
     if (it->second->sqlite != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        if (auto rewritten = openads::sql_backend::rewrite_system_select_sql(
+                openads::sql_backend::SqlDdlDialect::Sqlite, sqlstr)) {
+            sqlstr = *rewritten;
+        }
         // Let SQLite classify the statement (it knows the column count): run_sql
         // returns a navigable cursor for a result-producing statement, or a null
         // pointer for an executed INSERT/UPDATE/DELETE/DDL — no SQL parsing here.
@@ -15575,6 +15671,10 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_MSSQL)
     if (it->second->mssql_conn != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        if (auto rewritten = openads::sql_backend::rewrite_system_select_sql(
+                openads::sql_backend::SqlDdlDialect::Mssql, sqlstr)) {
+            sqlstr = *rewritten;
+        }
         auto qr = it->second->mssql_conn->query(sqlstr);
         if (!qr) return fail(qr.error());
         openads::sql_backend::tds::QueryResult result = std::move(qr).value();
@@ -21219,7 +21319,7 @@ UNSIGNED32 ENTRYPOINT AdsConnect(UNSIGNED8* pucServer, ADSHANDLE* phConnect) {
                         nullptr, nullptr, 0, phConnect);
 }
 UNSIGNED32 ENTRYPOINT AdsApplicationExit(void) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 ENTRYPOINT AdsClearFilter(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+
 UNSIGNED32 ENTRYPOINT AdsClearRelation(ADSHANDLE hParent) {
     forget_relations(hParent);
     return ok();

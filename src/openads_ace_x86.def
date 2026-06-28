@@ -75,6 +75,7 @@ EXPORTS
     AdsCreateSQLStatement@8     = AdsCreateSQLStatement
     AdsCreateSavepoint@12       = AdsCreateSavepoint
     AdsCreateTable@36           = AdsCreateTable
+    AdsDropTable@12             = AdsDropTable
     AdsCreateTable71@40         = AdsCreateTable71
     AdsCreateTable90@44         = AdsCreateTable90
     AdsCustomizeAOF@16          = AdsCustomizeAOF

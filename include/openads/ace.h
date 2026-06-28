@@ -132,6 +132,8 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED16 usMemoBlockSize,
                               UNSIGNED8* pucFields,
                               ADSHANDLE* phTable);
+UNSIGNED32 ENTRYPOINT AdsDropTable     (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              UNSIGNED16 usDeleteFiles);
 UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE  hConnect, UNSIGNED8* pucTableName,
                               UNSIGNED8* pucAlias,
                               UNSIGNED16 usFileType, UNSIGNED16 usCharType,
