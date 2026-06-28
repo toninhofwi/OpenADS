@@ -39,14 +39,18 @@ void write_plain_dbf(const fs::path& path,
         static_cast<std::streamsize>(file.size()));
 }
 
-std::string read_first_tag(ADSHANDLE hCur) {
-    REQUIRE(AdsGotoTop(hCur) == 0);
+std::string tag_field(ADSHANDLE hCur) {
     UNSIGNED8  buf[16] = {0};
     UNSIGNED32 cap = sizeof(buf);
     REQUIRE(AdsGetField(hCur, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
     std::string s((char*)buf, cap);
     while (!s.empty() && s.back() == ' ') s.pop_back();
     return s;
+}
+
+std::string read_first_tag(ADSHANDLE hCur) {
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    return tag_field(hCur);
 }
 
 }  // namespace
@@ -176,10 +180,10 @@ TEST_CASE("M11.2 record-level encrypt: single record encrypted, others plain") {
     rec_enc = 1;
     CHECK(AdsIsRecordEncrypted(hTable, &rec_enc) == 0);
     CHECK(rec_enc == 0);
-    CHECK(read_first_tag(hTable) == "AAAAA");
+    CHECK(tag_field(hTable) == "AAAAA");
 
     REQUIRE(AdsGotoRecord(hTable, 2) == 0);
-    CHECK(read_first_tag(hTable) == "BBBBB");
+    CHECK(tag_field(hTable) == "BBBBB");
 
     REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
@@ -190,9 +194,9 @@ TEST_CASE("M11.2 record-level encrypt: single record encrypted, others plain") {
     REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
                          0, 0, 0, 0, &hTable) == 0);
     REQUIRE(AdsGotoRecord(hTable, 2) == 0);
-    CHECK(read_first_tag(hTable) == "BBBBB");
+    CHECK(tag_field(hTable) == "BBBBB");
     REQUIRE(AdsGotoRecord(hTable, 1) == 0);
-    CHECK(read_first_tag(hTable) == "AAAAA");
+    CHECK(tag_field(hTable) == "AAAAA");
 
     {
         std::ifstream f(dir / "data.dbf", std::ios::binary);

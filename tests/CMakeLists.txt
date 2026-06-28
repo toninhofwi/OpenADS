@@ -252,20 +252,16 @@ if(OPENADS_WITH_POSTGRESQL)
         unit/abi_plus_postgres_write_test.cpp
         unit/abi_plus_postgres_filter_test.cpp
         unit/abi_aggregate_postgres_test.cpp
-    unit/abi_plus_mariadb_read_test.cpp
-    unit/abi_plus_odbc_read_test.cpp
-    unit/abi_plus_odbc_seek_test.cpp
-    unit/abi_plus_odbc_write_test.cpp
-    unit/odbc_uri_test.cpp
         unit/abi_plus_postgres_seek_test.cpp
-    unit/abi_plus_mariadb_seek_test.cpp
-    unit/postgres_uri_test.cpp
+        unit/postgres_uri_test.cpp
     )
 endif()
 
 if(OPENADS_WITH_MARIADB)
     target_sources(openads_unit_tests PRIVATE
         unit/maria_uri_test.cpp
+        unit/abi_plus_mariadb_read_test.cpp
+        unit/abi_plus_mariadb_seek_test.cpp
         unit/abi_plus_mariadb_write_test.cpp
     )
 endif()
@@ -293,6 +289,10 @@ endif()
 if(OPENADS_WITH_ODBC)
     target_sources(openads_unit_tests PRIVATE
         unit/oracle_uri_test.cpp
+        unit/odbc_uri_test.cpp
+        unit/abi_plus_odbc_read_test.cpp
+        unit/abi_plus_odbc_seek_test.cpp
+        unit/abi_plus_odbc_write_test.cpp
     )
 endif()
 

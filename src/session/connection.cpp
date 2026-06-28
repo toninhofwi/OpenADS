@@ -173,14 +173,14 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
 
     auto holder = std::make_unique<engine::Table>(std::move(t).value());
 
-    // M11.2 — propagate the connection's encryption key to the
-    // driver when the table reports encrypted (header byte 0xC3).
+    // M11.2 — propagate the connection's encryption key to the CDX
+    // driver whenever the session has a password set.  Full-table
+    // encryption needs it on open; record-level encryption needs it
+    // before AdsEncryptRecord can touch a plain table.
     if (encryption_key_set_) {
         if (auto* cdx = dynamic_cast<
                 openads::drivers::cdx::CdxDriver*>(holder->driver())) {
-            if (cdx->encrypted() || cdx->partial_encrypted()) {
-                (void)cdx->set_encryption_key(encryption_key_);
-            }
+            (void)cdx->set_encryption_key(encryption_key_);
         }
     }
 
