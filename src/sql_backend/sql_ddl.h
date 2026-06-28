@@ -28,4 +28,10 @@ util::Result<std::string> build_create_table_ddl(
     const std::string& table_name,
     const std::vector<SqlDdlColumn>& columns);
 
+// One ALTER TABLE … ADD COLUMN statement per column (portable across dialects).
+util::Result<std::vector<std::string>> build_alter_table_add_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::vector<SqlDdlColumn>& columns);
+
 }  // namespace openads::sql_backend

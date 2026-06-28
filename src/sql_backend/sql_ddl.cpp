@@ -99,4 +99,30 @@ util::Result<std::string> build_create_table_ddl(
     return sql;
 }
 
+util::Result<std::vector<std::string>> build_alter_table_add_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::vector<SqlDdlColumn>& columns) {
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{5001, 0, "unsafe table name", table_name};
+    }
+    if (columns.empty()) {
+        return util::Error{5001, 0, "ALTER TABLE: no columns", ""};
+    }
+    std::vector<std::string> stmts;
+    stmts.reserve(columns.size());
+    for (const auto& c : columns) {
+        if (!is_safe_identifier(c.name)) {
+            return util::Error{5001, 0, "unsafe column name", c.name};
+        }
+        const char* add_kw =
+            (dialect == SqlDdlDialect::Mssql) ? "ADD " : "ADD COLUMN ";
+        std::string sql = "ALTER TABLE " + quote_table(dialect, table_name) +
+                          add_kw + quote_col(dialect, c.name) + " " +
+                          sql_type_for(dialect, c);
+        stmts.push_back(std::move(sql));
+    }
+    return stmts;
+}
+
 }  // namespace openads::sql_backend

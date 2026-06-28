@@ -5416,6 +5416,83 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
     }
 
     auto rel = openads::abi::to_internal(pucTableName, 0);
+
+    if (!del_set.empty() || !change_fields.empty()) {
+        bool on_sql_conn = false;
+#if defined(OPENADS_WITH_SQLITE)
+        on_sql_conn = on_sql_conn || get_sqlite_conn(hConnect) != nullptr;
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+        on_sql_conn = on_sql_conn || get_postgres_conn(hConnect) != nullptr;
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+        on_sql_conn = on_sql_conn || get_maria_conn(hConnect) != nullptr;
+#endif
+#if defined(OPENADS_WITH_ODBC)
+        on_sql_conn = on_sql_conn || get_odbc_conn(hConnect) != nullptr;
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+        on_sql_conn = on_sql_conn || get_firebird_conn(hConnect) != nullptr;
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+        on_sql_conn = on_sql_conn || get_mssql_conn(hConnect) != nullptr;
+#endif
+        if (on_sql_conn) {
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                        "SQL ALTER: DROP/CHANGE not yet supported");
+        }
+    }
+
+    if (!add_fields.empty()) {
+        std::vector<openads::sql_backend::SqlDdlColumn> ddl_cols;
+        ddl_cols.reserve(add_fields.size());
+        for (const auto& f : add_fields) {
+            ddl_cols.push_back({f.name, f.type, f.length, f.dec});
+        }
+        auto run_alter = [&](auto* conn,
+                             openads::sql_backend::SqlDdlDialect dialect)
+            -> UNSIGNED32 {
+            auto stmts = openads::sql_backend::build_alter_table_add_ddl(
+                dialect, rel, ddl_cols);
+            if (!stmts) return fail(stmts.error());
+            for (const auto& sql : stmts.value()) {
+                auto ex = conn->exec_sql(sql);
+                if (!ex) return fail(ex.error());
+            }
+            return ok();
+        };
+#if defined(OPENADS_WITH_SQLITE)
+        if (auto* sc = get_sqlite_conn(hConnect)) {
+            return run_alter(sc, openads::sql_backend::SqlDdlDialect::Sqlite);
+        }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+        if (auto* pc = get_postgres_conn(hConnect)) {
+            return run_alter(pc, openads::sql_backend::SqlDdlDialect::Postgres);
+        }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+        if (auto* mc = get_maria_conn(hConnect)) {
+            return run_alter(mc, openads::sql_backend::SqlDdlDialect::Maria);
+        }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+        if (auto* oc = get_odbc_conn(hConnect)) {
+            return run_alter(oc, openads::sql_backend::SqlDdlDialect::Postgres);
+        }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+        if (auto* fc = get_firebird_conn(hConnect)) {
+            return run_alter(fc, openads::sql_backend::SqlDdlDialect::Firebird);
+        }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+        if (auto* msc = get_mssql_conn(hConnect)) {
+            return run_alter(msc, openads::sql_backend::SqlDdlDialect::Mssql);
+        }
+#endif
+    }
+
     namespace fs = std::filesystem;
     fs::path full = fs::path(c->data_dir()) / rel;
     if (!full.has_extension()) full.replace_extension(".dbf");
