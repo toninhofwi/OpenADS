@@ -250,7 +250,87 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
                              ADS_READONLY, &hIdxSys) == 0);
         REQUIRE(AdsCloseTable(hIdxSys) == 0);
 
+        // SR_MGMNT synthetic ACL on SQL URI (open-access PUBLIC grants).
+        UNSIGNED8 sugname[] = "system.usergroups";
+        ADSHANDLE hUg = 0;
+        REQUIRE(AdsOpenTable(hConn, sugname, sugname, ADS_DEFAULT, 0, 0, 0,
+                             ADS_READONLY, &hUg) == 0);
+        REQUIRE(AdsGotoTop(hUg) == 0);
+        UNSIGNED8 gfn[16] = "GROUP_NAME";
+        UNSIGNED8 gbuf[64] = {};
+        UNSIGNED32 glen = sizeof(gbuf) - 1;
+        REQUIRE(AdsGetField(hUg, gfn, gbuf, &glen, 0) == 0);
+        std::string grp(reinterpret_cast<const char*>(gbuf), glen);
+        while (!grp.empty() && grp.back() == ' ') grp.pop_back();
+        CHECK(grp == "PUBLIC");
+        REQUIRE(AdsCloseTable(hUg) == 0);
+
+        UNSIGNED8 spermsname[] = "system.permissions";
+        ADSHANDLE hPerm = 0;
+        REQUIRE(AdsOpenTable(hConn, spermsname, spermsname, ADS_DEFAULT, 0, 0,
+                             0, ADS_READONLY, &hPerm) == 0);
+        bool found_item = false;
+        REQUIRE(AdsGotoTop(hPerm) == 0);
+        for (;;) {
+            UNSIGNED16 eof_perm = 0;
+            REQUIRE(AdsAtEOF(hPerm, &eof_perm) == 0);
+            if (eof_perm) break;
+            UNSIGNED8 obuf[64] = {};
+            UNSIGNED8 tbuf[8] = {};
+            UNSIGNED8 geebuf[16] = {};
+            UNSIGNED8 sbuf[16] = {};
+            UNSIGNED32 olen = sizeof(obuf) - 1;
+            UNSIGNED32 tlen = sizeof(tbuf) - 1;
+            UNSIGNED32 geelen = sizeof(geebuf) - 1;
+            UNSIGNED32 slen = sizeof(sbuf) - 1;
+            UNSIGNED8 ofn[16] = "OBJ_NAME";
+            UNSIGNED8 tfn[16] = "OBJ_TYPE";
+            UNSIGNED8 gee[16] = "GRANTEE";
+            UNSIGNED8 sfn[16] = "SELECT";
+            REQUIRE(AdsGetField(hPerm, ofn, obuf, &olen, 0) == 0);
+            REQUIRE(AdsGetField(hPerm, tfn, tbuf, &tlen, 0) == 0);
+            std::string obj(reinterpret_cast<const char*>(obuf), olen);
+            while (!obj.empty() && obj.back() == ' ') obj.pop_back();
+            std::string typ(reinterpret_cast<const char*>(tbuf), tlen);
+            while (!typ.empty() && typ.back() == ' ') typ.pop_back();
+            if (obj == "item" && typ == "1") {
+                REQUIRE(AdsGetField(hPerm, gee, geebuf, &geelen, 0) == 0);
+                REQUIRE(AdsGetField(hPerm, sfn, sbuf, &slen, 0) == 0);
+                std::string grantee(reinterpret_cast<const char*>(geebuf), geelen);
+                while (!grantee.empty() && grantee.back() == ' ')
+                    grantee.pop_back();
+                CHECK(grantee == "PUBLIC");
+                std::string sel(reinterpret_cast<const char*>(sbuf), slen);
+                while (!sel.empty() && sel.back() == ' ') sel.pop_back();
+                CHECK(sel == "2");
+                found_item = true;
+                break;
+            }
+            REQUIRE(AdsSkip(hPerm, 1) == 0);
+        }
+        CHECK(found_item);
+        REQUIRE(AdsCloseTable(hPerm) == 0);
+
         AdsCloseSQLStatement(hStmt);
+    }
+
+    // SQLite CHANGE via table-rebuild path (no native ALTER COLUMN length).
+    {
+        REQUIRE(AdsCloseTable(hC) == 0);
+        UNSIGNED8 chg[] = "DATA,Character,16";
+        REQUIRE(AdsRestructureTable(hConn, cname, nullptr, 0, 0, 0, 0, nullptr,
+                                    nullptr, chg) == 0);
+        REQUIRE(AdsOpenTable(hConn, cname, cname, ADS_DEFAULT, 0, 0, 0,
+                             ADS_READONLY, &hC) == 0);
+        CHECK(record_count(hC) == 6u);
+        REQUIRE(AdsGotoTop(hC) == 0);
+        UNSIGNED8 data_fld[8] = "DATA";
+        UNSIGNED8 vbuf[32] = {};
+        UNSIGNED32 vlen = sizeof(vbuf) - 1;
+        REQUIRE(AdsGetField(hC, data_fld, vbuf, &vlen, 0) == 0);
+        std::string val(reinterpret_cast<const char*>(vbuf), vlen);
+        while (!val.empty() && val.back() == ' ') val.pop_back();
+        CHECK(val == "a1");
     }
 
     REQUIRE(AdsCloseTable(hC) == 0);

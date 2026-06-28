@@ -49,6 +49,7 @@
 #include "sql_backend/odbc_connection.h"
 #include "sql_backend/odbc_index.h"
 #include "sql_backend/odbc_uri.h"
+#include "sql_backend/oracle_uri.h"
 #endif
 #if defined(OPENADS_WITH_MSSQL)
 #include "sql_backend/mssql_connection.h"
@@ -4423,6 +4424,26 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
 #endif
 #if defined(OPENADS_WITH_ODBC)
     {
+        openads::sql_backend::OracleUri oruri;
+        if (openads::sql_backend::parse_oracle_uri(path, oruri)) {
+            openads::sql_backend::OdbcUri ouri;
+            ouri.connstr = openads::sql_backend::oracle_to_odbc_connstr(oruri);
+            auto opened = openads::sql_backend::OdbcConnection::open(ouri);
+            if (!opened) return fail(opened.error());
+            auto holder =
+                std::make_unique<openads::sql_backend::OdbcConnection>(
+                    std::move(opened).value());
+            openads::sql_backend::OdbcConnection* raw = holder.get();
+            auto& s = state();
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
+            Handle h = s.registry.register_object(
+                HandleKind::OdbcConnection, raw);
+            odbc_conns_map().emplace(h, std::move(holder));
+            *phConnect = h;
+            return ok();
+        }
+    }
+    {
         openads::sql_backend::OdbcUri ouri;
         if (openads::sql_backend::parse_odbc_uri(path, ouri)) {
             auto opened = openads::sql_backend::OdbcConnection::open(ouri);
@@ -4443,13 +4464,13 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
 #else
     {
         static constexpr const char* kOdbcPrefixes[] = {
-            "odbc://", "odbc:",
+            "odbc://", "odbc:", "oracle://",
         };
         for (const char* prefix : kOdbcPrefixes) {
             const auto plen = std::char_traits<char>::length(prefix);
             if (path.size() >= plen && path.compare(0, plen, prefix) == 0) {
                 return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                            "odbc URI requires OPENADS_WITH_ODBC=ON");
+                            "odbc/oracle URI requires OPENADS_WITH_ODBC=ON");
             }
         }
     }
@@ -5899,7 +5920,8 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
         std::vector<std::string> drop_cols(del_set.begin(), del_set.end());
 
         auto run_sql_restructure =
-            [&](auto* conn, openads::sql_backend::SqlDdlDialect dialect)
+            [&](auto* conn, openads::sql_backend::SqlDdlDialect dialect,
+                const std::vector<openads::sql_backend::SqlDdlColumn>& chg)
             -> UNSIGNED32 {
             auto exec_vec = [&](const std::vector<std::string>& stmts)
                 -> UNSIGNED32 {
@@ -5916,9 +5938,9 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
                 auto rc = exec_vec(ddl.value());
                 if (rc != openads::AE_SUCCESS) return rc;
             }
-            if (!chg_cols.empty()) {
+            if (!chg.empty()) {
                 auto ddl = openads::sql_backend::build_alter_table_change_ddl(
-                    dialect, rel, chg_cols);
+                    dialect, rel, chg);
                 if (!ddl) return fail(ddl.error());
                 auto rc = exec_vec(ddl.value());
                 if (rc != openads::AE_SUCCESS) return rc;
@@ -5934,38 +5956,43 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
         };
 #if defined(OPENADS_WITH_SQLITE)
         if (auto* sc = get_sqlite_conn(hConnect)) {
+            if (!chg_cols.empty()) {
+                if (auto r = sc->restructure_change(rel, chg_cols); !r) {
+                    return fail(r.error());
+                }
+            }
             return run_sql_restructure(sc,
-                openads::sql_backend::SqlDdlDialect::Sqlite);
+                openads::sql_backend::SqlDdlDialect::Sqlite, {});
         }
 #endif
 #if defined(OPENADS_WITH_POSTGRESQL)
         if (auto* pc = get_postgres_conn(hConnect)) {
             return run_sql_restructure(pc,
-                openads::sql_backend::SqlDdlDialect::Postgres);
+                openads::sql_backend::SqlDdlDialect::Postgres, chg_cols);
         }
 #endif
 #if defined(OPENADS_WITH_MARIADB)
         if (auto* mc = get_maria_conn(hConnect)) {
             return run_sql_restructure(mc,
-                openads::sql_backend::SqlDdlDialect::Maria);
+                openads::sql_backend::SqlDdlDialect::Maria, chg_cols);
         }
 #endif
 #if defined(OPENADS_WITH_ODBC)
         if (auto* oc = get_odbc_conn(hConnect)) {
             return run_sql_restructure(oc,
-                openads::sql_backend::SqlDdlDialect::Postgres);
+                openads::sql_backend::SqlDdlDialect::Postgres, chg_cols);
         }
 #endif
 #if defined(OPENADS_WITH_FIREBIRD)
         if (auto* fc = get_firebird_conn(hConnect)) {
             return run_sql_restructure(fc,
-                openads::sql_backend::SqlDdlDialect::Firebird);
+                openads::sql_backend::SqlDdlDialect::Firebird, chg_cols);
         }
 #endif
 #if defined(OPENADS_WITH_MSSQL)
         if (auto* msc = get_mssql_conn(hConnect)) {
             return run_sql_restructure(msc,
-                openads::sql_backend::SqlDdlDialect::Mssql);
+                openads::sql_backend::SqlDdlDialect::Mssql, chg_cols);
         }
 #endif
     }

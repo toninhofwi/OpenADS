@@ -57,7 +57,8 @@ namespace openads::sql_backend {
 //   binary / image                      → ADS_BINARY (6)
 //   everything else (char, nchar, text) → ADS_STRING (4)
 
-static std::uint16_t ads_type_from_tds(std::uint8_t type_token) {
+static std::uint16_t ads_type_from_tds(std::uint8_t type_token,
+                                        std::uint32_t tds_length = 0) {
     switch (type_token) {
         // --- integers ---
         case 0x26:  // INTN
@@ -91,6 +92,11 @@ static std::uint16_t ads_type_from_tds(std::uint8_t type_token) {
         case 0x29:  // TIMEN
             return ADS_DATE;
 
+        // --- legacy LOB types ---
+        case 0x23:  // TEXT
+        case 0x63:  // NTEXT
+            return ADS_MEMO;
+
         // --- binary ---
         case 0xAD:  // BIGBINARY (BINARY)
         case 0xA5:  // BIGVARBINARY (VARBINARY)
@@ -98,6 +104,12 @@ static std::uint16_t ads_type_from_tds(std::uint8_t type_token) {
             return ADS_BINARY;
 
         // --- string / text / everything else ---
+        case 0xE7:  // NVARCHAR
+        case 0xA7:  // VARCHAR
+        case 0xAF:  // CHAR
+        case 0xEF:  // NCHAR
+            if (tds_length == 0xFFFFu) return ADS_MEMO;
+            return ADS_STRING;
         default:
             return ADS_STRING;
     }
@@ -106,9 +118,10 @@ static std::uint16_t ads_type_from_tds(std::uint8_t type_token) {
 // Return a v1 display length for the ADS type, using the TDS column length.
 static std::uint32_t ads_length_from_tds(std::uint8_t type_token,
                                           std::uint32_t tds_length) {
-    switch (ads_type_from_tds(type_token)) {
+    switch (ads_type_from_tds(type_token, tds_length)) {
         case ADS_LOGICAL: return 1;
         case ADS_DATE:    return 8;   // "YYYYMMDD"
+        case ADS_MEMO:    return 10;
         case ADS_BINARY:  return tds_length ? tds_length : 10;
         case ADS_DOUBLE:  return 8;   // sizeof(double)
         default:
@@ -270,7 +283,7 @@ std::string MssqlTable::field_name(std::size_t i) const {
 
 std::uint16_t MssqlTable::field_type(std::size_t i) const {
     if (i >= data.columns.size()) return ADS_STRING;
-    return ads_type_from_tds(data.columns[i].type_token);
+    return ads_type_from_tds(data.columns[i].type_token, data.columns[i].length);
 }
 
 std::uint32_t MssqlTable::field_length(std::size_t i) const {

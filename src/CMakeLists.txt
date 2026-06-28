@@ -89,6 +89,7 @@ endif()
 if(OPENADS_WITH_ODBC)
     target_sources(openads_core PRIVATE
         sql_backend/odbc_uri.cpp
+        sql_backend/oracle_uri.cpp
         sql_backend/odbc_backend.cpp
         sql_backend/odbc_connection.cpp
     )

@@ -416,6 +416,157 @@ WHERE rc.rdb$constraint_type = 'FOREIGN KEY'
 ORDER BY rc.rdb$constraint_name)";
         }
     }
+    // SR_MGMNT: synthetic open-access ACL (no SQL DD on URI connections).
+    const char* k_perm_tail =
+        ", '' AS \"PARENT\", 'PUBLIC' AS \"GRANTEE\", "
+        "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+        "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+        "'2' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+        "'2' AS \"DROP\"";
+    if (sys_name == "usergroups") {
+        return "SELECT 'PUBLIC' AS \"GROUP_NAME\"";
+    }
+    if (sys_name == "users") {
+        return "SELECT 'PUBLIC' AS \"USER_NAME\"";
+    }
+    if (sys_name == "usergroupmembers") {
+        return "SELECT 'PUBLIC' AS \"GROUP_NAME\", 'PUBLIC' AS \"USER_NAME\"";
+    }
+    if (sys_name == "permissions") {
+        switch (dialect) {
+            case SqlDdlDialect::Sqlite:
+                return std::string(
+                    "SELECT m.name AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
+                       k_perm_tail +
+                       " FROM sqlite_master m "
+                       "WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' "
+                       "UNION ALL "
+                       "SELECT p.name AS \"OBJ_NAME\", '4' AS \"OBJ_TYPE\", "
+                       "m.name AS \"PARENT\", 'PUBLIC' AS \"GRANTEE\", "
+                       "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+                       "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+                       "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+                       "'2' AS \"DROP\" "
+                       "FROM sqlite_master m "
+                       "JOIN pragma_table_info(m.name) p "
+                       "WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%'";
+            case SqlDdlDialect::Postgres:
+                return std::string(
+                    "SELECT table_name AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
+                       k_perm_tail +
+                       " FROM information_schema.tables "
+                       "WHERE table_schema = ANY (current_schemas(true)) "
+                       "AND table_type = 'BASE TABLE' "
+                       "UNION ALL "
+                       "SELECT column_name AS \"OBJ_NAME\", '4' AS \"OBJ_TYPE\", "
+                       "table_name AS \"PARENT\", 'PUBLIC' AS \"GRANTEE\", "
+                       "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+                       "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+                       "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+                       "'2' AS \"DROP\" "
+                       "FROM information_schema.columns "
+                       "WHERE table_schema = ANY (current_schemas(true))";
+            case SqlDdlDialect::Maria:
+                return std::string(
+                    "SELECT table_name AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
+                       k_perm_tail +
+                       " FROM information_schema.tables "
+                       "WHERE table_schema = DATABASE() "
+                       "AND table_type = 'BASE TABLE' "
+                       "UNION ALL "
+                       "SELECT column_name AS \"OBJ_NAME\", '4' AS \"OBJ_TYPE\", "
+                       "table_name AS \"PARENT\", 'PUBLIC' AS \"GRANTEE\", "
+                       "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+                       "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+                       "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+                       "'2' AS \"DROP\" "
+                       "FROM information_schema.columns "
+                       "WHERE table_schema = DATABASE()";
+            case SqlDdlDialect::Mssql:
+                return std::string(
+                    "SELECT TABLE_NAME AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
+                       k_perm_tail +
+                       " FROM INFORMATION_SCHEMA.TABLES "
+                       "WHERE TABLE_TYPE = 'BASE TABLE' "
+                       "UNION ALL "
+                       "SELECT COLUMN_NAME AS \"OBJ_NAME\", '4' AS \"OBJ_TYPE\", "
+                       "TABLE_NAME AS \"PARENT\", 'PUBLIC' AS \"GRANTEE\", "
+                       "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+                       "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+                       "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+                       "'2' AS \"DROP\" "
+                       "FROM INFORMATION_SCHEMA.COLUMNS";
+            case SqlDdlDialect::Firebird:
+                return std::string(
+                    "SELECT TRIM(r.rdb$relation_name) AS \"OBJ_NAME\", "
+                    "'1' AS \"OBJ_TYPE\"") +
+                       k_perm_tail +
+                       " FROM rdb$relations r "
+                       "WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0 "
+                       "UNION ALL "
+                       "SELECT TRIM(rf.rdb$field_name) AS \"OBJ_NAME\", "
+                       "'4' AS \"OBJ_TYPE\", "
+                       "TRIM(rf.rdb$relation_name) AS \"PARENT\", "
+                       "'PUBLIC' AS \"GRANTEE\", "
+                       "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+                       "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+                       "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+                       "'2' AS \"DROP\" "
+                       "FROM rdb$relation_fields rf "
+                       "JOIN rdb$relations r ON r.rdb$relation_name = "
+                       "rf.rdb$relation_name "
+                       "WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0";
+        }
+    }
+    if (sys_name == "effectivepermissions") {
+        switch (dialect) {
+            case SqlDdlDialect::Sqlite:
+                return std::string(
+                    "SELECT m.name AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\", "
+                    "'PUBLIC' AS \"GRANTEE\", "
+                    "'2' AS \"SELECT\", '2' AS \"UPDATE\", '2' AS \"INSERT\", "
+                    "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
+                    "'2' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
+                    "'2' AS \"DROP\" "
+                    "FROM sqlite_master m "
+                    "WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%'");
+            case SqlDdlDialect::Postgres:
+                return R"(
+SELECT table_name AS "OBJ_NAME", '1' AS "OBJ_TYPE", 'PUBLIC' AS "GRANTEE",
+       '2' AS "SELECT", '2' AS "UPDATE", '2' AS "INSERT", '2' AS "DELETE",
+       '' AS "EXECUTE", '2' AS "ACCESS", '2' AS "INHERIT",
+       '2' AS "CREATE", '2' AS "ALTER", '2' AS "DROP"
+FROM information_schema.tables
+WHERE table_schema = ANY (current_schemas(true))
+  AND table_type = 'BASE TABLE')";
+            case SqlDdlDialect::Maria:
+                return R"(
+SELECT table_name AS "OBJ_NAME", '1' AS "OBJ_TYPE", 'PUBLIC' AS "GRANTEE",
+       '2' AS "SELECT", '2' AS "UPDATE", '2' AS "INSERT", '2' AS "DELETE",
+       '' AS "EXECUTE", '2' AS "ACCESS", '2' AS "INHERIT",
+       '2' AS "CREATE", '2' AS "ALTER", '2' AS "DROP"
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_type = 'BASE TABLE')";
+            case SqlDdlDialect::Mssql:
+                return R"(
+SELECT TABLE_NAME AS "OBJ_NAME", '1' AS "OBJ_TYPE", 'PUBLIC' AS "GRANTEE",
+       '2' AS "SELECT", '2' AS "UPDATE", '2' AS "INSERT", '2' AS "DELETE",
+       '' AS "EXECUTE", '2' AS "ACCESS", '2' AS "INHERIT",
+       '2' AS "CREATE", '2' AS "ALTER", '2' AS "DROP"
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_TYPE = 'BASE TABLE')";
+            case SqlDdlDialect::Firebird:
+                return R"(
+SELECT TRIM(r.rdb$relation_name) AS "OBJ_NAME", '1' AS "OBJ_TYPE",
+       'PUBLIC' AS "GRANTEE",
+       '2' AS "SELECT", '2' AS "UPDATE", '2' AS "INSERT", '2' AS "DELETE",
+       '' AS "EXECUTE", '2' AS "ACCESS", '2' AS "INHERIT",
+       '2' AS "CREATE", '2' AS "ALTER", '2' AS "DROP"
+FROM rdb$relations r
+WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0)";
+        }
+    }
     return std::nullopt;
 }
 

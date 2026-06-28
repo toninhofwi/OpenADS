@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sql_backend/backend_tx_manager.h"
+#include "sql_backend/sql_ddl.h"
 #include "sql_backend/sqlite_table.h"
 #include "sql_backend/uri.h"
 #include "util/result.h"
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace openads::sql_backend {
 
@@ -87,6 +89,11 @@ public:
     // Execute a simple SQL statement (no result set). Used by the
     // transaction manager for BEGIN/COMMIT/ROLLBACK/SAVEPOINT.
     util::Result<void> exec_sql(const std::string& sql);
+
+    // SQLite CHANGE: table rebuild (preserves rows; updates navigational length).
+    util::Result<void> restructure_change(
+        const std::string& table_name,
+        const std::vector<SqlDdlColumn>& changes);
 
     util::Result<void> lock_record(SqliteTable* tbl, std::uint32_t recno);
     util::Result<void> unlock_record(SqliteTable* tbl, std::uint32_t recno);

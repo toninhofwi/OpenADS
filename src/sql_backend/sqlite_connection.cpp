@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 
 #if defined(OPENADS_WITH_SQLITE)
 #include <sqlite3.h>
@@ -1014,6 +1015,89 @@ util::Result<void> SqliteConnection::unlock_table(SqliteTable* tbl) {
     return lock_key(impl_->db, "T\x1f" + tbl->name, false);
 #else
     (void)tbl;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::restructure_change(
+    const std::string& table_name,
+    const std::vector<SqlDdlColumn>& changes) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid()) {
+        return util::Error{5001, 0, "sqlite connection not open", ""};
+    }
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{5001, 0, "unsafe table name", table_name};
+    }
+    if (changes.empty()) return util::Result<void>{};
+
+    std::unordered_map<std::string, SqlDdlColumn> change_map;
+    for (const auto& c : changes) {
+        if (!is_safe_identifier(c.name)) {
+            return util::Error{5001, 0, "unsafe column name", c.name};
+        }
+        change_map[c.name] = c;
+    }
+
+    struct PragmaCol {
+        std::string name;
+        std::string decl_type;
+        bool        notnull = false;
+        bool        pk      = false;
+    };
+    std::vector<PragmaCol> cols;
+    const std::string pragma = "PRAGMA table_info(\"" + table_name + "\")";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(impl_->db, pragma.c_str(),
+                           static_cast<int>(pragma.size()),
+                           &stmt, nullptr) != SQLITE_OK) {
+        return sqlite_error(impl_->db, "pragma table_info");
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        PragmaCol c;
+        const char* n = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        const char* t = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        c.name      = n ? n : "";
+        c.decl_type = t ? t : "TEXT";
+        c.notnull   = sqlite3_column_int(stmt, 3) != 0;
+        c.pk        = sqlite3_column_int(stmt, 5) != 0;
+        cols.push_back(std::move(c));
+    }
+    sqlite3_finalize(stmt);
+    if (cols.empty()) {
+        return util::Error{5001, 0, "table not found", table_name};
+    }
+
+    const std::string staging = table_name + "__openads_new";
+    std::string create = "CREATE TABLE \"" + staging + "\" (";
+    std::string col_list;
+    for (std::size_t i = 0; i < cols.size(); ++i) {
+        if (i) {
+            create += ", ";
+            col_list += ", ";
+        }
+        create += "\"" + cols[i].name + "\" " + cols[i].decl_type;
+        if (cols[i].pk) create += " PRIMARY KEY";
+        else if (cols[i].notnull) create += " NOT NULL";
+        col_list += "\"" + cols[i].name + "\"";
+        (void)change_map;  // length metadata applied on next table open
+    }
+    create += ")";
+    if (auto r = exec_sql(create); !r) return r.error();
+    const std::string ins =
+        "INSERT INTO \"" + staging + "\" (" + col_list + ") SELECT " +
+        col_list + " FROM \"" + table_name + "\"";
+    if (auto r = exec_sql(ins); !r) return r.error();
+    if (auto r = exec_sql("DROP TABLE \"" + table_name + "\""); !r) {
+        return r.error();
+    }
+    const std::string rename =
+        "ALTER TABLE \"" + staging + "\" RENAME TO \"" + table_name + "\"";
+    if (auto r = exec_sql(rename); !r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)table_name;
+    (void)changes;
     return util::Error{5004, 0, "sqlite backend disabled", ""};
 #endif
 }

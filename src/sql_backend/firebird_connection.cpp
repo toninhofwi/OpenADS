@@ -155,7 +155,7 @@ constexpr int kFbBoolean   = 23;
 
 FirebirdTable::FieldDesc map_firebird_column(const std::string& name,
                                              int field_type,
-                                             int /*sub_type*/,
+                                             int sub_type,
                                              int char_length,
                                              int field_scale,
                                              bool nullable) {
@@ -198,7 +198,7 @@ FirebirdTable::FieldDesc map_firebird_column(const std::string& name,
             fd.decimals = 0;
             break;
         case kFbBlob:
-            fd.type     = ADS_MEMO;
+            fd.type     = (sub_type == 1) ? ADS_MEMO : ADS_BINARY;
             fd.length   = 10;
             fd.decimals = 0;
             break;
@@ -239,7 +239,37 @@ std::string fmt_double(double d) {
     return buf;
 }
 
-std::string format_xsqlvar(const XSQLVAR& v, bool& is_null) {
+std::string read_blob_bytes(isc_db_handle* db, isc_tr_handle* tr,
+                            const ISC_QUAD* blob_id) {
+    ISC_STATUS_ARRAY st{};
+    isc_blob_handle h = 0;
+    if (isc_open_blob2(st, db, tr, &h, const_cast<ISC_QUAD*>(blob_id),
+                       0, nullptr)) {
+        return {};
+    }
+    std::string out;
+    char buffer[65536];
+    while (true) {
+        unsigned short seg_len = 0;
+        const ISC_STATUS rc = isc_get_segment(
+            st, &h, &seg_len, static_cast<unsigned short>(sizeof(buffer)),
+            buffer);
+        if (rc == 0 || rc == isc_segstr_eof) {
+            if (seg_len > 0) {
+                out.append(buffer, seg_len);
+            }
+            if (rc == isc_segstr_eof) break;
+        } else {
+            break;
+        }
+    }
+    ISC_STATUS_ARRAY st2{};
+    isc_close_blob(st2, &h);
+    return out;
+}
+
+std::string format_xsqlvar(isc_db_handle* db, isc_tr_handle* tr,
+                           const XSQLVAR& v, bool& is_null) {
     is_null = (v.sqltype & 1) && v.sqlind && (*v.sqlind < 0);
     if (is_null) return std::string();
 
@@ -317,9 +347,12 @@ std::string format_xsqlvar(const XSQLVAR& v, bool& is_null) {
             std::memcpy(&b, v.sqldata, sizeof(b));
             return b ? "true" : "false";
         }
+        case SQL_BLOB: {
+            ISC_QUAD id{};
+            std::memcpy(&id, v.sqldata, sizeof(id));
+            return read_blob_bytes(db, tr, &id);
+        }
         default:
-            // BLOB / unsupported: surface an empty placeholder rather than
-            // raw bytes (the read path never returns binary garbage).
             return std::string();
     }
 }
@@ -411,7 +444,7 @@ util::Result<SqlRows> exec_query(isc_db_handle* db, isc_tr_handle* tr,
         rn.reserve(static_cast<std::size_t>(out->sqld));
         for (int i = 0; i < out->sqld; ++i) {
             bool is_null = false;
-            row.push_back(format_xsqlvar(out->sqlvar[i], is_null));
+            row.push_back(format_xsqlvar(db, tr, out->sqlvar[i], is_null));
             rn.push_back(is_null);
         }
         res.rows.push_back(std::move(row));

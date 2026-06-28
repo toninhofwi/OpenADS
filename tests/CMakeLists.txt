@@ -286,6 +286,12 @@ if(OPENADS_WITH_MSSQL)
     )
 endif()
 
+if(OPENADS_WITH_ODBC)
+    target_sources(openads_unit_tests PRIVATE
+        unit/oracle_uri_test.cpp
+    )
+endif()
+
 # M11.4 — side DLL with stored procedures used by abi_aep_test.
 add_library(openads_test_aep_proc SHARED
     fixtures/test_aep_proc.cpp
