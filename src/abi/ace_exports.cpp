@@ -11279,6 +11279,7 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
             }
             return true;
         };
+#if defined(OPENADS_WITH_SQLITE)
         for (auto& [ih, si] : sqlite_indexes_map()) {
             if (si->parent == get_sqlite_table(hTable) &&
                 upper_eq(si->column, name)) {
@@ -11286,6 +11287,7 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
                 return ok();
             }
         }
+#endif
 #if defined(OPENADS_WITH_MARIADB)
         for (auto& [ih, si] : maria_indexes_map()) {
             if (si->parent == get_maria_table(hTable) &&
@@ -14820,6 +14822,12 @@ UNSIGNED32 ENTRYPOINT AdsSetAutoCommit(ADSHANDLE hConnect,
                                        SIGNED32 nThreshold) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
+#if !defined(OPENADS_WITH_SQLITE) && !defined(OPENADS_WITH_POSTGRESQL) && \
+    !defined(OPENADS_WITH_MARIADB) && !defined(OPENADS_WITH_ODBC) && \
+    !defined(OPENADS_WITH_FIREBIRD) && !defined(OPENADS_WITH_MSSQL)
+    (void)hConnect;
+    (void)nThreshold;
+#endif
     // SQL backend path
 #if defined(OPENADS_WITH_SQLITE)
     if (auto* sqc = get_sqlite_conn(hConnect)) {
@@ -15201,7 +15209,9 @@ namespace {
 struct SqlStatement {
     Connection*                            conn   = nullptr;
     openads::network::RemoteConnection*    remote = nullptr;
+#if defined(OPENADS_WITH_SQLITE)
     openads::sql_backend::SqliteConnection* sqlite = nullptr;
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     openads::sql_backend::MssqlConnection*     mssql_conn  = nullptr;
 #endif
