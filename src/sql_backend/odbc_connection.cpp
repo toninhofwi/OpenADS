@@ -669,6 +669,14 @@ OdbcConnection::set_filter(OdbcTable* tbl, const std::string& where) {
     return load_pk_snapshot(impl_->dbc, impl_->quote, tbl);
 }
 
+util::Result<void> OdbcConnection::refresh_where_filter(OdbcTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc refresh_where_filter", ""};
+    }
+    tbl->where_filter = tbl->where_builder.build();
+    return load_pk_snapshot(impl_->dbc, impl_->quote, tbl);
+}
+
 util::Result<std::vector<engine::AggValue>>
 OdbcConnection::aggregate(OdbcTable* tbl,
                           const std::string& where_sql,

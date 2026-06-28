@@ -314,6 +314,20 @@ SqliteConnection::set_filter(SqliteTable* tbl, const std::string& where) {
 #endif
 }
 
+util::Result<void>
+SqliteConnection::refresh_where_filter(SqliteTable* tbl) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid sqlite refresh_where_filter", ""};
+    }
+    tbl->where_filter = tbl->where_builder.build();
+    return load_rowids(impl_->db, tbl);
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
 util::Result<void> SqliteConnection::goto_top(SqliteTable* tbl) {
 #if defined(OPENADS_WITH_SQLITE)
     if (!valid() || tbl == nullptr) {

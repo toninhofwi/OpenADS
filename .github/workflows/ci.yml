@@ -84,6 +84,30 @@ jobs:
           OPENADS_ACE_LIB: ${{ github.workspace }}/build/ninja-clang/src/libace64.so
         run: composer test
 
+  sql-uri-smoke:
+    name: SQL URI smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: Configure
+        run: cmake --preset ninja-clang
+        shell: bash
+
+      - name: Build unit tests
+        run: cmake --build build/ninja-clang --config Release --target openads_unit_tests
+        shell: bash
+
+      - name: Run SQL URI smoke tests
+        run: |
+          ctest --test-dir build/ninja-clang -C Release --output-on-failure \
+            -R "sql_uri_smoke|sqlite_filter_pushdown|sqlite_seek_smoke"
+        shell: bash
+
   harbour-smoke:
     name: Harbour smoke (Windows)
     runs-on: windows-2022

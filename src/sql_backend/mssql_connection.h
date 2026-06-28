@@ -52,6 +52,7 @@ public:
     util::Result<void> exec_sql(const std::string& sql);
 
     util::Result<void> set_filter(MssqlTable* tbl, const std::string& where);
+    util::Result<void> refresh_where_filter(MssqlTable* tbl);
 
     util::Result<std::vector<engine::AggValue>>
         aggregate(MssqlTable* tbl,

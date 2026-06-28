@@ -49,6 +49,10 @@ public:
     // SELECT verbatim. Resets the cursor to an unpositioned state.
     util::Result<void> set_filter(SqliteTable* tbl, const std::string& where);
 
+    // Rebuild where_filter from where_builder (scope/for/aof slots) and reload
+    // the navigation snapshot. Used by scoped AdsSetRelation push-down.
+    util::Result<void> refresh_where_filter(SqliteTable* tbl);
+
     util::Result<bool>          at_eof(SqliteTable* tbl) const;
     util::Result<bool>          at_bof(SqliteTable* tbl) const;
     util::Result<std::uint32_t> record_count(SqliteTable* tbl);

@@ -43,6 +43,7 @@ public:
     util::Result<void> skip(FirebirdTable* tbl, std::int32_t step);
 
     util::Result<void> set_filter(FirebirdTable* tbl, const std::string& where);
+    util::Result<void> refresh_where_filter(FirebirdTable* tbl);
 
     util::Result<std::vector<engine::AggValue>>
         aggregate(FirebirdTable* tbl,

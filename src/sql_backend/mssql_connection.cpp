@@ -519,6 +519,16 @@ MssqlConnection::set_filter(MssqlTable* tbl, const std::string& where) {
     return util::Result<void>{};
 }
 
+util::Result<void> MssqlConnection::refresh_where_filter(MssqlTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql refresh_where_filter", ""};
+    }
+    tbl->where_filter = tbl->where_builder.build();
+    if (auto rf = refetch(*this, tbl); !rf) return rf.error();
+    reset_cursor_bof(tbl);
+    return util::Result<void>{};
+}
+
 util::Result<std::vector<engine::AggValue>>
 MssqlConnection::aggregate(MssqlTable* tbl,
                              const std::string& where_sql,

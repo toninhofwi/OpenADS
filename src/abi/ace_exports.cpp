@@ -3441,6 +3441,198 @@ std::string sql_parent_field_raw(const std::string& expr) {
     return openads::engine::strip_alias_qualifiers(expr);
 }
 
+std::string sql_escape_literal_value(const std::string& s) {
+    std::string o;
+    o.reserve(s.size());
+    for (char c : s) {
+        if (c == '\'') o += "''";
+        else o += c;
+    }
+    return o;
+}
+
+bool sql_raw_key_looks_numeric(const std::string& raw) {
+    if (raw.empty()) return false;
+    bool saw_digit = false;
+    for (char c : raw) {
+        if (std::isdigit(static_cast<unsigned char>(c))) {
+            saw_digit = true;
+            continue;
+        }
+        if (c == '.' || c == '-' || c == '+') continue;
+        return false;
+    }
+    return saw_digit;
+}
+
+std::string sql_scope_equality(const std::string& col,
+                               const std::string& raw_key,
+                               const char* ql,
+                               const char* qr) {
+    const std::string qcol = std::string(ql) + col + qr;
+    if (sql_raw_key_looks_numeric(raw_key)) {
+        return qcol + " = " + raw_key;
+    }
+    return qcol + " = '" + sql_escape_literal_value(raw_key) + "'";
+}
+
+void sql_clear_relation_scope(ADSHANDLE hChild) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* ct = get_sqlite_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        ct->where_builder.scope_lower.clear();
+        ct->where_builder.scope_upper.clear();
+        (void)ct->conn->refresh_where_filter(ct);
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* ct = get_maria_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        ct->where_builder.scope_lower.clear();
+        ct->where_builder.scope_upper.clear();
+        (void)ct->conn->refresh_where_filter(ct);
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* ct = get_postgres_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        ct->where_builder.scope_lower.clear();
+        ct->where_builder.scope_upper.clear();
+        (void)ct->conn->refresh_where_filter(ct);
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ct = get_odbc_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        ct->where_builder.scope_lower.clear();
+        ct->where_builder.scope_upper.clear();
+        (void)ct->conn->refresh_where_filter(ct);
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ct = get_firebird_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        ct->where_builder.scope_lower.clear();
+        ct->where_builder.scope_upper.clear();
+        (void)ct->conn->refresh_where_filter(ct);
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* ct = get_mssql_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        ct->where_builder.scope_lower.clear();
+        ct->where_builder.scope_upper.clear();
+        (void)ct->conn->refresh_where_filter(ct);
+        return;
+    }
+#endif
+    (void)hChild;
+}
+
+bool sql_apply_relation_scope(ADSHANDLE hChild, ADSHANDLE idx_h,
+                              const std::string& raw_key) {
+    if (raw_key.empty()) {
+        sql_clear_relation_scope(hChild);
+        return true;
+    }
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* ct = get_sqlite_table(hChild)) {
+        if (ct->conn == nullptr) return false;
+        if (auto* si = get_sqlite_index(idx_h); si != nullptr) {
+            const std::string pred =
+                sql_scope_equality(si->column, raw_key, "\"", "\"");
+            ct->where_builder.scope_lower = pred;
+            ct->where_builder.scope_upper = pred;
+            (void)ct->conn->refresh_where_filter(ct);
+            (void)ct->conn->goto_top(ct);
+            return true;
+        }
+        return false;
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* ct = get_maria_table(hChild)) {
+        if (ct->conn == nullptr) return false;
+        if (auto* si = get_maria_index(idx_h); si != nullptr) {
+            const std::string pred =
+                sql_scope_equality(si->column, raw_key, "`", "`");
+            ct->where_builder.scope_lower = pred;
+            ct->where_builder.scope_upper = pred;
+            (void)ct->conn->refresh_where_filter(ct);
+            (void)ct->conn->goto_top(ct);
+            return true;
+        }
+        return false;
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* ct = get_postgres_table(hChild)) {
+        if (ct->conn == nullptr) return false;
+        if (auto* si = get_postgres_index(idx_h); si != nullptr) {
+            const std::string pred =
+                sql_scope_equality(si->column, raw_key, "\"", "\"");
+            ct->where_builder.scope_lower = pred;
+            ct->where_builder.scope_upper = pred;
+            (void)ct->conn->refresh_where_filter(ct);
+            (void)ct->conn->goto_top(ct);
+            return true;
+        }
+        return false;
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ct = get_odbc_table(hChild)) {
+        if (ct->conn == nullptr) return false;
+        if (auto* si = get_odbc_index(idx_h); si != nullptr) {
+            const std::string pred =
+                sql_scope_equality(si->column, raw_key, "\"", "\"");
+            ct->where_builder.scope_lower = pred;
+            ct->where_builder.scope_upper = pred;
+            (void)ct->conn->refresh_where_filter(ct);
+            (void)ct->conn->goto_top(ct);
+            return true;
+        }
+        return false;
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ct = get_firebird_table(hChild)) {
+        if (ct->conn == nullptr) return false;
+        if (auto* si = get_firebird_index(idx_h); si != nullptr) {
+            const std::string pred =
+                sql_scope_equality(si->column, raw_key, "\"", "\"");
+            ct->where_builder.scope_lower = pred;
+            ct->where_builder.scope_upper = pred;
+            (void)ct->conn->refresh_where_filter(ct);
+            (void)ct->conn->goto_top(ct);
+            return true;
+        }
+        return false;
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* ct = get_mssql_table(hChild)) {
+        if (ct->conn == nullptr) return false;
+        if (auto* si = get_mssql_index(idx_h); si != nullptr) {
+            const std::string pred =
+                sql_scope_equality(si->column, raw_key, "[", "]");
+            ct->where_builder.scope_lower = pred;
+            ct->where_builder.scope_upper = pred;
+            (void)ct->conn->refresh_where_filter(ct);
+            return true;
+        }
+        return false;
+    }
+#endif
+    (void)hChild; (void)idx_h;
+    return false;
+}
+
 template<typename TableT, typename ConnT>
 bool sql_read_parent_string(TableT* parent, ConnT* conn,
                             const std::string& expr, std::string& out) {
@@ -3454,11 +3646,35 @@ bool sql_read_parent_string(TableT* parent, ConnT* conn,
 }
 
 void seek_sql_child(ADSHANDLE hChild, const std::string& raw_key, bool scoped) {
-    (void)scoped;  // v1: scoped relations use the same soft seek as plain
     ADSHANDLE idx_h = 0;
     if (auto it = sql_active_index_handle().find(hChild);
         it != sql_active_index_handle().end()) {
         idx_h = it->second;
+    }
+    if (scoped && idx_h != 0) {
+        if (raw_key.empty()) {
+            sql_clear_relation_scope(hChild);
+#if defined(OPENADS_WITH_SQLITE)
+            if (auto* ct = get_sqlite_table(hChild)) sql_child_to_eof_sqlite(ct);
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+            if (auto* ct = get_maria_table(hChild)) sql_child_to_eof_maria(ct);
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+            if (auto* ct = get_postgres_table(hChild)) sql_child_to_eof_postgres(ct);
+#endif
+#if defined(OPENADS_WITH_ODBC)
+            if (auto* ct = get_odbc_table(hChild)) sql_child_to_eof_odbc(ct);
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+            if (auto* ct = get_firebird_table(hChild)) sql_child_to_eof_firebird(ct);
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+            if (auto* ct = get_mssql_table(hChild)) sql_child_to_eof_mssql(ct);
+#endif
+            return;
+        }
+        if (sql_apply_relation_scope(hChild, idx_h, raw_key)) return;
     }
 #if defined(OPENADS_WITH_SQLITE)
     if (auto* ct = get_sqlite_table(hChild)) {
@@ -3821,6 +4037,8 @@ void forget_relations(ADSHANDLE h) {
                        rtc->conn != nullptr) {
                 (void)rtc->conn->clear_scope(rtc->active_index_id, ADS_TOP);
                 (void)rtc->conn->clear_scope(rtc->active_index_id, ADS_BOTTOM);
+            } else if (is_sql_table_handle(rel.child)) {
+                sql_clear_relation_scope(rel.child);
             }
         }
         tbl.erase(it);
@@ -5361,11 +5579,6 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
         return fail(openads::AE_INTERNAL_ERROR,
                     "AdsRestructureTable: null table name");
     }
-    auto& s = state();
-    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
-    if (c == nullptr) {
-        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
-    }
     auto del = pucDeleteFields ? openads::abi::to_internal(pucDeleteFields, 0)
                                : std::string();
     auto chg = pucChangeFields ? openads::abi::to_internal(pucChangeFields, 0)
@@ -5491,6 +5704,12 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
             return run_alter(msc, openads::sql_backend::SqlDdlDialect::Mssql);
         }
 #endif
+    }
+
+    auto& s = state();
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (c == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     }
 
     namespace fs = std::filesystem;

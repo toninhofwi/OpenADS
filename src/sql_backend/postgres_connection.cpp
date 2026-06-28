@@ -420,6 +420,20 @@ PostgresConnection::set_filter(PostgresTable* tbl, const std::string& where) {
 #endif
 }
 
+util::Result<void>
+PostgresConnection::refresh_where_filter(PostgresTable* tbl) {
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid postgres refresh_where_filter", ""};
+    }
+    tbl->where_filter = tbl->where_builder.build();
+    return load_pk_snapshot(impl_->conn, tbl);
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "postgresql backend disabled", ""};
+#endif
+}
+
 util::Result<std::vector<engine::AggValue>>
 PostgresConnection::aggregate(PostgresTable* tbl,
                               const std::string& where_sql,

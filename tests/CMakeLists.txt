@@ -75,6 +75,7 @@ add_executable(openads_unit_tests
     unit/abi_plus_sqlite_read_test.cpp
     unit/abi_plus_sqlite_write_test.cpp
     unit/abi_plus_sqlite_filter_test.cpp
+    unit/abi_sql_uri_smoke_test.cpp
     unit/abi_aggregate_sqlite_test.cpp
     unit/abi_plus_sqlite_seek_test.cpp
     unit/abi_plus_sqlite_passthrough_test.cpp
@@ -309,6 +310,16 @@ if(OPENADS_WITH_SQLITE)
 endif()
 
 add_test(NAME openads_unit_tests COMMAND openads_unit_tests)
+
+# SQL URI backend smoke (sqlite://): runs a focused doctest subset in CI.
+if(OPENADS_WITH_SQLITE)
+    add_test(NAME sql_uri_smoke COMMAND openads_unit_tests
+        -tc="SQL URI smoke*")
+    add_test(NAME sqlite_filter_pushdown COMMAND openads_unit_tests
+        -tc="Tier-2 push-down: SET FILTER*")
+    add_test(NAME sqlite_seek_smoke COMMAND openads_unit_tests
+        -tc="ABI Plus: sqlite*")
+endif()
 
 # Harbour smoke fixture builder (M8.6). Produces a CDX matching the
 # M8.5 fixture DBF using OpenADS' own CdxIndex::create + insert path,

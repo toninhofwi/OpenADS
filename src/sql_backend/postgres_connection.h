@@ -42,6 +42,7 @@ public:
     // matching rows. `where` must be a trusted, already-translated SQL boolean
     // expression (see engine::try_emit_sql_where). Resets the cursor.
     util::Result<void> set_filter(PostgresTable* tbl, const std::string& where);
+    util::Result<void> refresh_where_filter(PostgresTable* tbl);
 
     // Tier-3 push-down: compute COUNT/SUM/AVG/MIN/MAX over the rows matching
     // `where_sql` (already-translated SQL, empty = all rows) with one SELECT in

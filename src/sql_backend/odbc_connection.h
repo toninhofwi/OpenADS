@@ -45,6 +45,7 @@ public:
     util::Result<void> skip(OdbcTable* tbl, std::int32_t step);
 
     util::Result<void> set_filter(OdbcTable* tbl, const std::string& where);
+    util::Result<void> refresh_where_filter(OdbcTable* tbl);
 
     util::Result<std::vector<engine::AggValue>>
         aggregate(OdbcTable* tbl,

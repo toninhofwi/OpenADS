@@ -37,6 +37,7 @@ public:
     util::Result<void> skip(MariaTable* tbl, std::int32_t step);
 
     util::Result<void> set_filter(MariaTable* tbl, const std::string& where);
+    util::Result<void> refresh_where_filter(MariaTable* tbl);
 
     util::Result<std::vector<engine::AggValue>>
         aggregate(MariaTable* tbl,

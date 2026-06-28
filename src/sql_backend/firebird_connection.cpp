@@ -914,6 +914,16 @@ FirebirdConnection::set_filter(FirebirdTable* tbl, const std::string& where) {
     return load_pk_snapshot(&impl_->db, &impl_->tr, tbl);
 }
 
+util::Result<void> FirebirdConnection::refresh_where_filter(FirebirdTable* tbl) {
+    if (!impl_) return util::Error{5001, 0, "invalid firebird refresh_where_filter", ""};
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid firebird refresh_where_filter", ""};
+    }
+    tbl->where_filter = tbl->where_builder.build();
+    return load_pk_snapshot(&impl_->db, &impl_->tr, tbl);
+}
+
 util::Result<std::vector<engine::AggValue>>
 FirebirdConnection::aggregate(FirebirdTable* tbl,
                               const std::string& where_sql,

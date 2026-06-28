@@ -442,6 +442,20 @@ MariaConnection::set_filter(MariaTable* tbl, const std::string& where) {
 #endif
 }
 
+util::Result<void>
+MariaConnection::refresh_where_filter(MariaTable* tbl) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid maria refresh_where_filter", ""};
+    }
+    tbl->where_filter = tbl->where_builder.build();
+    return reload_pk_snapshot(impl_->conn, tbl);
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
 util::Result<std::vector<engine::AggValue>>
 MariaConnection::aggregate(MariaTable* tbl,
                            const std::string& where_sql,
