@@ -426,6 +426,41 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         CHECK(dval == 0.0);
     }
 
+    // Runtime ACL: REVOKE PUBLIC, GRANT alice, enforce usCheckRights on open.
+    {
+        REQUIRE(AdsCloseTable(hC) == 0);
+        ADSHANDLE hStmtAcl = 0;
+        REQUIRE(AdsCreateSQLStatement(hConn, &hStmtAcl) == 0);
+        UNSIGNED8 revoke_pub[] = "REVOKE SELECT ON item FROM PUBLIC";
+        ADSHANDLE hCurAcl = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmtAcl, revoke_pub, &hCurAcl) == 0);
+        UNSIGNED8 grant_alice_acl[] = "GRANT SELECT ON item TO alice";
+        REQUIRE(AdsExecuteSQLDirect(hStmtAcl, grant_alice_acl, &hCurAcl) == 0);
+        AdsCloseSQLStatement(hStmtAcl);
+
+        UNSIGNED8 user_alice[] = "alice";
+        ADSHANDLE hAlice = 0;
+        REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER, user_alice,
+                             nullptr, 0, &hAlice) == 0);
+        ADSHANDLE hAliceTbl = 0;
+        REQUIRE(AdsOpenTable(hAlice, cname, cname, ADS_DEFAULT, 0, 0, 1,
+                             ADS_READONLY, &hAliceTbl) == 0);
+        REQUIRE(AdsCloseTable(hAliceTbl) == 0);
+
+        UNSIGNED8 user_bob[] = "bob";
+        ADSHANDLE hBob = 0;
+        REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER, user_bob,
+                             nullptr, 0, &hBob) == 0);
+        ADSHANDLE hBobTbl = 0;
+        CHECK(AdsOpenTable(hBob, cname, cname, ADS_DEFAULT, 0, 0, 1,
+                           ADS_READONLY, &hBobTbl) != 0);
+        REQUIRE(AdsDisconnect(hBob) == 0);
+        REQUIRE(AdsDisconnect(hAlice) == 0);
+
+        REQUIRE(AdsOpenTable(hConn, cname, cname, ADS_DEFAULT, 0, 0, 0,
+                             ADS_READONLY, &hC) == 0);
+    }
+
     REQUIRE(AdsCloseTable(hC) == 0);
     REQUIRE(AdsCloseTable(hP) == 0);
 

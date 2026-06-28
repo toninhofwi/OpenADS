@@ -300,4 +300,86 @@ std::optional<util::Result<void>> try_sql_acl_statement(
     return util::Result<void>{};
 }
 
+namespace {
+
+uint32_t expand_bitmask(uint32_t mask) {
+    if (mask & DD::DD_PERM_FULL) {
+        return DD::DD_PERM_SELECT | DD::DD_PERM_UPDATE |
+               DD::DD_PERM_INSERT | DD::DD_PERM_DELETE |
+               DD::DD_PERM_EXECUTE | DD::DD_PERM_REFERENCE |
+               DD::DD_PERM_GRANT;
+    }
+    return mask;
+}
+
+openads::engine::DataDict::EffectiveOps ops_from_bitmask(uint32_t mask) {
+    const uint32_t m = expand_bitmask(mask);
+    openads::engine::DataDict::EffectiveOps ops;
+    ops.select_  = (m & DD::DD_PERM_SELECT)  != 0;
+    ops.update_  = (m & DD::DD_PERM_UPDATE)  != 0;
+    ops.execute_ = (m & DD::DD_PERM_EXECUTE) != 0;
+    ops.insert_  = (m & DD::DD_PERM_INSERT)  != 0;
+    ops.delete_  = (m & DD::DD_PERM_DELETE)  != 0;
+    ops.open     = ops.select_ || ops.update_ || ops.insert_ || ops.delete_;
+    return ops;
+}
+
+openads::engine::DataDict::EffectiveOps full_ops() {
+    openads::engine::DataDict::EffectiveOps ops;
+    ops.open = ops.select_ = ops.update_ =
+        ops.insert_ = ops.delete_ = ops.execute_ = true;
+    return ops;
+}
+
+std::optional<std::string> query_cell(const SqlQueryFn& query,
+                                      const std::string& sql) {
+    auto r = query(sql);
+    if (!r) return std::nullopt;
+    return r.value();
+}
+
+}  // namespace
+
+bool sql_acl_has_any(SqlDdlDialect dialect, const SqlQueryFn& query) {
+    const std::string qtab = quote_ident(dialect, kAclTable);
+    return query_cell(query, "SELECT 1 FROM " + qtab + " LIMIT 1").has_value();
+}
+
+openads::engine::DataDict::EffectiveOps sql_acl_effective_ops(
+    SqlDdlDialect dialect,
+    const SqlQueryFn& query,
+    const std::string& username,
+    const std::string& object_name) {
+    if (!sql_acl_has_any(dialect, query)) {
+        return full_ops();
+    }
+    const std::string qtab = quote_ident(dialect, kAclTable);
+    const std::string obj_sql = sql_escape(object_name);
+    const std::string probe =
+        "SELECT 1 FROM " + qtab +
+        " WHERE obj_type = '1' AND obj_name = " + obj_sql + " LIMIT 1";
+    if (!query_cell(query, probe).has_value()) {
+        return full_ops();
+    }
+
+    uint32_t bits = 0;
+    auto accumulate = [&](const std::string& grantee) {
+        const std::string sql =
+            "SELECT bitmask FROM " + qtab +
+            " WHERE obj_type = '1' AND obj_name = " + obj_sql +
+            " AND grantee = " + sql_escape(grantee) + " LIMIT 1";
+        if (auto cell = query_cell(query, sql); cell && !cell->empty()) {
+            try {
+                bits |= static_cast<uint32_t>(std::stoul(*cell));
+            } catch (...) {
+            }
+        }
+    };
+    if (!username.empty()) {
+        accumulate(username);
+    }
+    accumulate("PUBLIC");
+    return ops_from_bitmask(bits);
+}
+
 }  // namespace openads::sql_backend

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sql_backend/sql_common.h"
 #include "util/result.h"
 
 #include <cstdint>
@@ -50,5 +51,13 @@ util::Result<std::string> build_drop_table_ddl(
     SqlDdlDialect dialect,
     const std::string& table_name,
     bool if_exists = false);
+
+// CREATE INDEX for SQL URI navigational SEEK (column or UPPER(column) only).
+util::Result<std::string> build_create_index_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::string& index_name,
+    IndexExprKind expr_kind,
+    const std::string& column);
 
 }  // namespace openads::sql_backend

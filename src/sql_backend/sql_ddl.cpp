@@ -209,4 +209,40 @@ util::Result<std::string> build_drop_table_ddl(
     return sql;
 }
 
+util::Result<std::string> build_create_index_ddl(
+    SqlDdlDialect dialect,
+    const std::string& table_name,
+    const std::string& index_name,
+    IndexExprKind expr_kind,
+    const std::string& column) {
+    if (!is_safe_identifier(table_name)) {
+        return util::Error{5001, 0, "unsafe table name", table_name};
+    }
+    if (!is_safe_identifier(index_name)) {
+        return util::Error{5001, 0, "unsafe index name", index_name};
+    }
+    if (!is_safe_identifier(column)) {
+        return util::Error{5001, 0, "unsafe column name", column};
+    }
+    const std::string qtab = quote_table(dialect, table_name);
+    const std::string qidx = quote_table(dialect, index_name);
+    const std::string qcol = quote_col(dialect, column);
+    const std::string expr =
+        expr_kind == IndexExprKind::UpperColumn ? "UPPER(" + qcol + ")" : qcol;
+    std::string sql;
+    switch (dialect) {
+        case SqlDdlDialect::Mssql:
+            sql = "CREATE INDEX " + qidx + " ON " + qtab + " (" + expr + ")";
+            break;
+        case SqlDdlDialect::Firebird:
+            sql = "CREATE INDEX " + qidx + " ON " + qtab + " (" + expr + ")";
+            break;
+        default:
+            sql = "CREATE INDEX IF NOT EXISTS " + qidx + " ON " + qtab +
+                  " (" + expr + ")";
+            break;
+    }
+    return sql;
+}
+
 }  // namespace openads::sql_backend
