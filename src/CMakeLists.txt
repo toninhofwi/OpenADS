@@ -65,6 +65,7 @@ add_library(openads_core STATIC
     network/mg_wire.cpp
     sql_backend/uri.cpp
     sql_backend/sql_common.cpp
+    sql_backend/sql_ddl.cpp
     sql_backend/enterprise_config.cpp
 )
 

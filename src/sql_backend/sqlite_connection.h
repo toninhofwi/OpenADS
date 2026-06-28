@@ -84,6 +84,11 @@ public:
     // transaction manager for BEGIN/COMMIT/ROLLBACK/SAVEPOINT.
     util::Result<void> exec_sql(const std::string& sql);
 
+    util::Result<void> lock_record(SqliteTable* tbl, std::uint32_t recno);
+    util::Result<void> unlock_record(SqliteTable* tbl, std::uint32_t recno);
+    util::Result<void> lock_table(SqliteTable* tbl);
+    util::Result<void> unlock_table(SqliteTable* tbl);
+
     // ── Tier 1: Transaction management (SQLRDD pattern) ─────────────
     BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
     const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }

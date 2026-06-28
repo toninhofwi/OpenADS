@@ -883,4 +883,120 @@ util::Result<void> SqliteConnection::delete_record(SqliteTable* tbl) {
 #endif
 }
 
+#if defined(OPENADS_WITH_SQLITE)
+namespace {
+
+util::Result<void> ensure_lock_table(sqlite3* db) {
+    const char* sql =
+        "CREATE TABLE IF NOT EXISTS \"OPENADS$LOCKS\" ("
+        "key TEXT PRIMARY KEY NOT NULL)";
+    char* err = nullptr;
+    if (sqlite3_exec(db, sql, nullptr, nullptr, &err) != SQLITE_OK) {
+        std::string msg = err ? err : "create lock table";
+        sqlite3_free(err);
+        return util::Error{5001, 0, msg, ""};
+    }
+    return util::Result<void>{};
+}
+
+std::string sqlite_lock_key(const std::string& logical) {
+    std::string out;
+    out.reserve(logical.size() * 2 + 2);
+    out.push_back('\'');
+    for (char c : logical) {
+        if (c == '\'') out.push_back('\'');
+        out.push_back(c);
+    }
+    out.push_back('\'');
+    return out;
+}
+
+std::string record_lock_key(const SqliteTable& tbl, std::size_t pos) {
+    std::string k = "R\x1f" + tbl.name;
+    if (pos < tbl.rowids.size()) {
+        k += "\x1f" + std::to_string(tbl.rowids[pos]);
+    }
+    return k;
+}
+
+util::Result<void> lock_key(sqlite3* db, const std::string& key, bool acquire) {
+    if (auto r = ensure_lock_table(db); !r) return r.error();
+    const std::string sql = acquire
+        ? "INSERT INTO \"OPENADS$LOCKS\" (key) VALUES (" +
+          sqlite_lock_key(key) + ")"
+        : "DELETE FROM \"OPENADS$LOCKS\" WHERE key = " + sqlite_lock_key(key);
+    char* err = nullptr;
+    const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err);
+    if (rc == SQLITE_OK) return util::Result<void>{};
+    std::string msg = err ? err : (acquire ? "lock failed" : "unlock failed");
+    sqlite3_free(err);
+    if (acquire && rc == SQLITE_CONSTRAINT) {
+        return util::Error{5035, 0, "record locked", ""};
+    }
+    return util::Error{5001, 0, msg, ""};
+}
+
+}  // namespace
+#endif
+
+util::Result<void> SqliteConnection::lock_record(SqliteTable* tbl,
+                                               std::uint32_t recno) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr || tbl->is_result) {
+        return util::Error{5001, 0, "invalid sqlite lock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (!tbl->positioned || pos >= tbl->rowids.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    return lock_key(impl_->db, record_lock_key(*tbl, pos), true);
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::unlock_record(SqliteTable* tbl,
+                                                 std::uint32_t recno) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr || tbl->is_result) {
+        return util::Error{5001, 0, "invalid sqlite unlock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0) ? tbl->pos : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->rowids.size()) return util::Result<void>{};
+    return lock_key(impl_->db, record_lock_key(*tbl, pos), false);
+#else
+    (void)tbl; (void)recno;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::lock_table(SqliteTable* tbl) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr || tbl->is_result) {
+        return util::Error{5001, 0, "invalid sqlite lock", ""};
+    }
+    auto r = lock_key(impl_->db, "T\x1f" + tbl->name, true);
+    if (!r) return r.error();
+    return util::Result<void>{};
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
+util::Result<void> SqliteConnection::unlock_table(SqliteTable* tbl) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (!valid() || tbl == nullptr || tbl->is_result) {
+        return util::Error{5001, 0, "invalid sqlite unlock", ""};
+    }
+    return lock_key(impl_->db, "T\x1f" + tbl->name, false);
+#else
+    (void)tbl;
+    return util::Error{5004, 0, "sqlite backend disabled", ""};
+#endif
+}
+
 } // namespace openads::sql_backend

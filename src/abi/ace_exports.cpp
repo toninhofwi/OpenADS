@@ -14,6 +14,7 @@
 #include "engine/fts.h"
 #include "engine/aggregate.h"
 #include "sql_backend/backend_tx_manager.h"
+#include "sql_backend/sql_ddl.h"
 #include "engine/index_expr.h"
 #include "engine/table.h"
 
@@ -3168,6 +3169,35 @@ std::unordered_map<ADSHANDLE, std::vector<AdsRelation>>& relation_map() {
     return m;
 }
 
+// Active controlling index per SQL table handle (AdsSetIndexOrder).
+std::unordered_map<ADSHANDLE, ADSHANDLE>& sql_active_index_handle() {
+    static std::unordered_map<ADSHANDLE, ADSHANDLE> m;
+    return m;
+}
+
+bool is_sql_table_handle(ADSHANDLE h) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (get_sqlite_table(h)) return true;
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (get_postgres_table(h)) return true;
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (get_maria_table(h)) return true;
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (get_odbc_table(h)) return true;
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (get_firebird_table(h)) return true;
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (get_mssql_table(h)) return true;
+#endif
+    (void)h;
+    return false;
+}
+
 namespace {
 
 void remote_child_to_eof(openads::network::RemoteTable* child) {
@@ -3300,6 +3330,292 @@ void seek_remote_child_relation(openads::network::RemoteTable* parent,
     child->current_found = true;
 }
 
+void seek_remote_child_relation(Table* parent,
+                                openads::network::RemoteTable* child,
+                                const std::string& expr,
+                                bool scoped) {
+    if (parent == nullptr || child == nullptr || child->conn == nullptr) return;
+    if (!parent->positioned() || parent->eof()) {
+        if (scoped && child->active_index_id != 0) {
+            (void)child->conn->clear_scope(child->active_index_id, ADS_TOP);
+            (void)child->conn->clear_scope(child->active_index_id, ADS_BOTTOM);
+        }
+        remote_child_to_eof(child);
+        return;
+    }
+    const std::string field = openads::engine::strip_alias_qualifiers(expr);
+    std::string raw = ri_read_field(*parent, field);
+    while (!raw.empty() && raw.back() == ' ') raw.pop_back();
+    if (child->active_index_id == 0) {
+        double dv = 0;
+        try { dv = std::stod(raw); } catch (...) { dv = 0; }
+        auto rc = child->conn->record_count(child->id);
+        std::uint32_t max_rec = rc.has_value() ? rc.value() : 0;
+        auto rn = static_cast<std::uint32_t>(dv);
+        if (rn >= 1 && rn <= max_rec) {
+            (void)child->conn->goto_record(child, rn);
+        } else {
+            remote_child_to_eof(child);
+        }
+        return;
+    }
+    std::string key = remote_relation_seek_key(child, raw);
+    if (scoped) {
+        (void)child->conn->clear_scope(child->active_index_id, ADS_TOP);
+        (void)child->conn->clear_scope(child->active_index_id, ADS_BOTTOM);
+        (void)child->conn->set_scope(child->active_index_id, ADS_TOP,
+                                     key, ADS_STRINGKEY);
+        (void)child->conn->set_scope(child->active_index_id, ADS_BOTTOM,
+                                     key, ADS_STRINGKEY);
+        (void)child->conn->goto_top(child);
+        child->found_cached  = true;
+        child->current_found = true;
+        return;
+    }
+    auto so = child->conn->seek(child->active_index_id, key,
+                                /*soft=*/1, /*last=*/0);
+    if (!so || so.value().hit == 0) {
+        remote_child_to_eof(child);
+        return;
+    }
+    (void)child->conn->goto_record(child, so.value().recno);
+    child->found_cached  = true;
+    child->current_found = true;
+}
+
+#if defined(OPENADS_WITH_SQLITE)
+void sql_child_to_eof_sqlite(openads::sql_backend::SqliteTable* child) {
+    if (child == nullptr) return;
+    child->positioned = false;
+    child->row_valid  = false;
+    child->pos        = child->rowids.size();
+}
+#endif
+
+#if defined(OPENADS_WITH_MARIADB)
+void sql_child_to_eof_maria(openads::sql_backend::MariaTable* child) {
+    if (child == nullptr) return;
+    child->positioned = false;
+    child->row_valid  = false;
+    child->pos        = child->pk_snapshot.size();
+}
+#endif
+
+#if defined(OPENADS_WITH_ODBC)
+void sql_child_to_eof_odbc(openads::sql_backend::OdbcTable* child) {
+    if (child == nullptr) return;
+    child->positioned = false;
+    child->row_valid  = false;
+    child->pos        = child->pk_snapshot.size();
+}
+#endif
+
+#if defined(OPENADS_WITH_FIREBIRD)
+void sql_child_to_eof_firebird(openads::sql_backend::FirebirdTable* child) {
+    if (child == nullptr) return;
+    child->positioned = false;
+    child->row_valid  = false;
+    child->pos        = child->pk_snapshot.size();
+}
+#endif
+
+#if defined(OPENADS_WITH_POSTGRESQL)
+void sql_child_to_eof_postgres(openads::sql_backend::PostgresTable* child) {
+    if (child == nullptr) return;
+    child->positioned = false;
+    child->row_valid  = false;
+    child->pos        = child->pk_snapshot.size();
+}
+#endif
+
+#if defined(OPENADS_WITH_MSSQL)
+void sql_child_to_eof_mssql(openads::sql_backend::MssqlTable* child) {
+    if (child == nullptr) return;
+    child->pos = child->data.rows.size();
+    child->bof = false;
+    child->eof = true;
+}
+#endif
+
+std::string sql_parent_field_raw(const std::string& expr) {
+    return openads::engine::strip_alias_qualifiers(expr);
+}
+
+template<typename TableT, typename ConnT>
+bool sql_read_parent_string(TableT* parent, ConnT* conn,
+                            const std::string& expr, std::string& out) {
+    if (parent == nullptr || conn == nullptr) return false;
+    const std::string fname = sql_parent_field_raw(expr);
+    bool is_null = false;
+    auto r = conn->read_field(parent, fname, out, is_null);
+    if (!r) return false;
+    if (is_null) out.clear();
+    return true;
+}
+
+void seek_sql_child(ADSHANDLE hChild, const std::string& raw_key, bool scoped) {
+    (void)scoped;  // v1: scoped relations use the same soft seek as plain
+    ADSHANDLE idx_h = 0;
+    if (auto it = sql_active_index_handle().find(hChild);
+        it != sql_active_index_handle().end()) {
+        idx_h = it->second;
+    }
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* ct = get_sqlite_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        if (raw_key.empty()) { sql_child_to_eof_sqlite(ct); return; }
+        if (idx_h == 0) {
+            double dv = 0;
+            try { dv = std::stod(raw_key); } catch (...) { dv = 0; }
+            const auto rn = static_cast<std::size_t>(dv);
+            if (rn >= 1 && rn <= ct->rowids.size()) {
+                (void)ct->conn->goto_top(ct);
+                if (rn > 1) {
+                    (void)ct->conn->skip(ct, static_cast<std::int32_t>(rn - 1));
+                }
+            } else {
+                sql_child_to_eof_sqlite(ct);
+            }
+            return;
+        }
+        if (auto* si = get_sqlite_index(idx_h)) {
+            (void)si->parent->conn->seek_index(
+                si->parent, si->column, raw_key, true, false);
+            return;
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* ct = get_maria_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        if (idx_h == 0) {
+            double dv = 0;
+            try { dv = std::stod(raw_key); } catch (...) { dv = 0; }
+            if (dv >= 1 && dv <= ct->pk_snapshot.size()) {
+                ct->pos = static_cast<std::size_t>(dv) - 1;
+                (void)ct->conn->goto_top(ct);
+                (void)ct->conn->skip(ct, static_cast<std::int32_t>(ct->pos));
+            } else {
+                sql_child_to_eof_maria(ct);
+            }
+            return;
+        }
+        if (auto* si = get_maria_index(idx_h)) {
+            (void)si->parent->conn->seek_index(
+                si->parent, si->column, raw_key, true, false);
+            return;
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* ct = get_postgres_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        if (idx_h != 0) {
+            if (auto* si = get_postgres_index(idx_h)) {
+                (void)si->parent->conn->seek_index(
+                    si->parent, si->column, raw_key, true, false);
+            }
+        } else {
+            sql_child_to_eof_postgres(ct);
+        }
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ct = get_odbc_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        if (idx_h != 0) {
+            if (auto* si = get_odbc_index(idx_h)) {
+                (void)si->parent->conn->seek_index(
+                    si->parent, si->column, si->expr_kind, raw_key, true, false);
+            }
+        } else {
+            sql_child_to_eof_odbc(ct);
+        }
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ct = get_firebird_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        if (idx_h != 0) {
+            if (auto* si = get_firebird_index(idx_h)) {
+                (void)si->parent->conn->seek_index(
+                    si->parent, si->column, si->expr_kind, raw_key, true, false);
+            }
+        } else {
+            sql_child_to_eof_firebird(ct);
+        }
+        return;
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* ct = get_mssql_table(hChild)) {
+        if (ct->conn == nullptr) return;
+        if (idx_h != 0) {
+            if (auto* si = get_mssql_index(idx_h)) {
+                (void)ct->conn->seek_index(ct, si->column, raw_key, true, false);
+            }
+        } else {
+            sql_child_to_eof_mssql(ct);
+        }
+        return;
+    }
+#endif
+    (void)hChild; (void)raw_key;
+}
+
+bool sql_parent_key(ADSHANDLE hParent, const std::string& expr, std::string& key) {
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* pt = get_sqlite_table(hParent)) {
+        if (!pt->positioned || !pt->row_valid || pt->is_result || !pt->conn) {
+            return false;
+        }
+        return sql_read_parent_string(pt, pt->conn, expr, key);
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* pt = get_maria_table(hParent)) {
+        if (!pt->positioned || !pt->row_valid || !pt->conn) return false;
+        return sql_read_parent_string(pt, pt->conn, expr, key);
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pt = get_postgres_table(hParent)) {
+        if (!pt->positioned || !pt->row_valid || !pt->conn) return false;
+        return sql_read_parent_string(pt, pt->conn, expr, key);
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* pt = get_odbc_table(hParent)) {
+        if (!pt->positioned || !pt->row_valid || !pt->conn) return false;
+        return sql_read_parent_string(pt, pt->conn, expr, key);
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* pt = get_firebird_table(hParent)) {
+        if (!pt->positioned || !pt->row_valid || !pt->conn) return false;
+        return sql_read_parent_string(pt, pt->conn, expr, key);
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* pt = get_mssql_table(hParent)) {
+        if (pt->bof || pt->eof) return false;
+        const std::string fname = sql_parent_field_raw(expr);
+        for (std::size_t i = 0; i < pt->field_count(); ++i) {
+            if (pt->field_name(i) == fname) {
+                bool is_null = false;
+                (void)pt->get_field(i, key, is_null);
+                return true;
+            }
+        }
+        return false;
+    }
+#endif
+    (void)hParent; (void)expr; (void)key;
+    return false;
+}
+
 }  // namespace
 
 // Drive `child` to EOF — used when the parent has no current record or
@@ -3412,6 +3728,23 @@ void seek_child_relation(Table* parent, Table* child, const std::string& expr,
     }
 }
 
+void apply_relations_for_handle(ADSHANDLE hParent);
+
+void apply_sql_parent_relations(ADSHANDLE hParent) {
+    auto& tbl = relation_map();
+    auto it = tbl.find(hParent);
+    if (it == tbl.end()) return;
+    for (auto& rel : it->second) {
+        std::string key;
+        if (!sql_parent_key(hParent, rel.expr, key)) {
+            seek_sql_child(rel.child, "", rel.scoped);
+        } else {
+            seek_sql_child(rel.child, key, rel.scoped);
+        }
+        apply_relations_for_handle(rel.child);
+    }
+}
+
 // Re-seek every child related to `hParent`, then cascade into each child's
 // own relations so a multi-level chain (A→B→C) refreshes end to end.
 void apply_relations_for_handle(ADSHANDLE hParent) {
@@ -3420,6 +3753,11 @@ void apply_relations_for_handle(ADSHANDLE hParent) {
     if (it == tbl.end()) return;
     static thread_local std::unordered_set<ADSHANDLE> active;
     if (!active.insert(hParent).second) return;
+    if (is_sql_table_handle(hParent)) {
+        apply_sql_parent_relations(hParent);
+        active.erase(hParent);
+        return;
+    }
     if (auto* rtp = get_remote_table(hParent)) {
         for (auto& rel : it->second) {
             if (auto* rtc = get_remote_table(rel.child)) {
@@ -3440,7 +3778,15 @@ void apply_relations_for_handle(ADSHANDLE hParent) {
             seek_child_relation(parent, child, rel.expr, rel.scoped);
             apply_relations_for_handle(rel.child);
         } else if (auto* rtc = get_remote_table(rel.child)) {
-            seek_remote_child_relation(nullptr, rtc, rel.expr, rel.scoped);
+            seek_remote_child_relation(parent, rtc, rel.expr, rel.scoped);
+            apply_relations_for_handle(rel.child);
+        } else if (is_sql_table_handle(rel.child)) {
+            std::string key;
+            if (sql_parent_key(hParent, rel.expr, key)) {
+                seek_sql_child(rel.child, key, rel.scoped);
+            } else {
+                seek_sql_child(rel.child, "", rel.scoped);
+            }
             apply_relations_for_handle(rel.child);
         }
     }
@@ -3463,6 +3809,7 @@ void apply_relations_for_table(Table* parent) {
 
 // Drop any relation state touching a closing table handle.
 void forget_relations(ADSHANDLE h) {
+    sql_active_index_handle().erase(h);
     auto& tbl = relation_map();
     if (auto it = tbl.find(h); it != tbl.end()) {
         for (auto& rel : it->second) {
@@ -4702,12 +5049,69 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
     if (pucName == nullptr || pucFields == nullptr || phTable == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "null arg");
     }
+    const auto rel  = openads::abi::to_internal(pucName, 0);
+    const auto defs = openads::abi::to_internal(pucFields, 0);
+    auto fields = parse_rddads_field_defs(defs);
+    if (fields.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "no fields");
+    }
+
+    std::vector<openads::sql_backend::SqlDdlColumn> ddl_cols;
+    ddl_cols.reserve(fields.size());
+    for (const auto& f : fields) {
+        ddl_cols.push_back({f.name, f.type, f.length, f.dec});
+    }
+    auto sql_open_created = [&](ADSHANDLE conn_h) -> UNSIGNED32 {
+        std::vector<UNSIGNED8> namebuf(rel.size() + 1, 0);
+        std::memcpy(namebuf.data(), rel.data(), rel.size());
+        return AdsOpenTable(conn_h, namebuf.data(), namebuf.data(),
+                            ADS_CDX, 0, 0, 0, 1, phTable);
+    };
+    auto run_sql_ddl = [&](auto* conn,
+                           openads::sql_backend::SqlDdlDialect dialect)
+        -> UNSIGNED32 {
+        auto ddl = openads::sql_backend::build_create_table_ddl(
+            dialect, rel, ddl_cols);
+        if (!ddl) return fail(ddl.error());
+        auto ex = conn->exec_sql(ddl.value());
+        if (!ex) return fail(ex.error());
+        return sql_open_created(hConn);
+    };
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* sc = get_sqlite_conn(hConn)) {
+        return run_sql_ddl(sc, openads::sql_backend::SqlDdlDialect::Sqlite);
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pc = get_postgres_conn(hConn)) {
+        return run_sql_ddl(pc, openads::sql_backend::SqlDdlDialect::Postgres);
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = get_maria_conn(hConn)) {
+        return run_sql_ddl(mc, openads::sql_backend::SqlDdlDialect::Maria);
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = get_odbc_conn(hConn)) {
+        return run_sql_ddl(oc, openads::sql_backend::SqlDdlDialect::Postgres);
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = get_firebird_conn(hConn)) {
+        return run_sql_ddl(fc, openads::sql_backend::SqlDdlDialect::Firebird);
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* msc = get_mssql_conn(hConn)) {
+        return run_sql_ddl(msc, openads::sql_backend::SqlDdlDialect::Mssql);
+    }
+#endif
+
     auto& s = state();
     Connection* c = s.registry.lookup<Connection>(hConn,
                             HandleKind::Connection);
     if (c == nullptr) {
-        // rddads passes 0 when the host PRG never AdsConnect'd —
-        // fall back to a CWD-rooted default connection.
         ADSHANDLE def = get_or_create_default_connection();
         c = s.registry.lookup<Connection>(def, HandleKind::Connection);
         if (c == nullptr) {
@@ -4715,18 +5119,10 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
         }
     }
 
-    auto rel  = openads::abi::to_internal(pucName, 0);
-    auto defs = openads::abi::to_internal(pucFields, 0);
-
     namespace fs = std::filesystem;
     fs::path full = fs::path(c->data_dir()) / rel;
     const bool is_adt = (usTableType == ADS_ADT);
     if (!full.has_extension()) full.replace_extension(is_adt ? ".adt" : ".dbf");
-
-    auto fields = parse_rddads_field_defs(defs);
-    if (fields.empty()) {
-        return fail(openads::AE_INTERNAL_ERROR, "no fields");
-    }
 
     if (is_adt) {
         // ── ADT creation path ───────────────────────────────────────────────
@@ -5429,8 +5825,13 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
         apply_relations_for_handle(hTable);
         return ok();
     }
-    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
-        if (ops->goto_top) return ops->goto_top(hTable);
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->goto_top) {
+            UNSIGNED32 rc = ops->goto_top(hTable);
+            if (rc == openads::AE_SUCCESS) apply_relations_for_handle(hTable);
+            return rc;
+        }
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_top();
@@ -5448,8 +5849,13 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
         apply_relations_for_handle(hTable);
         return ok();
     }
-    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
-        if (ops->goto_bottom) return ops->goto_bottom(hTable);
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->goto_bottom) {
+            UNSIGNED32 rc = ops->goto_bottom(hTable);
+            if (rc == openads::AE_SUCCESS) apply_relations_for_handle(hTable);
+            return rc;
+        }
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_bottom();
@@ -5487,8 +5893,13 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
         apply_relations_for_handle(hTable);
         return ok();
     }
-    if (auto* ops = openads::abi::backend_table_ops_for(hTable))
-        if (ops->skip) return ops->skip(hTable, lRows);
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        if (ops->skip) {
+            UNSIGNED32 rc = ops->skip(hTable, lRows);
+            if (rc == openads::AE_SUCCESS) apply_relations_for_handle(hTable);
+            return rc;
+        }
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->skip(lRows);
@@ -7665,6 +8076,15 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = st->conn->lock_record(st, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     if (auto* mst = get_mssql_table(hTable)) {
         if (mst->conn == nullptr)
@@ -7723,6 +8143,15 @@ UNSIGNED32 ENTRYPOINT AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (ot->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ot->conn->unlock_record(ot, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = st->conn->unlock_record(st, ulRecord);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -7786,6 +8215,15 @@ UNSIGNED32 ENTRYPOINT AdsLockTable(ADSHANDLE hTable) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = st->conn->lock_table(st);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_MSSQL)
     if (auto* mst = get_mssql_table(hTable)) {
         if (mst->conn == nullptr)
@@ -7838,6 +8276,15 @@ UNSIGNED32 ENTRYPOINT AdsUnlockTable(ADSHANDLE hTable) {
         if (ot->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ot->conn->unlock_table(ot);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (st->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = st->conn->unlock_table(st);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -9444,6 +9891,78 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
         }
         return ok();
     }
+    if (is_sql_table_handle(hTable)) {
+        std::string name = pucName
+            ? openads::abi::to_internal(pucName, 0) : std::string();
+        if (name.empty()) {
+            sql_active_index_handle().erase(hTable);
+            return ok();
+        }
+        auto upper_eq = [](const std::string& a, const std::string& b) {
+            if (a.size() != b.size()) return false;
+            for (std::size_t i = 0; i < a.size(); ++i) {
+                if (std::toupper(static_cast<unsigned char>(a[i])) !=
+                    std::toupper(static_cast<unsigned char>(b[i]))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        for (auto& [ih, si] : sqlite_indexes_map()) {
+            if (si->parent == get_sqlite_table(hTable) &&
+                upper_eq(si->column, name)) {
+                sql_active_index_handle()[hTable] = ih;
+                return ok();
+            }
+        }
+#if defined(OPENADS_WITH_MARIADB)
+        for (auto& [ih, si] : maria_indexes_map()) {
+            if (si->parent == get_maria_table(hTable) &&
+                upper_eq(si->column, name)) {
+                sql_active_index_handle()[hTable] = ih;
+                return ok();
+            }
+        }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+        for (auto& [ih, si] : postgres_indexes_map()) {
+            if (si->parent == get_postgres_table(hTable) &&
+                upper_eq(si->column, name)) {
+                sql_active_index_handle()[hTable] = ih;
+                return ok();
+            }
+        }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+        for (auto& [ih, si] : odbc_indexes_map()) {
+            if (si->parent == get_odbc_table(hTable) &&
+                upper_eq(si->column, name)) {
+                sql_active_index_handle()[hTable] = ih;
+                return ok();
+            }
+        }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+        for (auto& [ih, si] : firebird_indexes_map()) {
+            if (si->parent == get_firebird_table(hTable) &&
+                upper_eq(si->column, name)) {
+                sql_active_index_handle()[hTable] = ih;
+                return ok();
+            }
+        }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+        for (auto& [ih, si] : mssql_indexes_map()) {
+            if (si->parent == get_mssql_table(hTable) &&
+                upper_eq(si->column, name)) {
+                sql_active_index_handle()[hTable] = ih;
+                return ok();
+            }
+        }
+#endif
+        return fail(openads::AE_INTERNAL_ERROR,
+                    ("AdsSetIndexOrder: no tag '" + name + "' on table").c_str());
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::string name = pucName
@@ -9500,6 +10019,33 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hInde
         }
         return fail(openads::AE_INTERNAL_ERROR,
                     "AdsSetIndexOrderByHandle: hIndex is not a remote index");
+    }
+    if (is_sql_table_handle(hTable)) {
+        bool ok_index = false;
+#if defined(OPENADS_WITH_SQLITE)
+        ok_index = ok_index || get_sqlite_index(hIndex) != nullptr;
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+        ok_index = ok_index || get_maria_index(hIndex) != nullptr;
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+        ok_index = ok_index || get_postgres_index(hIndex) != nullptr;
+#endif
+#if defined(OPENADS_WITH_ODBC)
+        ok_index = ok_index || get_odbc_index(hIndex) != nullptr;
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+        ok_index = ok_index || get_firebird_index(hIndex) != nullptr;
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+        ok_index = ok_index || get_mssql_index(hIndex) != nullptr;
+#endif
+        if (ok_index) {
+            sql_active_index_handle()[hTable] = hIndex;
+            return ok();
+        }
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsSetIndexOrderByHandle: index not bound to table");
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -21284,10 +21830,14 @@ UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
 UNSIGNED32 set_relation_impl(ADSHANDLE hParent, ADSHANDLE hChild,
                              UNSIGNED8* pucExpr, bool scoped) {
     if (pucExpr == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null expr");
-    if (get_table(hParent) == nullptr && get_remote_table(hParent) == nullptr)
-        return fail(openads::AE_INTERNAL_ERROR, "unknown parent table");
-    if (get_table(hChild) == nullptr && get_remote_table(hChild) == nullptr)
-        return fail(openads::AE_INTERNAL_ERROR, "unknown child table");
+    const bool parent_ok = get_table(hParent) != nullptr ||
+                           get_remote_table(hParent) != nullptr ||
+                           is_sql_table_handle(hParent);
+    const bool child_ok  = get_table(hChild) != nullptr ||
+                           get_remote_table(hChild) != nullptr ||
+                           is_sql_table_handle(hChild);
+    if (!parent_ok) return fail(openads::AE_INTERNAL_ERROR, "unknown parent table");
+    if (!child_ok)  return fail(openads::AE_INTERNAL_ERROR, "unknown child table");
     std::string expr = openads::abi::to_internal(pucExpr, 0);
     relation_map()[hParent].push_back(
         AdsRelation{hChild, std::move(expr), scoped});
