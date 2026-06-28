@@ -993,8 +993,15 @@ util::Result<std::uint32_t> FirebirdConnection::record_count(FirebirdTable* tbl)
         return util::Error{5001, 0, "invalid firebird record_count", ""};
     }
     if (tbl->rec_count_cached) return tbl->cached_rec_count;
-    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
-    tbl->rec_count_cached = true;
+    if (tbl->is_result) {
+        tbl->cached_rec_count =
+            static_cast<std::uint32_t>(tbl->result_rows.size());
+        tbl->rec_count_cached = true;
+        return tbl->cached_rec_count;
+    }
+    if (auto s = load_pk_snapshot(&impl_->db, &impl_->tr, tbl); !s) {
+        return s.error();
+    }
     return tbl->cached_rec_count;
 }
 

@@ -387,6 +387,19 @@ sqlite_tables_map() {
     return m;
 }
 
+void invalidate_sqlite_nav_after_dml(
+    openads::sql_backend::SqliteConnection* conn) {
+    if (!conn) return;
+    for (auto& kv : sqlite_tables_map()) {
+        if (!kv.second || kv.second->conn != conn || kv.second->is_result) {
+            continue;
+        }
+        kv.second->rec_count_cached = false;
+        kv.second->row_valid = false;
+        kv.second->positioned = false;
+    }
+}
+
 openads::sql_backend::SqliteTable* get_sqlite_table(ADSHANDLE h) {
     auto& s = state();
     return s.registry.lookup<openads::sql_backend::SqliteTable>(
@@ -471,6 +484,17 @@ odbc_tables_map() {
     static std::unordered_map<Handle,
         std::unique_ptr<openads::sql_backend::OdbcTable>> m;
     return m;
+}
+
+void invalidate_odbc_nav_after_dml(
+    openads::sql_backend::OdbcConnection* conn) {
+    if (!conn) return;
+    for (auto& kv : odbc_tables_map()) {
+        if (!kv.second || kv.second->conn != conn) continue;
+        kv.second->rec_count_cached = false;
+        kv.second->row_valid = false;
+        kv.second->positioned = false;
+    }
 }
 
 openads::sql_backend::OdbcTable* get_odbc_table(ADSHANDLE h) {
@@ -612,6 +636,19 @@ firebird_tables_map() {
     return m;
 }
 
+void invalidate_firebird_nav_after_dml(
+    openads::sql_backend::FirebirdConnection* conn) {
+    if (!conn) return;
+    for (auto& kv : firebird_tables_map()) {
+        if (!kv.second || kv.second->conn != conn || kv.second->is_result) {
+            continue;
+        }
+        kv.second->rec_count_cached = false;
+        kv.second->row_valid = false;
+        kv.second->positioned = false;
+    }
+}
+
 openads::sql_backend::FirebirdTable* get_firebird_table(ADSHANDLE h) {
     auto& s = state();
     return s.registry.lookup<openads::sql_backend::FirebirdTable>(
@@ -689,6 +726,19 @@ maria_tables_map() {
     static std::unordered_map<Handle,
         std::unique_ptr<openads::sql_backend::MariaTable>> m;
     return m;
+}
+
+void invalidate_maria_nav_after_dml(
+    openads::sql_backend::MariaConnection* conn) {
+    if (!conn) return;
+    for (auto& kv : maria_tables_map()) {
+        if (!kv.second || kv.second->conn != conn || kv.second->is_result) {
+            continue;
+        }
+        kv.second->rec_count_cached = false;
+        kv.second->row_valid = false;
+        kv.second->positioned = false;
+    }
 }
 
 openads::sql_backend::MariaTable* get_maria_table(ADSHANDLE h) {
@@ -777,6 +827,19 @@ postgres_tables_map() {
     static std::unordered_map<Handle,
         std::unique_ptr<openads::sql_backend::PostgresTable>> m;
     return m;
+}
+
+void invalidate_postgres_nav_after_dml(
+    openads::sql_backend::PostgresConnection* conn) {
+    if (!conn) return;
+    for (auto& kv : postgres_tables_map()) {
+        if (!kv.second || kv.second->conn != conn || kv.second->is_result) {
+            continue;
+        }
+        kv.second->rec_count_cached = false;
+        kv.second->row_valid = false;
+        kv.second->positioned = false;
+    }
 }
 
 openads::sql_backend::PostgresTable* get_postgres_table(ADSHANDLE h) {
@@ -15774,7 +15837,11 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
         auto r = it->second->sqlite->run_sql(sqlstr);
         if (!r) return fail(r.error());
         auto cursor = std::move(r).value();
-        if (!cursor) { *phCursor = 0; return ok(); }
+        if (!cursor) {
+            invalidate_sqlite_nav_after_dml(it->second->sqlite);
+            *phCursor = 0;
+            return ok();
+        }
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         openads::sql_backend::SqliteTable* raw = cursor.get();
@@ -15822,6 +15889,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             if (auto r = it->second->postgres->exec_sql(sqlstr); !r) {
                 return fail(r.error());
             }
+            invalidate_postgres_nav_after_dml(it->second->postgres);
             *phCursor = 0;
             return ok();
         }
@@ -15832,7 +15900,11 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
         auto r = it->second->postgres->run_sql(sqlstr);
         if (!r) return fail(r.error());
         auto cursor = std::move(r).value();
-        if (!cursor) { *phCursor = 0; return ok(); }
+        if (!cursor) {
+            invalidate_postgres_nav_after_dml(it->second->postgres);
+            *phCursor = 0;
+            return ok();
+        }
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         Handle h = s.registry.register_object(
@@ -15851,6 +15923,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             if (auto r = it->second->maria->exec_sql(sqlstr); !r) {
                 return fail(r.error());
             }
+            invalidate_maria_nav_after_dml(it->second->maria);
             *phCursor = 0;
             return ok();
         }
@@ -15861,7 +15934,11 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
         auto r = it->second->maria->run_sql(sqlstr);
         if (!r) return fail(r.error());
         auto cursor = std::move(r).value();
-        if (!cursor) { *phCursor = 0; return ok(); }
+        if (!cursor) {
+            invalidate_maria_nav_after_dml(it->second->maria);
+            *phCursor = 0;
+            return ok();
+        }
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         Handle h = s.registry.register_object(
@@ -15880,6 +15957,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             if (auto r = it->second->odbc->exec_sql(sqlstr); !r) {
                 return fail(r.error());
             }
+            invalidate_odbc_nav_after_dml(it->second->odbc);
             *phCursor = 0;
             return ok();
         }
@@ -15893,6 +15971,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             openads::sql::sql_is_drop_table(sqlstr)) {
             auto r = it->second->firebird->run_sql(sqlstr);
             if (!r) return fail(r.error());
+            invalidate_firebird_nav_after_dml(it->second->firebird);
             *phCursor = 0;
             return ok();
         }
@@ -15903,7 +15982,11 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
         auto r = it->second->firebird->run_sql(sqlstr);
         if (!r) return fail(r.error());
         auto cursor = std::move(r).value();
-        if (!cursor) { *phCursor = 0; return ok(); }
+        if (!cursor) {
+            invalidate_firebird_nav_after_dml(it->second->firebird);
+            *phCursor = 0;
+            return ok();
+        }
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         Handle h = s.registry.register_object(

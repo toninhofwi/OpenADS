@@ -462,8 +462,13 @@ util::Result<std::uint32_t> SqliteConnection::record_count(SqliteTable* tbl) {
         return util::Error{5001, 0, "invalid sqlite record_count", ""};
     }
     if (tbl->rec_count_cached) return tbl->cached_rec_count;
-    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->rowids.size());
-    tbl->rec_count_cached = true;
+    if (tbl->is_result) {
+        tbl->cached_rec_count =
+            static_cast<std::uint32_t>(tbl->result_rows.size());
+        tbl->rec_count_cached = true;
+        return tbl->cached_rec_count;
+    }
+    if (auto r = load_rowids(impl_->db, tbl); !r) return r.error();
     return tbl->cached_rec_count;
 #else
     (void)tbl;

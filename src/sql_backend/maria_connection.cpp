@@ -623,8 +623,7 @@ util::Result<std::uint32_t> MariaConnection::record_count(MariaTable* tbl) {
         return static_cast<std::uint32_t>(tbl->result_rows.size());
     }
     if (tbl->rec_count_cached) return tbl->cached_rec_count;
-    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
-    tbl->rec_count_cached = true;
+    if (auto r = reload_pk_snapshot(impl_->conn, tbl); !r) return r.error();
     return tbl->cached_rec_count;
 #else
     (void)tbl;

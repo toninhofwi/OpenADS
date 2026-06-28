@@ -741,8 +741,9 @@ util::Result<std::uint32_t> OdbcConnection::record_count(OdbcTable* tbl) {
         return util::Error{5001, 0, "invalid odbc record_count", ""};
     }
     if (tbl->rec_count_cached) return tbl->cached_rec_count;
-    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
-    tbl->rec_count_cached = true;
+    if (auto s = load_pk_snapshot(impl_->dbc, impl_->quote, tbl); !s) {
+        return s.error();
+    }
     return tbl->cached_rec_count;
 }
 

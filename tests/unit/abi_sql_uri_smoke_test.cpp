@@ -237,6 +237,19 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         }
         CHECK(item_cols == 2);
         REQUIRE(AdsCloseTable(hCur) == 0);
+
+        UNSIGNED8 spk[] = "SELECT * FROM system.primarykeys";
+        hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, spk, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        REQUIRE(AdsCloseTable(hCur) == 0);
+
+        UNSIGNED8 sixname[] = "system.indexes";
+        ADSHANDLE hIdxSys = 0;
+        REQUIRE(AdsOpenTable(hConn, sixname, sixname, ADS_DEFAULT, 0, 0, 0,
+                             ADS_READONLY, &hIdxSys) == 0);
+        REQUIRE(AdsCloseTable(hIdxSys) == 0);
+
         AdsCloseSQLStatement(hStmt);
     }
 
