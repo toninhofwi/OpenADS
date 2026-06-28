@@ -18,7 +18,8 @@ std::string lower_copy(std::string s) {
     return s;
 }
 
-std::optional<std::string> system_table_from_select(const std::string& sql) {
+[[maybe_unused]] std::optional<std::string>
+system_table_from_select(const std::string& sql) {
     if (!openads::sql::sql_is_select(sql)) return std::nullopt;
     auto sel = openads::sql::parse_select(sql);
     if (!sel) return std::nullopt;

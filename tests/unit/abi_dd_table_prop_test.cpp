@@ -281,9 +281,30 @@ TEST_CASE("AdsDDSetTableProperty stores table memory/cache options") {
     std::uint16_t on = 1;
     std::uint16_t memo = 1024;
     std::uint16_t cache = ADS_TABLE_CACHE_READS;
+    std::uint16_t encrypted = 1;
+    std::uint16_t perm_level = 3;
+    std::uint16_t txn_free = 1;
+    const char comment[] = "Imported table comment";
+    const char user_defined[] = "app-owned value";
+    const char validation_expr[] = "Not Empty(NAME)";
+    const char validation_msg[] = "Name is required";
+    const char default_idx[] = "NAME_TAG";
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_COMMENT,
+                                  (void*)comment, sizeof(comment)) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_USER_DEFINED_PROP,
+                                  (void*)user_defined, sizeof(user_defined)) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_VALIDATION_EXPR,
+                                  (void*)validation_expr, sizeof(validation_expr)) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_VALIDATION_MSG,
+                                  (void*)validation_msg, sizeof(validation_msg)) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_DEFAULT_INDEX,
+                                  (void*)default_idx, sizeof(default_idx)) == 0);
     REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_AUTO_CREATE, &on, 2) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_ENCRYPTION, &encrypted, 2) == 0);
     REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_MEMO_BLOCK_SIZE, &memo, 2) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_PERMISSION_LEVEL, &perm_level, 2) == 0);
     REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_CACHING, &cache, 2) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_TXN_FREE, &txn_free, 2) == 0);
 
     UNSIGNED16 len = 2;
     std::uint8_t out[2] = {};
@@ -296,6 +317,12 @@ TEST_CASE("AdsDDSetTableProperty stores table memory/cache options") {
     len = 2;
     REQUIRE(AdsDDGetTableProperty(hConn, alias, ADS_DD_TABLE_CACHING, out, &len) == 0);
     CHECK(out[0] == ADS_TABLE_CACHE_READS);
+    len = 2;
+    REQUIRE(AdsDDGetTableProperty(hConn, alias, ADS_DD_TABLE_PERMISSION_LEVEL, out, &len) == 0);
+    CHECK(out[0] == 3);
+    len = 2;
+    REQUIRE(AdsDDGetTableProperty(hConn, alias, ADS_DD_TABLE_TXN_FREE, out, &len) == 0);
+    CHECK(out[0] == 1);
 
     auto auto_vals = table_prop_sql_col(
         hConn,
@@ -309,12 +336,36 @@ TEST_CASE("AdsDDSetTableProperty stores table memory/cache options") {
         hConn,
         "SELECT Table_Caching FROM system.tables WHERE Name = 'cacheme'",
         "Table_Caching");
+    auto comment_vals = table_prop_sql_col(
+        hConn,
+        "SELECT Comment FROM system.tables WHERE Name = 'cacheme'",
+        "Comment");
+    auto rule_vals = table_prop_sql_col(
+        hConn,
+        "SELECT Table_Validation_Expr FROM system.tables WHERE Name = 'cacheme'",
+        "Table_Validation_Expr");
+    auto default_idx_vals = table_prop_sql_col(
+        hConn,
+        "SELECT Table_Default_Index FROM system.tables WHERE Name = 'cacheme'",
+        "Table_Default_Index");
+    auto txn_vals = table_prop_sql_col(
+        hConn,
+        "SELECT Table_Trans_Free FROM system.tables WHERE Name = 'cacheme'",
+        "Table_Trans_Free");
     REQUIRE(auto_vals.size() == 1);
     REQUIRE(memo_vals.size() == 1);
     REQUIRE(cache_vals.size() == 1);
+    REQUIRE(comment_vals.size() == 1);
+    REQUIRE(rule_vals.size() == 1);
+    REQUIRE(default_idx_vals.size() == 1);
+    REQUIRE(txn_vals.size() == 1);
     CHECK(auto_vals[0] == "True");
     CHECK(memo_vals[0] == "1024");
     CHECK(cache_vals[0] == "1");
+    CHECK(comment_vals[0] == "Imported table comment");
+    CHECK(rule_vals[0] == "Not Empty(NAME)");
+    CHECK(default_idx_vals[0] == "NAME_TAG");
+    CHECK(txn_vals[0] == "True");
 
     REQUIRE(AdsDisconnect(hConn) == 0);
 

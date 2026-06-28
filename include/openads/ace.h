@@ -827,7 +827,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pu
 #define ADS_DD_USER_GROUP_MEMBERSHIP      1102
 #define ADS_DD_USER_BAD_LOGINS            1103
 
-// Table-object property codes (200-217).
+// Table-object property codes (200-218).
 #define ADS_DD_TABLE_VALIDATION_EXPR         200
 #define ADS_DD_TABLE_VALIDATION_MSG          201
 #define ADS_DD_TABLE_PRIMARY_KEY             202
@@ -848,6 +848,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pu
 /* RCB 06/27/2026: OpenADS exposes SAP-style table caching as a DD table
    property; modes are ADS_TABLE_CACHE_* below. */
 #define ADS_DD_TABLE_CACHING                 217
+#define ADS_DD_TABLE_TXN_FREE                218
 
 // Permission levels for AdsDDGet/SetUserTableRights.
 #define ADS_DD_TABLE_PERMISSION_NONE         0

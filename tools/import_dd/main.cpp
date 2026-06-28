@@ -125,6 +125,8 @@ using PFN_FindNext   = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, ADSHANDLE hFind,
 using PFN_FindClose  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE hObj, ADSHANDLE hFind);
 using PFN_GetDBProp  = UNSIGNED32 (ADS_CALL*)(ADSHANDLE h, UNSIGNED16 usProp,
                            void* pBuf, UNSIGNED16* pusLen);
+using PFN_GetTableProp = UNSIGNED32 (ADS_CALL*)(ADSHANDLE h, UNSIGNED8* table,
+                           UNSIGNED16 usProp, void* pBuf, UNSIGNED16* pusLen);
 
 struct SapFuncs {
     PFN_Connect    connect    = nullptr;
@@ -142,6 +144,7 @@ struct SapFuncs {
     PFN_FindNext   findNext   = nullptr;
     PFN_FindClose  findClose  = nullptr;
     PFN_GetDBProp  getDBProp  = nullptr;
+    PFN_GetTableProp getTableProp = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -206,6 +209,48 @@ static std::string sap_field_large(const SapFuncs& f, ADSHANDLE hc,
     // AdsGetField sets len to the actual byte count filled.
     while (len && buf[len - 1] == ' ') --len;
     return std::string(buf.data(), len);
+}
+
+static std::string trim_sap_string(const char* buf, UNSIGNED16 len) {
+    while (len > 0 && (buf[len - 1] == ' ' || buf[len - 1] == '\0')) --len;
+    return std::string(buf, len);
+}
+
+static std::string le_u16_string(const char* buf, UNSIGNED16 len) {
+    unsigned v = 0;
+    if (len >= 2) {
+        v = static_cast<unsigned>(static_cast<unsigned char>(buf[0])) |
+            (static_cast<unsigned>(static_cast<unsigned char>(buf[1])) << 8);
+    } else if (len == 1) {
+        v = static_cast<unsigned>(static_cast<unsigned char>(buf[0]));
+    }
+    return std::to_string(v);
+}
+
+static bool get_sap_table_prop_string(const SapFuncs& f, ADSHANDLE hConn,
+                                      const std::string& table,
+                                      UNSIGNED16 prop,
+                                      std::string& out,
+                                      UNSIGNED32& rc_out) {
+    char buf[8192] = {};
+    UNSIGNED16 len = static_cast<UNSIGNED16>(sizeof(buf) - 1);
+    rc_out = f.getTableProp(hConn, (UNSIGNED8*)table.c_str(), prop, buf, &len);
+    if (rc_out != 0) return false;
+    out = trim_sap_string(buf, len);
+    return true;
+}
+
+static bool get_sap_table_prop_u16(const SapFuncs& f, ADSHANDLE hConn,
+                                   const std::string& table,
+                                   UNSIGNED16 prop,
+                                   std::string& out,
+                                   UNSIGNED32& rc_out) {
+    char buf[2] = {};
+    UNSIGNED16 len = static_cast<UNSIGNED16>(sizeof(buf));
+    rc_out = f.getTableProp(hConn, (UNSIGNED8*)table.c_str(), prop, buf, &len);
+    if (rc_out != 0) return false;
+    out = le_u16_string(buf, len);
+    return true;
 }
 
 
@@ -322,6 +367,7 @@ int main(int argc, char** argv) {
     f.findNext   = (PFN_FindNext)  lib_sym(sap, "AdsDDFindNextObject");
     f.findClose  = (PFN_FindClose) lib_sym(sap, "AdsDDFindClose");
     f.getDBProp  = (PFN_GetDBProp) lib_sym(sap, "AdsDDGetDatabaseProperty");
+    f.getTableProp = (PFN_GetTableProp) lib_sym(sap, "AdsDDGetTableProperty");
 
     if (!f.connect || !f.disconnect || !f.execSQL || !f.close ||
         !f.createStmt || !f.atEOF || !f.skip || !f.getField) {
@@ -456,31 +502,86 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── Step 5d: read table primary-key and default-index from SAP system.tables ──
+    // ── Step 5d: read table properties from SAP ─────────────────────────────
     struct TableProps {
-        std::string name, primary_key, default_index;
+        std::string name;
+        std::unordered_map<int, std::string> props;
     };
     std::vector<TableProps> table_props_list;
     {
-        ADSHANDLE hc = 0;
-        rc = f.execSQL(hStmt,
-            (UNSIGNED8*)"SELECT Name, Table_Primary_Key, Table_Default_Index "
-                        "FROM system.tables ORDER BY Name",
-            &hc);
-        if (rc == 0 && hc) {
-            UNSIGNED16 eof = 0;
-            while (f.atEOF(hc, &eof) == 0 && !eof) {
-                TableProps tp;
-                tp.name          = sap_field(f, hc, "Name");
-                tp.primary_key   = sap_field(f, hc, "Table_Primary_Key");
-                tp.default_index = sap_field(f, hc, "Table_Default_Index");
-                if (!tp.name.empty())
-                    table_props_list.push_back(std::move(tp));
-                f.skip(hc, 1);
+        std::vector<std::string> table_names;
+        if (f.findFirst && f.findNext && f.findClose) {
+            char nameBuf[256] = {};
+            UNSIGNED16 nameLen = sizeof(nameBuf) - 1;
+            ADSHANDLE hFind = 0;
+            UNSIGNED32 rc2 = f.findFirst(hConn, 1, nullptr,
+                                         (UNSIGNED8*)nameBuf, &nameLen, &hFind);
+            while (rc2 == 0 && hFind) {
+                nameBuf[nameLen] = '\0';
+                while (nameLen > 0 && nameBuf[nameLen - 1] == ' ')
+                    nameBuf[--nameLen] = '\0';
+                if (nameBuf[0]) table_names.emplace_back(nameBuf);
+                nameLen = sizeof(nameBuf) - 1;
+                nameBuf[0] = '\0';
+                rc2 = f.findNext(hConn, hFind, (UNSIGNED8*)nameBuf, &nameLen);
             }
-            f.close(hc);
+            if (hFind) f.findClose(hConn, hFind);
+        }
+
+        if (table_names.empty()) {
+            ADSHANDLE hc = 0;
+            rc = f.execSQL(hStmt,
+                (UNSIGNED8*)"SELECT Name FROM system.tables ORDER BY Name",
+                &hc);
+            if (rc == 0 && hc) {
+                UNSIGNED16 eof = 0;
+                while (f.atEOF(hc, &eof) == 0 && !eof) {
+                    auto name = sap_field(f, hc, "Name");
+                    if (!name.empty()) table_names.push_back(std::move(name));
+                    f.skip(hc, 1);
+                }
+                f.close(hc);
+            }
+        }
+
+        if (!f.getTableProp) {
+            warnings.push_back("AdsDDGetTableProperty not found in SAP library — table properties skipped.");
+        } else if (table_names.empty()) {
+            warnings.push_back("No SAP table names found — table properties skipped.");
         } else {
-            warnings.push_back("system.tables query failed — table primary keys skipped.");
+            struct PropDef { UNSIGNED16 sap_id; int openads_id; bool is_u16; const char* name; };
+            static const PropDef kTableProps[] = {
+                { 1,   1,   false, "comment" },
+                { 3,   3,   false, "user_defined" },
+                { 22,  3,   false, "user_defined" },
+                { 200, 200, false, "validation_expr" },
+                { 201, 201, false, "validation_msg" },
+                { 202, 202, false, "primary_key" },
+                { 203, 203, true,  "auto_create" },
+                { 213, 213, false, "default_index" },
+                { 214, 214, true,  "encryption" },
+                { 215, 215, true,  "memo_block_size" },
+                { 216, 216, true,  "permission_level" },
+                { 217, 217, true,  "caching" },
+                { 218, 218, true,  "txn_free" },
+            };
+
+            for (const auto& table : table_names) {
+                TableProps tp;
+                tp.name = table;
+                for (const auto& pd : kTableProps) {
+                    std::string value;
+                    UNSIGNED32 prc = 0;
+                    bool ok = pd.is_u16
+                        ? get_sap_table_prop_u16(f, hConn, table, pd.sap_id, value, prc)
+                        : get_sap_table_prop_string(f, hConn, table, pd.sap_id, value, prc);
+                    if (!ok) continue;
+                    if (!pd.is_u16 && value.empty()) continue;
+                    if (pd.openads_id == 3 && tp.props.count(3) != 0 && value.empty()) continue;
+                    tp.props[pd.openads_id] = value;
+                }
+                if (!tp.props.empty()) table_props_list.push_back(std::move(tp));
+            }
         }
     }
 
@@ -689,10 +790,9 @@ int main(int argc, char** argv) {
         auto dd = std::move(opened).value();
 
         for (const auto& tp : table_props_list) {
-            if (!tp.primary_key.empty())
-                dd.set_table_property(tp.name, 202, tp.primary_key);
-            if (!tp.default_index.empty())
-                dd.set_table_property(tp.name, 213, tp.default_index);
+            for (const auto& kv : tp.props) {
+                dd.set_table_property(tp.name, kv.first, kv.second);
+            }
         }
 
         for (const auto& pv : db_prop_values) {

@@ -4276,6 +4276,17 @@ eff_ops(Connection* conn, const std::string& object_name) {
     return dd->get_effective_ops(conn->username(), object_name);
 }
 
+bool dd_can_view_object_metadata(Connection* conn, const std::string& object_name) {
+    if (!conn || !conn->has_dd() || conn->username().empty()) return true;
+    auto ops = eff_ops(conn, object_name);
+    // RCB 2026-06-28: DD metadata is not table data, but exposing names,
+    // columns, indexes, triggers, or properties still reveals protected objects.
+    // A user with zero effective bits on a protected object cannot view that
+    // object's metadata; any inherited/direct operation keeps legacy visibility.
+    return ops.open || ops.select_ || ops.update_ ||
+           ops.insert_ || ops.delete_ || ops.execute_;
+}
+
 // Resolve an AdsOpenTable name (alias, bare filename, or path) to a DD alias.
 std::string name_to_alias(const openads::engine::DataDict* dd,
                            const std::string& name) {
@@ -11800,6 +11811,10 @@ UNSIGNED32 ENTRYPOINT AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
         return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND),
                     alias.c_str());
     }
+    if (!dd_can_view_object_metadata(c, alias)) {
+        *pusLen = 0;
+        return fail(openads::AE_ACCESS_DENIED, alias.c_str());
+    }
 
     std::string rel = dd->resolve(alias);
 
@@ -11888,25 +11903,37 @@ UNSIGNED32 ENTRYPOINT AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
             return put_u16(prop_u16(usProp));
 
         case ADS_DD_TABLE_ENCRYPTION:          // 214
+            return put_u16(prop_u16(usProp));
+
+        case ADS_DD_TABLE_TXN_FREE:            // 218
+            return put_u16(prop_u16(usProp));
+
         case ADS_DD_TABLE_IS_RI_PARENT:        // 210
             return put_u16(0);
 
         case ADS_DD_TABLE_PERMISSION_LEVEL: {  // 216
-            int lvl = (c && !c->username().empty())
-                ? dd->get_effective_permission(c->username(), alias)
-                : 4;
+            int lvl = prop_u16(usProp, 0);
+            if (lvl == 0) {
+                lvl = (c && !c->username().empty())
+                    ? dd->get_effective_permission(c->username(), alias)
+                    : 4;
+            }
             return put_u16(static_cast<std::uint16_t>(lvl));
         }
 
         case ADS_DD_TABLE_VALIDATION_EXPR:     // 200
         case ADS_DD_TABLE_VALIDATION_MSG:      // 201
-            return put_str({});
+            return put_str(dd->get_table_property(alias, usProp));
 
         case ADS_DD_TABLE_PRIMARY_KEY:         // 202
             return put_str(dd->get_table_property(alias, 202));
 
         case ADS_DD_TABLE_DEFAULT_INDEX:       // 213
             return put_str(dd->get_table_property(alias, 213));
+
+        case ADS_DD_COMMENT:                   // 1
+        case ADS_DD_USER_DEFINED_PROP:         // 22 in SAP docs; table value stored under generic prop 3 too.
+            return put_str(dd->get_table_property(alias, usProp == ADS_DD_COMMENT ? 1 : 3));
 
         default:
             *pusLen = 0;
@@ -11954,24 +11981,40 @@ UNSIGNED32 ENTRYPOINT AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
     };
 
     // RCB 06/27/2026: Support the table properties DA-Web now exposes.
-    if (usProp == ADS_DD_TABLE_PRIMARY_KEY || usProp == ADS_DD_TABLE_DEFAULT_INDEX) {
+    if (usProp == ADS_DD_COMMENT ||
+        usProp == ADS_DD_USER_DEFINED_PROP ||
+        usProp == ADS_DD_TABLE_VALIDATION_EXPR ||
+        usProp == ADS_DD_TABLE_VALIDATION_MSG ||
+        usProp == ADS_DD_TABLE_PRIMARY_KEY ||
+        usProp == ADS_DD_TABLE_DEFAULT_INDEX) {
         std::string val;
         if (pBuf != nullptr && usLen > 0)
             val.assign(static_cast<const char*>(pBuf), usLen);
-        dd->set_table_property(alias, static_cast<int>(usProp), val);
+        while (!val.empty() && val.back() == '\0') val.pop_back();
+        int stored_prop = static_cast<int>(usProp);
+        if (usProp == ADS_DD_USER_DEFINED_PROP) stored_prop = 3;
+        dd->set_table_property(alias, stored_prop, val);
         if (auto r = dd->save(); !r) return fail(r.error());
         return ok();
     }
     if (usProp == ADS_DD_TABLE_AUTO_CREATE ||
+        usProp == ADS_DD_TABLE_ENCRYPTION ||
         usProp == ADS_DD_TABLE_MEMO_BLOCK_SIZE ||
-        usProp == ADS_DD_TABLE_CACHING) {
+        usProp == ADS_DD_TABLE_PERMISSION_LEVEL ||
+        usProp == ADS_DD_TABLE_CACHING ||
+        usProp == ADS_DD_TABLE_TXN_FREE) {
         std::uint16_t v = 0;
         if (!parse_u16_prop(v))
             return fail(static_cast<int>(AE_VALUE_OVERFLOW),
                         "AdsDDSetTableProperty");
-        if (usProp == ADS_DD_TABLE_AUTO_CREATE) {
+        if (usProp == ADS_DD_TABLE_AUTO_CREATE ||
+            usProp == ADS_DD_TABLE_ENCRYPTION ||
+            usProp == ADS_DD_TABLE_TXN_FREE) {
             v = (v == 0) ? 0 : 1;
         } else if (usProp == ADS_DD_TABLE_CACHING && v > ADS_TABLE_CACHE_WRITES) {
+            return fail(static_cast<int>(AE_VALUE_OVERFLOW),
+                        "AdsDDSetTableProperty");
+        } else if (usProp == ADS_DD_TABLE_PERMISSION_LEVEL && v > 3) {
             return fail(static_cast<int>(AE_VALUE_OVERFLOW),
                         "AdsDDSetTableProperty");
         }
@@ -12070,6 +12113,10 @@ UNSIGNED32 ENTRYPOINT AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
     if (!dd->has_alias(alias)) {
         *pusLen = 0;
         return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND), alias.c_str());
+    }
+    if (!dd_can_view_object_metadata(c, alias)) {
+        *pusLen = 0;
+        return fail(openads::AE_ACCESS_DENIED, alias.c_str());
     }
 
     auto put_u16 = [&](std::uint16_t v) -> UNSIGNED32 {
@@ -15630,23 +15677,31 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         for (const auto& kv : dd->tables()) {
             const std::string& alias = kv.first;
             const std::string& rel   = kv.second;
+            if (!dd_can_view_object_metadata(c, alias)) continue;
             // Infer table type from extension (3=ADT, 2=CDX/NTX)
             std::string ext = fs::path(rel).extension().string();
             for (auto& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             int ttype = (ext == ".adt") ? 3 : 2;
-            int perm = (c != nullptr && !c->username().empty())
-                       ? dd->get_effective_permission(c->username(), alias) : 4;
             std::string pk   = dd->get_table_property(alias, 202);
             std::string didx = dd->get_table_property(alias, 213);
             std::string auto_create = dd->get_table_property(alias, 203);
+            std::string encryption = dd->get_table_property(alias, 214);
             std::string memo_block  = dd->get_table_property(alias, 215);
+            std::string perm_level = dd->get_table_property(alias, 216);
             std::string caching     = dd->get_table_property(alias, ADS_DD_TABLE_CACHING);
+            std::string validation_expr = dd->get_table_property(alias, 200);
+            std::string validation_msg = dd->get_table_property(alias, 201);
+            std::string comment = dd->get_table_property(alias, ADS_DD_COMMENT);
+            std::string txn_free = dd->get_table_property(alias, ADS_DD_TABLE_TXN_FREE);
             rows.push_back({alias, rel, std::to_string(ttype),
                             (auto_create == "1" ? "True" : "False"), pk, didx,
-                            "False", std::to_string(perm), memo_block.empty() ? "0" : memo_block,
-                            "", "", "",
+                            (encryption == "1" ? "True" : "False"),
+                            perm_level.empty() ? "0" : perm_level,
+                            memo_block.empty() ? "0" : memo_block,
+                            validation_expr, validation_msg, comment,
                             "False", caching.empty() ? "0" : caching,
-                            "False", "False", "False"});
+                            (txn_free == "1" ? "True" : "False"),
+                            "False", "False"});
         }
         return build(cols, rows);
     }
@@ -15657,8 +15712,10 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
             {"COMMENT",    'C', 200, 0},
         };
         std::vector<std::vector<std::string>> rows;
-        for (const auto& e : dd->indexes())
+        for (const auto& e : dd->indexes()) {
+            if (!dd_can_view_object_metadata(c, e.table_alias)) continue;
             rows.push_back({e.table_alias, e.index_path, e.comment});
+        }
         return build(cols, rows);
     }
     if (sys_name == "primarykeys") {
@@ -15748,6 +15805,7 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         for (const auto& kv : dd->tables()) {
             const std::string& alias = kv.first;
             const std::string& rel   = kv.second;
+            if (!dd_can_view_object_metadata(c, alias)) continue;
             std::string tag = dd->get_table_property(alias, 202);
             if (tag.empty()) continue;
             std::string expr = expr_for_tag(rel, alias, tag);
@@ -16088,6 +16146,10 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         std::vector<std::vector<std::string>> rows;
         for (const auto& kv : dd->ri()) {
             const auto& e = kv.second;
+            if (!dd_can_view_object_metadata(c, e.parent) ||
+                !dd_can_view_object_metadata(c, e.child)) {
+                continue;
+            }
             rows.push_back({e.name, e.parent, e.child,
                             e.parent_tag, e.child_tag,
                             e.update_opt, e.delete_opt, e.fail_table});
@@ -16109,6 +16171,10 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         std::vector<std::vector<std::string>> rows;
         for (const auto& kv : dd->ri()) {
             const auto& e = kv.second;
+            if (!dd_can_view_object_metadata(c, e.parent) ||
+                !dd_can_view_object_metadata(c, e.child)) {
+                continue;
+            }
             rows.push_back({e.name, e.parent, e.child,
                             e.parent_tag, e.child_tag,
                             e.update_opt, e.delete_opt, e.fail_table});
@@ -16156,6 +16222,7 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         std::vector<std::vector<std::string>> rows;
         for (const auto& kv : dd->triggers()) {
             const auto& e = kv.second;
+            if (!dd_can_view_object_metadata(c, e.table_alias)) continue;
             rows.push_back({e.name, e.table_alias,
                             std::to_string(e.event_mask),
                             timing_str(e.timing),
@@ -16239,6 +16306,7 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         };
         std::vector<std::vector<std::string>> rows;
         for (const auto& kv : dd->tables()) {
+            if (!dd_can_view_object_metadata(c, kv.first)) continue;
             std::string rel = kv.second;
             auto th = c->open_table(rel, openads::engine::TableType::Cdx,
                                     openads::engine::OpenMode::Read);

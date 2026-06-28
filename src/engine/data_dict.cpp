@@ -402,11 +402,17 @@ static std::string table_to_json(const DataDict::TableProps& tp) {
     j += "\"pk\":\"";          j += json_escape(tp.primary_key);   j += '"';
     j += ",\"default_idx\":\""; j += json_escape(tp.default_index); j += '"';
     j += ",\"comment\":\"";    j += json_escape(tp.comment);       j += '"';
+    j += ",\"user_defined\":\"";    j += json_escape(tp.user_defined);    j += '"';
+    j += ",\"validation_expr\":\""; j += json_escape(tp.validation_expr); j += '"';
+    j += ",\"validation_msg\":\"";  j += json_escape(tp.validation_msg);  j += '"';
     // RCB 06/27/2026: Keep optional table-open/cache properties with the
     // table registration record instead of inventing a second DD object type.
     j += ",\"auto_create\":\"";     j += json_escape(tp.auto_create);     j += '"';
     j += ",\"memo_block_size\":\""; j += json_escape(tp.memo_block_size); j += '"';
     j += ",\"caching\":\"";         j += json_escape(tp.caching);         j += '"';
+    j += ",\"encryption\":\"";       j += json_escape(tp.encryption);      j += '"';
+    j += ",\"permission_level\":\""; j += json_escape(tp.permission_level); j += '"';
+    j += ",\"txn_free\":\"";         j += json_escape(tp.txn_free);        j += '"';
     j += '}';
     return j;
 }
@@ -1634,12 +1640,21 @@ util::Result<void> DataDict::load_() {
                 if (m.count("pk"))          tp.primary_key   = m.at("pk");
                 if (m.count("default_idx")) tp.default_index = m.at("default_idx");
                 if (m.count("comment"))     tp.comment       = m.at("comment");
+                if (m.count("user_defined"))    tp.user_defined    = m.at("user_defined");
+                if (m.count("validation_expr")) tp.validation_expr = m.at("validation_expr");
+                if (m.count("validation_msg"))  tp.validation_msg  = m.at("validation_msg");
                 if (m.count("auto_create"))     tp.auto_create     = m.at("auto_create");
                 if (m.count("memo_block_size")) tp.memo_block_size = m.at("memo_block_size");
                 if (m.count("caching"))         tp.caching         = m.at("caching");
+                if (m.count("encryption"))      tp.encryption      = m.at("encryption");
+                if (m.count("permission_level")) tp.permission_level = m.at("permission_level");
+                if (m.count("txn_free"))        tp.txn_free        = m.at("txn_free");
                 if (!tp.primary_key.empty() || !tp.default_index.empty() ||
-                    !tp.comment.empty() || !tp.auto_create.empty() ||
-                    !tp.memo_block_size.empty() || !tp.caching.empty())
+                    !tp.comment.empty() || !tp.user_defined.empty() ||
+                    !tp.validation_expr.empty() || !tp.validation_msg.empty() ||
+                    !tp.auto_create.empty() || !tp.memo_block_size.empty() ||
+                    !tp.caching.empty() || !tp.encryption.empty() ||
+                    !tp.permission_level.empty() || !tp.txn_free.empty())
                     table_props_[obj_name] = std::move(tp);
             }
 
@@ -2076,11 +2091,18 @@ std::string DataDict::get_table_property(const std::string& alias,
     auto it = table_props_.find(alias);
     if (it == table_props_.end()) return {};
     switch (prop_code) {
+        case 1:   return it->second.comment;
+        case 3:   return it->second.user_defined;
+        case 200: return it->second.validation_expr;
+        case 201: return it->second.validation_msg;
         case 202: return it->second.primary_key;
         case 203: return it->second.auto_create;
         case 213: return it->second.default_index;
+        case 214: return it->second.encryption;
         case 215: return it->second.memo_block_size;
+        case 216: return it->second.permission_level;
         case 217: return it->second.caching;
+        case 218: return it->second.txn_free;
         case 'C': case 704: return it->second.comment;
         default:  return {};
     }
@@ -2091,11 +2113,18 @@ void DataDict::set_table_property(const std::string& alias, int prop_code,
     if (!has_alias(alias)) return;
     TableProps& tp = table_props_[alias];
     switch (prop_code) {
+        case 1:   tp.comment = value; break;
+        case 3:   tp.user_defined = value; break;
+        case 200: tp.validation_expr = value; break;
+        case 201: tp.validation_msg = value; break;
         case 202: tp.primary_key   = value; break;
         case 203: tp.auto_create   = value; break;
         case 213: tp.default_index = value; break;
+        case 214: tp.encryption = value; break;
         case 215: tp.memo_block_size = value; break;
+        case 216: tp.permission_level = value; break;
         case 217: tp.caching = value; break;
+        case 218: tp.txn_free = value; break;
         case 'C': case 704: tp.comment = value; break;
         default: break;
     }
@@ -2172,7 +2201,10 @@ DataDict::add_user_to_group(const std::string& user,
                             const std::string& group) {
     if (user.empty() || group.empty())
         return util::Error{5000, 0, "DD member user / group empty", ""};
-    if (ci_name(user) == "adssys")
+    // RCB 2026-06-28: SAP dictionaries expect the built-in AdsSys account to
+    // belong to DB:Admin.  Keep AdsSys locked down for arbitrary groups, but
+    // allow import and round-trip code to persist the required admin role.
+    if (ci_name(user) == "adssys" && ci_name(group) != "db:admin")
         return util::Error{5000, 0, "AdsSys group membership cannot be changed", ""};
     // Auto-create DB: built-in groups in groups_ so they round-trip.
     if (group.size() >= 3 &&
@@ -2199,6 +2231,10 @@ DataDict::remove_user_from_group(const std::string& user,
 
 bool DataDict::is_member_of(const std::string& user,
                             const std::string& group) const {
+    // RCB 2026-06-28: Treat AdsSys as DB:Admin even when older DD metadata did
+    // not persist that membership, matching SAP DD built-in behavior.
+    if (ci_name(user) == "adssys" && ci_name(group) == "db:admin")
+        return true;
     auto it = memberships_.find(ci_name(user));
     if (it == memberships_.end()) return false;
     return it->second.find(group) != it->second.end();
@@ -2417,7 +2453,22 @@ static DataDict::EffectiveOps ops_from_bitmask(uint32_t mask) {
     return ops;
 }
 
+static bool has_ci_group(const std::unordered_set<std::string>& groups,
+                         const char* wanted) {
+    for (const auto& g : groups) {
+        if (DataDict::ci_name(g) == wanted) return true;
+    }
+    return false;
+}
+
 } // namespace
+
+bool DataDict::has_acl_for_object(const std::string& object_name) const noexcept {
+    for (const auto& pe : permissions_) {
+        if (pe.object_name == object_name) return true;
+    }
+    return false;
+}
 
 // Build the effective-permission cache for the named user.
 // For each distinct (object_name) that appears in permissions_,
@@ -2438,6 +2489,10 @@ void DataDict::build_perm_cache(const std::string& username) const {
             principals.insert(g);
             principals.insert(ci_name(g));
         }
+    }
+    if (lo == "adssys") {
+        principals.insert("DB:Admin");
+        principals.insert("db:admin");
     }
 
     // Store the raw OR of all bitmasks for each object.  Do NOT expand FULL
@@ -2461,6 +2516,14 @@ bool DataDict::check_perm(const std::string& username,
     if (permissions_.empty()) return true;
 
     const auto lo = ci_name(username);
+    // RCB 2026-06-28: DB:Admin and AdsSys must remain administrative bypasses;
+    // regular users with no effective grant are denied below when an object has
+    // explicit DD ACL rows for someone else.
+    if (lo == "adssys") return true;
+    auto mg = memberships_.find(lo);
+    if (mg != memberships_.end() && has_ci_group(mg->second, "db:admin"))
+        return true;
+
     // Ensure cache is populated for this user.
     if (perm_cache_.find(lo) == perm_cache_.end())
         build_perm_cache(lo);
@@ -2468,7 +2531,7 @@ bool DataDict::check_perm(const std::string& username,
     const auto& user_map = perm_cache_.at(lo);
     auto it = user_map.find(object_name);
     if (it == user_map.end())
-        return true;   // no entry for this object → unrestricted
+        return !has_acl_for_object(object_name);
 
     // Expand raw bitmask before testing (FULL sentinel → all individual bits).
     return (expand_bitmask(it->second) & required) == required;
@@ -2486,6 +2549,20 @@ DataDict::EffectiveOps DataDict::get_effective_ops(
     }
 
     const auto lo = ci_name(username);
+    if (lo == "adssys") {
+        EffectiveOps full;
+        full.open = full.select_ = full.update_ =
+            full.insert_ = full.delete_ = full.execute_ = true;
+        return full;
+    }
+    auto mg = memberships_.find(lo);
+    if (mg != memberships_.end() && has_ci_group(mg->second, "db:admin")) {
+        EffectiveOps full;
+        full.open = full.select_ = full.update_ =
+            full.insert_ = full.delete_ = full.execute_ = true;
+        return full;
+    }
+
     // Use cache (build lazily if needed).
     if (perm_cache_.find(lo) == perm_cache_.end())
         build_perm_cache(lo);
@@ -2493,8 +2570,11 @@ DataDict::EffectiveOps DataDict::get_effective_ops(
     const auto& user_map = perm_cache_.at(lo);
     auto it = user_map.find(object_name);
     if (it == user_map.end()) {
-        // No entry for this object → unrestricted.
+        // RCB 2026-06-28: Preserve the historical "no ACL exists for this
+        // object" open behavior, but deny users who have no effective grant
+        // for an object that is explicitly protected by DD permissions.
         EffectiveOps full;
+        if (has_acl_for_object(object_name)) return full;
         full.open = full.select_ = full.update_ =
             full.insert_ = full.delete_ = full.execute_ = true;
         return full;
@@ -2536,13 +2616,21 @@ DataDict::get_all_effective_perms(const std::string& username) const {
 int DataDict::get_effective_permission(const std::string& username,
                                         const std::string& table) const {
     const auto lo = ci_name(username);
+    if (lo == "adssys") return 4;
+    auto mg = memberships_.find(lo);
+    if (mg != memberships_.end() && has_ci_group(mg->second, "db:admin"))
+        return 4;
+
     // Prefer the fine-grained cache when available; fall back to table_perms_.
     if (!permissions_.empty()) {
         if (perm_cache_.find(lo) == perm_cache_.end())
             build_perm_cache(lo);
         const auto& user_map = perm_cache_.at(lo);
         auto it = user_map.find(table);
-        if (it == user_map.end()) return 4;   // no entry → full access
+        // RCB 2026-06-28: A missing effective row means level 0 only when the
+        // table has ACL rows for someone else; otherwise keep legacy open DDs
+        // at level 4 so older dictionaries without ACLs remain usable.
+        if (it == user_map.end()) return has_acl_for_object(table) ? 0 : 4;
         uint32_t bits = it->second;
         if (bits & DD_PERM_FULL)                                   return 4;
         if (bits & DD_PERM_DELETE)                                 return 3;
@@ -2557,9 +2645,9 @@ int DataDict::get_effective_permission(const std::string& username,
     int eff = 0;
     auto u = t->second.find(lo);
     if (u != t->second.end()) eff = u->second;
-    auto mg = memberships_.find(lo);
-    if (mg != memberships_.end()) {
-        for (const auto& g : mg->second) {
+    auto legacy_mg = memberships_.find(lo);
+    if (legacy_mg != memberships_.end()) {
+        for (const auto& g : legacy_mg->second) {
             auto gi = t->second.find(g);
             if (gi != t->second.end() && gi->second > eff)
                 eff = gi->second;

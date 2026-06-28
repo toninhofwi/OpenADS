@@ -1362,6 +1362,9 @@
         const cacheOptions = (resp.cacheModes || []).map(m =>
           `<option value="${m.value}" ${Number(resp.caching || 0) === Number(m.value) ? 'selected' : ''}>${escHtml(m.label)}</option>`
         ).join('');
+        const permissionOptions = (resp.permissionLevels || []).map(m =>
+          `<option value="${m.value}" ${Number(resp.permissionLevel || 0) === Number(m.value) ? 'selected' : ''}>${escHtml(m.label)}</option>`
+        ).join('');
 
         container.innerHTML = `
           <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;
@@ -1372,6 +1375,34 @@
           <div style="padding:16px;max-width:620px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
             <h3 style="margin:0;color:#cdd6f4;font-size:14px;">Table: ${escHtml(dd)}.${escHtml(table)}</h3>
             <div style="display:grid;grid-template-columns:180px 1fr;gap:10px;align-items:start;">
+              <label style="padding-top:5px;font-size:12px;">Comment</label>
+              <input id="table-props-comment-${tabId}" type="text"
+                     value="${escAttr(String(resp.comment ?? ''))}"
+                     style="${inputStyle}width:100%;">
+
+              <label style="padding-top:5px;font-size:12px;">User-defined property</label>
+              <textarea id="table-props-user-${tabId}" rows="3"
+                        style="${inputStyle}width:100%;resize:vertical;">${escHtml(String(resp.userDefined ?? ''))}</textarea>
+
+              <label style="padding-top:5px;font-size:12px;">Validation expression</label>
+              <textarea id="table-props-rule-${tabId}" rows="3"
+                        style="${inputStyle}width:100%;resize:vertical;">${escHtml(String(resp.validationExpr ?? ''))}</textarea>
+
+              <label style="padding-top:5px;font-size:12px;">Validation message</label>
+              <input id="table-props-rule-msg-${tabId}" type="text"
+                     value="${escAttr(String(resp.validationMsg ?? ''))}"
+                     style="${inputStyle}width:100%;">
+
+              <label style="padding-top:5px;font-size:12px;">Primary key tag</label>
+              <input id="table-props-pk-${tabId}" type="text"
+                     value="${escAttr(String(resp.primaryKey ?? ''))}"
+                     style="${inputStyle}width:220px;">
+
+              <label style="padding-top:5px;font-size:12px;">Default index tag</label>
+              <input id="table-props-default-index-${tabId}" type="text"
+                     value="${escAttr(String(resp.defaultIndex ?? ''))}"
+                     style="${inputStyle}width:220px;">
+
               <label style="padding-top:2px;font-size:12px;">Auto create</label>
               <label style="display:flex;align-items:center;gap:7px;cursor:pointer;">
                 <input type="checkbox" id="table-props-auto-${tabId}" ${resp.autoCreate ? 'checked' : ''}
@@ -1379,10 +1410,29 @@
                 <span style="font-size:12px;color:#a6adc8;">Create missing table/index files on open</span>
               </label>
 
+              <label style="padding-top:2px;font-size:12px;">Encrypted</label>
+              <label style="display:flex;align-items:center;gap:7px;cursor:pointer;">
+                <input type="checkbox" id="table-props-encryption-${tabId}" ${resp.encryption ? 'checked' : ''}
+                       style="width:15px;height:15px;accent-color:#89b4fa;">
+                <span style="font-size:12px;color:#a6adc8;">Reflect imported SAP encryption state</span>
+              </label>
+
+              <label style="padding-top:2px;font-size:12px;">Transaction-free</label>
+              <label style="display:flex;align-items:center;gap:7px;cursor:pointer;">
+                <input type="checkbox" id="table-props-txn-free-${tabId}" ${resp.txnFree ? 'checked' : ''}
+                       style="width:15px;height:15px;accent-color:#89b4fa;">
+                <span style="font-size:12px;color:#a6adc8;">Exclude this table from transaction handling</span>
+              </label>
+
               <label style="padding-top:5px;font-size:12px;">Memo block size</label>
               <input id="table-props-memo-${tabId}" type="number" min="0" max="65535"
                      value="${escAttr(String(resp.memoBlockSize ?? 0))}"
                      style="${inputStyle}width:120px;">
+
+              <label style="padding-top:5px;font-size:12px;">Permission level</label>
+              <select id="table-props-perm-${tabId}" style="${inputStyle}width:180px;">
+                ${permissionOptions}
+              </select>
 
               <label style="padding-top:5px;font-size:12px;">Caching</label>
               <select id="table-props-cache-${tabId}" style="${inputStyle}width:180px;">
@@ -1397,8 +1447,17 @@
           const payload = {
             dd,
             table,
+            comment: document.getElementById(`table-props-comment-${tabId}`)?.value ?? '',
+            userDefined: document.getElementById(`table-props-user-${tabId}`)?.value ?? '',
+            validationExpr: document.getElementById(`table-props-rule-${tabId}`)?.value ?? '',
+            validationMsg: document.getElementById(`table-props-rule-msg-${tabId}`)?.value ?? '',
+            primaryKey: document.getElementById(`table-props-pk-${tabId}`)?.value ?? '',
+            defaultIndex: document.getElementById(`table-props-default-index-${tabId}`)?.value ?? '',
             autoCreate: document.getElementById(`table-props-auto-${tabId}`)?.checked ?? false,
+            encryption: document.getElementById(`table-props-encryption-${tabId}`)?.checked ?? false,
+            txnFree: document.getElementById(`table-props-txn-free-${tabId}`)?.checked ?? false,
             memoBlockSize: parseInt(document.getElementById(`table-props-memo-${tabId}`)?.value ?? '0', 10) || 0,
+            permissionLevel: parseInt(document.getElementById(`table-props-perm-${tabId}`)?.value ?? '0', 10) || 0,
             caching: parseInt(document.getElementById(`table-props-cache-${tabId}`)?.value ?? '0', 10) || 0,
           };
           try {

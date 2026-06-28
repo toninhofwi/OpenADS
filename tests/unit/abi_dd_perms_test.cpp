@@ -315,6 +315,63 @@ TEST_CASE("Perms: check_perm direct user — correct bit resolution") {
     fs::remove(fs::temp_directory_path() / "openads_cp_direct.am",  ec);
 }
 
+TEST_CASE("Perms: protected object denies users with no effective grant") {
+    using DD = openads::engine::DataDict;
+    auto cr = DD::create((fs::temp_directory_path() / "openads_cp_no_effective.add").string());
+    REQUIRE(cr.has_value());
+    auto& dd = cr.value();
+    dd.create_user("alice");
+    dd.create_user("bob");
+    dd.grant_permission("Table", "secure", "alice", DD::DD_PERM_SELECT);
+
+    CHECK(dd.check_perm("alice", "secure", DD::DD_PERM_SELECT));
+    CHECK(!dd.check_perm("bob", "secure", DD::DD_PERM_SELECT));
+
+    const auto bob_ops = dd.get_effective_ops("bob", "secure");
+    CHECK(!bob_ops.open);
+    CHECK(!bob_ops.select_);
+    CHECK(!bob_ops.insert_);
+    CHECK(!bob_ops.update_);
+    CHECK(!bob_ops.delete_);
+    CHECK(!bob_ops.execute_);
+    CHECK(dd.get_effective_permission("bob", "secure") == 0);
+
+    CHECK(dd.check_perm("bob", "nosuchtable", DD::DD_PERM_DELETE));
+    const auto open_ops = dd.get_effective_ops("bob", "nosuchtable");
+    CHECK(open_ops.open);
+    CHECK(open_ops.select_);
+    CHECK(dd.get_effective_permission("bob", "nosuchtable") == 4);
+
+    std::error_code ec;
+    fs::remove(fs::temp_directory_path() / "openads_cp_no_effective.add", ec);
+    fs::remove(fs::temp_directory_path() / "openads_cp_no_effective.am",  ec);
+}
+
+TEST_CASE("Perms: AdsSys is DB:Admin and stays otherwise locked") {
+    using DD = openads::engine::DataDict;
+    auto cr = DD::create((fs::temp_directory_path() / "openads_cp_adssys.add").string());
+    REQUIRE(cr.has_value());
+    auto& dd = cr.value();
+    dd.grant_permission("Table", "secure", "alice", DD::DD_PERM_SELECT);
+
+    REQUIRE(dd.add_user_to_group("adssys", "DB:Admin").has_value());
+    CHECK(dd.is_member_of("adssys", "DB:Admin"));
+    CHECK(!dd.add_user_to_group("adssys", "OtherGroup").has_value());
+    CHECK(!dd.remove_user_from_group("adssys", "DB:Admin").has_value());
+
+    CHECK(dd.check_perm("adssys", "secure", DD::DD_PERM_SELECT));
+    CHECK(dd.check_perm("adssys", "secure", DD::DD_PERM_DELETE));
+    const auto ops = dd.get_effective_ops("adssys", "secure");
+    CHECK(ops.open);
+    CHECK(ops.select_);
+    CHECK(ops.delete_);
+    CHECK(dd.get_effective_permission("adssys", "secure") == 4);
+
+    std::error_code ec;
+    fs::remove(fs::temp_directory_path() / "openads_cp_adssys.add", ec);
+    fs::remove(fs::temp_directory_path() / "openads_cp_adssys.am",  ec);
+}
+
 TEST_CASE("Perms: check_perm FULL access grants all bits") {
     using DD = openads::engine::DataDict;
     auto cr = DD::create((fs::temp_directory_path() / "openads_cp_full.add").string());
@@ -490,6 +547,40 @@ TEST_CASE("Perms: AdsDDGetTableProperty returns effective level") {
                                   ADS_DD_TABLE_PERMISSION_LEVEL,
                                   &buf, &len) == 0);
     CHECK(buf == 3u);
+
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Perms: level 0 blocks table metadata visibility") {
+    auto dir = fs::temp_directory_path() / "openads_perm_metadata_none";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf");
+    make_perm_add(dir, "TABLEPERM tbl;alice=0\n");
+
+    ADSHANDLE hConn = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(hConn != 0);
+
+    UNSIGNED8 tbl[8] = "tbl";
+    UNSIGNED16 buf = 0;
+    UNSIGNED16 len = sizeof(buf);
+    CHECK(AdsDDGetTableProperty(hConn, tbl,
+                                ADS_DD_TABLE_PERMISSION_LEVEL,
+                                &buf, &len) == openads::AE_ACCESS_DENIED);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+    UNSIGNED8 sql[] = "SELECT Name FROM system.tables";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(hCur != 0);
+    UNSIGNED32 count = 99;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &count) == 0);
+    CHECK(count == 0u);
+    REQUIRE(AdsCloseTable(hCur) == 0);
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
 
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
