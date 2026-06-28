@@ -226,9 +226,13 @@ std::string scaled_to_string(long long raw, int scale) {
                                  : static_cast<unsigned long long>(raw);
     std::string s = std::to_string(mag);
     if (static_cast<int>(s.size()) <= digits) {
-        s.insert(0, digits - s.size() + 1, '0');
+        const auto pad = static_cast<std::string::size_type>(
+            digits - static_cast<int>(s.size()) + 1);
+        s.insert(0, pad, '0');
     }
-    s.insert(s.size() - digits, ".");
+    s.insert(static_cast<std::string::size_type>(s.size()) -
+                 static_cast<std::string::size_type>(digits),
+             ".");
     if (neg) s.insert(0, "-");
     return s;
 }
@@ -544,7 +548,11 @@ constexpr int kFbTableExistsSqlCode  = -607;  // metadata: object already exists
 
 std::string fb_hash_key(const std::string& s) {
     std::uint64_t h = 1469598103934665603ULL;       // FNV-1a 64-bit
-    for (unsigned char c : s) { h ^= c; h *= 1099511628211ULL; }
+    for (char ch : s) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        h ^= c;
+        h *= 1099511628211ULL;
+    }
     static const char* hex = "0123456789abcdef";
     char buf[17];
     for (int i = 15; i >= 0; --i) { buf[i] = hex[h & 0xF]; h >>= 4; }

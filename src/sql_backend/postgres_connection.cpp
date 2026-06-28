@@ -16,6 +16,8 @@ namespace {
 
 #if defined(OPENADS_WITH_POSTGRESQL)
 
+util::Result<void> reload_pk_snapshot(PGconn* conn, PostgresTable* tbl);
+
 std::string quote_ident(const std::string& name) {
     std::string out = "\"";
     for (char c : name) {
@@ -229,8 +231,9 @@ util::Result<void> load_current_row(PGconn* conn, PostgresTable* tbl) {
         tbl->current_nulls.resize(static_cast<std::size_t>(cols));
         for (int c = 0; c < cols; ++c) {
             bool is_null = false;
-            tbl->current_row[c] = format_pg_value(res, 0, c, is_null);
-            tbl->current_nulls[c] = is_null;
+            const auto ci = static_cast<std::size_t>(c);
+            tbl->current_row[ci] = format_pg_value(res, 0, c, is_null);
+            tbl->current_nulls[ci] = is_null;
         }
         tbl->row_valid = true;
     } else {
@@ -346,8 +349,10 @@ PostgresConnection::run_sql(const std::string& sql) {
         std::vector<std::string> row(static_cast<std::size_t>(cols));
         std::vector<bool>        nul(static_cast<std::size_t>(cols));
         for (int c = 0; c < cols; ++c) {
+            bool is_null = false;
             row[static_cast<std::size_t>(c)] =
-                format_pg_value(res, r, c, nul[static_cast<std::size_t>(c)]);
+                format_pg_value(res, r, c, is_null);
+            nul[static_cast<std::size_t>(c)] = is_null;
         }
         tbl->result_rows.push_back(std::move(row));
         tbl->result_nulls.push_back(std::move(nul));

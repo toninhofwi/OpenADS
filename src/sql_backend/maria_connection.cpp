@@ -17,6 +17,8 @@ namespace {
 
 #if defined(OPENADS_WITH_MARIADB)
 
+util::Result<void> reload_pk_snapshot(MYSQL* conn, MariaTable* tbl);
+
 std::string quote_ident(const std::string& name) {
     return '`' + name + '`';
 }
@@ -89,7 +91,7 @@ describe_table_impl(MYSQL* conn, MariaTable* tbl) {
     if (res == nullptr) {
         return maria_error("describe_table", mysql_error(conn));
     }
-    const unsigned int rows = mysql_num_rows(res);
+    const auto rows = static_cast<std::size_t>(mysql_num_rows(res));
     if (rows == 0) {
         mysql_free_result(res);
         return util::Error{5001, 0, "table not found or has no columns",
@@ -1128,7 +1130,9 @@ MariaConnection::run_sql(const std::string& sql) {
         std::vector<std::string> rrow(cols);
         std::vector<bool>        rnul(cols);
         for (unsigned int c = 0; c < cols; ++c) {
-            rrow[c] = format_maria_value(row, c, rnul[c]);
+            bool is_null = false;
+            rrow[c] = format_maria_value(row, c, is_null);
+            rnul[c] = is_null;
         }
         tbl->result_rows.push_back(std::move(rrow));
         tbl->result_nulls.push_back(std::move(rnul));
