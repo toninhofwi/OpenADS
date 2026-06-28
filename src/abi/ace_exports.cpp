@@ -4834,6 +4834,28 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (auto* mc = s.registry.lookup<openads::sql_backend::MssqlConnection>(
             hConnect, HandleKind::MssqlConnection)) {
         auto name = openads::abi::to_internal(pucName, 0);
+        std::string sys_suffix;
+        if (sql_uri_system_suffix(name, sys_suffix)) {
+            auto catalog = openads::sql_backend::build_system_catalog_sql(
+                openads::sql_backend::SqlDdlDialect::Mssql, sys_suffix);
+            if (catalog) {
+                auto qr = mc->query(*catalog);
+                if (!qr) return fail(qr.error());
+                openads::sql_backend::tds::QueryResult result =
+                    std::move(qr).value();
+                if (!result.ok) {
+                    return fail(static_cast<int>(result.error_number),
+                                result.message.c_str());
+                }
+                auto st = openads::sql_backend::MssqlTable::from_result(
+                    std::move(result));
+                Handle gh = s.registry.register_object(
+                    HandleKind::MssqlTable, st.get());
+                mssql_tables_map().emplace(gh, std::move(st));
+                *phTable = gh;
+                return ok();
+            }
+        }
         auto tbl = openads::sql_backend::MssqlTable::open(*mc, name);
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
@@ -4872,6 +4894,25 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (auto* sc = s.registry.lookup<openads::sql_backend::FirebirdConnection>(
             hConnect, HandleKind::FirebirdConnection)) {
         auto name = openads::abi::to_internal(pucName, 0);
+        std::string sys_suffix;
+        if (sql_uri_system_suffix(name, sys_suffix)) {
+            auto catalog = openads::sql_backend::build_system_catalog_sql(
+                openads::sql_backend::SqlDdlDialect::Firebird, sys_suffix);
+            if (catalog) {
+                auto cur = sc->run_sql(*catalog);
+                if (!cur) return fail(cur.error());
+                auto st = std::move(cur).value();
+                if (!st) {
+                    return fail(openads::AE_NO_FILE_FOUND, name.c_str());
+                }
+                st->conn = sc;
+                Handle gh = s.registry.register_object(
+                    HandleKind::FirebirdTable, st.get());
+                firebird_tables_map().emplace(gh, std::move(st));
+                *phTable = gh;
+                return ok();
+            }
+        }
         auto tbl = sc->open_table(name);
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();

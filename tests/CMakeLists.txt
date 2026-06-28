@@ -236,9 +236,14 @@ if(WIN32)
         ${CMAKE_SOURCE_DIR}/bindings/odbc/openads_odbc.cpp)
 endif()
 
+if(OPENADS_WITH_POSTGRESQL OR OPENADS_WITH_MARIADB OR OPENADS_WITH_MSSQL
+   OR OPENADS_WITH_FIREBIRD)
+    target_sources(openads_unit_tests PRIVATE
+        unit/abi_sql_live_pg_maria_test.cpp)
+endif()
+
 if(OPENADS_WITH_POSTGRESQL)
     target_sources(openads_unit_tests PRIVATE
-        unit/abi_sql_live_pg_maria_test.cpp
         unit/abi_plus_postgres_read_test.cpp
         unit/abi_plus_postgres_write_test.cpp
         unit/abi_plus_postgres_filter_test.cpp
@@ -320,6 +325,14 @@ endif()
 if(OPENADS_WITH_MARIADB)
     add_test(NAME maria_live_smoke COMMAND openads_unit_tests
         -tc="SQL live Maria*")
+endif()
+if(OPENADS_WITH_MSSQL)
+    add_test(NAME mssql_live_smoke COMMAND openads_unit_tests
+        -tc="SQL live MSSQL*")
+endif()
+if(OPENADS_WITH_FIREBIRD)
+    add_test(NAME firebird_live_smoke COMMAND openads_unit_tests
+        -tc="SQL live Firebird*")
 endif()
 
 if(OPENADS_WITH_SQLITE)

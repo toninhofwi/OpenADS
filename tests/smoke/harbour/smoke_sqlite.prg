@@ -3,8 +3,6 @@
 
 REQUEST ADS
 
-EXTERN UNSIGNED32 AdsDropTable( ADSHANDLE, STRING, UNSIGNED16 )
-
 PROCEDURE Main()
    LOCAL hConn := 0, hT := 0, hStmt := 0, hCur := 0
    LOCAL cDb, cUri, n := 0, cName := Space( 200 ), nLen := 200
@@ -57,11 +55,11 @@ PROCEDURE Main()
    ELSE
       ? "system.tables query failed"
    ENDIF
-   AdsCloseSQLStatement( hStmt )
-
-   IF AdsDropTable( hConn, "items", 0 ) != 0
-      ? "AdsDropTable failed"
-      RETURN
+   IF AdsCreateSQLStatement( hConn, @hStmt ) == 0
+      IF AdsExecuteSQLDirect( hStmt, "DROP TABLE items", @hCur ) != 0
+         ? "DROP TABLE failed"
+      ENDIF
+      AdsCloseSQLStatement( hStmt )
    ENDIF
 
    AdsDisconnect( hConn )

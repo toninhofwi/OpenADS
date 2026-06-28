@@ -203,24 +203,31 @@ endif()
 
 if(OPENADS_WITH_FIREBIRD)
     target_compile_definitions(openads_core PUBLIC OPENADS_WITH_FIREBIRD=1)
-    # The Firebird client SDK is located via FIREBIRD_ROOT (no hard-coded
-    # paths). The native connection links libfbclient via its import library.
     if(FIREBIRD_ROOT)
         target_include_directories(openads_core PRIVATE ${FIREBIRD_ROOT}/include)
         target_link_libraries(openads_core PUBLIC ${FIREBIRD_ROOT}/lib/fbclient_ms.lib)
         if(MSVC AND OPENADS_FIREBIRD_DELAYLOAD)
-            # Delay-load so fbclient.dll is only required when a Firebird
-            # connection is actually opened: the unit-test binary links this
-            # backend but must still run where the Firebird runtime is absent.
-            # delayimp.lib provides the __delayLoadHelper2 thunk.
             target_link_options(openads_core INTERFACE /DELAYLOAD:fbclient.dll)
             target_link_libraries(openads_core PUBLIC delayimp.lib)
         endif()
-    else()
+    elseif(MSVC)
         message(FATAL_ERROR
             "OPENADS_WITH_FIREBIRD=ON but FIREBIRD_ROOT was not set "
             "(point it at the Firebird client SDK: include/ibase.h + "
             "lib/fbclient_ms.lib)")
+    else()
+        find_path(_openads_fb_include ibase.h
+            PATHS /usr/include /usr/include/firebird)
+        find_library(_openads_fb_client NAMES fbclient)
+        if(_openads_fb_include AND _openads_fb_client)
+            target_include_directories(openads_core PRIVATE "${_openads_fb_include}")
+            target_link_libraries(openads_core PUBLIC "${_openads_fb_client}")
+            message(STATUS "OpenADS: Firebird backend (libfbclient: ${_openads_fb_client})")
+        else()
+            message(FATAL_ERROR
+                "OPENADS_WITH_FIREBIRD=ON but libfbclient was not found "
+                "(install firebird3.0-dev or set FIREBIRD_ROOT)")
+        endif()
     endif()
 endif()
 

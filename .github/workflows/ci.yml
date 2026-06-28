@@ -167,6 +167,89 @@ jobs:
             -R "pg_live_smoke|maria_live_smoke"
         shell: bash
 
+  sql-live-mssql:
+    name: SQL live MSSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: OpenADS_CI_Passw0rd!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P OpenADS_CI_Passw0rd! -Q 'SELECT 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: Configure (MSSQL)
+        run: cmake --preset ninja-clang -DOPENADS_WITH_MSSQL=ON
+        shell: bash
+
+      - name: Build unit tests
+        run: cmake --build build/ninja-clang --config Release --target openads_unit_tests
+        shell: bash
+
+      - name: Run live MSSQL smoke test
+        env:
+          OPENADS_TEST_MSSQL_CONNSTR: mssql://sa:OpenADS_CI_Passw0rd!@127.0.0.1:1433/master
+        run: |
+          ctest --test-dir build/ninja-clang -C Release --output-on-failure \
+            -R mssql_live_smoke
+        shell: bash
+
+  sql-live-firebird:
+    name: SQL live Firebird
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build firebird3.0-dev firebird3.0-utils
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: Seed embedded Firebird fixture
+        run: |
+          mkdir -p /tmp/openads-fb
+          cat > /tmp/openads-fb/seed.sql <<'EOF'
+          CREATE DATABASE '/tmp/openads-fb/live.fdb' USER 'SYSDBA' DEFAULT CHARACTER SET UTF8;
+          EXIT;
+          EOF
+          isql -user SYSDBA -i /tmp/openads-fb/seed.sql
+
+      - name: Configure (Firebird)
+        run: cmake --preset ninja-clang -DOPENADS_WITH_FIREBIRD=ON
+        shell: bash
+
+      - name: Build unit tests
+        run: cmake --build build/ninja-clang --config Release --target openads_unit_tests
+        shell: bash
+
+      - name: Run live Firebird smoke test
+        env:
+          OPENADS_TEST_FIREBIRD_DB: /tmp/openads-fb/live.fdb
+        run: |
+          ctest --test-dir build/ninja-clang -C Release --output-on-failure \
+            -R firebird_live_smoke
+        shell: bash
+
   harbour-smoke:
     name: Harbour smoke (Windows)
     runs-on: windows-2022

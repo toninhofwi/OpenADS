@@ -119,7 +119,7 @@ inline void wire_standard_savepoint_tx(
     BackendTxManager& tx,
     const std::function<void(const std::string&)>& exec_sql) {
     if (tx.on_begin) return;
-    tx.on_begin = [&tx, exec_sql](bool is_nested) {
+    tx.on_begin = [exec_sql](bool is_nested) {
         if (!is_nested) exec_sql("BEGIN");
     };
     tx.on_commit = [exec_sql](bool) { exec_sql("COMMIT"); };
@@ -140,7 +140,7 @@ inline void wire_mssql_savepoint_tx(
     BackendTxManager& tx,
     const std::function<void(const std::string&)>& exec_sql) {
     if (tx.on_begin) return;
-    tx.on_begin = [&tx, exec_sql](bool is_nested) {
+    tx.on_begin = [exec_sql](bool is_nested) {
         if (!is_nested) exec_sql("BEGIN TRANSACTION");
     };
     tx.on_commit = [exec_sql](bool) { exec_sql("COMMIT TRANSACTION"); };
