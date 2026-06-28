@@ -337,6 +337,9 @@ util::Result<SqliteConnection> SqliteConnection::open(const SqliteUri& uri) {
     (void)sqlite3_exec(raw,
                       member_table_ddl(SqlDdlDialect::Sqlite).c_str(),
                       nullptr, nullptr, nullptr);
+    (void)sqlite3_exec(raw,
+                      user_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+                      nullptr, nullptr, nullptr);
     return conn;
 #else
     (void)uri;

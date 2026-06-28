@@ -257,6 +257,7 @@ util::Result<MariaConnection> MariaConnection::open(const MariaUri& uri) {
     conn.impl_->conn = raw;
     (void)mysql_query(raw, acl_table_ddl(SqlDdlDialect::Maria).c_str());
     (void)mysql_query(raw, member_table_ddl(SqlDdlDialect::Maria).c_str());
+    (void)mysql_query(raw, user_table_ddl(SqlDdlDialect::Maria).c_str());
     return std::move(conn);
 #else
     (void)uri;

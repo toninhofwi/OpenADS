@@ -16,6 +16,7 @@ using DD = openads::engine::DataDict;
 
 constexpr const char* kAclTable    = "OPENADS$ACL";
 constexpr const char* kMemberTable = "OPENADS$MEMBER";
+constexpr const char* kUserTable   = "OPENADS$USER";
 
 std::string quote_ident(SqlDdlDialect d, const std::string& name) {
     switch (d) {
@@ -43,6 +44,22 @@ std::string upper_copy(std::string s) {
         ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
     }
     return s;
+}
+
+std::string lower_copy(std::string s) {
+    for (auto& ch : s) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return s;
+}
+
+// Advantage DD user names are case-insensitive; group grantees keep parsed case.
+std::string normalize_user_name(const std::string& user) {
+    return lower_copy(user);
+}
+
+std::string ci_compare_sql(const std::string& col, const std::string& value) {
+    return "LOWER(" + col + ") = LOWER(" + sql_escape(value) + ")";
 }
 
 uint32_t bits_from_right(const std::string& right) {
@@ -86,6 +103,10 @@ util::Result<void> ensure_acl_table(SqlDdlDialect dialect, SqlExecFn exec_sql) {
 
 util::Result<void> ensure_member_table(SqlDdlDialect dialect, SqlExecFn exec_sql) {
     return exec_sql(member_table_ddl(dialect));
+}
+
+util::Result<void> ensure_user_table(SqlDdlDialect dialect, SqlExecFn exec_sql) {
+    return exec_sql(user_table_ddl(dialect));
 }
 
 // GRANT GROUP sales TO alice  /  REVOKE GROUP sales FROM alice
@@ -175,11 +196,13 @@ std::string member_grant_sql(SqlDdlDialect dialect,
                              const std::string& user) {
     const std::string qtab = quote_ident(dialect, kMemberTable);
     const std::string g = sql_escape(group);
-    const std::string u = sql_escape(user);
+    const std::string u = sql_escape(normalize_user_name(user));
+    const std::string where_ci =
+        ci_compare_sql("user_name", user) + " AND group_name = " + g;
     switch (dialect) {
         case SqlDdlDialect::Mssql:
             return "IF NOT EXISTS (SELECT 1 FROM " + qtab +
-                   " WHERE user_name = " + u + " AND group_name = " + g + ") "
+                   " WHERE " + where_ci + ") "
                    "INSERT INTO " + qtab + " (user_name, group_name) VALUES (" +
                    u + ", " + g + ")";
         case SqlDdlDialect::Firebird:
@@ -202,29 +225,30 @@ std::string member_revoke_sql(SqlDdlDialect dialect,
                               const std::string& group,
                               const std::string& user) {
     const std::string qtab = quote_ident(dialect, kMemberTable);
-    return "DELETE FROM " + qtab + " WHERE user_name = " + sql_escape(user) +
-           " AND group_name = " + sql_escape(group);
+    return "DELETE FROM " + qtab + " WHERE " +
+           ci_compare_sql("user_name", user) + " AND group_name = " +
+           sql_escape(group);
 }
 
 std::string groups_for_user_sql(SqlDdlDialect dialect,
                                 const std::string& username) {
     const std::string qtab = quote_ident(dialect, kMemberTable);
-    const std::string u = sql_escape(username);
+    const std::string where = ci_compare_sql("user_name", username);
     switch (dialect) {
         case SqlDdlDialect::Mssql:
             return "SELECT STRING_AGG(group_name, ',') FROM " + qtab +
-                   " WHERE user_name = " + u;
+                   " WHERE " + where;
         case SqlDdlDialect::Postgres:
             return "SELECT string_agg(group_name, ',') FROM " + qtab +
-                   " WHERE user_name = " + u;
+                   " WHERE " + where;
         case SqlDdlDialect::Firebird:
             return "SELECT LIST(group_name, ',') FROM " + qtab +
-                   " WHERE user_name = " + u;
+                   " WHERE " + where;
         case SqlDdlDialect::Maria:
         case SqlDdlDialect::Sqlite:
         default:
             return "SELECT GROUP_CONCAT(group_name) FROM " + qtab +
-                   " WHERE user_name = " + u;
+                   " WHERE " + where;
     }
 }
 
@@ -326,7 +350,7 @@ std::string revoke_sql(SqlDdlDialect dialect,
     const std::string where =
         " WHERE obj_type = " + sql_escape(obj_type) +
         " AND obj_name = " + sql_escape(obj_name) +
-        " AND grantee = " + sql_escape(grantee);
+        " AND " + ci_compare_sql("grantee", grantee);
     switch (dialect) {
         case SqlDdlDialect::Firebird:
             return "UPDATE " + qtab + " SET bitmask = BIN_AND(bitmask, -1 - " +
@@ -387,6 +411,53 @@ std::string acl_table_ddl(SqlDdlDialect dialect) {
     }
 }
 
+std::string user_table_ddl(SqlDdlDialect dialect) {
+    const std::string qtab = quote_ident(dialect, kUserTable);
+    switch (dialect) {
+        case SqlDdlDialect::Mssql:
+            return "IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '" +
+                   std::string(kUserTable) + "') CREATE TABLE " + qtab +
+                   " (user_name NVARCHAR(200) NOT NULL PRIMARY KEY)";
+        case SqlDdlDialect::Maria:
+            return "CREATE TABLE IF NOT EXISTS " + qtab +
+                   " (user_name VARCHAR(200) NOT NULL PRIMARY KEY)";
+        case SqlDdlDialect::Firebird:
+            return "EXECUTE BLOCK AS BEGIN IF (NOT EXISTS(SELECT 1 FROM "
+                   "RDB$RELATIONS WHERE TRIM(RDB$RELATION_NAME) = '" +
+                   std::string(kUserTable) + "')) THEN EXECUTE STATEMENT '" +
+                   "CREATE TABLE " + qtab +
+                   " (user_name VARCHAR(200) NOT NULL PRIMARY KEY)'; END";
+        case SqlDdlDialect::Postgres:
+        case SqlDdlDialect::Sqlite:
+        default:
+            return "CREATE TABLE IF NOT EXISTS " + qtab +
+                   " (user_name TEXT NOT NULL PRIMARY KEY)";
+    }
+}
+
+std::string connect_user_register_sql(SqlDdlDialect dialect,
+                                       const std::string& user) {
+    const std::string qtab = quote_ident(dialect, kUserTable);
+    const std::string u = sql_escape(normalize_user_name(user));
+    switch (dialect) {
+        case SqlDdlDialect::Mssql:
+            return "IF NOT EXISTS (SELECT 1 FROM " + qtab +
+                   " WHERE " + ci_compare_sql("user_name", user) + ") "
+                   "INSERT INTO " + qtab + " (user_name) VALUES (" + u + ")";
+        case SqlDdlDialect::Firebird:
+            return "UPDATE OR INSERT INTO " + qtab +
+                   " (user_name) VALUES (" + u + ") MATCHING (user_name)";
+        case SqlDdlDialect::Postgres:
+        case SqlDdlDialect::Sqlite:
+            return "INSERT INTO " + qtab + " (user_name) VALUES (" + u +
+                   ") ON CONFLICT (user_name) DO NOTHING";
+        case SqlDdlDialect::Maria:
+        default:
+            return "INSERT IGNORE INTO " + qtab + " (user_name) VALUES (" +
+                   u + ")";
+    }
+}
+
 std::string member_table_ddl(SqlDdlDialect dialect) {
     const std::string qtab = quote_ident(dialect, kMemberTable);
     switch (dialect) {
@@ -422,9 +493,11 @@ std::string member_table_ddl(SqlDdlDialect dialect) {
 std::string acl_users_catalog_sql(SqlDdlDialect dialect) {
     const std::string qacl = quote_ident(dialect, kAclTable);
     const std::string qmem = quote_ident(dialect, kMemberTable);
+    const std::string qusr = quote_ident(dialect, kUserTable);
     return std::string("SELECT 'PUBLIC' AS \"USER_NAME\" UNION SELECT DISTINCT "
                        "user_name AS \"USER_NAME\" FROM ") +
-           qmem + " UNION SELECT DISTINCT grantee AS \"USER_NAME\" FROM " +
+           qmem + " UNION SELECT DISTINCT user_name AS \"USER_NAME\" FROM " +
+           qusr + " UNION SELECT DISTINCT grantee AS \"USER_NAME\" FROM " +
            qacl + " WHERE is_group = 0";
 }
 
@@ -514,8 +587,10 @@ std::optional<util::Result<void>> try_sql_acl_statement(
     const std::string obj_type = g.column.empty() ? "1" : "4";
     const std::string obj_name = g.column.empty() ? g.object : g.column;
     const std::string parent   = g.column.empty() ? "" : g.object;
-    const std::string grantee  = g.principal;
-    const bool is_grp          = grantee_is_group(grantee);
+    const std::string grantee_raw = g.principal;
+    const bool is_grp             = grantee_is_group(grantee_raw);
+    const std::string grantee     = is_grp ? grantee_raw
+                                             : normalize_user_name(grantee_raw);
 
     if (is_grant) {
         const uint32_t add_bits = bits_from_right(g.right);
@@ -599,11 +674,11 @@ openads::engine::DataDict::EffectiveOps sql_acl_effective_ops(
     }
 
     uint32_t bits = 0;
-    auto accumulate = [&](const std::string& grantee) {
+    auto accumulate = [&](const std::string& principal) {
         const std::string sql =
             "SELECT bitmask FROM " + qtab +
             " WHERE obj_type = '1' AND obj_name = " + obj_sql +
-            " AND grantee = " + sql_escape(grantee) + " LIMIT 1";
+            " AND " + ci_compare_sql("grantee", principal) + " LIMIT 1";
         if (auto cell = query_cell(query, sql); cell && !cell->empty()) {
             try {
                 bits |= static_cast<uint32_t>(std::stoul(*cell));
@@ -622,6 +697,14 @@ openads::engine::DataDict::EffectiveOps sql_acl_effective_ops(
     }
     accumulate("PUBLIC");
     return ops_from_bitmask(bits);
+}
+
+void sql_acl_register_connect_user(SqlDdlDialect dialect,
+                                   SqlExecFn exec_sql,
+                                   const std::string& username) {
+    if (username.empty()) return;
+    if (auto r = ensure_user_table(dialect, exec_sql); !r) return;
+    (void)exec_sql(connect_user_register_sql(dialect, username));
 }
 
 }  // namespace openads::sql_backend

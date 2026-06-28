@@ -1030,7 +1030,7 @@ UNSIGNED32 sqlite_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
     if (!r) return fail(r.error());
     st->aof_opt_level = where.empty()
         ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
-        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_FULL);
     return ok();
 }
 
@@ -1660,7 +1660,7 @@ UNSIGNED32 odbc_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
     if (!r) return fail(r.error());
     st->aof_opt_level = where.empty()
         ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
-        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_FULL);
     return ok();
 }
 
@@ -1945,7 +1945,7 @@ UNSIGNED32 mssql_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
     if (!r) return fail(r.error());
     st->aof_opt_level = where.empty()
         ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
-        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_FULL);
     return ok();
 }
 
@@ -2258,7 +2258,7 @@ UNSIGNED32 firebird_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
     if (!r) return fail(r.error());
     st->aof_opt_level = where.empty()
         ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
-        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_FULL);
     return ok();
 }
 
@@ -2571,7 +2571,7 @@ UNSIGNED32 maria_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
     if (!r) return fail(r.error());
     st->aof_opt_level = where.empty()
         ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
-        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_FULL);
     return ok();
 }
 
@@ -2695,7 +2695,7 @@ UNSIGNED32 postgres_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
     if (!r) return fail(r.error());
     st->aof_opt_level = where.empty()
         ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
-        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_FULL);
     return ok();
 }
 
@@ -4357,6 +4357,19 @@ void sql_uri_forget_user(ADSHANDLE hConnect) {
     sql_uri_usernames().erase(hConnect);
 }
 
+template<typename ConnT>
+void sql_uri_connect_register_user(ADSHANDLE hConnect, UNSIGNED8* pucUser,
+                                   ConnT* conn,
+                                   openads::sql_backend::SqlDdlDialect dialect) {
+    sql_uri_remember_user(hConnect, pucUser);
+    if (pucUser == nullptr || conn == nullptr) return;
+    const std::string user = openads::abi::to_internal(pucUser, 0);
+    if (user.empty()) return;
+    openads::sql_backend::SqlExecFn exec =
+        [conn](const std::string& sql) { return conn->exec_sql(sql); };
+    openads::sql_backend::sql_acl_register_connect_user(dialect, exec, user);
+}
+
 #if defined(OPENADS_WITH_SQLITE)
 openads::util::Result<std::optional<std::string>> sqlite_acl_query(
     openads::sql_backend::SqliteConnection* sc, const std::string& sql) {
@@ -4667,7 +4680,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::SqliteConnection, raw);
             sqlite_conns_map().emplace(h, std::move(holder));
-            sql_uri_remember_user(h, pucUser);
+            sql_uri_connect_register_user(h, pucUser, raw,
+                                          openads::sql_backend::SqlDdlDialect::Sqlite);
             *phConnect = h;
             return ok();
         }
@@ -4690,7 +4704,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::OdbcConnection, raw);
             odbc_conns_map().emplace(h, std::move(holder));
-            sql_uri_remember_user(h, pucUser);
+            sql_uri_connect_register_user(h, pucUser, raw,
+                                          openads::sql_backend::SqlDdlDialect::Postgres);
             *phConnect = h;
             return ok();
         }
@@ -4709,7 +4724,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::OdbcConnection, raw);
             odbc_conns_map().emplace(h, std::move(holder));
-            sql_uri_remember_user(h, pucUser);
+            sql_uri_connect_register_user(h, pucUser, raw,
+                                          openads::sql_backend::SqlDdlDialect::Postgres);
             *phConnect = h;
             return ok();
         }
@@ -4743,7 +4759,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::MssqlConnection, raw);
             mssql_conns_map().emplace(h, std::move(holder));
-            sql_uri_remember_user(h, pucUser);
+            sql_uri_connect_register_user(h, pucUser, raw,
+                                          openads::sql_backend::SqlDdlDialect::Mssql);
             *phConnect = h;
             return ok();
         }
@@ -4781,7 +4798,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::FirebirdConnection, raw);
             firebird_conns_map().emplace(h, std::move(holder));
-            sql_uri_remember_user(h, pucUser);
+            sql_uri_connect_register_user(h, pucUser, raw,
+                                          openads::sql_backend::SqlDdlDialect::Firebird);
             *phConnect = h;
             return ok();
         }
@@ -4814,7 +4832,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::MariaConnection, raw);
             maria_conns_map().emplace(h, std::move(holder));
-            sql_uri_remember_user(h, pucUser);
+            sql_uri_connect_register_user(h, pucUser, raw,
+                                          openads::sql_backend::SqlDdlDialect::Maria);
             *phConnect = h;
             return ok();
         }
@@ -4848,7 +4867,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             Handle h = s.registry.register_object(
                 HandleKind::PostgresConnection, raw);
             postgres_conns_map().emplace(h, std::move(holder));
-            sql_uri_remember_user(h, pucUser);
+            sql_uri_connect_register_user(h, pucUser, raw,
+                                          openads::sql_backend::SqlDdlDialect::Postgres);
             *phConnect = h;
             return ok();
         }

@@ -114,6 +114,9 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
     UNSIGNED8 filt[] = "GRP = 'A'";
     REQUIRE(AdsSetFilter(hC, filt) == 0);
     CHECK(record_count(hC) == 3u);
+    UNSIGNED16 aof_lvl = 0;
+    REQUIRE(AdsGetAOFOptLevel(hC, &aof_lvl, nullptr, nullptr) == 0);
+    CHECK(aof_lvl == ADS_OPTIMIZED_FULL);
     REQUIRE(AdsClearFilter(hC) == 0);
     CHECK(record_count(hC) == 4u);
 
@@ -451,6 +454,19 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         ADSHANDLE hBob = 0;
         REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER, user_bob,
                              nullptr, 0, &hBob) == 0);
+        ADSHANDLE hStmtBob = 0;
+        REQUIRE(AdsCreateSQLStatement(hConn, &hStmtBob) == 0);
+        ADSHANDLE hCurBob = 0;
+        UNSIGNED8 sbob[] =
+            "SELECT USER_NAME FROM system.users WHERE USER_NAME = 'bob'";
+        REQUIRE(AdsExecuteSQLDirect(hStmtBob, sbob, &hCurBob) == 0);
+        REQUIRE(hCurBob != 0);
+        REQUIRE(AdsGotoTop(hCurBob) == 0);
+        UNSIGNED16 eof_bob = 0;
+        REQUIRE(AdsAtEOF(hCurBob, &eof_bob) == 0);
+        CHECK(eof_bob == 0);
+        REQUIRE(AdsCloseTable(hCurBob) == 0);
+        AdsCloseSQLStatement(hStmtBob);
         ADSHANDLE hBobTbl = 0;
         CHECK(AdsOpenTable(hBob, cname, cname, ADS_DEFAULT, 0, 0, 1,
                            ADS_READONLY, &hBobTbl) != 0);

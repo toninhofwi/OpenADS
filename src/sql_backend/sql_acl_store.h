@@ -25,6 +25,14 @@ std::string acl_table_ddl(SqlDdlDialect dialect);
 // User-to-group membership (GRANT GROUP … TO user).
 std::string member_table_ddl(SqlDdlDialect dialect);
 
+// Connect-time user registry (AdsConnect60 username → system.users).
+std::string user_table_ddl(SqlDdlDialect dialect);
+
+// Persist a connect username into OPENADS$USER (no-op when empty).
+void sql_acl_register_connect_user(SqlDdlDialect dialect,
+                                   SqlExecFn exec_sql,
+                                   const std::string& username);
+
 // SELECT fragment (system.permissions column layout) from OPENADS$ACL.
 std::string acl_permissions_select_sql(SqlDdlDialect dialect);
 

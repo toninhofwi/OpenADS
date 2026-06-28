@@ -816,6 +816,7 @@ util::Result<FirebirdConnection> FirebirdConnection::open(const FirebirdUri& uri
     }
     (void)conn.exec_sql(acl_table_ddl(SqlDdlDialect::Firebird));
     (void)conn.exec_sql(member_table_ddl(SqlDdlDialect::Firebird));
+    (void)conn.exec_sql(user_table_ddl(SqlDdlDialect::Firebird));
     return std::move(conn);
 }
 

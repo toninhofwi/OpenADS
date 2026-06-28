@@ -78,8 +78,14 @@ TEST_CASE("sql_system_catalog: users/groups/members catalog SQL on SQLite") {
         db, openads::sql_backend::member_table_ddl(SqlDdlDialect::Sqlite).c_str(),
         nullptr, nullptr, nullptr) == SQLITE_OK);
     REQUIRE(sqlite3_exec(
+        db, openads::sql_backend::user_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
         db, "INSERT INTO OPENADS$MEMBER (user_name, group_name) "
             "VALUES ('carol', 'SALES')",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+        db, "INSERT INTO OPENADS$USER (user_name) VALUES ('dave')",
         nullptr, nullptr, nullptr) == SQLITE_OK);
 
     auto users = build_system_catalog_sql(SqlDdlDialect::Sqlite, "users");
@@ -95,13 +101,17 @@ TEST_CASE("sql_system_catalog: users/groups/members catalog SQL on SQLite") {
                                static_cast<int>(users->size()),
                                &stmt, nullptr) == SQLITE_OK);
     bool saw_carol = false;
+    bool saw_dave = false;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const char* u =
             reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        if (u && std::string(u) == "carol") saw_carol = true;
+        if (!u) continue;
+        if (std::string(u) == "carol") saw_carol = true;
+        if (std::string(u) == "dave") saw_dave = true;
     }
     sqlite3_finalize(stmt);
     CHECK(saw_carol);
+    CHECK(saw_dave);
 
     REQUIRE(sqlite3_prepare_v2(db, groups->c_str(),
                                static_cast<int>(groups->size()),

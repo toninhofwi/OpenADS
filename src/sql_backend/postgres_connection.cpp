@@ -289,6 +289,7 @@ util::Result<PostgresConnection> PostgresConnection::open(
     conn.impl_->conn = raw;
     (void)PQexec(raw, acl_table_ddl(SqlDdlDialect::Postgres).c_str());
     (void)PQexec(raw, member_table_ddl(SqlDdlDialect::Postgres).c_str());
+    (void)PQexec(raw, user_table_ddl(SqlDdlDialect::Postgres).c_str());
     return std::move(conn);
 #else
     (void)uri;
