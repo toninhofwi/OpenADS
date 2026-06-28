@@ -2,6 +2,7 @@
 
 #include "sql_backend/backend_aggregate.h"
 #include "sql_backend/maria_backend.h"
+#include "sql_backend/sql_acl_store.h"
 #include "sql_backend/sql_common.h"
 
 #include <algorithm>
@@ -254,6 +255,7 @@ util::Result<MariaConnection> MariaConnection::open(const MariaUri& uri) {
         return e;
     }
     conn.impl_->conn = raw;
+    (void)mysql_query(raw, acl_table_ddl(SqlDdlDialect::Maria).c_str());
     return std::move(conn);
 #else
     (void)uri;

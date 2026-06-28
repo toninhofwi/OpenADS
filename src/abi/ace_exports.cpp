@@ -14,6 +14,7 @@
 #include "engine/fts.h"
 #include "engine/aggregate.h"
 #include "sql_backend/backend_tx_manager.h"
+#include "sql_backend/sql_acl_store.h"
 #include "sql_backend/sql_ddl.h"
 #include "sql_backend/sql_system_catalog.h"
 #include "engine/index_expr.h"
@@ -15813,6 +15814,31 @@ static std::string exec_body(const std::string& body, Scope& scope, ADSHANDLE hS
 
 } // namespace proc
 
+namespace {
+
+template<typename ExecFn>
+bool dispatch_sql_uri_acl(const std::string& sqlstr,
+                          openads::sql_backend::SqlDdlDialect dialect,
+                          ExecFn&& exec_sql,
+                          ADSHANDLE* phCursor,
+                          UNSIGNED32& rc_out) {
+    auto acl = openads::sql_backend::try_sql_acl_statement(
+        sqlstr, dialect,
+        [&](const std::string& s) -> openads::util::Result<void> {
+            return exec_sql(s);
+        });
+    if (!acl) return false;
+    if (!acl->has_value()) {
+        rc_out = fail(acl->error());
+        return true;
+    }
+    *phCursor = 0;
+    rc_out = ok();
+    return true;
+}
+
+}  // namespace
+
 extern "C" {  // reopen for the ACE API exports
 
 UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
@@ -15855,6 +15881,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_SQLITE)
     if (it->second->sqlite != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        {
+            UNSIGNED32 acl_rc = 0;
+            if (dispatch_sql_uri_acl(
+                    sqlstr, openads::sql_backend::SqlDdlDialect::Sqlite,
+                    [&](const std::string& s) {
+                        return it->second->sqlite->exec_sql(s);
+                    },
+                    phCursor, acl_rc)) {
+                return acl_rc;
+            }
+        }
         if (auto rewritten = openads::sql_backend::rewrite_system_select_sql(
                 openads::sql_backend::SqlDdlDialect::Sqlite, sqlstr)) {
             sqlstr = *rewritten;
@@ -15882,6 +15919,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_MSSQL)
     if (it->second->mssql_conn != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        {
+            UNSIGNED32 acl_rc = 0;
+            if (dispatch_sql_uri_acl(
+                    sqlstr, openads::sql_backend::SqlDdlDialect::Mssql,
+                    [&](const std::string& s) {
+                        return it->second->mssql_conn->exec_sql(s);
+                    },
+                    phCursor, acl_rc)) {
+                return acl_rc;
+            }
+        }
         if (auto rewritten = openads::sql_backend::rewrite_system_select_sql(
                 openads::sql_backend::SqlDdlDialect::Mssql, sqlstr)) {
             sqlstr = *rewritten;
@@ -15911,6 +15959,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (it->second->postgres != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        {
+            UNSIGNED32 acl_rc = 0;
+            if (dispatch_sql_uri_acl(
+                    sqlstr, openads::sql_backend::SqlDdlDialect::Postgres,
+                    [&](const std::string& s) {
+                        return it->second->postgres->exec_sql(s);
+                    },
+                    phCursor, acl_rc)) {
+                return acl_rc;
+            }
+        }
         if (openads::sql::sql_is_alter_table(sqlstr) ||
             openads::sql::sql_is_drop_index(sqlstr) ||
             openads::sql::sql_is_drop_table(sqlstr)) {
@@ -15945,6 +16004,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_MARIADB)
     if (it->second->maria != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        {
+            UNSIGNED32 acl_rc = 0;
+            if (dispatch_sql_uri_acl(
+                    sqlstr, openads::sql_backend::SqlDdlDialect::Maria,
+                    [&](const std::string& s) {
+                        return it->second->maria->exec_sql(s);
+                    },
+                    phCursor, acl_rc)) {
+                return acl_rc;
+            }
+        }
         if (openads::sql::sql_is_alter_table(sqlstr) ||
             openads::sql::sql_is_drop_index(sqlstr) ||
             openads::sql::sql_is_drop_table(sqlstr)) {
@@ -15979,6 +16049,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_ODBC)
     if (it->second->odbc != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        {
+            UNSIGNED32 acl_rc = 0;
+            if (dispatch_sql_uri_acl(
+                    sqlstr, openads::sql_backend::SqlDdlDialect::Postgres,
+                    [&](const std::string& s) {
+                        return it->second->odbc->exec_sql(s);
+                    },
+                    phCursor, acl_rc)) {
+                return acl_rc;
+            }
+        }
         if (openads::sql::sql_is_alter_table(sqlstr) ||
             openads::sql::sql_is_drop_index(sqlstr) ||
             openads::sql::sql_is_drop_table(sqlstr)) {
@@ -15994,6 +16075,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 #if defined(OPENADS_WITH_FIREBIRD)
     if (it->second->firebird != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        {
+            UNSIGNED32 acl_rc = 0;
+            if (dispatch_sql_uri_acl(
+                    sqlstr, openads::sql_backend::SqlDdlDialect::Firebird,
+                    [&](const std::string& s) {
+                        return it->second->firebird->exec_sql(s);
+                    },
+                    phCursor, acl_rc)) {
+                return acl_rc;
+            }
+        }
         if (openads::sql::sql_is_alter_table(sqlstr) ||
             openads::sql::sql_is_drop_index(sqlstr) ||
             openads::sql::sql_is_drop_table(sqlstr)) {

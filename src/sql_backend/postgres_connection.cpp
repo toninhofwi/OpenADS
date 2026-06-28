@@ -1,6 +1,7 @@
 #include "sql_backend/postgres_connection.h"
 
 #include "sql_backend/postgres_backend.h"
+#include "sql_backend/sql_acl_store.h"
 #include "sql_backend/sql_common.h"
 
 #include <algorithm>
@@ -286,6 +287,7 @@ util::Result<PostgresConnection> PostgresConnection::open(
         return e;
     }
     conn.impl_->conn = raw;
+    (void)PQexec(raw, acl_table_ddl(SqlDdlDialect::Postgres).c_str());
     return std::move(conn);
 #else
     (void)uri;

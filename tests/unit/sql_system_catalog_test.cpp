@@ -1,5 +1,6 @@
 #include "doctest.h"
 
+#include "sql_backend/sql_acl_store.h"
 #include "sql_backend/sql_system_catalog.h"
 
 using openads::sql_backend::SqlDdlDialect;
@@ -47,6 +48,9 @@ TEST_CASE("sql_system_catalog: rewritten permissions WHERE executes on SQLite") 
     REQUIRE(sqlite3_exec(db,
                          "CREATE TABLE item (GRP TEXT, DATA TEXT)",
                          nullptr, nullptr, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(
+        db, openads::sql_backend::acl_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+        nullptr, nullptr, nullptr) == SQLITE_OK);
 
     sqlite3_stmt* stmt = nullptr;
     const int prep = sqlite3_prepare_v2(

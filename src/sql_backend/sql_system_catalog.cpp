@@ -1,6 +1,7 @@
 #include "sql_backend/sql_system_catalog.h"
 
 #include "sql/parser.h"
+#include "sql_backend/sql_acl_store.h"
 
 #include <cctype>
 #include <cstring>
@@ -436,6 +437,8 @@ ORDER BY rc.rdb$constraint_name)";
         return "SELECT 'PUBLIC' AS \"GROUP_NAME\", 'PUBLIC' AS \"USER_NAME\"";
     }
     if (sys_name == "permissions") {
+        const std::string acl_union =
+            " UNION ALL " + acl_permissions_select_sql(dialect);
         switch (dialect) {
             case SqlDdlDialect::Sqlite:
                 return std::string(
@@ -443,6 +446,7 @@ ORDER BY rc.rdb$constraint_name)";
                        k_perm_tail +
                        " FROM sqlite_master m "
                        "WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' "
+                       "AND m.name NOT LIKE 'OPENADS$%' "
                        "UNION ALL "
                        "SELECT p.name AS \"OBJ_NAME\", '4' AS \"OBJ_TYPE\", "
                        "m.name AS \"PARENT\", 'PUBLIC' AS \"GRANTEE\", "
@@ -452,7 +456,9 @@ ORDER BY rc.rdb$constraint_name)";
                        "'2' AS \"DROP\" "
                        "FROM sqlite_master m "
                        "JOIN pragma_table_info(m.name) p "
-                       "WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%'";
+                       "WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' "
+                       "AND m.name NOT LIKE 'OPENADS$%'" +
+                       acl_union;
             case SqlDdlDialect::Postgres:
                 return std::string(
                     "SELECT table_name AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
@@ -468,7 +474,8 @@ ORDER BY rc.rdb$constraint_name)";
                        "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
                        "'2' AS \"DROP\" "
                        "FROM information_schema.columns "
-                       "WHERE table_schema = ANY (current_schemas(true))";
+                       "WHERE table_schema = ANY (current_schemas(true))" +
+                       acl_union;
             case SqlDdlDialect::Maria:
                 return std::string(
                     "SELECT table_name AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
@@ -484,7 +491,8 @@ ORDER BY rc.rdb$constraint_name)";
                        "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
                        "'2' AS \"DROP\" "
                        "FROM information_schema.columns "
-                       "WHERE table_schema = DATABASE()";
+                       "WHERE table_schema = DATABASE()" +
+                       acl_union;
             case SqlDdlDialect::Mssql:
                 return std::string(
                     "SELECT TABLE_NAME AS \"OBJ_NAME\", '1' AS \"OBJ_TYPE\"") +
@@ -498,7 +506,8 @@ ORDER BY rc.rdb$constraint_name)";
                        "'2' AS \"DELETE\", '' AS \"EXECUTE\", '2' AS \"ACCESS\", "
                        "'' AS \"INHERIT\", '2' AS \"CREATE\", '2' AS \"ALTER\", "
                        "'2' AS \"DROP\" "
-                       "FROM INFORMATION_SCHEMA.COLUMNS";
+                       "FROM INFORMATION_SCHEMA.COLUMNS" +
+                       acl_union;
             case SqlDdlDialect::Firebird:
                 return std::string(
                     "SELECT TRIM(r.rdb$relation_name) AS \"OBJ_NAME\", "
@@ -518,7 +527,8 @@ ORDER BY rc.rdb$constraint_name)";
                        "FROM rdb$relation_fields rf "
                        "JOIN rdb$relations r ON r.rdb$relation_name = "
                        "rf.rdb$relation_name "
-                       "WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0";
+                       "WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0" +
+                       acl_union;
         }
     }
     if (sys_name == "effectivepermissions") {

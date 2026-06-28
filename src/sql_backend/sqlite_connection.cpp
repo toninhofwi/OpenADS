@@ -1,6 +1,7 @@
 #include "sql_backend/sqlite_connection.h"
 
 #include "openads/ace.h"
+#include "sql_backend/sql_acl_store.h"
 #include "sql_backend/sqlite_backend.h"
 
 #include <algorithm>
@@ -48,6 +49,63 @@ std::uint16_t ads_type_from_xbase(char t) {
         case 'C':
         default:  return ADS_STRING;
     }
+}
+
+char xbase_type_from_decl(const std::string& decl_type) {
+    std::string u = decl_type;
+    for (auto& ch : u) {
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    }
+    if (u.find("INT") != std::string::npos) return 'A';
+    if (u.find("REAL") != std::string::npos ||
+        u.find("FLOA") != std::string::npos ||
+        u.find("DOUB") != std::string::npos ||
+        u.find("NUM") != std::string::npos) {
+        return 'N';
+    }
+    if (u.find("BLOB") != std::string::npos) return 'B';
+    return 'C';
+}
+
+std::string sqlite_decl_for_xbase(char xt) {
+    switch (xt) {
+        case 'L': return "INTEGER";
+        case 'N': return "REAL";
+        case 'A': return "INTEGER";
+        case 'B':
+        case 'M': return "BLOB";
+        case 'D':
+        case 'C':
+        default:  return "TEXT";
+    }
+}
+
+std::string sqlite_cast_expr(const std::string& col_name,
+                             char old_type,
+                             char new_type) {
+    const std::string q = "\"" + col_name + "\"";
+    if (old_type == new_type) return q;
+    if (old_type == 'C' && new_type == 'N') {
+        return "CAST(" + q + " AS REAL)";
+    }
+    if (old_type == 'N' && new_type == 'C') {
+        return "CAST(" + q + " AS TEXT)";
+    }
+    if (old_type == 'C' && new_type == 'L') {
+        return "CASE WHEN TRIM(" + q + ") IN ('T','t','Y','y','1') "
+               "THEN 1 ELSE 0 END";
+    }
+    if (old_type == 'L' && new_type == 'C') {
+        return "CASE WHEN " + q + " IN (1,'1','T','t') THEN 'T' ELSE 'F' END";
+    }
+    if (old_type == 'N' && new_type == 'L') {
+        return "CASE WHEN CAST(" + q + " AS REAL) != 0 THEN 1 ELSE 0 END";
+    }
+    if (old_type == 'L' && new_type == 'N') {
+        return "CAST(CASE WHEN " + q + " IN (1,'1','T','t') "
+               "THEN 1 ELSE 0 END AS REAL)";
+    }
+    return q;
 }
 
 void apply_colmeta_overrides(sqlite3* db, const std::string& table_name,
@@ -273,6 +331,9 @@ util::Result<SqliteConnection> SqliteConnection::open(const SqliteUri& uri) {
     sqlite3_exec(raw, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
     conn.impl_->db = raw;
     (void)ensure_colmeta_table(raw);
+    (void)sqlite3_exec(raw,
+                      acl_table_ddl(SqlDdlDialect::Sqlite).c_str(),
+                      nullptr, nullptr, nullptr);
     return conn;
 #else
     (void)uri;
@@ -1140,24 +1201,60 @@ util::Result<void> SqliteConnection::restructure_change(
         return util::Error{5001, 0, "table not found", table_name};
     }
 
+    std::unordered_map<std::string, char> old_types;
+    if (auto r = ensure_colmeta_table(impl_->db); r) {
+        const std::string meta_sql =
+            "SELECT col_name, xbase_type FROM \"OPENADS$COLMETA\" "
+            "WHERE table_name = \"" + table_name + "\"";
+        sqlite3_stmt* meta_stmt = nullptr;
+        if (sqlite3_prepare_v2(impl_->db, meta_sql.c_str(),
+                               static_cast<int>(meta_sql.size()),
+                               &meta_stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(meta_stmt) == SQLITE_ROW) {
+                const char* cn = reinterpret_cast<const char*>(
+                    sqlite3_column_text(meta_stmt, 0));
+                const char* xt = reinterpret_cast<const char*>(
+                    sqlite3_column_text(meta_stmt, 1));
+                if (cn && xt && xt[0] != '\0') {
+                    old_types[cn] = xt[0];
+                }
+            }
+            sqlite3_finalize(meta_stmt);
+        }
+    }
+    for (const auto& c : cols) {
+        if (old_types.find(c.name) == old_types.end()) {
+            old_types[c.name] = xbase_type_from_decl(c.decl_type);
+        }
+    }
+
     const std::string staging = table_name + "__openads_new";
     std::string create = "CREATE TABLE \"" + staging + "\" (";
     std::string col_list;
+    std::string select_list;
     for (std::size_t i = 0; i < cols.size(); ++i) {
         if (i) {
             create += ", ";
             col_list += ", ";
+            select_list += ", ";
         }
-        create += "\"" + cols[i].name + "\" " + cols[i].decl_type;
+        char new_xt = old_types[cols[i].name];
+        if (auto it = change_map.find(cols[i].name); it != change_map.end()) {
+            new_xt = it->second.xbase_type;
+        }
+        const std::string decl = sqlite_decl_for_xbase(new_xt);
+        create += "\"" + cols[i].name + "\" " + decl;
         if (cols[i].pk) create += " PRIMARY KEY";
         else if (cols[i].notnull) create += " NOT NULL";
         col_list += "\"" + cols[i].name + "\"";
+        select_list += sqlite_cast_expr(cols[i].name,
+                                        old_types[cols[i].name], new_xt);
     }
     create += ")";
     if (auto r = exec_sql(create); !r) return r.error();
     const std::string ins =
         "INSERT INTO \"" + staging + "\" (" + col_list + ") SELECT " +
-        col_list + " FROM \"" + table_name + "\"";
+        select_list + " FROM \"" + table_name + "\"";
     if (auto r = exec_sql(ins); !r) return r.error();
     if (auto r = exec_sql("DROP TABLE \"" + table_name + "\""); !r) {
         return r.error();

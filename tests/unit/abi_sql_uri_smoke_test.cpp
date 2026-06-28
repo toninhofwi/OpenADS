@@ -343,6 +343,49 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         CHECK(perm_rows == 1);
         REQUIRE(AdsCloseTable(hCur) == 0);
 
+        // GRANT persisted in OPENADS$ACL (SQL URI, no Advantage DD).
+        UNSIGNED8 grant_sql[] = "GRANT SELECT ON item TO alice";
+        hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, grant_sql, &hCur) == 0);
+        CHECK(hCur == 0);
+        UNSIGNED8 sperms_alice[] = "system.permissions";
+        ADSHANDLE hPermAlice = 0;
+        REQUIRE(AdsOpenTable(hConn, sperms_alice, sperms_alice, ADS_DEFAULT,
+                             0, 0, 0, ADS_READONLY, &hPermAlice) == 0);
+        bool found_alice = false;
+        REQUIRE(AdsGotoTop(hPermAlice) == 0);
+        for (;;) {
+            UNSIGNED16 eof_a = 0;
+            REQUIRE(AdsAtEOF(hPermAlice, &eof_a) == 0);
+            if (eof_a) break;
+            UNSIGNED8 obuf[64] = {};
+            UNSIGNED8 abuf[16] = {};
+            UNSIGNED8 sbuf[8] = {};
+            UNSIGNED32 olen = sizeof(obuf) - 1;
+            UNSIGNED32 alen = sizeof(abuf) - 1;
+            UNSIGNED32 slen = sizeof(sbuf) - 1;
+            UNSIGNED8 ofn[16] = "OBJ_NAME";
+            UNSIGNED8 afn[16] = "GRANTEE";
+            UNSIGNED8 sfn[16] = "SELECT";
+            REQUIRE(AdsGetField(hPermAlice, ofn, obuf, &olen, 0) == 0);
+            REQUIRE(AdsGetField(hPermAlice, afn, abuf, &alen, 0) == 0);
+            std::string obj(reinterpret_cast<const char*>(obuf), olen);
+            std::string gee(reinterpret_cast<const char*>(abuf), alen);
+            while (!obj.empty() && obj.back() == ' ') obj.pop_back();
+            while (!gee.empty() && gee.back() == ' ') gee.pop_back();
+            if (obj == "item" && gee == "alice") {
+                REQUIRE(AdsGetField(hPermAlice, sfn, sbuf, &slen, 0) == 0);
+                std::string sel(reinterpret_cast<const char*>(sbuf), slen);
+                while (!sel.empty() && sel.back() == ' ') sel.pop_back();
+                CHECK(sel == "2");
+                found_alice = true;
+                break;
+            }
+            REQUIRE(AdsSkip(hPermAlice, 1) == 0);
+        }
+        CHECK(found_alice);
+        REQUIRE(AdsCloseTable(hPermAlice) == 0);
+
         AdsCloseSQLStatement(hStmt);
     }
 
@@ -366,6 +409,21 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         UNSIGNED32 fl = 0;
         REQUIRE(AdsGetFieldLength(hC, data_fld, &fl) == 0);
         CHECK(fl == 16u);
+    }
+
+    // SQLite CHANGE retype C→N (table-rebuild + CAST).
+    {
+        REQUIRE(AdsCloseTable(hC) == 0);
+        UNSIGNED8 chg_num[] = "DATA,Numeric,10";
+        REQUIRE(AdsRestructureTable(hConn, cname, nullptr, 0, 0, 0, 0, nullptr,
+                                    nullptr, chg_num) == 0);
+        REQUIRE(AdsOpenTable(hConn, cname, cname, ADS_DEFAULT, 0, 0, 0,
+                             ADS_READONLY, &hC) == 0);
+        REQUIRE(AdsGotoTop(hC) == 0);
+        UNSIGNED8 data_fld[8] = "DATA";
+        double dval = -1.0;
+        REQUIRE(AdsGetDouble(hC, data_fld, &dval) == 0);
+        CHECK(dval == 0.0);
     }
 
     REQUIRE(AdsCloseTable(hC) == 0);

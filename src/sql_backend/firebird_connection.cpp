@@ -1,6 +1,7 @@
 #include "sql_backend/firebird_connection.h"
 
 #include "sql_backend/backend_aggregate.h"
+#include "sql_backend/sql_acl_store.h"
 #include "sql_backend/sql_common.h"
 
 #include "openads/ace.h"
@@ -468,6 +469,164 @@ util::Result<void> exec_dml(isc_db_handle* db, isc_tr_handle* tr,
     return util::Result<void>{};
 }
 
+struct FbRowParam {
+    bool     is_null = true;
+    bool     is_blob = false;
+    std::string text;
+    ISC_QUAD blob_id{};
+};
+
+bool write_blob_quad(isc_db_handle* db, isc_tr_handle* tr,
+                     const std::string& data, ISC_QUAD* out) {
+    ISC_STATUS_ARRAY st{};
+    isc_blob_handle  bh = 0;
+    if (isc_create_blob2(st, db, tr, &bh, out, 0, nullptr)) {
+        return false;
+    }
+    if (!data.empty()) {
+        const char* p    = data.data();
+        std::size_t left = data.size();
+        while (left > 0) {
+            const unsigned short seg = static_cast<unsigned short>(
+                std::min<std::size_t>(left, 65535u));
+            if (isc_put_segment(st, &bh, seg, const_cast<char*>(p))) {
+                ISC_STATUS_ARRAY st2{};
+                isc_close_blob(st2, &bh);
+                return false;
+            }
+            p += seg;
+            left -= seg;
+        }
+    }
+    ISC_STATUS_ARRAY st2{};
+    isc_close_blob(st2, &bh);
+    return true;
+}
+
+void bind_fb_param(XSQLVAR& v, const FirebirdTable::FieldDesc& fd,
+                   const FbRowParam& p) {
+    v.sqlind = static_cast<short*>(std::malloc(sizeof(short)));
+    if (p.is_null) {
+        v.sqltype = SQL_TEXT | 1;
+        v.sqllen  = 1;
+        v.sqldata = static_cast<char*>(std::malloc(2));
+        *v.sqlind = -1;
+        return;
+    }
+    if (p.is_blob) {
+        v.sqltype = SQL_BLOB | 1;
+        v.sqllen  = static_cast<short>(sizeof(ISC_QUAD));
+        v.sqldata = static_cast<char*>(std::malloc(sizeof(ISC_QUAD)));
+        std::memcpy(v.sqldata, &p.blob_id, sizeof(ISC_QUAD));
+        *v.sqlind = 0;
+        return;
+    }
+    if (fd.type == ADS_INTEGER && is_numeric_literal(p.text)) {
+        v.sqltype = SQL_LONG | 1;
+        v.sqllen  = static_cast<short>(sizeof(ISC_LONG));
+        v.sqldata = static_cast<char*>(std::malloc(sizeof(ISC_LONG)));
+        ISC_LONG n = static_cast<ISC_LONG>(std::strtol(p.text.c_str(), nullptr, 10));
+        std::memcpy(v.sqldata, &n, sizeof(n));
+        *v.sqlind = 0;
+        return;
+    }
+    if (fd.type == ADS_DOUBLE && is_numeric_literal(p.text)) {
+        v.sqltype = SQL_DOUBLE | 1;
+        v.sqllen  = static_cast<short>(sizeof(double));
+        v.sqldata = static_cast<char*>(std::malloc(sizeof(double)));
+        double d = std::strtod(p.text.c_str(), nullptr);
+        std::memcpy(v.sqldata, &d, sizeof(d));
+        *v.sqlind = 0;
+        return;
+    }
+    v.sqltype = SQL_TEXT | 1;
+    v.sqllen  = static_cast<short>(p.text.size());
+    v.sqldata = static_cast<char*>(std::malloc(
+        static_cast<std::size_t>(v.sqllen) + 1u));
+    if (!p.text.empty()) {
+        std::memcpy(v.sqldata, p.text.data(),
+                    static_cast<std::size_t>(v.sqllen));
+    }
+    *v.sqlind = 0;
+}
+
+util::Result<void> exec_param_dml(isc_db_handle* db, isc_tr_handle* tr,
+                                  const std::string& sql,
+                                  const std::vector<FirebirdTable::FieldDesc>& fields,
+                                  const std::vector<std::size_t>& field_indices,
+                                  std::vector<FbRowParam>& params) {
+    if (params.size() != field_indices.size()) {
+        return util::Error{5001, 0, "firebird param count mismatch", ""};
+    }
+    ISC_STATUS_ARRAY st;
+    isc_stmt_handle  stmt = 0;
+    if (isc_dsql_allocate_statement(st, db, &stmt); status_failed(st)) {
+        return fb_error("firebird alloc stmt", st);
+    }
+
+    const int n = static_cast<int>(params.size());
+    XSQLDA* in = alloc_xsqlda(n);
+    in->sqld = static_cast<short>(n);
+    auto teardown = [&]() {
+        free_xsqlda_buffers(in);
+        std::free(in);
+        if (stmt) {
+            ISC_STATUS_ARRAY s2;
+            isc_dsql_free_statement(s2, &stmt, DSQL_drop);
+        }
+    };
+
+    for (int i = 0; i < n; ++i) {
+        bind_fb_param(in->sqlvar[i],
+                      fields[field_indices[static_cast<std::size_t>(i)]],
+                      params[static_cast<std::size_t>(i)]);
+    }
+
+    isc_dsql_prepare(st, tr, &stmt, 0, sql.c_str(), kSqlDialect, in);
+    if (status_failed(st)) {
+        auto e = fb_error("firebird prepare", st);
+        teardown();
+        return e;
+    }
+    isc_dsql_execute(st, tr, &stmt, kSqlDialect, in);
+    if (status_failed(st)) {
+        auto e = fb_error("firebird execute", st);
+        teardown();
+        return e;
+    }
+    teardown();
+    return util::Result<void>{};
+}
+
+bool row_has_blob(const FirebirdTable& tbl) {
+    for (std::size_t i = 0; i < tbl.fields.size(); ++i) {
+        if (tbl.staging_nulls[i]) continue;
+        if (tbl.fields[i].type == ADS_MEMO ||
+            tbl.fields[i].type == ADS_BINARY) {
+            return true;
+        }
+    }
+    return false;
+}
+
+FbRowParam make_row_param(isc_db_handle* db, isc_tr_handle* tr,
+                          const FirebirdTable& tbl, std::size_t idx) {
+    FbRowParam p;
+    p.is_null = tbl.staging_nulls[idx];
+    if (p.is_null) return p;
+    if (tbl.fields[idx].type == ADS_MEMO ||
+        tbl.fields[idx].type == ADS_BINARY) {
+        p.is_blob = true;
+        if (!write_blob_quad(db, tr, tbl.staging_row[idx], &p.blob_id)) {
+            p.is_null = true;
+            p.is_blob = false;
+        }
+    } else {
+        p.text = tbl.staging_row[idx];
+    }
+    return p;
+}
+
 } // namespace
 
 // ---- Impl ----------------------------------------------------------------
@@ -655,6 +814,7 @@ util::Result<FirebirdConnection> FirebirdConnection::open(const FirebirdUri& uri
         isc_detach_database(s2, &conn.impl_->db);
         return t.error();
     }
+    (void)conn.exec_sql(acl_table_ddl(SqlDdlDialect::Firebird));
     return std::move(conn);
 }
 
@@ -1223,21 +1383,55 @@ util::Result<void> FirebirdConnection::flush_record(FirebirdTable* tbl) {
         return format_literal(*tbl, tbl->fields[i].name, tbl->staging_row[i]);
     };
 
+    const bool use_blob_params = row_has_blob(*tbl);
+
     if (tbl->pending_append) {
-        std::string cols, vals;
-        bool any = false;
+        std::string cols;
+        std::vector<std::size_t> ins_idx;
+        std::vector<FbRowParam>  ins_params;
         for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
-            if (tbl->staging_nulls[i]) continue;  // let the DB default it
-            if (any) { cols += ", "; vals += ", "; }
+            if (tbl->staging_nulls[i]) continue;
+            if (!cols.empty()) cols += ", ";
             cols += quote_ident(tbl->fields[i].name);
-            vals += literal_for(i);
-            any = true;
+            ins_idx.push_back(i);
+            if (use_blob_params) {
+                ins_params.push_back(
+                    make_row_param(&impl_->db, &impl_->tr, *tbl, i));
+            }
         }
-        if (!any) return util::Error{5001, 0, "insert has no columns", tbl->name};
-        const std::string sql =
-            "INSERT INTO " + quote_ident(tbl->sql_table) +
-            " (" + cols + ") VALUES (" + vals + ")";
-        if (auto e = exec_dml(&impl_->db, &impl_->tr, sql); !e) return e.error();
+        if (cols.empty()) {
+            return util::Error{5001, 0, "insert has no columns", tbl->name};
+        }
+        if (use_blob_params) {
+            std::string placeholders;
+            for (std::size_t j = 0; j < ins_idx.size(); ++j) {
+                if (j) placeholders += ", ";
+                placeholders += "?";
+            }
+            const std::string sql =
+                "INSERT INTO " + quote_ident(tbl->sql_table) +
+                " (" + cols + ") VALUES (" + placeholders + ")";
+            if (auto e = exec_param_dml(&impl_->db, &impl_->tr, sql,
+                                        tbl->fields, ins_idx, ins_params);
+                !e) {
+                return e.error();
+            }
+        } else {
+            std::string vals;
+            bool any = false;
+            for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
+                if (tbl->staging_nulls[i]) continue;
+                if (any) vals += ", ";
+                vals += literal_for(i);
+                any = true;
+            }
+            const std::string sql =
+                "INSERT INTO " + quote_ident(tbl->sql_table) +
+                " (" + cols + ") VALUES (" + vals + ")";
+            if (auto e = exec_dml(&impl_->db, &impl_->tr, sql); !e) {
+                return e.error();
+            }
+        }
 
         // Capture this row's PK from staging, then persist + re-snapshot.
         FirebirdTable::PkRow pk;
@@ -1274,23 +1468,70 @@ util::Result<void> FirebirdConnection::flush_record(FirebirdTable* tbl) {
         return util::Error{5026, 0, "no current record", ""};
     }
     const FirebirdTable::PkRow current_pk = tbl->pk_snapshot[tbl->pos];
+    std::vector<std::size_t> upd_idx;
+    std::vector<FbRowParam>  upd_params;
     std::string set_clause;
-    bool any = false;
     for (std::size_t i = 0; i < tbl->fields.size(); ++i) {
         bool is_pk = false;
         for (const auto& pkc : tbl->pk_columns) {
-            if (to_upper(pkc) == to_upper(tbl->fields[i].name)) { is_pk = true; break; }
+            if (to_upper(pkc) == to_upper(tbl->fields[i].name)) {
+                is_pk = true;
+                break;
+            }
         }
         if (is_pk) continue;
-        if (any) set_clause += ", ";
-        set_clause += quote_ident(tbl->fields[i].name) + " = " + literal_for(i);
-        any = true;
+        if (!set_clause.empty()) set_clause += ", ";
+        if (use_blob_params) {
+            set_clause += quote_ident(tbl->fields[i].name) + " = ?";
+            upd_idx.push_back(i);
+            upd_params.push_back(
+                make_row_param(&impl_->db, &impl_->tr, *tbl, i));
+        } else {
+            set_clause += quote_ident(tbl->fields[i].name) + " = " +
+                          literal_for(i);
+        }
     }
-    if (!any) { tbl->row_dirty = false; return util::Result<void>{}; }
-    const std::string sql =
-        "UPDATE " + quote_ident(tbl->sql_table) + " SET " + set_clause +
-        " WHERE " + pk_where_clause(*tbl, current_pk);
-    if (auto e = exec_dml(&impl_->db, &impl_->tr, sql); !e) return e.error();
+    if (set_clause.empty()) {
+        tbl->row_dirty = false;
+        return util::Result<void>{};
+    }
+    if (use_blob_params) {
+        std::string where_sql;
+        std::vector<std::size_t> where_idx;
+        std::vector<FbRowParam>  where_params;
+        for (std::size_t i = 0; i < tbl->pk_columns.size(); ++i) {
+            const std::size_t fi = field_index_ci(*tbl, tbl->pk_columns[i]);
+            if (fi == static_cast<std::size_t>(-1)) {
+                return util::Error{5001, 0, "pk column missing",
+                                   tbl->pk_columns[i]};
+            }
+            if (!where_sql.empty()) where_sql += " AND ";
+            where_sql += quote_ident(tbl->pk_columns[i]) + " = ?";
+            where_idx.push_back(fi);
+            FbRowParam pp;
+            pp.is_null = false;
+            pp.text    = current_pk.values[i];
+            where_params.push_back(std::move(pp));
+        }
+        upd_idx.insert(upd_idx.end(), where_idx.begin(), where_idx.end());
+        upd_params.insert(upd_params.end(),
+                          where_params.begin(), where_params.end());
+        const std::string sql =
+            "UPDATE " + quote_ident(tbl->sql_table) + " SET " + set_clause +
+            " WHERE " + where_sql;
+        if (auto e = exec_param_dml(&impl_->db, &impl_->tr, sql,
+                                    tbl->fields, upd_idx, upd_params);
+            !e) {
+            return e.error();
+        }
+    } else {
+        const std::string sql =
+            "UPDATE " + quote_ident(tbl->sql_table) + " SET " + set_clause +
+            " WHERE " + pk_where_clause(*tbl, current_pk);
+        if (auto e = exec_dml(&impl_->db, &impl_->tr, sql); !e) {
+            return e.error();
+        }
+    }
     tbl->row_dirty = false;
     ISC_STATUS_ARRAY st;
     isc_commit_retaining(st, &impl_->tr);

@@ -5,6 +5,7 @@
 #include "sql_backend/backend_aggregate.h"
 #include "openads/error.h"
 #include "sql_backend/mssql_uri.h"
+#include "sql_backend/sql_acl_store.h"
 #include "sql_backend/sql_common.h"
 #include "sql_backend/tds_protocol.h"
 
@@ -85,6 +86,7 @@ util::Result<MssqlConnection> MssqlConnection::open(const MssqlUri& uri) {
     }
 
     conn.impl_->authenticated = true;
+    (void)conn.exec_sql(acl_table_ddl(SqlDdlDialect::Mssql));
     return conn;
 }
 
