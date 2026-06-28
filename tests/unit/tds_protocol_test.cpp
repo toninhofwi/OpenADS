@@ -290,8 +290,8 @@ TEST_CASE("decode GUID / TIMEN / binary edge types") {
     };
     CHECK(decode_cell(col(0x24), guid, 16) == "6BA7B810-9DAD-11D1-80B4-00C04FD430C8");
 
-    // TIMEN scale=0, 12:34:56 → 45296 seconds, LE3 = 0x10 0xB0 0x00.
-    uint8_t timen[] = {0x10, 0xB0, 0x00};
+    // TIMEN scale=0, 12:34:56 → 45296 s (0xB0F0), LE3 = 0xF0 0xB0 0x00.
+    uint8_t timen[] = {0xF0, 0xB0, 0x00};
     CHECK(decode_cell(col(0x29, 0), timen, 3) == "123456");
 
     uint8_t bin[] = {0xDE, 0xAD, 0xBE, 0xEF};
@@ -411,7 +411,7 @@ TEST_CASE("parse_query_response: GUID column row") {
     std::vector<uint8_t> s;
     auto push = [&](std::initializer_list<uint8_t> b){ for (auto x:b) s.push_back(x); };
     push({0x81, 0x01,0x00});
-    push({0,0,0,0, 0,0, 0x24, 0x01,'i',0,'d',0});
+    push({0,0,0,0, 0,0, 0x24, 0x02,'i',0,'d',0});
     push({0xD1});
     push({0x10,0xB8,0xA7,0x6B, 0xAD,0x9D, 0xD1,0x11,
           0x80,0xB4, 0x00,0xC0,0x4F,0xD4,0x30,0xC8});

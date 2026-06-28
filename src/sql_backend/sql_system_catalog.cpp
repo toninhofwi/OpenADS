@@ -950,17 +950,12 @@ static std::optional<std::size_t> system_from_clause_end(
 std::optional<std::string> rewrite_system_select_sql(
     SqlDdlDialect dialect,
     const std::string& sql) {
-    if (!openads::sql::sql_is_select(sql)) return std::nullopt;
+    auto sys_name = system_table_from_select(sql);
+    if (!sys_name) return std::nullopt;
     auto sel = openads::sql::parse_select(sql);
     if (!sel) return std::nullopt;
     const auto& st = sel.value();
-    if (!st.derived_sql.empty() || !st.unions.empty()) return std::nullopt;
-    if (st.inner_join.has_value()) return std::nullopt;
-    const std::string px = lower_copy(
-        st.table.size() >= 7 ? st.table.substr(0, 7) : st.table);
-    if (px != "system.") return std::nullopt;
-    const std::string sys_name = lower_copy(st.table.substr(7));
-    auto catalog = catalog_sql(dialect, sys_name);
+    auto catalog = catalog_sql(dialect, *sys_name);
     if (!catalog) return std::nullopt;
     const std::size_t from_pos =
         lower_copy(sql).find("from " + lower_copy(st.table));
