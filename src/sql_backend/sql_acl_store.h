@@ -22,6 +22,9 @@ using SqlQueryFn =
 // CREATE TABLE IF NOT EXISTS for the dialect.
 std::string acl_table_ddl(SqlDdlDialect dialect);
 
+// User-to-group membership (GRANT GROUP … TO user).
+std::string member_table_ddl(SqlDdlDialect dialect);
+
 // SELECT fragment (system.permissions column layout) from OPENADS$ACL.
 std::string acl_permissions_select_sql(SqlDdlDialect dialect);
 

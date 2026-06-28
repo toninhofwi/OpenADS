@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,7 @@ public:
     util::Result<void> unlock_table(OdbcTable* tbl);
 
     util::Result<void> exec_sql(const std::string& sql);
+    util::Result<std::optional<std::string>> query_scalar(const std::string& sql);
 
     BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
     const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }

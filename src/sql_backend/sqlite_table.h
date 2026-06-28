@@ -16,6 +16,9 @@ class SqliteConnection;
 struct SqliteTable {
     SqliteConnection* conn = nullptr;
     std::string       name;
+    std::uint32_t     connect_handle = 0;
+    std::uint16_t     check_rights   = 0;
+    std::uint16_t     aof_opt_level  = 0;
 
     struct FieldDesc {
         std::string   name;

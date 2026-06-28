@@ -6,6 +6,7 @@
 
 #include <cctype>
 #include <cstdint>
+#include <functional>
 
 namespace openads::sql_backend {
 
@@ -13,7 +14,8 @@ namespace {
 
 using DD = openads::engine::DataDict;
 
-constexpr const char* kAclTable = "OPENADS$ACL";
+constexpr const char* kAclTable    = "OPENADS$ACL";
+constexpr const char* kMemberTable = "OPENADS$MEMBER";
 
 std::string quote_ident(SqlDdlDialect d, const std::string& name) {
     switch (d) {
@@ -80,6 +82,164 @@ std::string perm_col_sql(const char* col_name, uint32_t bit) {
 
 util::Result<void> ensure_acl_table(SqlDdlDialect dialect, SqlExecFn exec_sql) {
     return exec_sql(acl_table_ddl(dialect));
+}
+
+util::Result<void> ensure_member_table(SqlDdlDialect dialect, SqlExecFn exec_sql) {
+    return exec_sql(member_table_ddl(dialect));
+}
+
+// GRANT GROUP sales TO alice  /  REVOKE GROUP sales FROM alice
+std::optional<std::pair<bool, std::pair<std::string, std::string>>>
+try_parse_group_membership(const std::string& sql) {
+    std::string s = sql;
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+        s.erase(s.begin());
+    }
+    auto upper_prefix = [&](std::size_t n) {
+        std::string out;
+        for (std::size_t i = 0; i < n && i < s.size(); ++i) {
+            out.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(s[i]))));
+        }
+        return out;
+    };
+    bool is_revoke = false;
+    std::size_t pos = 0;
+    if (upper_prefix(12) == "REVOKE GROUP") {
+        is_revoke = true;
+        pos = 12;
+    } else if (upper_prefix(11) == "GRANT GROUP") {
+        pos = 11;
+    } else {
+        return std::nullopt;
+    }
+    while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) {
+        ++pos;
+    }
+    auto read_ident = [&]() -> std::string {
+        std::string id;
+        if (pos < s.size() && s[pos] == '[') {
+            ++pos;
+            while (pos < s.size() && s[pos] != ']') {
+                id.push_back(s[pos++]);
+            }
+            if (pos < s.size() && s[pos] == ']') ++pos;
+            return id;
+        }
+        while (pos < s.size()) {
+            char c = s[pos];
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+                c == ':' || c == '$') {
+                id.push_back(c);
+                ++pos;
+            } else {
+                break;
+            }
+        }
+        return id;
+    };
+    auto match_kw = [&](const char* kw) -> bool {
+        const auto klen = std::char_traits<char>::length(kw);
+        if (pos + klen > s.size()) return false;
+        for (std::size_t i = 0; i < klen; ++i) {
+            if (std::toupper(static_cast<unsigned char>(s[pos + i])) !=
+                std::toupper(static_cast<unsigned char>(kw[i]))) {
+                return false;
+            }
+        }
+        pos += klen;
+        return true;
+    };
+
+    const std::string group = read_ident();
+    if (group.empty()) return std::nullopt;
+    while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) {
+        ++pos;
+    }
+    if (is_revoke) {
+        if (!match_kw("FROM")) return std::nullopt;
+    } else {
+        if (!match_kw("TO")) return std::nullopt;
+    }
+    while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) {
+        ++pos;
+    }
+    const std::string user = read_ident();
+    if (user.empty()) return std::nullopt;
+    return std::pair<bool, std::pair<std::string, std::string>>{
+        is_revoke, {group, user}};
+}
+
+std::string member_grant_sql(SqlDdlDialect dialect,
+                             const std::string& group,
+                             const std::string& user) {
+    const std::string qtab = quote_ident(dialect, kMemberTable);
+    const std::string g = sql_escape(group);
+    const std::string u = sql_escape(user);
+    switch (dialect) {
+        case SqlDdlDialect::Mssql:
+            return "IF NOT EXISTS (SELECT 1 FROM " + qtab +
+                   " WHERE user_name = " + u + " AND group_name = " + g + ") "
+                   "INSERT INTO " + qtab + " (user_name, group_name) VALUES (" +
+                   u + ", " + g + ")";
+        case SqlDdlDialect::Firebird:
+            return "UPDATE OR INSERT INTO " + qtab +
+                   " (user_name, group_name) VALUES (" + u + ", " + g +
+                   ") MATCHING (user_name, group_name)";
+        case SqlDdlDialect::Postgres:
+        case SqlDdlDialect::Sqlite:
+            return "INSERT INTO " + qtab +
+                   " (user_name, group_name) VALUES (" + u + ", " + g +
+                   ") ON CONFLICT (user_name, group_name) DO NOTHING";
+        case SqlDdlDialect::Maria:
+        default:
+            return "INSERT IGNORE INTO " + qtab +
+                   " (user_name, group_name) VALUES (" + u + ", " + g + ")";
+    }
+}
+
+std::string member_revoke_sql(SqlDdlDialect dialect,
+                              const std::string& group,
+                              const std::string& user) {
+    const std::string qtab = quote_ident(dialect, kMemberTable);
+    return "DELETE FROM " + qtab + " WHERE user_name = " + sql_escape(user) +
+           " AND group_name = " + sql_escape(group);
+}
+
+std::string groups_for_user_sql(SqlDdlDialect dialect,
+                                const std::string& username) {
+    const std::string qtab = quote_ident(dialect, kMemberTable);
+    const std::string u = sql_escape(username);
+    switch (dialect) {
+        case SqlDdlDialect::Mssql:
+            return "SELECT STRING_AGG(group_name, ',') FROM " + qtab +
+                   " WHERE user_name = " + u;
+        case SqlDdlDialect::Postgres:
+            return "SELECT string_agg(group_name, ',') FROM " + qtab +
+                   " WHERE user_name = " + u;
+        case SqlDdlDialect::Firebird:
+            return "SELECT LIST(group_name, ',') FROM " + qtab +
+                   " WHERE user_name = " + u;
+        case SqlDdlDialect::Maria:
+        case SqlDdlDialect::Sqlite:
+        default:
+            return "SELECT GROUP_CONCAT(group_name) FROM " + qtab +
+                   " WHERE user_name = " + u;
+    }
+}
+
+void split_csv_groups(const std::string& csv,
+                      const std::function<void(const std::string&)>& fn) {
+    std::string token;
+    for (char c : csv) {
+        if (c == ',') {
+            if (!token.empty()) fn(token);
+            token.clear();
+        } else {
+            token.push_back(c);
+        }
+    }
+    if (!token.empty()) fn(token);
 }
 
 std::string grant_upsert_sql(SqlDdlDialect dialect,
@@ -227,6 +387,38 @@ std::string acl_table_ddl(SqlDdlDialect dialect) {
     }
 }
 
+std::string member_table_ddl(SqlDdlDialect dialect) {
+    const std::string qtab = quote_ident(dialect, kMemberTable);
+    switch (dialect) {
+        case SqlDdlDialect::Mssql:
+            return "IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '" +
+                   std::string(kMemberTable) + "') CREATE TABLE " + qtab +
+                   " (user_name NVARCHAR(200) NOT NULL, "
+                   "group_name NVARCHAR(200) NOT NULL, "
+                   "PRIMARY KEY (user_name, group_name))";
+        case SqlDdlDialect::Maria:
+            return "CREATE TABLE IF NOT EXISTS " + qtab +
+                   " (user_name VARCHAR(200) NOT NULL, "
+                   "group_name VARCHAR(200) NOT NULL, "
+                   "PRIMARY KEY (user_name, group_name))";
+        case SqlDdlDialect::Firebird:
+            return "EXECUTE BLOCK AS BEGIN IF (NOT EXISTS(SELECT 1 FROM "
+                   "RDB$RELATIONS WHERE TRIM(RDB$RELATION_NAME) = '" +
+                   std::string(kMemberTable) + "')) THEN EXECUTE STATEMENT '" +
+                   "CREATE TABLE " + qtab +
+                   " (user_name VARCHAR(200) NOT NULL, "
+                   "group_name VARCHAR(200) NOT NULL, "
+                   "PRIMARY KEY (user_name, group_name))'; END";
+        case SqlDdlDialect::Postgres:
+        case SqlDdlDialect::Sqlite:
+        default:
+            return "CREATE TABLE IF NOT EXISTS " + qtab +
+                   " (user_name TEXT NOT NULL, "
+                   "group_name TEXT NOT NULL, "
+                   "PRIMARY KEY (user_name, group_name))";
+    }
+}
+
 std::string acl_permissions_select_sql(SqlDdlDialect dialect) {
     const std::string qtab = quote_ident(dialect, kAclTable);
     return std::string(
@@ -258,6 +450,23 @@ std::optional<util::Result<void>> try_sql_acl_statement(
     const std::string& sql,
     SqlDdlDialect dialect,
     SqlExecFn exec_sql) {
+    if (auto gm = try_parse_group_membership(sql)) {
+        if (auto r = ensure_member_table(dialect, exec_sql); !r) return r.error();
+        const bool is_revoke = gm->first;
+        const std::string& group = gm->second.first;
+        const std::string& user  = gm->second.second;
+        if (is_revoke) {
+            if (auto r = exec_sql(member_revoke_sql(dialect, group, user)); !r) {
+                return r.error();
+            }
+        } else {
+            if (auto r = exec_sql(member_grant_sql(dialect, group, user)); !r) {
+                return r.error();
+            }
+        }
+        return util::Result<void>{};
+    }
+
     const bool is_grant = openads::sql::sql_is_grant(sql);
     const bool is_revoke = openads::sql::sql_is_revoke(sql);
     if (!is_grant && !is_revoke) return std::nullopt;
@@ -377,6 +586,12 @@ openads::engine::DataDict::EffectiveOps sql_acl_effective_ops(
     };
     if (!username.empty()) {
         accumulate(username);
+        if (auto groups = query_cell(query, groups_for_user_sql(dialect, username));
+            groups && !groups->empty()) {
+            split_csv_groups(*groups, [&](const std::string& g) {
+                accumulate(g);
+            });
+        }
     }
     accumulate("PUBLIC");
     return ops_from_bitmask(bits);

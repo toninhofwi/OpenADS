@@ -20,6 +20,9 @@ class FirebirdConnection;
 struct FirebirdTable {
     FirebirdConnection* conn = nullptr;
     std::string         name;       // ABI / AdsOpenTable name (caller casing)
+    std::uint32_t       connect_handle = 0;
+    std::uint16_t       check_rights   = 0;
+    std::uint16_t       aof_opt_level  = 0;
     std::string         sql_table;  // catalog name used for SQL (folded upper)
 
     struct FieldDesc {

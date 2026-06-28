@@ -1028,6 +1028,9 @@ UNSIGNED32 sqlite_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
         pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
     auto r = st->conn->set_filter(st, where);
     if (!r) return fail(r.error());
+    st->aof_opt_level = where.empty()
+        ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
     return ok();
 }
 
@@ -1655,6 +1658,9 @@ UNSIGNED32 odbc_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
         pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
     auto r = st->conn->set_filter(st, where);
     if (!r) return fail(r.error());
+    st->aof_opt_level = where.empty()
+        ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
     return ok();
 }
 
@@ -1937,6 +1943,9 @@ UNSIGNED32 mssql_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
         pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
     auto r = st->conn->set_filter(st, where);
     if (!r) return fail(r.error());
+    st->aof_opt_level = where.empty()
+        ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
     return ok();
 }
 
@@ -2247,6 +2256,9 @@ UNSIGNED32 firebird_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
         pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
     auto r = st->conn->set_filter(st, where);
     if (!r) return fail(r.error());
+    st->aof_opt_level = where.empty()
+        ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
     return ok();
 }
 
@@ -2557,6 +2569,9 @@ UNSIGNED32 maria_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
         pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
     auto r = st->conn->set_filter(st, where);
     if (!r) return fail(r.error());
+    st->aof_opt_level = where.empty()
+        ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
     return ok();
 }
 
@@ -2678,6 +2693,9 @@ UNSIGNED32 postgres_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
         pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
     auto r = st->conn->set_filter(st, where);
     if (!r) return fail(r.error());
+    st->aof_opt_level = where.empty()
+        ? static_cast<std::uint16_t>(ADS_OPTIMIZED_NONE)
+        : static_cast<std::uint16_t>(ADS_OPTIMIZED_PART);
     return ok();
 }
 
@@ -4401,6 +4419,13 @@ openads::util::Result<std::optional<std::string>> firebird_acl_query(
 }
 #endif
 
+#if defined(OPENADS_WITH_ODBC)
+openads::util::Result<std::optional<std::string>> odbc_acl_query(
+    openads::sql_backend::OdbcConnection* oc, const std::string& sql) {
+    return oc->query_scalar(sql);
+}
+#endif
+
 bool sql_uri_table_denied(
     ADSHANDLE hConnect,
     UNSIGNED16 usCheckRights,
@@ -4463,6 +4488,55 @@ UNSIGNED32 sql_uri_check_sql_rights(
     }
     if (denied) return fail(openads::AE_ACCESS_DENIED, obj_name.c_str());
     return ok();
+}
+
+enum class SqlUriDmlOp { Insert, Update, Delete };
+
+UNSIGNED32 sql_uri_dml_rights(
+    std::uint32_t connect_handle,
+    std::uint16_t check_rights,
+    const std::string& object_name,
+    SqlUriDmlOp op,
+    openads::sql_backend::SqlDdlDialect dialect,
+    const openads::sql_backend::SqlQueryFn& query) {
+    if (check_rights == 0) return ok();
+    const auto ops = openads::sql_backend::sql_acl_effective_ops(
+        dialect, query,
+        sql_uri_username(static_cast<ADSHANDLE>(connect_handle)),
+        object_name);
+    bool denied = false;
+    switch (op) {
+        case SqlUriDmlOp::Insert: denied = !ops.insert_; break;
+        case SqlUriDmlOp::Update: denied = !ops.update_; break;
+        case SqlUriDmlOp::Delete: denied = !ops.delete_; break;
+    }
+    if (denied) return fail(openads::AE_ACCESS_DENIED, object_name.c_str());
+    return ok();
+}
+
+template<typename ConnPtr, typename QueryFn>
+UNSIGNED32 sql_uri_check_dml(
+    std::uint32_t connect_handle,
+    std::uint16_t check_rights,
+    const std::string& table_name,
+    SqlUriDmlOp op,
+    openads::sql_backend::SqlDdlDialect dialect,
+    ConnPtr* conn,
+    QueryFn query_fn) {
+    if (check_rights == 0 || conn == nullptr) return ok();
+    const openads::sql_backend::SqlQueryFn qfn =
+        [conn, query_fn](const std::string& sql) {
+            return query_fn(conn, sql);
+        };
+    return sql_uri_dml_rights(
+        connect_handle, check_rights, table_name, op, dialect, qfn);
+}
+
+template<typename TableT>
+void sql_uri_bind_table_acl(TableT* tbl, ADSHANDLE hConnect,
+                            UNSIGNED16 usCheckRights) {
+    tbl->connect_handle = static_cast<std::uint32_t>(hConnect);
+    tbl->check_rights   = usCheckRights;
 }
 
 bool sql_uri_system_suffix(const std::string& name, std::string& suffix) {
@@ -5070,6 +5144,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
         st->conn = sc;
+        sql_uri_bind_table_acl(st.get(), hConnect, usCheckRights);
         Handle gh = s.registry.register_object(
             HandleKind::SqliteTable, st.get());
         sqlite_tables_map().emplace(gh, std::move(st));
@@ -5081,10 +5156,21 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (auto* sc = s.registry.lookup<openads::sql_backend::OdbcConnection>(
             hConnect, HandleKind::OdbcConnection)) {
         auto name = openads::abi::to_internal(pucName, 0);
+        if (usCheckRights != 0) {
+            const openads::sql_backend::SqlQueryFn qfn =
+                [sc](const std::string& sql) {
+                    return odbc_acl_query(sc, sql);
+                };
+            if (sql_uri_table_denied(hConnect, usCheckRights, usMode, name,
+                    openads::sql_backend::SqlDdlDialect::Postgres, qfn)) {
+                return fail(openads::AE_ACCESS_DENIED, name.c_str());
+            }
+        }
         auto tbl = sc->open_table(name);
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
         st->conn = sc;
+        sql_uri_bind_table_acl(st.get(), hConnect, usCheckRights);
         Handle gh = s.registry.register_object(
             HandleKind::OdbcTable, st.get());
         odbc_tables_map().emplace(gh, std::move(st));
@@ -5136,6 +5222,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         st->conn      = mc;
         st->name      = name;
         st->sql_table = name;
+        sql_uri_bind_table_acl(st.get(), hConnect, usCheckRights);
         if (auto pk = mc->discover_pk(name); pk) {
             for (const std::string& col : pk.value()) {
                 for (std::size_t i = 0; i < st->field_count(); ++i) {
@@ -5203,6 +5290,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
         st->conn = sc;
+        sql_uri_bind_table_acl(st.get(), hConnect, usCheckRights);
         Handle gh = s.registry.register_object(
             HandleKind::FirebirdTable, st.get());
         firebird_tables_map().emplace(gh, std::move(st));
@@ -5249,6 +5337,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
         st->conn = sc;
+        sql_uri_bind_table_acl(st.get(), hConnect, usCheckRights);
         Handle gh = s.registry.register_object(
             HandleKind::MariaTable, st.get());
         maria_tables_map().emplace(gh, std::move(st));
@@ -5295,6 +5384,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
         st->conn = sc;
+        sql_uri_bind_table_acl(st.get(), hConnect, usCheckRights);
         Handle gh = s.registry.register_object(
             HandleKind::PostgresTable, st.get());
         postgres_tables_map().emplace(gh, std::move(st));
@@ -7927,6 +8017,14 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* ft = get_firebird_table(hTable)) {
         if (ft->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                ft->connect_handle, ft->check_rights, ft->name,
+                SqlUriDmlOp::Insert,
+                openads::sql_backend::SqlDdlDialect::Firebird, ft->conn,
+                firebird_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = ft->conn->append_blank(ft);
         if (!r) return fail(r.error());
         return hook_auto_commit(ft);
@@ -7936,6 +8034,14 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* pt = get_postgres_table(hTable)) {
         if (pt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                pt->connect_handle, pt->check_rights, pt->name,
+                SqlUriDmlOp::Insert,
+                openads::sql_backend::SqlDdlDialect::Postgres, pt->conn,
+                postgres_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = pt->conn->append_blank(pt);
         if (!r) return fail(r.error());
         return hook_auto_commit(pt);
@@ -7945,6 +8051,14 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* mt = get_maria_table(hTable)) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                mt->connect_handle, mt->check_rights, mt->name,
+                SqlUriDmlOp::Insert,
+                openads::sql_backend::SqlDdlDialect::Maria, mt->conn,
+                maria_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = mt->conn->append_blank(mt);
         if (!r) return fail(r.error());
         return hook_auto_commit(mt);
@@ -7954,6 +8068,14 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* ot = get_odbc_table(hTable)) {
         if (ot->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                ot->connect_handle, ot->check_rights, ot->name,
+                SqlUriDmlOp::Insert,
+                openads::sql_backend::SqlDdlDialect::Postgres, ot->conn,
+                odbc_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = ot->conn->append_blank(ot);
         if (!r) return fail(r.error());
         return hook_auto_commit(ot);
@@ -7963,6 +8085,14 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* st = get_sqlite_table(hTable)) {
         if (st->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                st->connect_handle, st->check_rights, st->name,
+                SqlUriDmlOp::Insert,
+                openads::sql_backend::SqlDdlDialect::Sqlite, st->conn,
+                sqlite_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = st->conn->append_blank(st);
         if (!r) return fail(r.error());
         return hook_auto_commit(st);
@@ -7972,6 +8102,14 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* mt = get_mssql_table(hTable)) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                mt->connect_handle, mt->check_rights, mt->name,
+                SqlUriDmlOp::Insert,
+                openads::sql_backend::SqlDdlDialect::Mssql, mt->conn,
+                mssql_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = mt->conn->append_blank(mt);
         if (!r) return fail(r.error());
         return hook_auto_commit(mt);
@@ -8002,6 +8140,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* ft = get_firebird_table(hTable)) {
         if (ft->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                ft->connect_handle, ft->check_rights, ft->name,
+                ft->pending_append ? SqlUriDmlOp::Insert : SqlUriDmlOp::Update,
+                openads::sql_backend::SqlDdlDialect::Firebird, ft->conn,
+                firebird_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = ft->conn->flush_record(ft);
         if (!r) return fail(r.error());
         return hook_auto_commit(ft);
@@ -8011,6 +8157,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* pt = get_postgres_table(hTable)) {
         if (pt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                pt->connect_handle, pt->check_rights, pt->name,
+                pt->pending_append ? SqlUriDmlOp::Insert : SqlUriDmlOp::Update,
+                openads::sql_backend::SqlDdlDialect::Postgres, pt->conn,
+                postgres_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = pt->conn->flush_record(pt);
         if (!r) return fail(r.error());
         return hook_auto_commit(pt);
@@ -8020,6 +8174,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* mt = get_maria_table(hTable)) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                mt->connect_handle, mt->check_rights, mt->name,
+                mt->pending_append ? SqlUriDmlOp::Insert : SqlUriDmlOp::Update,
+                openads::sql_backend::SqlDdlDialect::Maria, mt->conn,
+                maria_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = mt->conn->flush_record(mt);
         if (!r) return fail(r.error());
         return hook_auto_commit(mt);
@@ -8029,6 +8191,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* ot = get_odbc_table(hTable)) {
         if (ot->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                ot->connect_handle, ot->check_rights, ot->name,
+                ot->appending ? SqlUriDmlOp::Insert : SqlUriDmlOp::Update,
+                openads::sql_backend::SqlDdlDialect::Postgres, ot->conn,
+                odbc_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = ot->conn->flush_table(ot);
         if (!r) return fail(r.error());
         return hook_auto_commit(ot);
@@ -8038,6 +8208,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* st = get_sqlite_table(hTable)) {
         if (st->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                st->connect_handle, st->check_rights, st->name,
+                st->pending_append ? SqlUriDmlOp::Insert : SqlUriDmlOp::Update,
+                openads::sql_backend::SqlDdlDialect::Sqlite, st->conn,
+                sqlite_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = st->conn->flush_record(st);
         if (!r) return fail(r.error());
         return hook_auto_commit(st);
@@ -8047,6 +8225,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* mt = get_mssql_table(hTable)) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                mt->connect_handle, mt->check_rights, mt->name,
+                mt->pending_append ? SqlUriDmlOp::Insert : SqlUriDmlOp::Update,
+                openads::sql_backend::SqlDdlDialect::Mssql, mt->conn,
+                mssql_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = mt->conn->flush_record(mt);
         if (!r) return fail(r.error());
         return hook_auto_commit(mt);
@@ -8114,6 +8300,14 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* ft = get_firebird_table(hTable)) {
         if (ft->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                ft->connect_handle, ft->check_rights, ft->name,
+                SqlUriDmlOp::Delete,
+                openads::sql_backend::SqlDdlDialect::Firebird, ft->conn,
+                firebird_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = ft->conn->delete_record(ft);
         if (!r) return fail(r.error());
         return hook_auto_commit(ft);
@@ -8123,6 +8317,14 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* pt = get_postgres_table(hTable)) {
         if (pt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                pt->connect_handle, pt->check_rights, pt->name,
+                SqlUriDmlOp::Delete,
+                openads::sql_backend::SqlDdlDialect::Postgres, pt->conn,
+                postgres_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = pt->conn->delete_record(pt);
         if (!r) return fail(r.error());
         return hook_auto_commit(pt);
@@ -8132,6 +8334,14 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* mt = get_maria_table(hTable)) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                mt->connect_handle, mt->check_rights, mt->name,
+                SqlUriDmlOp::Delete,
+                openads::sql_backend::SqlDdlDialect::Maria, mt->conn,
+                maria_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = mt->conn->delete_record(mt);
         if (!r) return fail(r.error());
         return hook_auto_commit(mt);
@@ -8141,6 +8351,14 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* ot = get_odbc_table(hTable)) {
         if (ot->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                ot->connect_handle, ot->check_rights, ot->name,
+                SqlUriDmlOp::Delete,
+                openads::sql_backend::SqlDdlDialect::Postgres, ot->conn,
+                odbc_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = ot->conn->delete_record(ot);
         if (!r) return fail(r.error());
         return hook_auto_commit(ot);
@@ -8150,6 +8368,14 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* st = get_sqlite_table(hTable)) {
         if (st->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                st->connect_handle, st->check_rights, st->name,
+                SqlUriDmlOp::Delete,
+                openads::sql_backend::SqlDdlDialect::Sqlite, st->conn,
+                sqlite_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = st->conn->delete_record(st);
         if (!r) return fail(r.error());
         return hook_auto_commit(st);
@@ -8159,6 +8385,14 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* mt = get_mssql_table(hTable)) {
         if (mt->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        if (UNSIGNED32 rc = sql_uri_check_dml(
+                mt->connect_handle, mt->check_rights, mt->name,
+                SqlUriDmlOp::Delete,
+                openads::sql_backend::SqlDdlDialect::Mssql, mt->conn,
+                mssql_acl_query);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
         auto r = mt->conn->delete_record(mt);
         if (!r) return fail(r.error());
         return hook_auto_commit(mt);
@@ -13412,6 +13646,66 @@ UNSIGNED32 ENTRYPOINT AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
         if (pusLevel != nullptr) *pusLevel = r.value();
         return ok();
     }
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hTable)) {
+        if (pusLevel != nullptr) {
+            *pusLevel = st->aof_opt_level != 0
+                ? st->aof_opt_level
+                : static_cast<UNSIGNED16>(ADS_OPTIMIZED_NONE);
+        }
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* st = get_postgres_table(hTable)) {
+        if (pusLevel != nullptr) {
+            *pusLevel = st->aof_opt_level != 0
+                ? st->aof_opt_level
+                : static_cast<UNSIGNED16>(ADS_OPTIMIZED_NONE);
+        }
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* st = get_maria_table(hTable)) {
+        if (pusLevel != nullptr) {
+            *pusLevel = st->aof_opt_level != 0
+                ? st->aof_opt_level
+                : static_cast<UNSIGNED16>(ADS_OPTIMIZED_NONE);
+        }
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* st = get_mssql_table(hTable)) {
+        if (pusLevel != nullptr) {
+            *pusLevel = st->aof_opt_level != 0
+                ? st->aof_opt_level
+                : static_cast<UNSIGNED16>(ADS_OPTIMIZED_NONE);
+        }
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* st = get_firebird_table(hTable)) {
+        if (pusLevel != nullptr) {
+            *pusLevel = st->aof_opt_level != 0
+                ? st->aof_opt_level
+                : static_cast<UNSIGNED16>(ADS_OPTIMIZED_NONE);
+        }
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* st = get_odbc_table(hTable)) {
+        if (pusLevel != nullptr) {
+            *pusLevel = st->aof_opt_level != 0
+                ? st->aof_opt_level
+                : static_cast<UNSIGNED16>(ADS_OPTIMIZED_NONE);
+        }
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     int lvl = ADS_OPTIMIZED_NONE;
     if (t != nullptr && t->aof_active()) {
@@ -16458,6 +16752,19 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                     },
                     phCursor, acl_rc)) {
                 return acl_rc;
+            }
+        }
+        {
+            const openads::sql_backend::SqlQueryFn qfn =
+                [&](const std::string& sql) {
+                    return odbc_acl_query(it->second->odbc, sql);
+                };
+            if (UNSIGNED32 rc = sql_uri_check_sql_rights(
+                    sqlstr, it->second->check_rights,
+                    it->second->sql_username,
+                    openads::sql_backend::SqlDdlDialect::Postgres, qfn);
+                rc != openads::AE_SUCCESS) {
+                return rc;
             }
         }
         if (openads::sql::sql_is_alter_table(sqlstr) ||

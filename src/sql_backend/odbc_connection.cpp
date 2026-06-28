@@ -1153,6 +1153,25 @@ util::Result<void> OdbcConnection::exec_sql(const std::string& sql) {
     return run_query(impl_->dbc, sql, rows, nulls);
 }
 
+util::Result<std::optional<std::string>>
+OdbcConnection::query_scalar(const std::string& sql) {
+    if (!valid()) {
+        return util::Error{5001, 0, "odbc connection not open", ""};
+    }
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::vector<bool>>        nulls;
+    if (auto r = run_query(impl_->dbc, sql, rows, nulls, /*max_rows=*/1); !r) {
+        return r.error();
+    }
+    if (rows.empty() || rows[0].empty()) {
+        return std::optional<std::string>{};
+    }
+    if (!nulls.empty() && !nulls[0].empty() && nulls[0][0]) {
+        return std::optional<std::string>{};
+    }
+    return rows[0][0];
+}
+
 } // namespace openads::sql_backend
 
 #endif // OPENADS_WITH_ODBC

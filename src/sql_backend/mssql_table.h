@@ -25,6 +25,9 @@ struct MssqlTable {
     MssqlConnection* conn = nullptr;
     std::string      name;       // ABI / AdsOpenTable name
     std::string      sql_table;
+    std::uint32_t    connect_handle = 0;
+    std::uint16_t    check_rights   = 0;
+    std::uint16_t    aof_opt_level  = 0;
 
     // Entire result set buffered in memory.
     tds::QueryResult data;

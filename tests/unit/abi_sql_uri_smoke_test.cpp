@@ -461,6 +461,48 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
                              ADS_READONLY, &hC) == 0);
     }
 
+    // Group ACL + navigational INSERT enforcement with usCheckRights.
+    {
+        REQUIRE(AdsCloseTable(hC) == 0);
+        ADSHANDLE hStmtGrp = 0;
+        REQUIRE(AdsCreateSQLStatement(hConn, &hStmtGrp) == 0);
+        ADSHANDLE hCurGrp = 0;
+        UNSIGNED8 grant_grp[] = "GRANT GROUP SALES TO carol";
+        REQUIRE(AdsExecuteSQLDirect(hStmtGrp, grant_grp, &hCurGrp) == 0);
+        UNSIGNED8 revoke_ins[] = "REVOKE INSERT ON item FROM PUBLIC";
+        REQUIRE(AdsExecuteSQLDirect(hStmtGrp, revoke_ins, &hCurGrp) == 0);
+        UNSIGNED8 grant_sales[] = "GRANT INSERT ON item TO SALES";
+        REQUIRE(AdsExecuteSQLDirect(hStmtGrp, grant_sales, &hCurGrp) == 0);
+        UNSIGNED8 grant_sel_pub[] = "GRANT SELECT ON item TO PUBLIC";
+        REQUIRE(AdsExecuteSQLDirect(hStmtGrp, grant_sel_pub, &hCurGrp) == 0);
+        AdsCloseSQLStatement(hStmtGrp);
+
+        UNSIGNED8 user_carol[] = "carol";
+        ADSHANDLE hCarol = 0;
+        REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER, user_carol,
+                             nullptr, 0, &hCarol) == 0);
+        ADSHANDLE hCarolTbl = 0;
+        REQUIRE(AdsOpenTable(hCarol, cname, cname, ADS_DEFAULT, 0, 0, 1,
+                             ADS_SHARED, &hCarolTbl) == 0);
+        REQUIRE(AdsAppendRecord(hCarolTbl) == 0);
+        REQUIRE(AdsCloseTable(hCarolTbl) == 0);
+
+        UNSIGNED8 user_dave[] = "dave";
+        ADSHANDLE hDave = 0;
+        REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER, user_dave,
+                             nullptr, 0, &hDave) == 0);
+        ADSHANDLE hDaveTbl = 0;
+        REQUIRE(AdsOpenTable(hDave, cname, cname, ADS_DEFAULT, 0, 0, 1,
+                             ADS_READONLY, &hDaveTbl) == 0);
+        CHECK(AdsAppendRecord(hDaveTbl) != 0);
+        REQUIRE(AdsCloseTable(hDaveTbl) == 0);
+        REQUIRE(AdsDisconnect(hDave) == 0);
+        REQUIRE(AdsDisconnect(hCarol) == 0);
+
+        REQUIRE(AdsOpenTable(hConn, cname, cname, ADS_DEFAULT, 0, 0, 0,
+                             ADS_READONLY, &hC) == 0);
+    }
+
     REQUIRE(AdsCloseTable(hC) == 0);
     REQUIRE(AdsCloseTable(hP) == 0);
 
