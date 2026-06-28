@@ -56,6 +56,10 @@ struct MariaTable {
     std::string where_filter;
     BackendFieldOptimizer field_optimizer;
     BackendWhereBuilder   where_builder;
+
+    bool                                  is_result = false;
+    std::vector<std::vector<std::string>> result_rows;
+    std::vector<std::vector<bool>>        result_nulls;
 };
 
 } // namespace openads::sql_backend

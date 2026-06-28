@@ -238,6 +238,7 @@ endif()
 
 if(OPENADS_WITH_POSTGRESQL)
     target_sources(openads_unit_tests PRIVATE
+        unit/abi_sql_live_pg_maria_test.cpp
         unit/abi_plus_postgres_read_test.cpp
         unit/abi_plus_postgres_write_test.cpp
         unit/abi_plus_postgres_filter_test.cpp
@@ -312,6 +313,15 @@ endif()
 add_test(NAME openads_unit_tests COMMAND openads_unit_tests)
 
 # SQL URI backend smoke (sqlite://): runs a focused doctest subset in CI.
+if(OPENADS_WITH_POSTGRESQL)
+    add_test(NAME pg_live_smoke COMMAND openads_unit_tests
+        -tc="SQL live PG*")
+endif()
+if(OPENADS_WITH_MARIADB)
+    add_test(NAME maria_live_smoke COMMAND openads_unit_tests
+        -tc="SQL live Maria*")
+endif()
+
 if(OPENADS_WITH_SQLITE)
     add_test(NAME sql_uri_smoke COMMAND openads_unit_tests
         -tc="SQL URI smoke*")

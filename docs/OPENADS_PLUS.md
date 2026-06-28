@@ -54,9 +54,10 @@ Capabilities below are wired through the **navigational ABI** (`AdsGotoTop`, `Ad
 
 Remaining gaps vs full xHarbour SQLRDD (not #103):
 
-- Harbour-level `SR_*` / `SR_MGMNT*` dedicated workareas (beyond `system.*` SQL catalog).
 - Oracle native OCI (ODBC only today).
-- Live CI for PostgreSQL / MariaDB / MSSQL (set `OPENADS_TEST_*_URI` locally).
+- Live CI for MSSQL / Firebird (set `OPENADS_TEST_MSSQL_CONNSTR` locally).
+
+`SR_MGMNT*` parity: open `system.tables` / `system.columns` / `system.iota` as navigational workareas on SQL URI connections (`AdsOpenTable` or `AdsExecuteSQLDirect`). `AdsPrepareSQL` + `AdsExecuteSQL` named parameters work on all SQL backends. CI job `sql-live-pg-maria` runs against service containers on every push.
 
 ## DDL via navigational API
 

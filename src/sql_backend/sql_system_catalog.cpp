@@ -170,4 +170,15 @@ std::optional<std::string> rewrite_system_select_sql(
     return catalog_sql(dialect, *sys);
 }
 
+std::optional<std::string> build_system_catalog_sql(
+    SqlDdlDialect dialect,
+    const std::string& sys_name) {
+    std::string lower = sys_name;
+    for (auto& ch : lower) {
+        ch = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return catalog_sql(dialect, lower);
+}
+
 }  // namespace openads::sql_backend

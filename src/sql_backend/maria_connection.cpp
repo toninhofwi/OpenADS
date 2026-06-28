@@ -143,6 +143,18 @@ util::Result<void> load_current_row(MYSQL* conn, MariaTable* tbl) {
         tbl->current_nulls.clear();
         return util::Result<void>{};
     }
+    if (tbl->is_result) {
+        if (tbl->pos < tbl->result_rows.size()) {
+            tbl->current_row   = tbl->result_rows[tbl->pos];
+            tbl->current_nulls = tbl->result_nulls[tbl->pos];
+            tbl->row_valid     = true;
+        } else {
+            tbl->current_row.clear();
+            tbl->current_nulls.clear();
+            tbl->row_valid = false;
+        }
+        return util::Result<void>{};
+    }
     if (!tbl->fields_cached) {
         auto d = describe_table_impl(conn, tbl);
         if (!d) return d.error();
@@ -335,6 +347,19 @@ util::Result<void> MariaConnection::goto_top(MariaTable* tbl) {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid mariadb goto_top", ""};
     }
+    if (tbl->is_result) {
+        if (tbl->result_rows.empty()) {
+            tbl->positioned    = false;
+            tbl->row_valid     = false;
+            tbl->current_recno = 0;
+            tbl->pos           = 0;
+            return util::Result<void>{};
+        }
+        tbl->pos           = 0;
+        tbl->positioned    = true;
+        tbl->current_recno = 1;
+        return load_current_row(impl_->conn, tbl);
+    }
     if (tbl->pk_snapshot.empty()) {
         tbl->positioned    = false;
         tbl->row_valid     = false;
@@ -356,6 +381,19 @@ util::Result<void> MariaConnection::goto_bottom(MariaTable* tbl) {
 #if defined(OPENADS_WITH_MARIADB)
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid mariadb goto_bottom", ""};
+    }
+    if (tbl->is_result) {
+        if (tbl->result_rows.empty()) {
+            tbl->positioned    = false;
+            tbl->row_valid     = false;
+            tbl->current_recno = 0;
+            tbl->pos           = 0;
+            return util::Result<void>{};
+        }
+        tbl->pos           = tbl->result_rows.size() - 1;
+        tbl->positioned    = true;
+        tbl->current_recno = static_cast<std::uint32_t>(tbl->pos + 1);
+        return load_current_row(impl_->conn, tbl);
     }
     if (tbl->pk_snapshot.empty()) {
         tbl->positioned    = false;
@@ -380,6 +418,44 @@ util::Result<void> MariaConnection::skip(MariaTable* tbl, std::int32_t step) {
         return util::Error{5001, 0, "invalid mariadb skip", ""};
     }
     if (step == 0) return util::Result<void>{};
+    if (tbl->is_result) {
+        const auto n = tbl->result_rows.size();
+        if (n == 0) {
+            tbl->positioned = false;
+            tbl->row_valid  = false;
+            tbl->pos        = 0;
+            return util::Result<void>{};
+        }
+        std::int64_t next = 0;
+        if (!tbl->positioned) {
+            if (tbl->pos == 0) {
+                if (step > 0) next = step - 1;
+                else return util::Error{5026, 0, "bof", ""};
+            } else if (step < 0) {
+                next = static_cast<std::int64_t>(tbl->pos) + step;
+            } else {
+                return util::Result<void>{};
+            }
+        } else {
+            next = static_cast<std::int64_t>(tbl->pos) + step;
+        }
+        if (next < 0) {
+            tbl->positioned = false;
+            tbl->row_valid  = false;
+            tbl->pos        = 0;
+            return util::Error{5026, 0, "bof", ""};
+        }
+        if (static_cast<std::size_t>(next) >= n) {
+            tbl->positioned = false;
+            tbl->row_valid  = false;
+            tbl->pos        = n;
+            return util::Result<void>{};
+        }
+        tbl->pos           = static_cast<std::size_t>(next);
+        tbl->positioned    = true;
+        tbl->current_recno = static_cast<std::uint32_t>(tbl->pos + 1);
+        return load_current_row(impl_->conn, tbl);
+    }
     if (tbl->pk_snapshot.empty()) {
         tbl->positioned = false;
         tbl->row_valid  = false;
@@ -507,6 +583,11 @@ util::Result<bool> MariaConnection::at_eof(MariaTable* tbl) const {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid mariadb at_eof", ""};
     }
+    if (tbl->is_result) {
+        if (tbl->result_rows.empty()) return true;
+        if (!tbl->positioned && tbl->pos >= tbl->result_rows.size()) return true;
+        return false;
+    }
     if (tbl->pk_snapshot.empty()) return true;
     if (!tbl->positioned && tbl->pos >= tbl->pk_snapshot.size()) return true;
     return false;
@@ -521,6 +602,10 @@ util::Result<bool> MariaConnection::at_bof(MariaTable* tbl) const {
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid mariadb at_bof", ""};
     }
+    if (tbl->is_result) {
+        if (tbl->result_rows.empty()) return true;
+        return !tbl->positioned && tbl->pos == 0;
+    }
     if (tbl->pk_snapshot.empty()) return true;
     return !tbl->positioned && tbl->pos == 0;
 #else
@@ -533,6 +618,9 @@ util::Result<std::uint32_t> MariaConnection::record_count(MariaTable* tbl) {
 #if defined(OPENADS_WITH_MARIADB)
     if (!valid() || tbl == nullptr) {
         return util::Error{5001, 0, "invalid mariadb record_count", ""};
+    }
+    if (tbl->is_result) {
+        return static_cast<std::uint32_t>(tbl->result_rows.size());
     }
     if (tbl->rec_count_cached) return tbl->cached_rec_count;
     tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->pk_snapshot.size());
@@ -1002,6 +1090,57 @@ util::Result<void> MariaConnection::exec_sql(const std::string& sql) {
         return maria_error("exec_sql", mysql_error(impl_->conn));
     }
     return util::Result<void>{};
+#else
+    (void)sql;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
+util::Result<std::unique_ptr<MariaTable>>
+MariaConnection::run_sql(const std::string& sql) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid()) {
+        return util::Error{5001, 0, "mariadb connection not open", ""};
+    }
+    if (mysql_query(impl_->conn, sql.c_str()) != 0) {
+        return maria_error("run_sql", mysql_error(impl_->conn));
+    }
+    MYSQL_RES* res = mysql_store_result(impl_->conn);
+    if (res == nullptr) {
+        if (mysql_field_count(impl_->conn) == 0) {
+            return std::unique_ptr<MariaTable>{};
+        }
+        return maria_error("run_sql", mysql_error(impl_->conn));
+    }
+    auto tbl = std::make_unique<MariaTable>();
+    tbl->conn      = this;
+    tbl->name      = "(result)";
+    tbl->is_result = true;
+    const unsigned int cols = mysql_num_fields(res);
+    MYSQL_FIELD* fields = mysql_fetch_fields(res);
+    tbl->fields.reserve(cols);
+    for (unsigned int c = 0; c < cols; ++c) {
+        tbl->fields.push_back(map_maria_column(
+            fields[c].name, "varchar", true, 0, 0, 0));
+    }
+    tbl->fields_cached = true;
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(res)) != nullptr) {
+        std::vector<std::string> rrow(cols);
+        std::vector<bool>        rnul(cols);
+        for (unsigned int c = 0; c < cols; ++c) {
+            rrow[c] = format_maria_value(row, c, rnul[c]);
+        }
+        tbl->result_rows.push_back(std::move(rrow));
+        tbl->result_nulls.push_back(std::move(rnul));
+    }
+    mysql_free_result(res);
+    tbl->cached_rec_count = static_cast<std::uint32_t>(tbl->result_rows.size());
+    tbl->rec_count_cached = true;
+    tbl->positioned       = false;
+    tbl->pos              = 0;
+    tbl->row_valid        = false;
+    return tbl;
 #else
     (void)sql;
     return util::Error{5004, 0, "mariadb backend disabled", ""};

@@ -108,6 +108,65 @@ jobs:
             -R "sql_uri_smoke|sqlite_filter_pushdown|sqlite_seek_smoke"
         shell: bash
 
+  sql-live-pg-maria:
+    name: SQL live PG + Maria
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
+          MARIADB_DATABASE: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libpq-dev libmariadb-dev
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: Configure (PostgreSQL + MariaDB)
+        run: |
+          cmake --preset ninja-clang \
+            -DOPENADS_WITH_POSTGRESQL=ON \
+            -DOPENADS_WITH_MARIADB=ON
+        shell: bash
+
+      - name: Build unit tests
+        run: cmake --build build/ninja-clang --config Release --target openads_unit_tests
+        shell: bash
+
+      - name: Run live PG + Maria smoke tests
+        env:
+          OPENADS_TEST_PG_URI: postgresql://postgres@127.0.0.1:5432/postgres
+          OPENADS_TEST_MARIADB_URI: mariadb://root@127.0.0.1:3306/test
+        run: |
+          ctest --test-dir build/ninja-clang -C Release --output-on-failure \
+            -R "pg_live_smoke|maria_live_smoke"
+        shell: bash
+
   harbour-smoke:
     name: Harbour smoke (Windows)
     runs-on: windows-2022

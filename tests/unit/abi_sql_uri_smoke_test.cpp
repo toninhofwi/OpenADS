@@ -153,6 +153,38 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
     REQUIRE(AdsWriteRecord(hC) == 0);
     CHECK(record_count(hC) == 5u);
 
+    // Prepared statement (AdsPrepareSQL + AdsExecuteSQL) on SQL URI.
+    {
+        REQUIRE(AdsCloseTable(hC) == 0);
+        REQUIRE(AdsOpenTable(hConn, cname, cname, ADS_DEFAULT, 0, 0, 0, 0,
+                             &hC) == 0);
+        ADSHANDLE hStmt = 0;
+        REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+        UNSIGNED8 ins[] =
+            "INSERT INTO item (GRP, DATA) VALUES (:g, :d)";
+        REQUIRE(AdsPrepareSQL(hStmt, ins) == 0);
+        UNSIGNED8 pg[] = "g";
+        UNSIGNED8 pd[] = "d";
+        REQUIRE(AdsSetString(hStmt, pg, (UNSIGNED8*)"Z", 1) == 0);
+        REQUIRE(AdsSetString(hStmt, pd, (UNSIGNED8*)"zprep", 5) == 0);
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQL(hStmt, &hCur) == 0);
+        CHECK(record_count(hC) == 6u);
+        AdsCloseSQLStatement(hStmt);
+    }
+
+    // system.tables via AdsOpenTable (SR_MGMNT-style catalog workarea).
+    {
+        UNSIGNED8 sysname[] = "system.tables";
+        ADSHANDLE hSys = 0;
+        REQUIRE(AdsOpenTable(hConn, sysname, sysname, ADS_DEFAULT, 0, 0, 0,
+                             ADS_READONLY, &hSys) == 0);
+        UNSIGNED32 n = 0;
+        REQUIRE(AdsGetRecordCount(hSys, 0, &n) == 0);
+        CHECK(n >= 2u);
+        REQUIRE(AdsCloseTable(hSys) == 0);
+    }
+
     // system.tables / system.columns catalog (SQL URI).
     {
         ADSHANDLE hStmt = 0;

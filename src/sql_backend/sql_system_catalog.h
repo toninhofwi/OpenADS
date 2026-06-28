@@ -14,4 +14,9 @@ std::optional<std::string> rewrite_system_select_sql(
     SqlDdlDialect dialect,
     const std::string& sql);
 
+// `sys_name` is the part after "system." (e.g. "tables", "columns", "iota").
+std::optional<std::string> build_system_catalog_sql(
+    SqlDdlDialect dialect,
+    const std::string& sys_name);
+
 }  // namespace openads::sql_backend

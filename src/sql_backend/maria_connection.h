@@ -83,6 +83,8 @@ public:
 
     util::Result<void> exec_sql(const std::string& sql);
 
+    util::Result<std::unique_ptr<MariaTable>> run_sql(const std::string& sql);
+
     BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
     const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }
 

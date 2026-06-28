@@ -4727,6 +4727,24 @@ UNSIGNED32 ENTRYPOINT AdsDisconnect(ADSHANDLE hConnect) {
     return ok();
 }
 
+namespace {
+
+bool sql_uri_system_suffix(const std::string& name, std::string& suffix) {
+    if (name.size() <= 7) return false;
+    std::string px = name.substr(0, 7);
+    for (auto& ch : px) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (px != "system.") return false;
+    suffix = name.substr(7);
+    for (auto& ch : suffix) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return true;
+}
+
+}  // namespace
+
 UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                         UNSIGNED8* pucName,
                         UNSIGNED8* /*pucAlias*/,
@@ -4767,6 +4785,25 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (auto* sc = s.registry.lookup<openads::sql_backend::SqliteConnection>(
             hConnect, HandleKind::SqliteConnection)) {
         auto name = openads::abi::to_internal(pucName, 0);
+        std::string sys_suffix;
+        if (sql_uri_system_suffix(name, sys_suffix)) {
+            auto catalog = openads::sql_backend::build_system_catalog_sql(
+                openads::sql_backend::SqlDdlDialect::Sqlite, sys_suffix);
+            if (catalog) {
+                auto cur = sc->run_sql(*catalog);
+                if (!cur) return fail(cur.error());
+                auto st = std::move(cur).value();
+                if (!st) {
+                    return fail(openads::AE_NO_FILE_FOUND, name.c_str());
+                }
+                st->conn = sc;
+                Handle gh = s.registry.register_object(
+                    HandleKind::SqliteTable, st.get());
+                sqlite_tables_map().emplace(gh, std::move(st));
+                *phTable = gh;
+                return ok();
+            }
+        }
         auto tbl = sc->open_table(name);
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
@@ -4850,6 +4887,25 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (auto* sc = s.registry.lookup<openads::sql_backend::MariaConnection>(
             hConnect, HandleKind::MariaConnection)) {
         auto name = openads::abi::to_internal(pucName, 0);
+        std::string sys_suffix;
+        if (sql_uri_system_suffix(name, sys_suffix)) {
+            auto catalog = openads::sql_backend::build_system_catalog_sql(
+                openads::sql_backend::SqlDdlDialect::Maria, sys_suffix);
+            if (catalog) {
+                auto cur = sc->run_sql(*catalog);
+                if (!cur) return fail(cur.error());
+                auto st = std::move(cur).value();
+                if (!st) {
+                    return fail(openads::AE_NO_FILE_FOUND, name.c_str());
+                }
+                st->conn = sc;
+                Handle gh = s.registry.register_object(
+                    HandleKind::MariaTable, st.get());
+                maria_tables_map().emplace(gh, std::move(st));
+                *phTable = gh;
+                return ok();
+            }
+        }
         auto tbl = sc->open_table(name);
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
@@ -4865,6 +4921,25 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (auto* sc = s.registry.lookup<openads::sql_backend::PostgresConnection>(
             hConnect, HandleKind::PostgresConnection)) {
         auto name = openads::abi::to_internal(pucName, 0);
+        std::string sys_suffix;
+        if (sql_uri_system_suffix(name, sys_suffix)) {
+            auto catalog = openads::sql_backend::build_system_catalog_sql(
+                openads::sql_backend::SqlDdlDialect::Postgres, sys_suffix);
+            if (catalog) {
+                auto cur = sc->run_sql(*catalog);
+                if (!cur) return fail(cur.error());
+                auto st = std::move(cur).value();
+                if (!st) {
+                    return fail(openads::AE_NO_FILE_FOUND, name.c_str());
+                }
+                st->conn = sc;
+                Handle gh = s.registry.register_object(
+                    HandleKind::PostgresTable, st.get());
+                postgres_tables_map().emplace(gh, std::move(st));
+                *phTable = gh;
+                return ok();
+            }
+        }
         auto tbl = sc->open_table(name);
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
@@ -15709,6 +15784,21 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             *phCursor = 0;
             return ok();
         }
+        if (auto rewritten = openads::sql_backend::rewrite_system_select_sql(
+                openads::sql_backend::SqlDdlDialect::Postgres, sqlstr)) {
+            sqlstr = *rewritten;
+        }
+        auto r = it->second->postgres->run_sql(sqlstr);
+        if (!r) return fail(r.error());
+        auto cursor = std::move(r).value();
+        if (!cursor) { *phCursor = 0; return ok(); }
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        Handle h = s.registry.register_object(
+            HandleKind::PostgresTable, cursor.get());
+        postgres_tables_map().emplace(h, std::move(cursor));
+        *phCursor = h;
+        return ok();
     }
 #endif
 #if defined(OPENADS_WITH_MARIADB)
@@ -15723,6 +15813,21 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             *phCursor = 0;
             return ok();
         }
+        if (auto rewritten = openads::sql_backend::rewrite_system_select_sql(
+                openads::sql_backend::SqlDdlDialect::Maria, sqlstr)) {
+            sqlstr = *rewritten;
+        }
+        auto r = it->second->maria->run_sql(sqlstr);
+        if (!r) return fail(r.error());
+        auto cursor = std::move(r).value();
+        if (!cursor) { *phCursor = 0; return ok(); }
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        Handle h = s.registry.register_object(
+            HandleKind::MariaTable, cursor.get());
+        maria_tables_map().emplace(h, std::move(cursor));
+        *phCursor = h;
+        return ok();
     }
 #endif
 #if defined(OPENADS_WITH_ODBC)
@@ -15750,6 +15855,21 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             *phCursor = 0;
             return ok();
         }
+        if (auto rewritten = openads::sql_backend::rewrite_system_select_sql(
+                openads::sql_backend::SqlDdlDialect::Firebird, sqlstr)) {
+            sqlstr = *rewritten;
+        }
+        auto r = it->second->firebird->run_sql(sqlstr);
+        if (!r) return fail(r.error());
+        auto cursor = std::move(r).value();
+        if (!cursor) { *phCursor = 0; return ok(); }
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        Handle h = s.registry.register_object(
+            HandleKind::FirebirdTable, cursor.get());
+        firebird_tables_map().emplace(h, std::move(cursor));
+        *phCursor = h;
+        return ok();
     }
 #endif
     Connection* c = it->second->conn;

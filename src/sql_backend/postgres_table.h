@@ -64,6 +64,11 @@ struct PostgresTable {
 
     // ── Tier 1: WHERE clause composer ───────────────────────────────
     BackendWhereBuilder where_builder;
+
+    // Result-set cursor (AdsExecuteSQLDirect / system.* catalog).
+    bool                                  is_result = false;
+    std::vector<std::vector<std::string>> result_rows;
+    std::vector<std::vector<bool>>        result_nulls;
 };
 
 } // namespace openads::sql_backend
