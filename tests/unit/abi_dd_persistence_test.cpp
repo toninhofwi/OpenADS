@@ -2,6 +2,7 @@
 #include "openads/ace.h"
 #include "engine/data_dict.h"
 
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -19,6 +20,22 @@ fs::path stage_dd(const fs::path& dir) {
     auto created = openads::engine::DataDict::create(add_path.string());
     REQUIRE(created.has_value());
     return add_path;
+}
+
+std::size_t sys_temp_count(const fs::path& dir) {
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return 0;
+    std::size_t n = 0;
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file(ec)) continue;
+        auto name = entry.path().filename().string();
+        auto ext = entry.path().extension().string();
+        for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (name.rfind("_sys_", 0) == 0 && ext == ".adt") ++n;
+    }
+    return n;
 }
 
 }  // namespace
@@ -91,6 +108,43 @@ TEST_CASE("M10.1 DD CRUD round-trips through .add reopen") {
         CHECK(dd.ri().count("ri1") > 0);
         CHECK(dd.get_db_property("prop_42") == "hello");
     }
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("system.* materialization uses memory table instead of temp ADT") {
+    auto dir = fs::temp_directory_path() / "openads_system_temp_cleanup";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    auto add_path = stage_dd(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, add_path.string().c_str(), add_path.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[] = "SELECT USER_NAME FROM system.users";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(hCur != 0);
+
+    CHECK(sys_temp_count(dir) == 0);
+
+    REQUIRE(AdsCloseTable(hCur) == 0);
+    CHECK(sys_temp_count(dir) == 0);
+
+    hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(hCur != 0);
+    CHECK(sys_temp_count(dir) == 0);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    CHECK(sys_temp_count(dir) == 0);
 
     fs::remove_all(dir, ec);
 }

@@ -46,6 +46,7 @@ add_library(openads_core STATIC
     engine/codepage.cpp
     sql/parser.cpp
     drivers/dbf_common.cpp
+    drivers/cache/cached_driver.cpp
     drivers/cdx/cdx_driver.cpp
     drivers/cdx/cdx_index.cpp
     drivers/ntx/ntx_driver.cpp
@@ -55,6 +56,7 @@ add_library(openads_core STATIC
     drivers/adi/adi_index.cpp
     drivers/dbt/dbt_memo.cpp
     drivers/fpt/fpt_memo.cpp
+    drivers/memory/memory_driver.cpp
     network/wire.cpp
     network/frame_reader.cpp
     network/server.cpp

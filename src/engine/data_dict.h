@@ -30,7 +30,7 @@ namespace openads::engine {
 //   [333..341] OBJ_DATA  (Memo 9: uint32 block_no + uint32 data_len + 0x00)
 //
 // OBJ_TYPE values and OBJ_NAME / OBJ_KEY semantics:
-//   Table     : OBJ_NAME=alias       OBJ_KEY=relative_path  JSON={pk,default_idx,comment}
+//   Table     : OBJ_NAME=alias       OBJ_KEY=relative_path  JSON={pk,default_idx,comment,auto_create,memo_block_size,caching}
 //   Index     : OBJ_NAME=table_alias OBJ_KEY=index_path     JSON={comment}
 //   User      : OBJ_NAME=username                           JSON={prop_*=value,...}
 //   Group     : OBJ_NAME=groupname                          JSON={}
@@ -61,6 +61,11 @@ public:
         std::string primary_key;    // tag name of primary key (ADS_DD_TABLE_PRIMARY_KEY=202)
         std::string default_index;  // tag name of default index (ADS_DD_TABLE_DEFAULT_INDEX=213)
         std::string comment;
+        // RCB 06/27/2026: Persist SAP-style DD table properties so DA-Web can
+        // edit them now and the table-open path can consume them later.
+        std::string auto_create;     // "0" or "1" (ADS_DD_TABLE_AUTO_CREATE=203)
+        std::string memo_block_size; // decimal UNSIGNED16 (ADS_DD_TABLE_MEMO_BLOCK_SIZE=215)
+        std::string caching;         // ADS_TABLE_CACHE_* value (ADS_DD_TABLE_CACHING=217)
     };
 
     util::Result<void> add_table(const std::string& alias,

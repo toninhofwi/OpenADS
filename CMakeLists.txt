@@ -197,7 +197,7 @@ if(OPENADS_WITH_SQLITE)
         endif()
     endif()
     add_library(openads_sqlite3 STATIC "${_openads_sqlite_src}")
-    target_include_directories(openads_sqlite3 PUBLIC "${_openads_sqlite_inc}")
+    target_include_directories(openads_sqlite3 SYSTEM PUBLIC "${_openads_sqlite_inc}")
     target_compile_definitions(openads_sqlite3 PRIVATE
         SQLITE_THREADSAFE=1
         SQLITE_DEFAULT_MEMSTATUS=0)

@@ -37,7 +37,7 @@ if ($method === 'POST') {
         $name      = trim($body['name']      ?? '');
         $path      = trim($body['path']      ?? '');
         $username  = trim($body['username']  ?? '');
-        $connType  = trim($body['connType']  ?? 'local');
+        $connType  = strtolower(trim($body['connType']  ?? 'local'));
         $entryType = trim($body['entryType'] ?? 'dd');
         if ($name === '' || $path === '') {
             api_error(400, 'name and path are required');
@@ -64,7 +64,7 @@ if ($method === 'POST') {
         $name      = trim($body['name']      ?? '');
         $path      = trim($body['path']      ?? '');
         $username  = trim($body['username']  ?? '');
-        $connType  = trim($body['connType']  ?? 'local');
+        $connType  = strtolower(trim($body['connType']  ?? 'local'));
         if ($name === '' || $path === '') {
             api_error(400, 'name and path are required');
         }

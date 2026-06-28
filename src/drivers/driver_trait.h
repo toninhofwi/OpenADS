@@ -20,6 +20,9 @@ class IDriver {
 public:
     virtual ~IDriver() = default;
 
+    virtual IDriver* unwrap() noexcept { return this; }
+    virtual const IDriver* unwrap() const noexcept { return this; }
+
     virtual util::Result<void>
         open(const std::string& path, DriverOpenMode mode) = 0;
 

@@ -4,6 +4,7 @@
 #include "engine/index_expr.h"
 
 #include "drivers/adt/adt_driver.h"
+#include "drivers/cache/cached_driver.h"
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/ntx/ntx_driver.h"
 
@@ -86,6 +87,19 @@ util::Result<Table> Table::open(const std::string& path,
     if (auto r = drv->open(path, dmode); !r) return r.error();
     Table t{std::move(drv), mode, locking, type};
     t.path_ = path;
+    if (t.driver_->record_count() == 0) {
+        t.state_ = State::Limbo;
+    }
+    return t;
+}
+
+Table Table::from_driver(std::unique_ptr<drivers::IDriver> drv,
+                         std::string path,
+                         TableType type,
+                         OpenMode mode,
+                         LockingMode locking) {
+    Table t{std::move(drv), mode, locking, type};
+    t.path_ = std::move(path);
     if (t.driver_->record_count() == 0) {
         t.state_ = State::Limbo;
     }
@@ -1170,6 +1184,32 @@ util::Result<void> Table::flush() {
         if (extra == nullptr) continue;
         if (auto r = extra->flush(); !r) return r.error();
     }
+    return {};
+}
+
+util::Result<void> Table::enable_cache(std::uint16_t cache_mode) {
+    using openads::drivers::cache::CachedDriver;
+    using openads::drivers::cache::TableCacheMode;
+
+    if (cache_mode == 0 || cache_enabled_) return {};
+    TableCacheMode mode = TableCacheMode::None;
+    if (cache_mode == 1) mode = TableCacheMode::Reads;
+    else if (cache_mode == 2) mode = TableCacheMode::Writes;
+    else return {};
+
+    // RCB 06/28/2026: Cache wrapping happens after the concrete driver is
+    // opened and configured, so encryption and driver-specific setup remain
+    // owned by the normal open path. Oversized tables simply keep using disk;
+    // the table property is a preference, not permission to exhaust memory.
+    auto wrapped = CachedDriver::create(std::move(driver_), mode);
+    if (!wrapped) {
+        if (wrapped.error().code == openads::AE_FUNCTION_NOT_AVAILABLE) {
+            return {};
+        }
+        return wrapped.error();
+    }
+    driver_ = std::move(wrapped).value();
+    cache_enabled_ = true;
     return {};
 }
 

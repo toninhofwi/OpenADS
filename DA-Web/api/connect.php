@@ -8,6 +8,27 @@ header('Content-Type: application/json');
 session_start();
 require_once __DIR__ . '/common.php';
 
+$configFile = __DIR__ . '/../config/dictionaries.json';
+
+function persistSuccessfulConnType(string $file, string $name, string $connType): void {
+    if ($name === '' || !file_exists($file)) return;
+    $dicts = json_decode(file_get_contents($file), true);
+    if (!is_array($dicts)) return;
+
+    $changed = false;
+    foreach ($dicts as &$d) {
+        if (($d['name'] ?? '') !== $name) continue;
+        $d['connType'] = $connType;
+        $changed = true;
+        break;
+    }
+    unset($d);
+
+    if ($changed) {
+        file_put_contents($file, json_encode(array_values($dicts), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    }
+}
+
 if (!extension_loaded('openads')) {
     http_response_code(500);
     echo json_encode(['error' => "php_openads extension not loaded (check extension=php_openads in php.ini)"]);
@@ -57,6 +78,7 @@ if ($action === 'connect') {
         'password' => $password,
         'connType' => $connType,
     ];
+    persistSuccessfulConnType($configFile, $name, $connType);
 
     echo json_encode(['ok' => true]);
     exit;

@@ -219,6 +219,8 @@
         openMetaTab(dd, tbl, 'fields');
       } else if (type === 'indexes') {
         openMetaTab(dd, tbl, 'indexes');
+      } else if (type === 'table_properties') {
+        openTablePropertiesTab(dd, tbl);
       } else if (type === 'table_triggers') {
         openTableTriggersTab(dd, tbl);
       } else if (type === 'gen_sql') {
@@ -1333,6 +1335,90 @@
   }
 
   // ── Trigger tab: resizable grid (top) + ACE editor (bottom) ──────────────────
+  // RCB 06/27/2026: Per-table DD properties share the right-side tab model
+  // with fields/indexes so DA-Web can grow this property sheet incrementally.
+  function openTablePropertiesTab(dd, table) {
+    const metaKey = `${dd}.${table}.properties`;
+    const existing = state.tabs.find(t => t.type === 'table_props' && t.metaKey === metaKey);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `${table} Properties`, type: 'table_props', dd, table, metaKey });
+    renderTabs();
+    activateTab(id);
+    loadTableProperties(id, dd, table);
+  }
+
+  function loadTableProperties(tabId, dd, table) {
+    const container = document.getElementById('table-props-' + tabId);
+    if (!container) return;
+
+    const inputStyle = 'background:#313244;color:#cdd6f4;border:1px solid #45475a;border-radius:4px;padding:4px 8px;font-size:12px;box-sizing:border-box;';
+    apiFetch(`api/table_props.php?dd=${encodeURIComponent(dd)}&table=${encodeURIComponent(table)}`)
+      .then(resp => {
+        if (resp.error) {
+          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+        const cacheOptions = (resp.cacheModes || []).map(m =>
+          `<option value="${m.value}" ${Number(resp.caching || 0) === Number(m.value) ? 'selected' : ''}>${escHtml(m.label)}</option>`
+        ).join('');
+
+        container.innerHTML = `
+          <div style="padding:4px 6px;display:flex;gap:8px;align-items:center;
+                      background:#1e1e2e;border-bottom:1px solid #313244;flex-shrink:0;">
+            <button class="btn btn-sm btn-primary" id="save-table-props-${tabId}">&#128190; Save</button>
+            <span id="table-props-msg-${tabId}" style="font-size:11px;color:#a6adc8;"></span>
+          </div>
+          <div style="padding:16px;max-width:620px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
+            <h3 style="margin:0;color:#cdd6f4;font-size:14px;">Table: ${escHtml(dd)}.${escHtml(table)}</h3>
+            <div style="display:grid;grid-template-columns:180px 1fr;gap:10px;align-items:start;">
+              <label style="padding-top:2px;font-size:12px;">Auto create</label>
+              <label style="display:flex;align-items:center;gap:7px;cursor:pointer;">
+                <input type="checkbox" id="table-props-auto-${tabId}" ${resp.autoCreate ? 'checked' : ''}
+                       style="width:15px;height:15px;accent-color:#89b4fa;">
+                <span style="font-size:12px;color:#a6adc8;">Create missing table/index files on open</span>
+              </label>
+
+              <label style="padding-top:5px;font-size:12px;">Memo block size</label>
+              <input id="table-props-memo-${tabId}" type="number" min="0" max="65535"
+                     value="${escAttr(String(resp.memoBlockSize ?? 0))}"
+                     style="${inputStyle}width:120px;">
+
+              <label style="padding-top:5px;font-size:12px;">Caching</label>
+              <select id="table-props-cache-${tabId}" style="${inputStyle}width:180px;">
+                ${cacheOptions}
+              </select>
+            </div>
+          </div>`;
+
+        const msgEl = document.getElementById('table-props-msg-' + tabId);
+        document.getElementById('save-table-props-' + tabId)?.addEventListener('click', async () => {
+          if (msgEl) msgEl.textContent = 'Saving...';
+          const payload = {
+            dd,
+            table,
+            autoCreate: document.getElementById(`table-props-auto-${tabId}`)?.checked ?? false,
+            memoBlockSize: parseInt(document.getElementById(`table-props-memo-${tabId}`)?.value ?? '0', 10) || 0,
+            caching: parseInt(document.getElementById(`table-props-cache-${tabId}`)?.value ?? '0', 10) || 0,
+          };
+          try {
+            const r = await apiFetch('api/table_props.php', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (msgEl) msgEl.textContent = r.error ? `Error: ${r.error}` : 'Saved';
+            setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000);
+          } catch (err) {
+            if (msgEl) msgEl.textContent = `Error: ${err.message}`;
+          }
+        });
+      })
+      .catch(err => {
+        container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
+  }
+
   function buildTriggerPanel(tabId, tab) {
     const dd = tab.dd || '';
     const ddOpts = Array.from(state.openConnections).map(n =>
@@ -2056,6 +2142,8 @@
           panel.innerHTML = `<div class="data-panel" id="ri-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'dbprops') {
           panel.innerHTML = `<div class="data-panel" id="dbprops-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'table_props') {
+          panel.innerHTML = `<div class="data-panel" id="table-props-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'view') {
           panel.innerHTML = buildViewPanel(tab.id, tab);
         } else if (tab.type === 'link') {
@@ -3755,6 +3843,9 @@
     } catch (err) {
       setStatus(err.message); return;
     }
+    const savedConnType = String(d.connType ?? 'local').toLowerCase() === 'remote'
+      ? 'remote'
+      : 'local';
 
     // Free-tables directories need no credentials — connect immediately
     if ((d.entryType ?? 'dd') === 'free') {
@@ -3762,7 +3853,7 @@
         await apiFetch('api/connect.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'connect', name: ddName, path: d.path, username: '', password: '', connType: d.connType ?? 'local' }),
+          body: JSON.stringify({ action: 'connect', name: ddName, path: d.path, username: '', password: '', connType: savedConnType }),
         });
         state.openConnections.add(ddName);
         refreshTree();
@@ -3778,10 +3869,10 @@
     document.getElementById('connect-dd-name').textContent = ddName;
     overlay.dataset.dd   = ddName;
     overlay.dataset.path = d.path;
-    overlay.dataset.connType = d.connType ?? 'local';
+    overlay.dataset.connType = savedConnType;
     resetToggleGroup('connect-conn-type');
     document.querySelectorAll('#connect-conn-type .toggle-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.value === (d.connType ?? 'local'));
+      btn.classList.toggle('active', btn.dataset.value === savedConnType);
     });
     document.getElementById('connect-username').value = d.username || '';
     document.getElementById('connect-password').value = '';

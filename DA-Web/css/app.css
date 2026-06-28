@@ -317,6 +317,9 @@ html, body {
 .jstree-icon-link::before       { content: "🔗"; font-style: normal; }
 .jstree-icon-fields::before     { content: "Ⅲ"; font-style: normal; }
 .jstree-icon-indexes::before    { content: "🔑"; font-style: normal; }
+/* RCB 06/27/2026: Table property branch uses an ASCII fallback to avoid
+   adding another icon-font dependency. */
+.jstree-icon-properties::before { content: "#"; font-style: normal; font-weight: 700; color: #89b4fa; }
 
 /* ── Status bar ───────────────────────────────────────────────────────────── */
 #statusbar {

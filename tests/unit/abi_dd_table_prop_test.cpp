@@ -1,6 +1,7 @@
 #include "doctest.h"
 #include "openads/ace.h"
 #include "openads/error.h"
+#include "session/connection.h"
 
 #include <array>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -58,6 +60,39 @@ fs::path make_adt_for_prop(const fs::path& dir, const char* leaf) {
         reinterpret_cast<const char*>(file.data()),
         static_cast<std::streamsize>(file.size()));
     return p;
+}
+
+std::vector<std::string> table_prop_sql_col(ADSHANDLE hConn,
+                                            const char* sql,
+                                            const char* field_name) {
+    std::vector<std::string> out;
+    ADSHANDLE stmt = 0;
+    if (AdsCreateSQLStatement(hConn, &stmt) != 0) return out;
+    std::vector<UNSIGNED8> buf(std::strlen(sql) + 1);
+    std::memcpy(buf.data(), sql, buf.size());
+    ADSHANDLE cur = 0;
+    if (AdsExecuteSQLDirect(stmt, buf.data(), &cur) != 0) {
+        AdsCloseSQLStatement(stmt);
+        return out;
+    }
+    UNSIGNED8 fname[64];
+    std::memcpy(fname, field_name, std::strlen(field_name) + 1);
+    AdsGotoTop(cur);
+    for (int i = 0; i < 20; ++i) {
+        UNSIGNED16 eof = 0;
+        AdsAtEOF(cur, &eof);
+        if (eof) break;
+        UNSIGNED8 vbuf[256] = {};
+        UNSIGNED32 vlen = sizeof(vbuf) - 1;
+        AdsGetField(cur, fname, vbuf, &vlen, 0);
+        std::string s(reinterpret_cast<const char*>(vbuf), vlen);
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        out.push_back(s);
+        AdsSkip(cur, 1);
+    }
+    AdsCloseTable(cur);
+    AdsCloseSQLStatement(stmt);
+    return out;
 }
 
 } // namespace
@@ -224,5 +259,111 @@ TEST_CASE("AdsDDSetTableProperty returns AE_FUNCTION_NOT_AVAILABLE") {
     CHECK(r == openads::AE_FUNCTION_NOT_AVAILABLE);
 
     REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AdsDDSetTableProperty stores table memory/cache options") {
+    const auto dir = fs::temp_directory_path() / "openads_dd_table_cache_props";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_adt_for_prop(dir, "cacheme.adt");
+
+    auto add_path = (dir / "openads.add").string();
+    UNSIGNED8 add_buf[260];
+    std::memcpy(add_buf, add_path.c_str(), add_path.size() + 1);
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsDDCreate(add_buf, 0, nullptr, &hConn) == 0);
+    UNSIGNED8 alias[64] = "cacheme";
+    UNSIGNED8 path [64] = "cacheme.adt";
+    REQUIRE(AdsDDAddTable(hConn, alias, path, ADS_ADT, 0, nullptr, nullptr) == 0);
+
+    std::uint16_t on = 1;
+    std::uint16_t memo = 1024;
+    std::uint16_t cache = ADS_TABLE_CACHE_READS;
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_AUTO_CREATE, &on, 2) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_MEMO_BLOCK_SIZE, &memo, 2) == 0);
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_CACHING, &cache, 2) == 0);
+
+    UNSIGNED16 len = 2;
+    std::uint8_t out[2] = {};
+    REQUIRE(AdsDDGetTableProperty(hConn, alias, ADS_DD_TABLE_AUTO_CREATE, out, &len) == 0);
+    CHECK(len == 2);
+    CHECK(out[0] == 1);
+    len = 2;
+    REQUIRE(AdsDDGetTableProperty(hConn, alias, ADS_DD_TABLE_MEMO_BLOCK_SIZE, out, &len) == 0);
+    CHECK(static_cast<unsigned>(out[0] | (out[1] << 8)) == 1024u);
+    len = 2;
+    REQUIRE(AdsDDGetTableProperty(hConn, alias, ADS_DD_TABLE_CACHING, out, &len) == 0);
+    CHECK(out[0] == ADS_TABLE_CACHE_READS);
+
+    auto auto_vals = table_prop_sql_col(
+        hConn,
+        "SELECT Table_Auto_Create FROM system.tables WHERE Name = 'cacheme'",
+        "Table_Auto_Create");
+    auto memo_vals = table_prop_sql_col(
+        hConn,
+        "SELECT Table_Memo_Block_Size FROM system.tables WHERE Name = 'cacheme'",
+        "Table_Memo_Block_Size");
+    auto cache_vals = table_prop_sql_col(
+        hConn,
+        "SELECT Table_Caching FROM system.tables WHERE Name = 'cacheme'",
+        "Table_Caching");
+    REQUIRE(auto_vals.size() == 1);
+    REQUIRE(memo_vals.size() == 1);
+    REQUIRE(cache_vals.size() == 1);
+    CHECK(auto_vals[0] == "True");
+    CHECK(memo_vals[0] == "1024");
+    CHECK(cache_vals[0] == "1");
+
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    hConn = 0;
+    REQUIRE(AdsConnect60(add_buf, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == 0);
+    len = 2;
+    out[0] = out[1] = 0;
+    REQUIRE(AdsDDGetTableProperty(hConn, alias, ADS_DD_TABLE_CACHING, out, &len) == 0);
+    CHECK(out[0] == ADS_TABLE_CACHE_READS);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("DD table caching property wraps opened table safely") {
+    const auto dir = fs::temp_directory_path() / "openads_dd_table_cache_open";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_adt_for_prop(dir, "hotref.adt");
+
+    auto add_path = (dir / "openads.add").string();
+    UNSIGNED8 add_buf[260];
+    std::memcpy(add_buf, add_path.c_str(), add_path.size() + 1);
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsDDCreate(add_buf, 0, nullptr, &hConn) == 0);
+    UNSIGNED8 alias[64] = "hotref";
+    UNSIGNED8 path [64] = "hotref.adt";
+    REQUIRE(AdsDDAddTable(hConn, alias, path, ADS_ADT, 0, nullptr, nullptr) == 0);
+    std::uint16_t cache = ADS_TABLE_CACHE_READS;
+    REQUIRE(AdsDDSetTableProperty(hConn, alias, ADS_DD_TABLE_CACHING, &cache, 2) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    auto conn_r = openads::session::Connection::open(add_path);
+    REQUIRE(conn_r.has_value());
+    auto conn = std::move(conn_r).value();
+    auto h = conn.open_table("hotref", openads::engine::TableType::Adt,
+                             openads::engine::OpenMode::Shared);
+    REQUIRE(h.has_value());
+    auto* t = conn.lookup_table(h.value());
+    REQUIRE(t != nullptr);
+    CHECK(t->cache_enabled());
+
+    REQUIRE(t->append_record().has_value());
+    REQUIRE(t->flush().has_value());
+    conn.close_table(h.value());
+
+    auto raw = openads::engine::Table::open((dir / "hotref.adt").string(),
+                                            openads::engine::TableType::Adt);
+    REQUIRE(raw.has_value());
+    CHECK(raw.value().record_count() == 1);
     fs::remove_all(dir, ec);
 }

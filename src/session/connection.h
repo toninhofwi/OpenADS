@@ -36,6 +36,8 @@ public:
                    engine::TableType  type,
                    engine::OpenMode   mode = engine::OpenMode::Shared,
                    engine::LockingMode locking = engine::LockingMode::Compatible);
+    util::Result<Handle> adopt_table(engine::Table table,
+                                     const std::string& relative_path);
 
     void close_table(Handle h);
     void close_table_ptr(const engine::Table* t);
@@ -140,7 +142,7 @@ private:
     util::Result<void> recover_orphan_tx_();
     std::string resolve_table_file(const std::string& relative_path,
                                    engine::TableType&  type);
-
+    std::uint16_t table_cache_mode_(const std::string& relative_path) const;
     std::string                                                data_dir_;
     std::string                                                dd_path_;   // full .add path if DD opened
     std::unordered_map<Handle, std::unique_ptr<engine::Table>> tables_;

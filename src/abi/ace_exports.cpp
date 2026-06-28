@@ -71,6 +71,7 @@
 #include "drivers/adi/adi_index.h"
 #include "drivers/adm/adm_memo.h"
 #include "drivers/fpt/fpt_memo.h"
+#include "drivers/memory/memory_driver.h"
 #include "platform/proc.h"
 #include "platform/time.h"
 #include "sql/parser.h"
@@ -11650,6 +11651,22 @@ UNSIGNED32 ENTRYPOINT AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
         *pusLen = need;
         return ok();
     };
+    auto prop_u16 = [&](UNSIGNED16 prop, std::uint16_t fallback = 0) -> std::uint16_t {
+        // RCB 06/27/2026: DD table options are stored as decimal strings so
+        // PHP/JS tools can set them without having to marshal raw ACE bytes.
+        std::string raw = dd->get_table_property(alias, static_cast<int>(prop));
+        if (raw.empty()) return fallback;
+        try {
+            auto v = std::stoul(raw);
+            return static_cast<std::uint16_t>(std::min<unsigned long>(v, 65535ul));
+        } catch (...) {
+            if (raw.size() >= 2) {
+                const auto* b = reinterpret_cast<const std::uint8_t*>(raw.data());
+                return static_cast<std::uint16_t>(b[0] | (static_cast<std::uint16_t>(b[1]) << 8));
+            }
+            return fallback;
+        }
+    };
 
     switch (usProp) {
         case ADS_DD_TABLE_RELATIVE_PATH:       // 211
@@ -11680,10 +11697,17 @@ UNSIGNED32 ENTRYPOINT AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
         case ADS_DD_TABLE_FIELD_COUNT:         // 206 — requires opening table
             return put_u32(0);
 
-        case ADS_DD_TABLE_ENCRYPTION:          // 214
         case ADS_DD_TABLE_AUTO_CREATE:         // 203
-        case ADS_DD_TABLE_IS_RI_PARENT:        // 210
+            return put_u16(prop_u16(usProp));
+
         case ADS_DD_TABLE_MEMO_BLOCK_SIZE:     // 215
+            return put_u16(prop_u16(usProp));
+
+        case ADS_DD_TABLE_CACHING:             // 217
+            return put_u16(prop_u16(usProp));
+
+        case ADS_DD_TABLE_ENCRYPTION:          // 214
+        case ADS_DD_TABLE_IS_RI_PARENT:        // 210
             return put_u16(0);
 
         case ADS_DD_TABLE_PERMISSION_LEVEL: {  // 216
@@ -11718,12 +11742,60 @@ UNSIGNED32 ENTRYPOINT AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
     if (!dd->has_alias(alias))
         return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND),
                     alias.c_str());
-    // Only string properties are supported for set
+    auto parse_u16_prop = [&](std::uint16_t& out) -> bool {
+        if (pBuf == nullptr || usLen == 0) {
+            out = 0;
+            return true;
+        }
+        std::string s(static_cast<const char*>(pBuf), usLen);
+        while (!s.empty() && (s.back() == '\0' ||
+               std::isspace(static_cast<unsigned char>(s.back())))) {
+            s.pop_back();
+        }
+        if (!s.empty() && std::all_of(s.begin(), s.end(), [](char ch) {
+                return std::isdigit(static_cast<unsigned char>(ch)) != 0;
+            })) {
+            try {
+                auto v = std::stoul(s);
+                if (v > 65535ul) return false;
+                out = static_cast<std::uint16_t>(v);
+                return true;
+            } catch (...) {
+                return false;
+            }
+        }
+        if (usLen == 2) {
+            const auto* b = static_cast<const std::uint8_t*>(pBuf);
+            out = static_cast<std::uint16_t>(b[0] | (static_cast<std::uint16_t>(b[1]) << 8));
+            return true;
+        }
+        return false;
+    };
+
+    // RCB 06/27/2026: Support the table properties DA-Web now exposes.
     if (usProp == ADS_DD_TABLE_PRIMARY_KEY || usProp == ADS_DD_TABLE_DEFAULT_INDEX) {
         std::string val;
         if (pBuf != nullptr && usLen > 0)
             val.assign(static_cast<const char*>(pBuf), usLen);
         dd->set_table_property(alias, static_cast<int>(usProp), val);
+        if (auto r = dd->save(); !r) return fail(r.error());
+        return ok();
+    }
+    if (usProp == ADS_DD_TABLE_AUTO_CREATE ||
+        usProp == ADS_DD_TABLE_MEMO_BLOCK_SIZE ||
+        usProp == ADS_DD_TABLE_CACHING) {
+        std::uint16_t v = 0;
+        if (!parse_u16_prop(v))
+            return fail(static_cast<int>(AE_VALUE_OVERFLOW),
+                        "AdsDDSetTableProperty");
+        if (usProp == ADS_DD_TABLE_AUTO_CREATE) {
+            v = (v == 0) ? 0 : 1;
+        } else if (usProp == ADS_DD_TABLE_CACHING && v > ADS_TABLE_CACHE_WRITES) {
+            return fail(static_cast<int>(AE_VALUE_OVERFLOW),
+                        "AdsDDSetTableProperty");
+        }
+        dd->set_table_property(alias, static_cast<int>(usProp), std::to_string(v));
+        if (auto r = dd->save(); !r) return fail(r.error());
         return ok();
     }
     return fail(static_cast<int>(openads::AE_FUNCTION_NOT_AVAILABLE),
@@ -14129,7 +14201,8 @@ UNSIGNED32 ENTRYPOINT AdsEncryptTable(ADSHANDLE hTable) {
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                     "AdsSetEncryptionPassword required first");
     }
-    auto* cdx = dynamic_cast<openads::drivers::cdx::CdxDriver*>(t->driver());
+    auto* cdx = dynamic_cast<openads::drivers::cdx::CdxDriver*>(
+        t->driver() ? t->driver()->unwrap() : nullptr);
     if (!cdx) {
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                     "encryption supported on CdxDriver tables only");
@@ -15188,16 +15261,22 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
     return AdsExecuteSQLDirect(hStatement, buf.data(), phCursor);
 }
 
-// Build a read-only temp DBF in c->data_dir() that materialises one of
-// the system.* virtual tables from the connection's DataDict state.
-// `sys_name` is the part after "system." (already lower-cased by the caller).
-// Returns the basename of the temp file, or "" if the name is unknown.
-extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
+// RCB 06/28/2026: system.* metadata is exposed through the existing Table
+// cursor path, but backed by a read-only memory driver instead of writing
+// _sys_*.adt scratch files to disk. This stops data-directory leaks, removes
+// the pointless DD-memory -> disk -> cursor round trip, and keeps client
+// behavior stable because the SQL executor still receives a normal Table.
+// Build a read-only memory table that materialises one of the system.*
+// virtual tables from the connection's DataDict state. `sys_name` is the part
+// after "system." (already lower-cased by the caller).
+extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std::string sys_name) {
     for (auto& ch : sys_name) ch = static_cast<char>(
         std::tolower(static_cast<unsigned char>(ch)));
 
     auto* dd = c->dd();
-    if (!dd) return "";
+    if (!dd) {
+        return openads::util::Error{openads::AE_NO_FILE_FOUND, 0, sys_name, ""};
+    }
 
     namespace fs = std::filesystem;
 
@@ -15208,77 +15287,49 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         std::uint8_t   decimals;
     };
 
-    // Builds a temporary ADT file (full-length field names, no 10-char truncation).
+    // Builds a memory table with ADT-compatible full-length field names.
     auto build = [&](const std::vector<Col>& cols,
                      const std::vector<std::vector<std::string>>& rows)
-                     -> std::string {
-        static const char kSig[] = "Advantage Table";  // 15 chars, no NUL
-
-        // Compute ADT storage sizes: CICHAR → col.length bytes, INTEGER → 4 bytes
-        struct FI { std::uint16_t adt_type; std::uint16_t storage; std::uint16_t rec_off; };
-        std::vector<FI> fi;
+                     -> openads::util::Result<Table> {
+        std::vector<openads::drivers::DbfField> fields;
+        fields.reserve(cols.size());
         std::uint32_t rlen = 1;  // 1 byte delete flag
         for (const auto& col : cols) {
-            FI f{};
-            if (col.type == 'N') { f.adt_type = 11; f.storage = 4; }
-            else if (col.type == 'L') { f.adt_type = 1; f.storage = 1; }
-            else { f.adt_type = 20; f.storage = col.length; }  // 'C' → CICHAR
-            f.rec_off = static_cast<std::uint16_t>(rlen);
-            rlen += f.storage;
-            fi.push_back(f);
+            openads::drivers::DbfField f;
+            f.name = col.colname;
+            f.decimals = col.decimals;
+            f.record_offset = static_cast<std::uint16_t>(rlen);
+            if (col.type == 'N') {
+                f.raw_type = 11;
+                f.type = openads::drivers::DbfFieldType::Integer;
+                f.length = 4;
+            } else if (col.type == 'L') {
+                f.raw_type = 1;
+                f.type = openads::drivers::DbfFieldType::Logical;
+                f.length = 1;
+            } else {
+                f.raw_type = 20;
+                f.type = openads::drivers::DbfFieldType::CiCharacter;
+                f.length = col.length;
+            }
+            rlen += f.length;
+            if (rlen > 0xFFFFu) {
+                return openads::util::Error{openads::AE_INTERNAL_ERROR, 0,
+                                            "system table record too large", sys_name};
+            }
+            fields.push_back(std::move(f));
         }
 
-        auto nf      = static_cast<std::uint32_t>(cols.size());
-        auto hdr_len = static_cast<std::uint32_t>(400u + nf * 200u);
-        auto nr      = static_cast<std::uint32_t>(rows.size());
-
-        std::vector<std::uint8_t> file;
-
-        // 400-byte ADT main header
-        std::array<std::uint8_t, 400> hdr{};
-        std::memcpy(hdr.data(), kSig, 15);
-        // rec_count at 24
-        hdr[24] = static_cast<std::uint8_t>( nr        & 0xFFu);
-        hdr[25] = static_cast<std::uint8_t>((nr >>  8) & 0xFFu);
-        hdr[26] = static_cast<std::uint8_t>((nr >> 16) & 0xFFu);
-        hdr[27] = static_cast<std::uint8_t>((nr >> 24) & 0xFFu);
-        // hdr_len at 32
-        hdr[32] = static_cast<std::uint8_t>( hdr_len        & 0xFFu);
-        hdr[33] = static_cast<std::uint8_t>((hdr_len >>  8) & 0xFFu);
-        hdr[34] = static_cast<std::uint8_t>((hdr_len >> 16) & 0xFFu);
-        hdr[35] = static_cast<std::uint8_t>((hdr_len >> 24) & 0xFFu);
-        // rec_len at 36
-        hdr[36] = static_cast<std::uint8_t>( rlen        & 0xFFu);
-        hdr[37] = static_cast<std::uint8_t>((rlen >>  8) & 0xFFu);
-        hdr[38] = static_cast<std::uint8_t>((rlen >> 16) & 0xFFu);
-        hdr[39] = static_cast<std::uint8_t>((rlen >> 24) & 0xFFu);
-        file.insert(file.end(), hdr.begin(), hdr.end());
-
-        // Field descriptors (200 bytes each)
-        for (std::size_t ci = 0; ci < cols.size(); ++ci) {
-            std::array<std::uint8_t, 200> fd{};
-            const char* nm = cols[ci].colname;
-            std::size_t nlen = std::strlen(nm);
-            if (nlen > 127u) nlen = 127u;
-            std::memcpy(fd.data(), nm, nlen);       // null-terminated within bytes 0-127
-            // fd[128] = flags = 0 (not nullable)
-            fd[129] = static_cast<std::uint8_t>( fi[ci].adt_type       & 0xFFu);
-            fd[130] = static_cast<std::uint8_t>((fi[ci].adt_type >>  8) & 0xFFu);
-            fd[131] = static_cast<std::uint8_t>( fi[ci].rec_off        & 0xFFu);
-            fd[132] = static_cast<std::uint8_t>((fi[ci].rec_off >>  8) & 0xFFu);
-            fd[135] = static_cast<std::uint8_t>( fi[ci].storage        & 0xFFu);
-            fd[136] = static_cast<std::uint8_t>((fi[ci].storage >>  8) & 0xFFu);
-            file.insert(file.end(), fd.begin(), fd.end());
-        }
-
-        // Records
+        std::vector<std::vector<std::uint8_t>> records;
+        records.reserve(rows.size());
         for (const auto& row : rows) {
             std::vector<std::uint8_t> rec(rlen, 0x20u);  // space-fill
-            rec[0] = 0x04u;  // ADT active-record flag
+            rec[0] = ' ';
             for (std::size_t ci = 0; ci < cols.size(); ++ci) {
                 const std::string& val = ci < row.size() ? row[ci] : "";
-                std::uint8_t* dst = rec.data() + fi[ci].rec_off;
-                if (fi[ci].adt_type == 11u) {  // INTEGER: 4-byte LE int32
+                const auto& f = fields[ci];
+                std::uint8_t* dst = rec.data() + f.record_offset;
+                if (f.type == openads::drivers::DbfFieldType::Integer) {
                     std::int32_t iv = val.empty() ? 0
                         : static_cast<std::int32_t>(std::stol(val));
                     auto uiv = static_cast<std::uint32_t>(iv);
@@ -15286,28 +15337,28 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
                     dst[1] = static_cast<std::uint8_t>((uiv >>  8) & 0xFFu);
                     dst[2] = static_cast<std::uint8_t>((uiv >> 16) & 0xFFu);
                     dst[3] = static_cast<std::uint8_t>((uiv >> 24) & 0xFFu);
-                } else if (fi[ci].adt_type == 1u) {  // LOGICAL: 1 byte — 'T'(0x54)/'F'(0x46)
+                } else if (f.type == openads::drivers::DbfFieldType::Logical) {
                     dst[0] = (val == "1" || val == "T" || val == "t") ? 'T' : 'F';
                 } else {  // CICHAR: space-padded
-                    std::size_t n2 = std::min<std::size_t>(val.size(), fi[ci].storage);
+                    std::size_t n2 = std::min<std::size_t>(val.size(), f.length);
                     std::memcpy(dst, val.data(), n2);
                 }
             }
-            file.insert(file.end(), rec.begin(), rec.end());
+            records.push_back(std::move(rec));
         }
 
         char nb[64];
-        std::snprintf(nb, sizeof(nb), "_sys_%llx.adt",
+        std::snprintf(nb, sizeof(nb), "memory://system.%s/%llx",
+            sys_name.c_str(),
             static_cast<unsigned long long>(
                 openads::platform::monotonic_nanos()));
-        fs::path tmp = fs::path(c->data_dir()) / nb;
-        {
-            std::ofstream out(tmp, std::ios::binary);
-            if (!out) return "";
-            out.write(reinterpret_cast<const char*>(file.data()),
-                      static_cast<std::streamsize>(file.size()));
-        }
-        return nb;
+        auto drv = std::make_unique<openads::drivers::memory::MemoryDriver>(
+            nb, std::move(fields), std::move(records),
+            static_cast<std::uint16_t>(rlen));
+        return Table::from_driver(std::move(drv), nb,
+                                  openads::engine::TableType::Adt,
+                                  openads::engine::OpenMode::Read,
+                                  openads::engine::LockingMode::Compatible);
     };
 
     if (sys_name == "tables") {
@@ -15344,11 +15395,15 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
                        ? dd->get_effective_permission(c->username(), alias) : 4;
             std::string pk   = dd->get_table_property(alias, 202);
             std::string didx = dd->get_table_property(alias, 213);
+            std::string auto_create = dd->get_table_property(alias, 203);
+            std::string memo_block  = dd->get_table_property(alias, 215);
+            std::string caching     = dd->get_table_property(alias, ADS_DD_TABLE_CACHING);
             rows.push_back({alias, rel, std::to_string(ttype),
-                            "True", pk, didx,
-                            "False", std::to_string(perm), "0",
+                            (auto_create == "1" ? "True" : "False"), pk, didx,
+                            "False", std::to_string(perm), memo_block.empty() ? "0" : memo_block,
                             "", "", "",
-                            "False", "0", "False", "False", "False"});
+                            "False", caching.empty() ? "0" : caching,
+                            "False", "False", "False"});
         }
         return build(cols, rows);
     }
@@ -15964,7 +16019,7 @@ extern "C++" std::string build_system_dbf(Connection* c, std::string sys_name) {
         }
         return build(cols, rows);
     }
-    return "";
+    return openads::util::Error{openads::AE_NO_FILE_FOUND, 0, sys_name, ""};
 }
 
 // Dispatch for ADS built-in sp_* stored procedures. Returns true and sets *prc
@@ -16897,7 +16952,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
     auto sql = openads::abi::to_internal(pucSQL, 0);
 
     // Open a table by name, transparently resolving "system.*" virtual tables
-    // to temp DBF files materialized from DD state.
+    // to memory tables materialized from DD state.
     auto open_or_sys = [c](const std::string& tname,
                             openads::engine::TableType  ttype,
                             openads::engine::OpenMode   omode,
@@ -16909,13 +16964,9 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             for (auto& ch : px) ch = static_cast<char>(
                 std::tolower(static_cast<unsigned char>(ch)));
             if (px == "system.") {
-                resolved = build_system_dbf(c, tname.substr(7));
-                if (resolved.empty())
-                    return openads::util::Error{
-                        openads::AE_NO_FILE_FOUND, 0, tname, ""};
-                ttype = openads::engine::TableType::Adt;
-                omode = openads::engine::OpenMode::Read;
-                lmode = openads::engine::LockingMode::Compatible;
+                auto mt = build_system_table(c, tname.substr(7));
+                if (!mt) return mt.error();
+                return c->adopt_table(std::move(mt).value(), tname);
             }
         }
         return c->open_table(resolved, ttype, omode, lmode);
@@ -22864,7 +22915,7 @@ UNSIGNED32 ENTRYPOINT AdsGetNumActiveLinks(ADSHANDLE /*hConnect*/, UNSIGNED16* p
 UNSIGNED32 ENTRYPOINT AdsGetNumLocks(ADSHANDLE hTable, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
-    if (auto* rt = get_remote_table(hTable)) { return ok(); }
+    if (get_remote_table(hTable) != nullptr) { return ok(); }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     *p = t->lock_count();
@@ -23115,7 +23166,7 @@ UNSIGNED32 ENTRYPOINT AdsGetTableAlias(ADSHANDLE hTable, UNSIGNED8* p, UNSIGNED1
 UNSIGNED32 ENTRYPOINT AdsGetTableCharType(ADSHANDLE hTable, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // OpenADS always uses ANSI character type. Validate the handle.
-    if (auto* rt = get_remote_table(hTable)) { *p = ADS_ANSI; return ok(); }
+    if (get_remote_table(hTable) != nullptr) { *p = ADS_ANSI; return ok(); }
     if (get_table(hTable) == nullptr)
         return fail(openads::AE_INTERNAL_ERROR, "no table");
     *p = ADS_ANSI;
@@ -23158,7 +23209,7 @@ UNSIGNED32 ENTRYPOINT AdsGetTableConnection(ADSHANDLE hTable, ADSHANDLE* p) {
 UNSIGNED32 ENTRYPOINT AdsIsConnectionAlive(ADSHANDLE hConnect, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 1;  // assume alive
-    if (auto* rt = get_remote_table(hConnect)) {
+    if (get_remote_table(hConnect) != nullptr) {
         // Remote table: the connection is alive if we can reach it.
         // Conservative: if the table handle exists, the connection is alive.
         *p = 1;
@@ -23197,7 +23248,7 @@ UNSIGNED32 ENTRYPOINT AdsIsNull(ADSHANDLE hTable, UNSIGNED8* pucField,
                      UNSIGNED16* pbNull) {
     if (pbNull == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbNull = 0;
-    if (auto* rt = get_remote_table(hTable)) {
+    if (get_remote_table(hTable) != nullptr) {
         // Remote tables: nullability isn't exposed over the wire yet;
         // conservatively report "not null" (same as legacy ACE).
         return ok();
@@ -23234,7 +23285,7 @@ UNSIGNED32 ENTRYPOINT AdsIsServerLoaded(UNSIGNED8*, UNSIGNED16* p)
 UNSIGNED32 ENTRYPOINT AdsIsTableLocked(ADSHANDLE hTable, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0;
-    if (auto* rt = get_remote_table(hTable)) { return ok(); }
+    if (get_remote_table(hTable) != nullptr) { return ok(); }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     *p = t->is_table_locked() ? 1 : 0;
@@ -24056,7 +24107,7 @@ static UNSIGNED8* as_field(const char* s) {
 UNSIGNED32 ENTRYPOINT AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32* pulOptions) {
     if (pulOptions == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulOptions = 0;
-    if (auto* rt = get_remote_table(hTable)) { return ok(); }
+    if (get_remote_table(hTable) != nullptr) { return ok(); }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     // Map internal OpenMode to ACE open-option bits.

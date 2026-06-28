@@ -179,7 +179,9 @@ util::Result<std::size_t> sock_recv(Socket& sock,
 
 util::Result<void> socket_set_nonblocking(Socket& sock, bool enable) {
     u_long mode = enable ? 1u : 0u;
-    if (::ioctlsocket(static_cast<SOCKET>(sock.handle), FIONBIO, &mode) != 0) {
+    if (::ioctlsocket(static_cast<SOCKET>(sock.handle),
+                      static_cast<long>(FIONBIO),
+                      &mode) != 0) {
         return util::Error{5000, WSAGetLastError(),
                            "ioctlsocket(FIONBIO) failed", ""};
     }

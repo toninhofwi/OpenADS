@@ -392,8 +392,9 @@ DA-Web/
 ├── css/
 │   └── app.css             Dark-theme stylesheet
 ├── config/
-│   ├── dictionaries.json   Registered DD list (persisted across sessions)
-│   └── sql_scripts.json    Saved SQL scripts
+│   ├── dictionaries.example.json  Template for local registered DD list
+│   ├── dictionaries.json          Local registered DD list (not committed)
+│   └── sql_scripts.json           Saved SQL scripts
 └── vendor/                 Auto-downloaded client libraries (run setup.bat)
     ├── ace/                ace.js, mode-sql.js, theme-dracula.js, ext-language_tools.js
     ├── jquery/

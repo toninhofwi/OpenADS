@@ -1,0 +1,16 @@
+[
+    {
+        "name": "Sample-DD",
+        "path": "C:\\Data\\Sample\\sample.add",
+        "username": "AdsSys",
+        "connType": "local",
+        "entryType": "dd"
+    },
+    {
+        "name": "Sample-Free-Tables",
+        "path": "C:\\Data\\Sample",
+        "username": "",
+        "connType": "local",
+        "entryType": "free"
+    }
+]

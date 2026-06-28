@@ -666,7 +666,7 @@ Connections are held in your **PHP session** (a server-side file). If you close 
 
 | Data | Stored in |
 |------|-----------|
-| Registered DDs | `config/dictionaries.json` |
+| Registered DDs | `config/dictionaries.json` (local-only, not committed) |
 | Saved SQL scripts | `config/sql_scripts.json` |
 | Current connections | PHP session (server memory) |
 | Field/index/trigger changes | Written to the `.add` DD file |
@@ -696,7 +696,9 @@ If Apache is restarted, PHP sessions are preserved (they live in the filesystem)
 
 ### config/dictionaries.json
 
-Stores the list of registered DDs. Edited via the Manage Dictionaries dialog, but can also be edited manually:
+Stores the list of registered DDs for one DA-Web installation. This file is local machine state and is intentionally not committed to the repository. DA-Web creates it automatically when you add, create, or import a dictionary. New installs can copy `config/dictionaries.example.json` as a starting point, or just start with an empty list.
+
+Edited via the Manage Dictionaries dialog, but can also be edited manually:
 
 ```json
 [

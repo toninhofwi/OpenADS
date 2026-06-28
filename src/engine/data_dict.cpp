@@ -402,6 +402,11 @@ static std::string table_to_json(const DataDict::TableProps& tp) {
     j += "\"pk\":\"";          j += json_escape(tp.primary_key);   j += '"';
     j += ",\"default_idx\":\""; j += json_escape(tp.default_index); j += '"';
     j += ",\"comment\":\"";    j += json_escape(tp.comment);       j += '"';
+    // RCB 06/27/2026: Keep optional table-open/cache properties with the
+    // table registration record instead of inventing a second DD object type.
+    j += ",\"auto_create\":\"";     j += json_escape(tp.auto_create);     j += '"';
+    j += ",\"memo_block_size\":\""; j += json_escape(tp.memo_block_size); j += '"';
+    j += ",\"caching\":\"";         j += json_escape(tp.caching);         j += '"';
     j += '}';
     return j;
 }
@@ -1621,7 +1626,7 @@ util::Result<void> DataDict::load_() {
         std::string json     = read_json(rec);
 
         if (obj_type == "Table") {
-            // OBJ_NAME=alias, OBJ_KEY=relative_path, JSON={pk,default_idx,comment}
+            // OBJ_NAME=alias, OBJ_KEY=relative_path, JSON={pk,default_idx,comment,...}
             tables_[obj_name] = obj_key;
             if (!json.empty()) {
                 auto m = json_parse_flat(json);
@@ -1629,8 +1634,12 @@ util::Result<void> DataDict::load_() {
                 if (m.count("pk"))          tp.primary_key   = m.at("pk");
                 if (m.count("default_idx")) tp.default_index = m.at("default_idx");
                 if (m.count("comment"))     tp.comment       = m.at("comment");
+                if (m.count("auto_create"))     tp.auto_create     = m.at("auto_create");
+                if (m.count("memo_block_size")) tp.memo_block_size = m.at("memo_block_size");
+                if (m.count("caching"))         tp.caching         = m.at("caching");
                 if (!tp.primary_key.empty() || !tp.default_index.empty() ||
-                    !tp.comment.empty())
+                    !tp.comment.empty() || !tp.auto_create.empty() ||
+                    !tp.memo_block_size.empty() || !tp.caching.empty())
                     table_props_[obj_name] = std::move(tp);
             }
 
@@ -2068,7 +2077,10 @@ std::string DataDict::get_table_property(const std::string& alias,
     if (it == table_props_.end()) return {};
     switch (prop_code) {
         case 202: return it->second.primary_key;
+        case 203: return it->second.auto_create;
         case 213: return it->second.default_index;
+        case 215: return it->second.memo_block_size;
+        case 217: return it->second.caching;
         case 'C': case 704: return it->second.comment;
         default:  return {};
     }
@@ -2080,7 +2092,10 @@ void DataDict::set_table_property(const std::string& alias, int prop_code,
     TableProps& tp = table_props_[alias];
     switch (prop_code) {
         case 202: tp.primary_key   = value; break;
+        case 203: tp.auto_create   = value; break;
         case 213: tp.default_index = value; break;
+        case 215: tp.memo_block_size = value; break;
+        case 217: tp.caching = value; break;
         case 'C': case 704: tp.comment = value; break;
         default: break;
     }

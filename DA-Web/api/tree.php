@@ -282,6 +282,15 @@ if ($action === 'table_children') {
                            'data-table' => $table, 'data-entry' => $entryType2],
         ];
         if (!$isFree) {
+            // RCB 06/27/2026: DD tables expose persisted table properties as
+            // a first-class table child, alongside fields/indexes/triggers.
+            $nodes[] = [
+                'id'       => "props_{$ddName}_{$table}",
+                'text'     => 'Properties',
+                'icon'     => 'jstree-icon-properties',
+                'children' => false,
+                'a_attr'   => ['data-dd' => $ddName, 'data-type' => 'table_properties', 'data-table' => $table],
+            ];
             // Triggers — only for DD-connected tables
             $nodes[] = [
                 'id'       => "tbl_triggers_{$ddName}_{$table}",

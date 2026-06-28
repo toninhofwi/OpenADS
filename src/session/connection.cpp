@@ -13,6 +13,7 @@
 #include "openads/error.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -108,6 +109,42 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
     return platform::resolve_case_insensitive(full.string());
 }
 
+std::uint16_t Connection::table_cache_mode_(const std::string& relative_path) const {
+    // RCB 06/28/2026: Only DD-managed tables participate in table caching.
+    // Free tables remain unchanged because the cache policy is stored as a DD
+    // table property, and because per-user/reference-table tuning belongs to
+    // the dictionary rather than a process-wide file-name heuristic.
+    if (!dd_.has_value()) return 0;
+    auto parse_mode = [](const std::string& raw) -> std::uint16_t {
+        if (raw.empty()) return 0;
+        try {
+            auto v = std::stoul(raw);
+            return v <= 2 ? static_cast<std::uint16_t>(v) : 0;
+        } catch (...) {
+            return 0;
+        }
+    };
+    auto find_prop = [&](const std::string& alias) -> std::uint16_t {
+        // RCB 06/28/2026: ADS_DD_TABLE_CACHING is 217 in OpenADS' ACE
+        // header; keep the lookup local to avoid pulling ace.h into session.
+        return parse_mode(dd_->get_table_property(alias, 217));
+    };
+
+    if (dd_->has_alias(relative_path)) return find_prop(relative_path);
+    const auto resolved = dd_->resolve(relative_path);
+    auto norm = [](std::string s) {
+        std::replace(s.begin(), s.end(), '\\', '/');
+        for (auto& ch : s) ch = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    };
+    const auto wanted = norm(resolved);
+    for (const auto& kv : dd_->tables()) {
+        if (norm(kv.second) == wanted) return find_prop(kv.first);
+    }
+    return 0;
+}
+
 // Return a table already open on this connection that resolves to the
 // same physical file as `relative_path`, or nullptr if none is open.
 // Used by RI enforcement so a cascade/restrict acts on the very buffer
@@ -192,6 +229,23 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
         }
     }
 
+    if (auto cache_mode = table_cache_mode_(relative_path); cache_mode != 0) {
+        if (auto cr = holder->enable_cache(cache_mode); !cr) return cr.error();
+    }
+
+    Handle h = next_table_handle_++;
+    if (tx_.active()) {
+        holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));
+        tx_.register_table(static_cast<engine::Tx::TableId>(h), relative_path);
+    }
+    tables_.emplace(h, std::move(holder));
+    table_paths_.emplace(h, relative_path);
+    return h;
+}
+
+util::Result<Handle> Connection::adopt_table(engine::Table table,
+                                             const std::string& relative_path) {
+    auto holder = std::make_unique<engine::Table>(std::move(table));
     Handle h = next_table_handle_++;
     if (tx_.active()) {
         holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));

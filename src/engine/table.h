@@ -45,6 +45,11 @@ public:
                                     TableType type,
                                     OpenMode mode = OpenMode::Read,
                                     LockingMode locking = LockingMode::Compatible);
+    static Table from_driver(std::unique_ptr<drivers::IDriver> drv,
+                             std::string path,
+                             TableType type = TableType::Adt,
+                             OpenMode mode = OpenMode::Read,
+                             LockingMode locking = LockingMode::Compatible);
 
     const std::string& path() const noexcept { return path_; }
     const std::string& alias() const noexcept { return alias_; }
@@ -179,6 +184,8 @@ public:
     void set_deferred_flush(bool v) noexcept { deferred_flush_ = v; }
 
     util::Result<void> flush();
+    util::Result<void> enable_cache(std::uint16_t cache_mode);
+    bool cache_enabled() const noexcept { return cache_enabled_; }
 
     // Drop every record. Header rec count -> 0 and every bound index
     // (active order plus parked extras) is walked to erase its
@@ -435,6 +442,7 @@ private:
     std::unordered_map<std::string, std::string>  ri_snapshot_;
     bool                                          pending_append_ = false;
     bool                                          deferred_flush_ = false;
+    bool                                          cache_enabled_  = false;
     bool                                          last_seek_found_ = false;
     bool                                          aof_active_      = false;
     int                                           aof_opt_level_   = 0;
