@@ -31,7 +31,8 @@ std::vector<uint8_t> obfuscate_password(const std::string& pw) {
     // v1: ASCII passwords only — UCS-2LE high byte is 0x00 for all code points.
     std::vector<uint8_t> out;
     out.reserve(pw.size() * 2);
-    for (unsigned char c : pw) {
+    for (char ch : pw) {
+        const unsigned char c = static_cast<unsigned char>(ch);
         // UCS-2LE encoding: low byte = character value, high byte = 0.
         for (uint8_t b : {static_cast<uint8_t>(c), uint8_t{0}}) {
             uint8_t swapped = static_cast<uint8_t>((b >> 4) | (b << 4));
@@ -100,7 +101,8 @@ static void push_le32(std::vector<uint8_t>& out, uint32_t v) {
 
 /// Append a UTF-8 string as UCS-2LE to |out| (ASCII-only, high byte = 0x00).
 static void push_ucs2le(std::vector<uint8_t>& out, const std::string& s) {
-    for (unsigned char c : s) {
+    for (char ch : s) {
+        const unsigned char c = static_cast<unsigned char>(ch);
         out.push_back(static_cast<uint8_t>(c));  // low byte
         out.push_back(0x00);                      // high byte (ASCII)
     }

@@ -232,7 +232,7 @@ jobs:
           CREATE DATABASE '/tmp/openads-fb/live.fdb' USER 'SYSDBA' DEFAULT CHARACTER SET UTF8;
           EXIT;
           EOF
-          isql -user SYSDBA -i /tmp/openads-fb/seed.sql
+          isql-fb -user SYSDBA -i /tmp/openads-fb/seed.sql
 
       - name: Configure (Firebird)
         run: cmake --preset ninja-clang -DOPENADS_WITH_FIREBIRD=ON

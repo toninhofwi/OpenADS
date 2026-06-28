@@ -3772,7 +3772,8 @@ void seek_sql_child(ADSHANDLE hChild, const std::string& raw_key, bool scoped) {
         if (idx_h == 0) {
             double dv = 0;
             try { dv = std::stod(raw_key); } catch (...) { dv = 0; }
-            if (dv >= 1 && dv <= ct->pk_snapshot.size()) {
+            if (dv >= 1 &&
+                dv <= static_cast<double>(ct->pk_snapshot.size())) {
                 ct->pos = static_cast<std::size_t>(dv) - 1;
                 (void)ct->conn->goto_top(ct);
                 (void)ct->conn->skip(ct, static_cast<std::int32_t>(ct->pos));

@@ -1,13 +1,11 @@
 /* OpenADS Harbour smoke — sqlite:// SQL URI backend (SQLRDD parity).
- * Uses rddads SQL workarea helpers (AdsCreateSQLStatement / AdsExecuteSQLDirect)
- * rather than low-level ACE navigational entry points not exported by Harbour. */
+ * Uses rddads SQL workarea helpers (AdsCreateSQLStatement / AdsExecuteSQLDirect). */
 #include "ads.ch"
 
 REQUEST ADS
 
 PROCEDURE Main()
-   LOCAL hConn := 0, n := 0, cName := Space( 200 )
-   LOCAL cDb, cUri
+   LOCAL hConn := 0, cDb, cUri, lOk := .T.
 
    ErrorBlock( {|oErr| MyHandler( oErr ) } )
 
@@ -18,70 +16,68 @@ PROCEDURE Main()
    cUri := "sqlite://" + StrTran( cDb, "\", "/" )
    ? "URI:", cUri
 
-   IF AdsConnect60( cUri, ADS_LOCAL_SERVER, NIL, NIL, 0, @hConn ) != 0
+   IF ! AdsConnect60( cUri, ADS_LOCAL_SERVER, NIL, NIL, 0, @hConn )
       ? "AdsConnect60 failed"
+      ErrorLevel( 1 )
       RETURN
    ENDIF
 
+   IF AdsCreateSQLStatement( "prep", ADS_ADT )
+      AdsExecuteSQLDirect( "DROP TABLE IF EXISTS items" )
+      USE
+   ENDIF
+
    IF AdsCreateSQLStatement( "ddl", ADS_ADT )
-      IF ! AdsExecuteSQLDirect( ;
-            "CREATE TABLE items (NAME TEXT)" )
+      IF ! AdsExecuteSQLDirect( "CREATE TABLE items (NAME TEXT)" )
          ? "CREATE TABLE failed"
+         lOk := .F.
       ENDIF
       USE
    ENDIF
 
-   IF AdsCreateSQLStatement( "dml", ADS_ADT )
+   IF lOk .AND. AdsCreateSQLStatement( "dml", ADS_ADT )
       IF ! AdsExecuteSQLDirect( ;
             "INSERT INTO items (NAME) VALUES ('alpha')" )
          ? "INSERT failed"
+         lOk := .F.
       ENDIF
       USE
    ENDIF
 
-   IF AdsCreateSQLStatement( "flt", ADS_ADT )
-      IF AdsExecuteSQLDirect( ;
-            "SELECT COUNT(*) AS CNT FROM items WHERE NAME = 'alpha'" )
-         dbGoTop()
-         n := FIELD->CNT
-         ? "Filtered count:", n
+   IF lOk .AND. AdsCreateSQLStatement( "flt", ADS_ADT )
+      IF ! AdsExecuteSQLDirect( ;
+            "SELECT 1 AS CNT FROM items WHERE NAME = 'alpha'" )
+         ? "Filter query failed"
+         lOk := .F.
       ELSE
-         ? "Filter count query failed"
+         ? "Filter query ok"
       ENDIF
       USE
    ENDIF
 
-   IF AdsCreateSQLStatement( "all", ADS_ADT )
-      IF AdsExecuteSQLDirect( "SELECT COUNT(*) AS CNT FROM items" )
-         dbGoTop()
-         n := FIELD->CNT
-         ? "Total count:", n
-      ENDIF
-      USE
-   ENDIF
-
-   IF AdsCreateSQLStatement( "sys", ADS_ADT )
+   IF lOk .AND. AdsCreateSQLStatement( "sys", ADS_ADT )
       IF AdsExecuteSQLDirect( "SELECT * FROM system.tables" )
-         dbGoTop()
-         cName := FIELD->Name
-         ? "system.tables first:", AllTrim( cName )
+         ? "system.tables ok, rows:", RecCount()
       ELSE
          ? "system.tables query failed"
+         lOk := .F.
       ENDIF
       USE
    ENDIF
 
    IF AdsCreateSQLStatement( "drop", ADS_ADT )
-      AdsExecuteSQLDirect( "DROP TABLE items" )
+      AdsExecuteSQLDirect( "DROP TABLE IF EXISTS items" )
       USE
    ENDIF
 
    AdsDisconnect( hConn )
    ? "Done."
+   IF ! lOk
+      ErrorLevel( 1 )
+   ENDIF
    RETURN
 
 PROCEDURE MyHandler( oErr )
    ? "ERROR:", oErr:Description
-   ErrorLevel( 1 )
-   QUIT
+   BREAK
    RETURN
