@@ -2,6 +2,9 @@
 
 #include "sql/parser.h"
 
+#include <cctype>
+#include <cstring>
+
 namespace openads::sql_backend {
 
 namespace {
@@ -567,7 +570,233 @@ FROM rdb$relations r
 WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0)";
         }
     }
+    if (sys_name == "links") {
+        return "SELECT '' AS \"LINK_NAME\", '' AS \"LINK_PATH\", "
+               "'' AS \"LINK_USER\" WHERE 1=0";
+    }
+    if (sys_name == "views") {
+        switch (dialect) {
+            case SqlDdlDialect::Sqlite:
+                return R"(
+SELECT name AS "VIEW_NAME", IFNULL(sql, '') AS "VIEW_SQL", '' AS "COMMENT"
+FROM sqlite_master
+WHERE type = 'view'
+ORDER BY name)";
+            case SqlDdlDialect::Postgres:
+                return R"(
+SELECT table_name AS "VIEW_NAME",
+       COALESCE(view_definition, '') AS "VIEW_SQL", '' AS "COMMENT"
+FROM information_schema.views
+WHERE table_schema = ANY (current_schemas(true))
+ORDER BY table_name)";
+            case SqlDdlDialect::Maria:
+                return R"(
+SELECT table_name AS "VIEW_NAME",
+       COALESCE(view_definition, '') AS "VIEW_SQL", '' AS "COMMENT"
+FROM information_schema.views
+WHERE table_schema = DATABASE()
+ORDER BY table_name)";
+            case SqlDdlDialect::Mssql:
+                return R"(
+SELECT TABLE_NAME AS "VIEW_NAME",
+       CAST('' AS NVARCHAR(250)) AS "VIEW_SQL", '' AS "COMMENT"
+FROM INFORMATION_SCHEMA.VIEWS
+ORDER BY TABLE_NAME)";
+            case SqlDdlDialect::Firebird:
+                return R"(
+SELECT TRIM(r.rdb$relation_name) AS "VIEW_NAME",
+       '' AS "VIEW_SQL", '' AS "COMMENT"
+FROM rdb$relations r
+WHERE r.rdb$view_blr IS NOT NULL AND r.rdb$system_flag = 0
+ORDER BY r.rdb$relation_name)";
+        }
+    }
+    if (sys_name == "triggers") {
+        switch (dialect) {
+            case SqlDdlDialect::Sqlite:
+                return R"(
+SELECT name AS "TRIG_NAME", tbl_name AS "TABLE_NAME",
+       '0' AS "EVENT_MASK", '' AS "TIMING", '' AS "EVENT",
+       IFNULL(sql, '') AS "CONTAINER", '' AS "PROC",
+       '0' AS "PRIORITY", 'T' AS "ENABLED", '0' AS "TRIG_OPTIONS"
+FROM sqlite_master
+WHERE type = 'trigger'
+ORDER BY name)";
+            case SqlDdlDialect::Postgres:
+                return R"(
+SELECT trigger_name AS "TRIG_NAME",
+       event_object_table AS "TABLE_NAME",
+       CASE event_manipulation
+         WHEN 'INSERT' THEN '1' WHEN 'UPDATE' THEN '2' WHEN 'DELETE' THEN '3'
+         ELSE '0' END AS "EVENT_MASK",
+       CASE action_timing
+         WHEN 'BEFORE' THEN 'BEFORE' WHEN 'AFTER' THEN 'AFTER' ELSE '' END
+         AS "TIMING",
+       event_manipulation AS "EVENT",
+       COALESCE(action_statement, '') AS "CONTAINER",
+       '' AS "PROC", '0' AS "PRIORITY", 'T' AS "ENABLED", '0' AS "TRIG_OPTIONS"
+FROM information_schema.triggers
+WHERE trigger_schema = ANY (current_schemas(true))
+ORDER BY trigger_name)";
+            case SqlDdlDialect::Maria:
+                return R"(
+SELECT trigger_name AS "TRIG_NAME",
+       event_object_table AS "TABLE_NAME",
+       CASE event_manipulation
+         WHEN 'INSERT' THEN '1' WHEN 'UPDATE' THEN '2' WHEN 'DELETE' THEN '3'
+         ELSE '0' END AS "EVENT_MASK",
+       CASE action_timing
+         WHEN 'BEFORE' THEN 'BEFORE' WHEN 'AFTER' THEN 'AFTER' ELSE '' END
+         AS "TIMING",
+       event_manipulation AS "EVENT",
+       COALESCE(action_statement, '') AS "CONTAINER",
+       '' AS "PROC", '0' AS "PRIORITY", 'T' AS "ENABLED", '0' AS "TRIG_OPTIONS"
+FROM information_schema.triggers
+WHERE trigger_schema = DATABASE()
+ORDER BY trigger_name)";
+            case SqlDdlDialect::Mssql:
+                return R"(
+SELECT tr.name AS "TRIG_NAME",
+       OBJECT_NAME(tr.parent_id) AS "TABLE_NAME",
+       '0' AS "EVENT_MASK", '' AS "TIMING", '' AS "EVENT",
+       '' AS "CONTAINER", '' AS "PROC",
+       '0' AS "PRIORITY", 'T' AS "ENABLED", '0' AS "TRIG_OPTIONS"
+FROM sys.triggers tr
+WHERE tr.parent_class = 1
+ORDER BY tr.name)";
+            case SqlDdlDialect::Firebird:
+                return R"(
+SELECT TRIM(tg.rdb$trigger_name) AS "TRIG_NAME",
+       TRIM(tg.rdb$relation_name) AS "TABLE_NAME",
+       '0' AS "EVENT_MASK", '' AS "TIMING", '' AS "EVENT",
+       '' AS "CONTAINER", '' AS "PROC",
+       '0' AS "PRIORITY", 'T' AS "ENABLED", '0' AS "TRIG_OPTIONS"
+FROM rdb$triggers tg
+WHERE tg.rdb$system_flag = 0
+ORDER BY tg.rdb$trigger_name)";
+        }
+    }
+    if (sys_name == "storedprocedures") {
+        switch (dialect) {
+            case SqlDdlDialect::Sqlite:
+                return "SELECT '' AS \"PROC_NAME\", '' AS \"CONTAINER\", "
+                       "'' AS \"PROCEDURE\", '' AS \"INPUT\", '' AS \"OUTPUT\" "
+                       "WHERE 1=0";
+            case SqlDdlDialect::Postgres:
+                return R"(
+SELECT routine_name AS "PROC_NAME", '' AS "CONTAINER",
+       routine_name AS "PROCEDURE", '' AS "INPUT", '' AS "OUTPUT"
+FROM information_schema.routines
+WHERE routine_schema = ANY (current_schemas(true))
+  AND routine_type = 'PROCEDURE'
+ORDER BY routine_name)";
+            case SqlDdlDialect::Maria:
+                return R"(
+SELECT routine_name AS "PROC_NAME", '' AS "CONTAINER",
+       routine_name AS "PROCEDURE", '' AS "INPUT", '' AS "OUTPUT"
+FROM information_schema.routines
+WHERE routine_schema = DATABASE()
+  AND routine_type = 'PROCEDURE'
+ORDER BY routine_name)";
+            case SqlDdlDialect::Mssql:
+                return R"(
+SELECT ROUTINE_NAME AS "PROC_NAME", '' AS "CONTAINER",
+       ROUTINE_NAME AS "PROCEDURE", '' AS "INPUT", '' AS "OUTPUT"
+FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_TYPE = 'PROCEDURE'
+ORDER BY ROUTINE_NAME)";
+            case SqlDdlDialect::Firebird:
+                return R"(
+SELECT TRIM(p.rdb$procedure_name) AS "PROC_NAME", '' AS "CONTAINER",
+       TRIM(p.rdb$procedure_name) AS "PROCEDURE", '' AS "INPUT", '' AS "OUTPUT"
+FROM rdb$procedures p
+WHERE p.rdb$system_flag = 0
+ORDER BY p.rdb$procedure_name)";
+        }
+    }
+    if (sys_name == "functions") {
+        switch (dialect) {
+            case SqlDdlDialect::Sqlite:
+                return "SELECT '' AS \"FUNC_NAME\", '' AS \"CONTAINER\", "
+                       "'' AS \"RET_TYPE\", '' AS \"IN_PARAMS\", "
+                       "'' AS \"FUNC_BODY\", '' AS \"COMMENT\" WHERE 1=0";
+            case SqlDdlDialect::Postgres:
+                return R"(
+SELECT routine_name AS "FUNC_NAME", '' AS "CONTAINER",
+       data_type AS "RET_TYPE", '' AS "IN_PARAMS",
+       '' AS "FUNC_BODY", '' AS "COMMENT"
+FROM information_schema.routines
+WHERE routine_schema = ANY (current_schemas(true))
+  AND routine_type = 'FUNCTION'
+ORDER BY routine_name)";
+            case SqlDdlDialect::Maria:
+                return R"(
+SELECT routine_name AS "FUNC_NAME", '' AS "CONTAINER",
+       data_type AS "RET_TYPE", '' AS "IN_PARAMS",
+       '' AS "FUNC_BODY", '' AS "COMMENT"
+FROM information_schema.routines
+WHERE routine_schema = DATABASE()
+  AND routine_type = 'FUNCTION'
+ORDER BY routine_name)";
+            case SqlDdlDialect::Mssql:
+                return R"(
+SELECT ROUTINE_NAME AS "FUNC_NAME", '' AS "CONTAINER",
+       DATA_TYPE AS "RET_TYPE", '' AS "IN_PARAMS",
+       '' AS "FUNC_BODY", '' AS "COMMENT"
+FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_TYPE = 'FUNCTION'
+ORDER BY ROUTINE_NAME)";
+            case SqlDdlDialect::Firebird:
+                return R"(
+SELECT TRIM(f.rdb$function_name) AS "FUNC_NAME", '' AS "CONTAINER",
+       '' AS "RET_TYPE", '' AS "IN_PARAMS",
+       '' AS "FUNC_BODY", '' AS "COMMENT"
+FROM rdb$functions f
+WHERE f.rdb$system_flag = 0
+ORDER BY f.rdb$function_name)";
+        }
+    }
     return std::nullopt;
+}
+
+static std::optional<std::size_t> system_from_clause_end(
+    const std::string& sql,
+    const std::string& system_table) {
+    const std::string lower    = lower_copy(sql);
+    const std::string needle   = "from " + lower_copy(system_table);
+    const std::size_t   from_pos = lower.find(needle);
+    if (from_pos == std::string::npos) return std::nullopt;
+    std::size_t end = from_pos + needle.size();
+    while (end < sql.size() &&
+           std::isspace(static_cast<unsigned char>(sql[end]))) {
+        ++end;
+    }
+    if (end < sql.size() &&
+        (std::isalnum(static_cast<unsigned char>(sql[end])) ||
+         sql[end] == '_')) {
+        const std::string rest = lower_copy(sql.substr(end));
+        static constexpr const char* k_clause_keywords[] = {
+            "where", "order", "group", "having", "limit", "union", "offset",
+        };
+        bool clause = false;
+        for (const char* kw : k_clause_keywords) {
+            const std::size_t n = std::strlen(kw);
+            if (rest.size() >= n && rest.compare(0, n, kw) == 0 &&
+                (rest.size() == n ||
+                 std::isspace(static_cast<unsigned char>(rest[n])))) {
+                clause = true;
+                break;
+            }
+        }
+        if (!clause) {
+            while (end < sql.size() &&
+                   (std::isalnum(static_cast<unsigned char>(sql[end])) ||
+                    sql[end] == '_')) {
+                ++end;
+            }
+        }
+    }
+    return end;
 }
 
 }  // namespace
@@ -575,9 +804,25 @@ WHERE r.rdb$view_blr IS NULL AND r.rdb$system_flag = 0)";
 std::optional<std::string> rewrite_system_select_sql(
     SqlDdlDialect dialect,
     const std::string& sql) {
-    auto sys = system_table_from_select(sql);
-    if (!sys) return std::nullopt;
-    return catalog_sql(dialect, *sys);
+    if (!openads::sql::sql_is_select(sql)) return std::nullopt;
+    auto sel = openads::sql::parse_select(sql);
+    if (!sel) return std::nullopt;
+    const auto& st = sel.value();
+    if (!st.derived_sql.empty() || !st.unions.empty()) return std::nullopt;
+    if (st.inner_join.has_value()) return std::nullopt;
+    const std::string px = lower_copy(
+        st.table.size() >= 7 ? st.table.substr(0, 7) : st.table);
+    if (px != "system.") return std::nullopt;
+    const std::string sys_name = lower_copy(st.table.substr(7));
+    auto catalog = catalog_sql(dialect, sys_name);
+    if (!catalog) return std::nullopt;
+    const std::size_t from_pos =
+        lower_copy(sql).find("from " + lower_copy(st.table));
+    if (from_pos == std::string::npos) return *catalog;
+    auto end = system_from_clause_end(sql, st.table);
+    if (!end) return *catalog;
+    return sql.substr(0, from_pos) + " FROM (" + *catalog +
+           ") AS _openads_sys " + sql.substr(*end);
 }
 
 std::optional<std::string> build_system_catalog_sql(

@@ -1,5 +1,6 @@
 #include "sql_backend/sqlite_connection.h"
 
+#include "openads/ace.h"
 #include "sql_backend/sqlite_backend.h"
 
 #include <algorithm>
@@ -17,6 +18,75 @@ namespace {
 #if defined(OPENADS_WITH_SQLITE)
 
 util::Result<void> load_current_row(sqlite3* db, SqliteTable* tbl);
+
+util::Result<void> ensure_colmeta_table(sqlite3* db) {
+    const char* ddl =
+        "CREATE TABLE IF NOT EXISTS \"OPENADS$COLMETA\" ("
+        "table_name TEXT NOT NULL,"
+        "col_name TEXT NOT NULL,"
+        "xbase_type TEXT NOT NULL,"
+        "col_length INTEGER NOT NULL,"
+        "col_dec INTEGER NOT NULL,"
+        "PRIMARY KEY (table_name, col_name))";
+    char* err = nullptr;
+    if (sqlite3_exec(db, ddl, nullptr, nullptr, &err) != SQLITE_OK) {
+        std::string msg = err ? err : "colmeta ddl failed";
+        if (err) sqlite3_free(err);
+        return util::Error{5001, 0, msg, ""};
+    }
+    return util::Result<void>{};
+}
+
+std::uint16_t ads_type_from_xbase(char t) {
+    switch (t) {
+        case 'L': return ADS_LOGICAL;
+        case 'N': return ADS_DOUBLE;
+        case 'M': return ADS_MEMO;
+        case 'B': return ADS_BINARY;
+        case 'A': return ADS_AUTOINC;
+        case 'D': return ADS_DATE;
+        case 'C':
+        default:  return ADS_STRING;
+    }
+}
+
+void apply_colmeta_overrides(sqlite3* db, const std::string& table_name,
+                             std::vector<SqliteTable::FieldDesc>& fields) {
+    if (!is_safe_identifier(table_name)) return;
+    const std::string sql =
+        "SELECT col_name, xbase_type, col_length, col_dec "
+        "FROM \"OPENADS$COLMETA\" WHERE table_name = \"" + table_name + "\"";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(),
+                           static_cast<int>(sql.size()),
+                           &stmt, nullptr) != SQLITE_OK) {
+        return;
+    }
+    std::unordered_map<std::string, SqliteTable::FieldDesc> meta;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* cn = reinterpret_cast<const char*>(
+            sqlite3_column_text(stmt, 0));
+        const char* xt = reinterpret_cast<const char*>(
+            sqlite3_column_text(stmt, 1));
+        if (!cn || !xt || xt[0] == '\0') continue;
+        SqliteTable::FieldDesc fd;
+        fd.name = cn;
+        fd.type = ads_type_from_xbase(xt[0]);
+        fd.length = static_cast<std::uint32_t>(
+            sqlite3_column_int(stmt, 2));
+        fd.decimals = static_cast<std::uint16_t>(
+            sqlite3_column_int(stmt, 3));
+        meta[fd.name] = fd;
+    }
+    sqlite3_finalize(stmt);
+    for (auto& f : fields) {
+        auto it = meta.find(f.name);
+        if (it == meta.end()) continue;
+        f.type     = it->second.type;
+        f.length   = it->second.length;
+        f.decimals = it->second.decimals;
+    }
+}
 
 util::Result<std::vector<SqliteTable::FieldDesc>>
 describe_table_impl(sqlite3* db, SqliteTable* tbl) {
@@ -47,6 +117,7 @@ describe_table_impl(sqlite3* db, SqliteTable* tbl) {
         return util::Error{5001, 0, "table not found or has no columns",
                            tbl->name};
     }
+    apply_colmeta_overrides(db, tbl->name, out);
     tbl->fields        = out;
     tbl->fields_cached = true;
     return out;
@@ -201,6 +272,7 @@ util::Result<SqliteConnection> SqliteConnection::open(const SqliteUri& uri) {
     sqlite3_busy_timeout(raw, 5000);
     sqlite3_exec(raw, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
     conn.impl_->db = raw;
+    (void)ensure_colmeta_table(raw);
     return conn;
 #else
     (void)uri;
@@ -1080,7 +1152,6 @@ util::Result<void> SqliteConnection::restructure_change(
         if (cols[i].pk) create += " PRIMARY KEY";
         else if (cols[i].notnull) create += " NOT NULL";
         col_list += "\"" + cols[i].name + "\"";
-        (void)change_map;  // length metadata applied on next table open
     }
     create += ")";
     if (auto r = exec_sql(create); !r) return r.error();
@@ -1094,6 +1165,21 @@ util::Result<void> SqliteConnection::restructure_change(
     const std::string rename =
         "ALTER TABLE \"" + staging + "\" RENAME TO \"" + table_name + "\"";
     if (auto r = exec_sql(rename); !r) return r.error();
+    if (auto r = ensure_colmeta_table(impl_->db); !r) return r.error();
+    for (const auto& c : changes) {
+        const std::string upsert =
+            "INSERT INTO \"OPENADS$COLMETA\" "
+            "(table_name, col_name, xbase_type, col_length, col_dec) "
+            "VALUES (\"" + table_name + "\", \"" + c.name + "\", '" +
+            std::string(1, c.xbase_type) + "', " +
+            std::to_string(static_cast<unsigned>(c.length)) + ", " +
+            std::to_string(static_cast<unsigned>(c.dec)) + ") "
+            "ON CONFLICT(table_name, col_name) DO UPDATE SET "
+            "xbase_type=excluded.xbase_type, "
+            "col_length=excluded.col_length, "
+            "col_dec=excluded.col_dec";
+        if (auto ex = exec_sql(upsert); !ex) return ex.error();
+    }
     return util::Result<void>{};
 #else
     (void)table_name;

@@ -311,6 +311,38 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         CHECK(found_item);
         REQUIRE(AdsCloseTable(hPerm) == 0);
 
+        // Remaining SR_MGMNT catalog tables (empty or native catalog).
+        for (const char* sys :
+             {"system.views", "system.triggers", "system.storedprocedures",
+              "system.functions", "system.links"}) {
+            std::vector<UNSIGNED8> sname(std::strlen(sys) + 1);
+            std::memcpy(sname.data(), sys, sname.size());
+            ADSHANDLE hSys = 0;
+            REQUIRE(AdsOpenTable(hConn, sname.data(), sname.data(),
+                                 ADS_DEFAULT, 0, 0, 0, ADS_READONLY,
+                                 &hSys) == 0);
+            REQUIRE(AdsCloseTable(hSys) == 0);
+        }
+
+        // system.* rewrite preserves client WHERE clause.
+        UNSIGNED8 sperms_where[] =
+            "SELECT OBJ_NAME FROM system.permissions "
+            "WHERE OBJ_NAME = 'item' AND OBJ_TYPE = '1'";
+        hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sperms_where, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        int perm_rows = 0;
+        REQUIRE(AdsGotoTop(hCur) == 0);
+        for (;;) {
+            UNSIGNED16 eof_w = 0;
+            REQUIRE(AdsAtEOF(hCur, &eof_w) == 0);
+            if (eof_w) break;
+            ++perm_rows;
+            REQUIRE(AdsSkip(hCur, 1) == 0);
+        }
+        CHECK(perm_rows == 1);
+        REQUIRE(AdsCloseTable(hCur) == 0);
+
         AdsCloseSQLStatement(hStmt);
     }
 
@@ -331,6 +363,9 @@ TEST_CASE("SQL URI smoke: sqlite:// DDL + DML + filter + scoped relation + ALTER
         std::string val(reinterpret_cast<const char*>(vbuf), vlen);
         while (!val.empty() && val.back() == ' ') val.pop_back();
         CHECK(val == "a1");
+        UNSIGNED32 fl = 0;
+        REQUIRE(AdsGetFieldLength(hC, data_fld, &fl) == 0);
+        CHECK(fl == 16u);
     }
 
     REQUIRE(AdsCloseTable(hC) == 0);
