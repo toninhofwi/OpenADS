@@ -158,7 +158,11 @@ MssqlTable::open(MssqlConnection& c, const std::string& table_name) {
                            result.message, sql};
     }
 
-    return from_result(std::move(result));
+    auto tbl = from_result(std::move(result));
+    tbl->conn      = &c;
+    tbl->name      = table_name;
+    tbl->sql_table = table_name;
+    return tbl;
 }
 
 std::unique_ptr<MssqlTable> MssqlTable::from_result(tds::QueryResult qr) {

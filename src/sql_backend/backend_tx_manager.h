@@ -112,4 +112,46 @@ struct BackendTxManager {
     bool in_transaction() const { return nesting > 0; }
 };
 
+// Wire standard BEGIN/COMMIT/ROLLBACK/SAVEPOINT callbacks for SQL backends
+// that accept ANSI-style transaction commands (SQLite, PostgreSQL, MariaDB,
+// ODBC drivers). Idempotent: does nothing when callbacks are already set.
+inline void wire_standard_savepoint_tx(
+    BackendTxManager& tx,
+    const std::function<void(const std::string&)>& exec_sql) {
+    if (tx.on_begin) return;
+    tx.on_begin = [&tx, exec_sql](bool is_nested) {
+        if (!is_nested) exec_sql("BEGIN");
+    };
+    tx.on_commit = [exec_sql](bool) { exec_sql("COMMIT"); };
+    tx.on_rollback = [exec_sql]() { exec_sql("ROLLBACK"); };
+    tx.on_savepoint = [exec_sql](const std::string& name) {
+        exec_sql("SAVEPOINT " + name);
+    };
+    tx.on_release_savepoint = [exec_sql](const std::string& name) {
+        exec_sql("RELEASE SAVEPOINT " + name);
+    };
+    tx.on_rollback_savepoint = [exec_sql](const std::string& name) {
+        exec_sql("ROLLBACK TO SAVEPOINT " + name);
+    };
+}
+
+// SQL Server uses BEGIN/COMMIT/ROLLBACK TRANSACTION and SAVE TRANSACTION.
+inline void wire_mssql_savepoint_tx(
+    BackendTxManager& tx,
+    const std::function<void(const std::string&)>& exec_sql) {
+    if (tx.on_begin) return;
+    tx.on_begin = [&tx, exec_sql](bool is_nested) {
+        if (!is_nested) exec_sql("BEGIN TRANSACTION");
+    };
+    tx.on_commit = [exec_sql](bool) { exec_sql("COMMIT TRANSACTION"); };
+    tx.on_rollback = [exec_sql]() { exec_sql("ROLLBACK TRANSACTION"); };
+    tx.on_savepoint = [exec_sql](const std::string& name) {
+        exec_sql("SAVE TRANSACTION " + name);
+    };
+    tx.on_release_savepoint = [](const std::string&) {};
+    tx.on_rollback_savepoint = [exec_sql](const std::string& name) {
+        exec_sql("ROLLBACK TRANSACTION " + name);
+    };
+}
+
 }  // namespace openads::sql_backend

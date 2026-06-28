@@ -8,6 +8,7 @@
 
 #if defined(OPENADS_WITH_MSSQL)
 
+#include "sql_backend/backend_where_builder.h"
 #include "sql_backend/tds_protocol.h"
 #include "util/result.h"
 
@@ -22,6 +23,7 @@ class MssqlConnection;  // mssql_connection.h
 
 struct MssqlTable {
     MssqlConnection* conn = nullptr;
+    std::string      name;       // ABI / AdsOpenTable name
     std::string      sql_table;
 
     // Entire result set buffered in memory.
@@ -34,8 +36,10 @@ struct MssqlTable {
     bool bof = false;
     bool eof = false;
 
-    // Last seek result — always false (no seek in v1).
-    bool last_found = false;
+    bool last_seek_found = false;
+
+    std::string where_filter;
+    BackendWhereBuilder where_builder;
 
     // Primary-key column indices (resolved by name at open).
     std::vector<std::size_t> pk_cols;

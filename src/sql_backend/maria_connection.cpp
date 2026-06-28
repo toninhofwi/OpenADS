@@ -1,5 +1,6 @@
 #include "sql_backend/maria_connection.h"
 
+#include "sql_backend/backend_aggregate.h"
 #include "sql_backend/maria_backend.h"
 #include "sql_backend/sql_common.h"
 
@@ -426,6 +427,67 @@ util::Result<void> MariaConnection::skip(MariaTable* tbl, std::int32_t step) {
 #endif
 }
 
+util::Result<void>
+MariaConnection::set_filter(MariaTable* tbl, const std::string& where) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid maria set_filter", ""};
+    }
+    tbl->where_builder.aof_filter = where;
+    tbl->where_filter = tbl->where_builder.build();
+    return reload_pk_snapshot(impl_->conn, tbl);
+#else
+    (void)tbl; (void)where;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
+util::Result<std::vector<engine::AggValue>>
+MariaConnection::aggregate(MariaTable* tbl,
+                           const std::string& where_sql,
+                           const std::vector<engine::AggSpec>& specs) {
+#if defined(OPENADS_WITH_MARIADB)
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid maria aggregate", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_table_impl(impl_->conn, tbl); !d) return d.error();
+    }
+    std::vector<AggregateFieldDesc> fields;
+    fields.reserve(tbl->fields.size());
+    for (const auto& f : tbl->fields) {
+        fields.push_back({f.name, f.type});
+    }
+    std::string bad;
+    const std::string sql = build_aggregate_sql(
+        quote_ident(tbl->name), where_sql, specs, fields,
+        [](const std::string& n) { return '`' + n + '`'; }, &bad);
+    if (sql.empty()) {
+        return util::Error{5001, 0,
+                           "invalid maria aggregate field: " + bad, ""};
+    }
+    if (mysql_query(impl_->conn, sql.c_str()) != 0) {
+        return maria_error("aggregate", mysql_error(impl_->conn));
+    }
+    MYSQL_RES* res = mysql_store_result(impl_->conn);
+    if (res == nullptr) return maria_error("aggregate", mysql_error(impl_->conn));
+    std::vector<std::string> vals;
+    vals.resize(specs.size());
+    MYSQL_ROW row = mysql_fetch_row(res);
+    if (row) {
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+            if (row[i] == nullptr) vals[i].clear();
+            else vals[i] = row[i];
+        }
+    }
+    mysql_free_result(res);
+    return parse_aggregate_row(specs, fields, vals, row != nullptr);
+#else
+    (void)tbl; (void)where_sql; (void)specs;
+    return util::Error{5004, 0, "mariadb backend disabled", ""};
+#endif
+}
+
 util::Result<bool> MariaConnection::at_eof(MariaTable* tbl) const {
 #if defined(OPENADS_WITH_MARIADB)
     if (!valid() || tbl == nullptr) {
@@ -604,9 +666,12 @@ namespace {
 // Re-run the PK snapshot SELECT (same shape as open_table) so RECCOUNT and row
 // ordering reflect a just-committed INSERT/DELETE (autocommit is on).
 util::Result<void> reload_pk_snapshot(MYSQL* conn, MariaTable* tbl) {
-    const std::string sql = "SELECT " + pk_select_list(*tbl) + " FROM " +
-                            quote_ident(tbl->name) + " ORDER BY " +
-                            pk_order_by(*tbl);
+    std::string sql = "SELECT " + pk_select_list(*tbl) + " FROM " +
+                      quote_ident(tbl->name);
+    if (!tbl->where_filter.empty()) {
+        sql += " WHERE (" + tbl->where_filter + ")";
+    }
+    sql += " ORDER BY " + pk_order_by(*tbl);
     if (mysql_query(conn, sql.c_str()) != 0) {
         return maria_error("pk snapshot", mysql_error(conn));
     }

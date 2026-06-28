@@ -1,5 +1,6 @@
 #include "sql_backend/odbc_connection.h"
 
+#include "sql_backend/backend_aggregate.h"
 #include "sql_backend/odbc_backend.h"
 #include "sql_backend/sql_common.h"
 
@@ -414,9 +415,12 @@ util::Result<void> describe_columns(SQLHDBC dbc, OdbcTable* tbl) {
 util::Result<void> load_pk_snapshot(SQLHDBC dbc, const std::string& q,
                                     OdbcTable* tbl) {
     const std::string list = pk_select_list(q, *tbl);
-    const std::string sql =
-        "SELECT " + list + " FROM " + quote_ident(q, tbl->sql_table) +
-        " ORDER BY " + list;
+    std::string sql =
+        "SELECT " + list + " FROM " + quote_ident(q, tbl->sql_table);
+    if (!tbl->where_filter.empty()) {
+        sql += " WHERE (" + tbl->where_filter + ")";
+    }
+    sql += " ORDER BY " + list;
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>>        nulls;
     auto r = run_query(dbc, sql, rows, nulls);
@@ -653,6 +657,58 @@ util::Result<void> OdbcConnection::skip(OdbcTable* tbl, std::int32_t step) {
     }
     return load_current_row(impl_->dbc, impl_->quote, tbl,
                             static_cast<std::size_t>(next));
+}
+
+util::Result<void>
+OdbcConnection::set_filter(OdbcTable* tbl, const std::string& where) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc set_filter", ""};
+    }
+    tbl->where_builder.aof_filter = where;
+    tbl->where_filter = tbl->where_builder.build();
+    return load_pk_snapshot(impl_->dbc, impl_->quote, tbl);
+}
+
+util::Result<std::vector<engine::AggValue>>
+OdbcConnection::aggregate(OdbcTable* tbl,
+                          const std::string& where_sql,
+                          const std::vector<engine::AggSpec>& specs) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid odbc aggregate", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_columns(impl_->dbc, tbl); !d) return d.error();
+    }
+    std::vector<AggregateFieldDesc> fields;
+    fields.reserve(tbl->fields.size());
+    for (const auto& f : tbl->fields) {
+        fields.push_back({f.name, f.type});
+    }
+    const auto q = [&](const std::string& n) {
+        return quote_ident(impl_->quote, n);
+    };
+    std::string bad;
+    const std::string sql = build_aggregate_sql(
+        quote_ident(impl_->quote, tbl->sql_table), where_sql, specs, fields,
+        q, &bad);
+    if (sql.empty()) {
+        return util::Error{5001, 0, "invalid odbc aggregate field: " + bad, ""};
+    }
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::vector<bool>>        nulls;
+    if (auto r = run_query(impl_->dbc, sql, rows, nulls); !r) return r.error();
+    std::vector<std::string> vals;
+    vals.resize(specs.size());
+    if (!rows.empty()) {
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+            if (i < rows[0].size() && !(i < nulls[0].size() && nulls[0][i])) {
+                vals[i] = rows[0][i];
+            } else {
+                vals[i].clear();
+            }
+        }
+    }
+    return parse_aggregate_row(specs, fields, vals, !rows.empty());
 }
 
 util::Result<bool> OdbcConnection::at_eof(OdbcTable* tbl) const {

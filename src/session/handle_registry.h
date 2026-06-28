@@ -43,7 +43,8 @@ enum class HandleKind {
     FirebirdIndex      = 23,
     // Native MS SQL Server backend (mssql:// / tds://).
     MssqlConnection = 24,
-    MssqlTable      = 25
+    MssqlTable      = 25,
+    MssqlIndex      = 26
 };
 
 using Handle = std::uint64_t;

@@ -13,6 +13,7 @@
 #include "engine/codepage.h"
 #include "engine/fts.h"
 #include "engine/aggregate.h"
+#include "sql_backend/backend_tx_manager.h"
 #include "engine/index_expr.h"
 #include "engine/table.h"
 
@@ -49,6 +50,7 @@
 #endif
 #if defined(OPENADS_WITH_MSSQL)
 #include "sql_backend/mssql_connection.h"
+#include "sql_backend/mssql_index.h"
 #include "sql_backend/mssql_table.h"
 #include "sql_backend/mssql_uri.h"
 #endif
@@ -138,6 +140,51 @@ UNSIGNED32 hook_auto_commit(TableT* tbl) {
     tx.note_dml();
     return ok();
 }
+
+#if defined(OPENADS_WITH_SQLITE)
+void ensure_sqlite_tx_wired(openads::sql_backend::SqliteConnection* c) {
+    if (!c) return;
+    openads::sql_backend::wire_standard_savepoint_tx(
+        c->tx_manager(), [c](const std::string& sql) { (void)c->exec_sql(sql); });
+}
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+void ensure_postgres_tx_wired(openads::sql_backend::PostgresConnection* c) {
+    if (!c) return;
+    auto& tx = c->tx_manager();
+    if (tx.on_begin) return;
+    openads::sql_backend::wire_standard_savepoint_tx(
+        tx, [c](const std::string& sql) { (void)c->exec_sql(sql); });
+}
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+void ensure_maria_tx_wired(openads::sql_backend::MariaConnection* c) {
+    if (!c) return;
+    openads::sql_backend::wire_standard_savepoint_tx(
+        c->tx_manager(), [c](const std::string& sql) { (void)c->exec_sql(sql); });
+}
+#endif
+#if defined(OPENADS_WITH_ODBC)
+void ensure_odbc_tx_wired(openads::sql_backend::OdbcConnection* c) {
+    if (!c) return;
+    openads::sql_backend::wire_standard_savepoint_tx(
+        c->tx_manager(), [c](const std::string& sql) { (void)c->exec_sql(sql); });
+}
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+void ensure_firebird_tx_wired(openads::sql_backend::FirebirdConnection* c) {
+    if (!c) return;
+    openads::sql_backend::wire_standard_savepoint_tx(
+        c->tx_manager(), [c](const std::string& sql) { (void)c->exec_sql(sql); });
+}
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+void ensure_mssql_tx_wired(openads::sql_backend::MssqlConnection* c) {
+    if (!c) return;
+    openads::sql_backend::wire_mssql_savepoint_tx(
+        c->tx_manager(), [c](const std::string& sql) { (void)c->exec_sql(sql); });
+}
+#endif
 
 openads::engine::TableType map_type(UNSIGNED16 t) {
     switch (t) {
@@ -430,6 +477,12 @@ openads::sql_backend::OdbcTable* get_odbc_table(ADSHANDLE h) {
         h, HandleKind::OdbcTable);
 }
 
+openads::sql_backend::OdbcConnection* get_odbc_conn(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::OdbcConnection>(
+        h, HandleKind::OdbcConnection);
+}
+
 std::unordered_map<Handle,
     std::unique_ptr<openads::sql_backend::OdbcIndex>>&
 odbc_indexes_map() {
@@ -503,6 +556,26 @@ openads::sql_backend::MssqlTable* get_mssql_table(ADSHANDLE h) {
         h, HandleKind::MssqlTable);
 }
 
+openads::sql_backend::MssqlConnection* get_mssql_conn(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::MssqlConnection>(
+        h, HandleKind::MssqlConnection);
+}
+
+std::unordered_map<Handle,
+    std::unique_ptr<openads::sql_backend::MssqlIndex>>&
+mssql_indexes_map() {
+    static std::unordered_map<Handle,
+        std::unique_ptr<openads::sql_backend::MssqlIndex>> m;
+    return m;
+}
+
+openads::sql_backend::MssqlIndex* get_mssql_index(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::MssqlIndex>(
+        h, HandleKind::MssqlIndex);
+}
+
 std::size_t mssql_field_index(openads::sql_backend::MssqlTable* st,
                                UNSIGNED8* pucField) {
     if (pucField == nullptr) return std::numeric_limits<std::size_t>::max();
@@ -541,6 +614,12 @@ openads::sql_backend::FirebirdTable* get_firebird_table(ADSHANDLE h) {
     auto& s = state();
     return s.registry.lookup<openads::sql_backend::FirebirdTable>(
         h, HandleKind::FirebirdTable);
+}
+
+openads::sql_backend::FirebirdConnection* get_firebird_conn(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::FirebirdConnection>(
+        h, HandleKind::FirebirdConnection);
 }
 
 std::unordered_map<Handle,
@@ -614,6 +693,12 @@ openads::sql_backend::MariaTable* get_maria_table(ADSHANDLE h) {
     auto& s = state();
     return s.registry.lookup<openads::sql_backend::MariaTable>(
         h, HandleKind::MariaTable);
+}
+
+openads::sql_backend::MariaConnection* get_maria_conn(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::sql_backend::MariaConnection>(
+        h, HandleKind::MariaConnection);
 }
 
 std::unordered_map<Handle,
@@ -1495,6 +1580,69 @@ UNSIGNED32 odbc_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     return ok();
 }
 
+UNSIGNED32 odbc_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
+    auto* st = get_odbc_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    std::string where =
+        pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
+    auto r = st->conn->set_filter(st, where);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 odbc_aggregate(
+        ADSHANDLE hTable, const char* where_sql,
+        const std::vector<openads::engine::AggSpec>* specs,
+        std::vector<openads::engine::AggValue>* out) {
+    auto* st = get_odbc_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (specs == nullptr || out == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "odbc_aggregate: null arg");
+    auto r = st->conn->aggregate(
+        st, where_sql ? std::string(where_sql) : std::string(), *specs);
+    if (!r) return fail(r.error());
+    *out = std::move(r).value();
+    return ok();
+}
+
+UNSIGNED32 odbc_begin_tx(ADSHANDLE hTable) {
+    auto* st = get_odbc_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto* conn = st->conn;
+    auto& tx = conn->tx_manager();
+    openads::sql_backend::wire_standard_savepoint_tx(
+        tx, [conn](const std::string& sql) { (void)conn->exec_sql(sql); });
+    tx.begin();
+    return ok();
+}
+
+UNSIGNED32 odbc_commit_tx(ADSHANDLE hTable) {
+    auto* st = get_odbc_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().commit();
+    return ok();
+}
+
+UNSIGNED32 odbc_rollback_tx(ADSHANDLE hTable) {
+    auto* st = get_odbc_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().rollback();
+    return ok();
+}
+
+UNSIGNED32 odbc_set_auto_commit(ADSHANDLE hTable, SIGNED32 threshold) {
+    auto* st = get_odbc_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().auto_commit_threshold = threshold;
+    return ok();
+}
+
 const openads::abi::BackendTableOps* odbc_table_ops() {
     static const openads::abi::BackendTableOps ops = [] {
         openads::abi::BackendTableOps o{};
@@ -1515,6 +1663,12 @@ const openads::abi::BackendTableOps* odbc_table_ops() {
         o.is_record_deleted = &odbc_is_record_deleted;
         o.open_index        = &odbc_open_index;
         o.is_found          = &odbc_is_found;
+        o.set_filter        = &odbc_set_filter;
+        o.aggregate         = &odbc_aggregate;
+        o.begin_tx          = &odbc_begin_tx;
+        o.commit_tx         = &odbc_commit_tx;
+        o.rollback_tx       = &odbc_rollback_tx;
+        o.set_auto_commit   = &odbc_set_auto_commit;
         return o;
     }();
     return &ops;
@@ -1676,6 +1830,101 @@ UNSIGNED32 mssql_is_record_deleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
     return ok();
 }
 
+UNSIGNED32 mssql_open_index(ADSHANDLE hTable, UNSIGNED8* pucName,
+                            ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
+    auto* st = get_mssql_table(hTable);
+    if (pu16ArrayLen != nullptr && *pu16ArrayLen < 1) {
+        return fail(openads::AE_INTERNAL_ERROR, "index array too small");
+    }
+    std::string tag = openads::abi::to_internal(pucName, 0);
+    if (tag.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "empty index tag");
+    }
+    const auto dot = tag.find_last_of("./\\");
+    if (dot != std::string::npos) tag = tag.substr(dot + 1);
+    const auto dot2 = tag.find('.');
+    if (dot2 != std::string::npos) tag = tag.substr(0, dot2);
+    auto si = std::make_unique<openads::sql_backend::MssqlIndex>();
+    si->parent = st;
+    si->column = tag;
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Handle gh = s.registry.register_object(HandleKind::MssqlIndex, si.get());
+    ahIndex[0] = gh;
+    if (pu16ArrayLen != nullptr) *pu16ArrayLen = 1;
+    mssql_indexes_map().emplace(gh, std::move(si));
+    return ok();
+}
+
+UNSIGNED32 mssql_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+    auto* st = get_mssql_table(hTable);
+    *pbFound = st->last_seek_found ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 mssql_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
+    auto* st = get_mssql_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    std::string where =
+        pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
+    auto r = st->conn->set_filter(st, where);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 mssql_aggregate(
+        ADSHANDLE hTable, const char* where_sql,
+        const std::vector<openads::engine::AggSpec>* specs,
+        std::vector<openads::engine::AggValue>* out) {
+    auto* st = get_mssql_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (specs == nullptr || out == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "mssql_aggregate: null arg");
+    auto r = st->conn->aggregate(
+        st, where_sql ? std::string(where_sql) : std::string(), *specs);
+    if (!r) return fail(r.error());
+    *out = std::move(r).value();
+    return ok();
+}
+
+UNSIGNED32 mssql_begin_tx(ADSHANDLE hTable) {
+    auto* st = get_mssql_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto* conn = st->conn;
+    auto& tx = conn->tx_manager();
+    openads::sql_backend::wire_mssql_savepoint_tx(
+        tx, [conn](const std::string& sql) { (void)conn->exec_sql(sql); });
+    tx.begin();
+    return ok();
+}
+
+UNSIGNED32 mssql_commit_tx(ADSHANDLE hTable) {
+    auto* st = get_mssql_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().commit();
+    return ok();
+}
+
+UNSIGNED32 mssql_rollback_tx(ADSHANDLE hTable) {
+    auto* st = get_mssql_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().rollback();
+    return ok();
+}
+
+UNSIGNED32 mssql_set_auto_commit(ADSHANDLE hTable, SIGNED32 threshold) {
+    auto* st = get_mssql_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().auto_commit_threshold = threshold;
+    return ok();
+}
+
 const openads::abi::BackendTableOps* mssql_table_ops() {
     static const openads::abi::BackendTableOps ops = [] {
         openads::abi::BackendTableOps o{};
@@ -1694,6 +1943,14 @@ const openads::abi::BackendTableOps* mssql_table_ops() {
         o.record_count      = &mssql_record_count;
         o.get_field         = &mssql_get_field;
         o.is_record_deleted = &mssql_is_record_deleted;
+        o.open_index        = &mssql_open_index;
+        o.is_found          = &mssql_is_found;
+        o.set_filter        = &mssql_set_filter;
+        o.aggregate         = &mssql_aggregate;
+        o.begin_tx          = &mssql_begin_tx;
+        o.commit_tx         = &mssql_commit_tx;
+        o.rollback_tx       = &mssql_rollback_tx;
+        o.set_auto_commit   = &mssql_set_auto_commit;
         return o;
     }();
     return &ops;
@@ -1915,6 +2172,69 @@ UNSIGNED32 firebird_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     return ok();
 }
 
+UNSIGNED32 firebird_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
+    auto* st = get_firebird_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    std::string where =
+        pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
+    auto r = st->conn->set_filter(st, where);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 firebird_aggregate(
+        ADSHANDLE hTable, const char* where_sql,
+        const std::vector<openads::engine::AggSpec>* specs,
+        std::vector<openads::engine::AggValue>* out) {
+    auto* st = get_firebird_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (specs == nullptr || out == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "firebird_aggregate: null arg");
+    auto r = st->conn->aggregate(
+        st, where_sql ? std::string(where_sql) : std::string(), *specs);
+    if (!r) return fail(r.error());
+    *out = std::move(r).value();
+    return ok();
+}
+
+UNSIGNED32 firebird_begin_tx(ADSHANDLE hTable) {
+    auto* st = get_firebird_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto* conn = st->conn;
+    auto& tx = conn->tx_manager();
+    openads::sql_backend::wire_standard_savepoint_tx(
+        tx, [conn](const std::string& sql) { (void)conn->exec_sql(sql); });
+    tx.begin();
+    return ok();
+}
+
+UNSIGNED32 firebird_commit_tx(ADSHANDLE hTable) {
+    auto* st = get_firebird_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().commit();
+    return ok();
+}
+
+UNSIGNED32 firebird_rollback_tx(ADSHANDLE hTable) {
+    auto* st = get_firebird_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().rollback();
+    return ok();
+}
+
+UNSIGNED32 firebird_set_auto_commit(ADSHANDLE hTable, SIGNED32 threshold) {
+    auto* st = get_firebird_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().auto_commit_threshold = threshold;
+    return ok();
+}
+
 const openads::abi::BackendTableOps* firebird_table_ops() {
     static const openads::abi::BackendTableOps ops = [] {
         openads::abi::BackendTableOps o{};
@@ -1935,6 +2255,12 @@ const openads::abi::BackendTableOps* firebird_table_ops() {
         o.is_record_deleted = &firebird_is_record_deleted;
         o.open_index        = &firebird_open_index;
         o.is_found          = &firebird_is_found;
+        o.set_filter        = &firebird_set_filter;
+        o.aggregate         = &firebird_aggregate;
+        o.begin_tx          = &firebird_begin_tx;
+        o.commit_tx         = &firebird_commit_tx;
+        o.rollback_tx       = &firebird_rollback_tx;
+        o.set_auto_commit   = &firebird_set_auto_commit;
         return o;
     }();
     return &ops;
@@ -2156,6 +2482,69 @@ UNSIGNED32 maria_is_found(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     return ok();
 }
 
+UNSIGNED32 maria_set_filter(ADSHANDLE hTable, UNSIGNED8* pucWhere) {
+    auto* st = get_maria_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    std::string where =
+        pucWhere ? openads::abi::to_internal(pucWhere, 0) : std::string();
+    auto r = st->conn->set_filter(st, where);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 maria_aggregate(
+        ADSHANDLE hTable, const char* where_sql,
+        const std::vector<openads::engine::AggSpec>* specs,
+        std::vector<openads::engine::AggValue>* out) {
+    auto* st = get_maria_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (specs == nullptr || out == nullptr)
+        return fail(openads::AE_INTERNAL_ERROR, "maria_aggregate: null arg");
+    auto r = st->conn->aggregate(
+        st, where_sql ? std::string(where_sql) : std::string(), *specs);
+    if (!r) return fail(r.error());
+    *out = std::move(r).value();
+    return ok();
+}
+
+UNSIGNED32 maria_begin_tx(ADSHANDLE hTable) {
+    auto* st = get_maria_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto* conn = st->conn;
+    auto& tx = conn->tx_manager();
+    openads::sql_backend::wire_standard_savepoint_tx(
+        tx, [conn](const std::string& sql) { (void)conn->exec_sql(sql); });
+    tx.begin();
+    return ok();
+}
+
+UNSIGNED32 maria_commit_tx(ADSHANDLE hTable) {
+    auto* st = get_maria_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().commit();
+    return ok();
+}
+
+UNSIGNED32 maria_rollback_tx(ADSHANDLE hTable) {
+    auto* st = get_maria_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().rollback();
+    return ok();
+}
+
+UNSIGNED32 maria_set_auto_commit(ADSHANDLE hTable, SIGNED32 threshold) {
+    auto* st = get_maria_table(hTable);
+    if (st == nullptr || st->conn == nullptr)
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    st->conn->tx_manager().auto_commit_threshold = threshold;
+    return ok();
+}
+
 const openads::abi::BackendTableOps* maria_table_ops() {
     static const openads::abi::BackendTableOps ops = [] {
         openads::abi::BackendTableOps o{};
@@ -2176,6 +2565,12 @@ const openads::abi::BackendTableOps* maria_table_ops() {
         o.is_record_deleted = &maria_is_record_deleted;
         o.open_index        = &maria_open_index;
         o.is_found          = &maria_is_found;
+        o.set_filter        = &maria_set_filter;
+        o.aggregate         = &maria_aggregate;
+        o.begin_tx          = &maria_begin_tx;
+        o.commit_tx         = &maria_commit_tx;
+        o.rollback_tx       = &maria_rollback_tx;
+        o.set_auto_commit   = &maria_set_auto_commit;
         return o;
     }();
     return &ops;
@@ -3840,6 +4235,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         if (!tbl) return fail(tbl.error());
         auto st = std::move(tbl).value();
         st->conn      = mc;
+        st->name      = name;
         st->sql_table = name;
         if (auto pk = mc->discover_pk(name); pk) {
             for (const std::string& col : pk.value()) {
@@ -7269,6 +7665,15 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hTable)) {
+        if (mst->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mst->conn->lock_record(mst, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     // ulRecord == 0 → the current record (ACE convention). Resolving it
@@ -7318,6 +7723,15 @@ UNSIGNED32 ENTRYPOINT AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (ot->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ot->conn->unlock_record(ot, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hTable)) {
+        if (mst->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mst->conn->unlock_record(mst, ulRecord);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -7372,6 +7786,15 @@ UNSIGNED32 ENTRYPOINT AdsLockTable(ADSHANDLE hTable) {
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hTable)) {
+        if (mst->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mst->conn->lock_table(mst);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t]() { return t->try_lock_table_excl(); });
@@ -7415,6 +7838,15 @@ UNSIGNED32 ENTRYPOINT AdsUnlockTable(ADSHANDLE hTable) {
         if (ot->conn == nullptr)
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         auto r = ot->conn->unlock_table(ot);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hTable)) {
+        if (mst->conn == nullptr)
+            return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        auto r = mst->conn->unlock_table(mst);
         if (!r) return fail(r.error());
         return ok();
     }
@@ -10830,6 +11262,24 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
         return ok();
     }
 #endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* si = get_mssql_index(hIndex)) {
+        if (si->parent == nullptr || si->parent->conn == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "mssql index orphan");
+        }
+        std::string key(reinterpret_cast<const char*>(pucKey), u16KeyLen);
+        const bool soft = (u16SeekType & 1u) != 0;
+        auto r = si->parent->conn->seek_index(
+            si->parent, si->column, key, soft, /*last=*/false);
+        if (!r) return fail(r.error());
+        const bool found = r.value();
+        si->last_seek_found = found;
+        si->parent->last_seek_found = found;
+        if (pbFound) *pbFound = found ? 1 : 0;
+        (void)u16KeyType;
+        return ok();
+    }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* si = get_postgres_index(hIndex)) {
         if (si->parent == nullptr || si->parent->conn == nullptr) {
@@ -11876,23 +12326,101 @@ UNSIGNED32 ENTRYPOINT AdsBeginTransaction(ADSHANDLE hConnect) {
         return ok();
     }
     // SQL backend path: dispatch BEGIN to the connection's TxManager
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* sqc = get_sqlite_conn(hConnect)) {
+        ensure_sqlite_tx_wired(sqc);
         sqc->tx_manager().begin();
         return ok();
     }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pgc = get_postgres_conn(hConnect)) {
+        ensure_postgres_tx_wired(pgc);
         pgc->tx_manager().begin();
         return ok();
     }
 #endif
-    // Check if it's a table handle — get tx_manager from the table's connection
-    if (auto* st = get_sqlite_table(hConnect)) {
-        if (st->conn) { st->conn->tx_manager().begin(); return ok(); }
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = get_maria_conn(hConnect)) {
+        ensure_maria_tx_wired(mc);
+        mc->tx_manager().begin();
+        return ok();
     }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = get_odbc_conn(hConnect)) {
+        ensure_odbc_tx_wired(oc);
+        oc->tx_manager().begin();
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = get_firebird_conn(hConnect)) {
+        ensure_firebird_tx_wired(fc);
+        fc->tx_manager().begin();
+        return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* msc = get_mssql_conn(hConnect)) {
+        ensure_mssql_tx_wired(msc);
+        msc->tx_manager().begin();
+        return ok();
+    }
+#endif
+    // Table handles — route through the table's connection TxManager
+#if defined(OPENADS_WITH_SQLITE)
+    if (auto* st = get_sqlite_table(hConnect)) {
+        if (st->conn) {
+            ensure_sqlite_tx_wired(st->conn);
+            st->conn->tx_manager().begin();
+            return ok();
+        }
+    }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hConnect)) {
-        if (pt->conn) { pt->conn->tx_manager().begin(); return ok(); }
+        if (pt->conn) {
+            ensure_postgres_tx_wired(pt->conn);
+            pt->conn->tx_manager().begin();
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hConnect)) {
+        if (mt->conn) {
+            ensure_maria_tx_wired(mt->conn);
+            mt->conn->tx_manager().begin();
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hConnect)) {
+        if (ot->conn) {
+            ensure_odbc_tx_wired(ot->conn);
+            ot->conn->tx_manager().begin();
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hConnect)) {
+        if (ft->conn) {
+            ensure_firebird_tx_wired(ft->conn);
+            ft->conn->tx_manager().begin();
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hConnect)) {
+        if (mst->conn) {
+            ensure_mssql_tx_wired(mst->conn);
+            mst->conn->tx_manager().begin();
+            return ok();
+        }
     }
 #endif
     return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -11909,22 +12437,64 @@ UNSIGNED32 ENTRYPOINT AdsCommitTransaction(ADSHANDLE hConnect) {
         return ok();
     }
     // SQL backend path
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* sqc = get_sqlite_conn(hConnect)) {
-        sqc->tx_manager().commit();
-        return ok();
-    }
-#if defined(OPENADS_WITH_POSTGRESQL)
-    if (auto* pgc = get_postgres_conn(hConnect)) {
-        pgc->tx_manager().commit();
-        return ok();
+        sqc->tx_manager().commit(); return ok();
     }
 #endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        pgc->tx_manager().commit(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = get_maria_conn(hConnect)) {
+        mc->tx_manager().commit(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = get_odbc_conn(hConnect)) {
+        oc->tx_manager().commit(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = get_firebird_conn(hConnect)) {
+        fc->tx_manager().commit(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* msc = get_mssql_conn(hConnect)) {
+        msc->tx_manager().commit(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* st = get_sqlite_table(hConnect)) {
         if (st->conn) { st->conn->tx_manager().commit(); return ok(); }
     }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hConnect)) {
         if (pt->conn) { pt->conn->tx_manager().commit(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hConnect)) {
+        if (mt->conn) { mt->conn->tx_manager().commit(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hConnect)) {
+        if (ot->conn) { ot->conn->tx_manager().commit(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hConnect)) {
+        if (ft->conn) { ft->conn->tx_manager().commit(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hConnect)) {
+        if (mst->conn) { mst->conn->tx_manager().commit(); return ok(); }
     }
 #endif
     return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -11941,22 +12511,64 @@ UNSIGNED32 ENTRYPOINT AdsRollbackTransaction(ADSHANDLE hConnect) {
         return ok();
     }
     // SQL backend path
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* sqc = get_sqlite_conn(hConnect)) {
-        sqc->tx_manager().rollback();
-        return ok();
-    }
-#if defined(OPENADS_WITH_POSTGRESQL)
-    if (auto* pgc = get_postgres_conn(hConnect)) {
-        pgc->tx_manager().rollback();
-        return ok();
+        sqc->tx_manager().rollback(); return ok();
     }
 #endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        pgc->tx_manager().rollback(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = get_maria_conn(hConnect)) {
+        mc->tx_manager().rollback(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = get_odbc_conn(hConnect)) {
+        oc->tx_manager().rollback(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = get_firebird_conn(hConnect)) {
+        fc->tx_manager().rollback(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* msc = get_mssql_conn(hConnect)) {
+        msc->tx_manager().rollback(); return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* st = get_sqlite_table(hConnect)) {
         if (st->conn) { st->conn->tx_manager().rollback(); return ok(); }
     }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hConnect)) {
         if (pt->conn) { pt->conn->tx_manager().rollback(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hConnect)) {
+        if (mt->conn) { mt->conn->tx_manager().rollback(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hConnect)) {
+        if (ot->conn) { ot->conn->tx_manager().rollback(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hConnect)) {
+        if (ft->conn) { ft->conn->tx_manager().rollback(); return ok(); }
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hConnect)) {
+        if (mst->conn) { mst->conn->tx_manager().rollback(); return ok(); }
     }
 #endif
     return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -11975,26 +12587,80 @@ UNSIGNED32 ENTRYPOINT AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
         return ok();
     }
     // SQL backend path
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* sqc = get_sqlite_conn(hConnect)) {
-        *pbInTx = sqc->tx_manager().in_transaction() ? 1 : 0;
-        return ok();
-    }
-#if defined(OPENADS_WITH_POSTGRESQL)
-    if (auto* pgc = get_postgres_conn(hConnect)) {
-        *pbInTx = pgc->tx_manager().in_transaction() ? 1 : 0;
-        return ok();
+        *pbInTx = sqc->tx_manager().in_transaction() ? 1 : 0; return ok();
     }
 #endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        *pbInTx = pgc->tx_manager().in_transaction() ? 1 : 0; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = get_maria_conn(hConnect)) {
+        *pbInTx = mc->tx_manager().in_transaction() ? 1 : 0; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = get_odbc_conn(hConnect)) {
+        *pbInTx = oc->tx_manager().in_transaction() ? 1 : 0; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = get_firebird_conn(hConnect)) {
+        *pbInTx = fc->tx_manager().in_transaction() ? 1 : 0; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* msc = get_mssql_conn(hConnect)) {
+        *pbInTx = msc->tx_manager().in_transaction() ? 1 : 0; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* st = get_sqlite_table(hConnect)) {
         if (st->conn) {
             *pbInTx = st->conn->tx_manager().in_transaction() ? 1 : 0;
             return ok();
         }
     }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hConnect)) {
         if (pt->conn) {
             *pbInTx = pt->conn->tx_manager().in_transaction() ? 1 : 0;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hConnect)) {
+        if (mt->conn) {
+            *pbInTx = mt->conn->tx_manager().in_transaction() ? 1 : 0;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hConnect)) {
+        if (ot->conn) {
+            *pbInTx = ot->conn->tx_manager().in_transaction() ? 1 : 0;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hConnect)) {
+        if (ft->conn) {
+            *pbInTx = ft->conn->tx_manager().in_transaction() ? 1 : 0;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hConnect)) {
+        if (mst->conn) {
+            *pbInTx = mst->conn->tx_manager().in_transaction() ? 1 : 0;
             return ok();
         }
     }
@@ -12010,26 +12676,80 @@ UNSIGNED32 ENTRYPOINT AdsSetAutoCommit(ADSHANDLE hConnect,
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     // SQL backend path
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* sqc = get_sqlite_conn(hConnect)) {
-        sqc->tx_manager().auto_commit_threshold = nThreshold;
-        return ok();
-    }
-#if defined(OPENADS_WITH_POSTGRESQL)
-    if (auto* pgc = get_postgres_conn(hConnect)) {
-        pgc->tx_manager().auto_commit_threshold = nThreshold;
-        return ok();
+        sqc->tx_manager().auto_commit_threshold = nThreshold; return ok();
     }
 #endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    if (auto* pgc = get_postgres_conn(hConnect)) {
+        pgc->tx_manager().auto_commit_threshold = nThreshold; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mc = get_maria_conn(hConnect)) {
+        mc->tx_manager().auto_commit_threshold = nThreshold; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* oc = get_odbc_conn(hConnect)) {
+        oc->tx_manager().auto_commit_threshold = nThreshold; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* fc = get_firebird_conn(hConnect)) {
+        fc->tx_manager().auto_commit_threshold = nThreshold; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* msc = get_mssql_conn(hConnect)) {
+        msc->tx_manager().auto_commit_threshold = nThreshold; return ok();
+    }
+#endif
+#if defined(OPENADS_WITH_SQLITE)
     if (auto* st = get_sqlite_table(hConnect)) {
         if (st->conn) {
             st->conn->tx_manager().auto_commit_threshold = nThreshold;
             return ok();
         }
     }
+#endif
 #if defined(OPENADS_WITH_POSTGRESQL)
     if (auto* pt = get_postgres_table(hConnect)) {
         if (pt->conn) {
             pt->conn->tx_manager().auto_commit_threshold = nThreshold;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    if (auto* mt = get_maria_table(hConnect)) {
+        if (mt->conn) {
+            mt->conn->tx_manager().auto_commit_threshold = nThreshold;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    if (auto* ot = get_odbc_table(hConnect)) {
+        if (ot->conn) {
+            ot->conn->tx_manager().auto_commit_threshold = nThreshold;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    if (auto* ft = get_firebird_table(hConnect)) {
+        if (ft->conn) {
+            ft->conn->tx_manager().auto_commit_threshold = nThreshold;
+            return ok();
+        }
+    }
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    if (auto* mst = get_mssql_table(hConnect)) {
+        if (mst->conn) {
+            mst->conn->tx_manager().auto_commit_threshold = nThreshold;
             return ok();
         }
     }

@@ -1,8 +1,10 @@
 #pragma once
 
+#include "sql_backend/backend_tx_manager.h"
 #include "sql_backend/firebird_table.h"
 #include "sql_backend/firebird_uri.h"
 #include "sql_backend/sql_common.h"
+#include "engine/aggregate.h"
 #include "util/result.h"
 
 #include <cstdint>
@@ -39,6 +41,13 @@ public:
     util::Result<void> goto_top(FirebirdTable* tbl);
     util::Result<void> goto_bottom(FirebirdTable* tbl);
     util::Result<void> skip(FirebirdTable* tbl, std::int32_t step);
+
+    util::Result<void> set_filter(FirebirdTable* tbl, const std::string& where);
+
+    util::Result<std::vector<engine::AggValue>>
+        aggregate(FirebirdTable* tbl,
+                  const std::string& where_sql,
+                  const std::vector<engine::AggSpec>& specs);
 
     util::Result<bool>          at_eof(FirebirdTable* tbl) const;
     util::Result<bool>          at_bof(FirebirdTable* tbl) const;
@@ -81,9 +90,15 @@ public:
     // cursor when the statement produces a result set, or nullptr for DML/DDL.
     util::Result<std::unique_ptr<FirebirdTable>> run_sql(const std::string& sql);
 
+    util::Result<void> exec_sql(const std::string& sql);
+
+    BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
+    const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    BackendTxManager      tx_mgr_;
 };
 
 } // namespace openads::sql_backend

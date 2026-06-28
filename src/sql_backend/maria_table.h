@@ -1,5 +1,8 @@
 #pragma once
 
+#include "sql_backend/backend_field_optimizer.h"
+#include "sql_backend/backend_where_builder.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -48,6 +51,11 @@ struct MariaTable {
     std::vector<bool>        staging_nulls;
     bool                     pending_append = false;
     bool                     row_dirty      = false;
+
+    // Tier-2 push-down: non-empty WHERE fragment for PK snapshot reload.
+    std::string where_filter;
+    BackendFieldOptimizer field_optimizer;
+    BackendWhereBuilder   where_builder;
 };
 
 } // namespace openads::sql_backend

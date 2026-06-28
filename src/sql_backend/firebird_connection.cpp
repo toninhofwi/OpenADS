@@ -1,5 +1,6 @@
 #include "sql_backend/firebird_connection.h"
 
+#include "sql_backend/backend_aggregate.h"
 #include "sql_backend/sql_common.h"
 
 #include "openads/ace.h"
@@ -709,9 +710,12 @@ util::Result<void> describe_columns(isc_db_handle* db, isc_tr_handle* tr,
 util::Result<void> load_pk_snapshot(isc_db_handle* db, isc_tr_handle* tr,
                                     FirebirdTable* tbl) {
     const std::string list = pk_select_list(*tbl);
-    const std::string sql =
-        "SELECT " + list + " FROM " + quote_ident(tbl->sql_table) +
-        " ORDER BY " + list;
+    std::string sql =
+        "SELECT " + list + " FROM " + quote_ident(tbl->sql_table);
+    if (!tbl->where_filter.empty()) {
+        sql += " WHERE (" + tbl->where_filter + ")";
+    }
+    sql += " ORDER BY " + list;
     auto r = exec_query(db, tr, sql);
     if (!r) return r.error();
     tbl->pk_snapshot.clear();
@@ -896,6 +900,59 @@ util::Result<void> FirebirdConnection::skip(FirebirdTable* tbl, std::int32_t ste
     }
     return load_current_row(&impl_->db, &impl_->tr, tbl,
                             static_cast<std::size_t>(next));
+}
+
+util::Result<void>
+FirebirdConnection::set_filter(FirebirdTable* tbl, const std::string& where) {
+    if (!impl_) return util::Error{5001, 0, "invalid firebird set_filter", ""};
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid firebird set_filter", ""};
+    }
+    tbl->where_builder.aof_filter = where;
+    tbl->where_filter = tbl->where_builder.build();
+    return load_pk_snapshot(&impl_->db, &impl_->tr, tbl);
+}
+
+util::Result<std::vector<engine::AggValue>>
+FirebirdConnection::aggregate(FirebirdTable* tbl,
+                              const std::string& where_sql,
+                              const std::vector<engine::AggSpec>& specs) {
+    if (!impl_) return util::Error{5001, 0, "invalid firebird aggregate", ""};
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid firebird aggregate", ""};
+    }
+    if (!tbl->fields_cached) {
+        if (auto d = describe_columns(&impl_->db, &impl_->tr, tbl); !d) {
+            return d.error();
+        }
+    }
+    std::vector<AggregateFieldDesc> fields;
+    fields.reserve(tbl->fields.size());
+    for (const auto& f : tbl->fields) {
+        fields.push_back({f.name, f.type});
+    }
+    std::string bad;
+    const std::string sql = build_aggregate_sql(
+        quote_ident(tbl->sql_table), where_sql, specs, fields,
+        [](const std::string& n) { return '"' + n + '"'; }, &bad);
+    if (sql.empty()) {
+        return util::Error{5001, 0,
+                           "invalid firebird aggregate field: " + bad, ""};
+    }
+    auto r = exec_query(&impl_->db, &impl_->tr, sql);
+    if (!r) return r.error();
+    std::vector<std::string> vals;
+    vals.resize(specs.size());
+    if (!r.value().rows.empty()) {
+        const auto& row = r.value().rows[0];
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+            if (i < row.size()) vals[i] = row[i];
+            else vals[i].clear();
+        }
+    }
+    return parse_aggregate_row(specs, fields, vals, !r.value().rows.empty());
 }
 
 util::Result<bool> FirebirdConnection::at_eof(FirebirdTable* tbl) const {
@@ -1283,6 +1340,13 @@ util::Result<void> FirebirdConnection::unlock_table(FirebirdTable* tbl) {
     if (!r) return r.error();
     impl_->held_locks.erase(key);
     return util::Result<void>{};
+}
+
+util::Result<void> FirebirdConnection::exec_sql(const std::string& sql) {
+    if (!impl_) return util::Error{5001, 0, "firebird connection not open", ""};
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!valid()) return util::Error{5001, 0, "firebird connection not open", ""};
+    return exec_dml(&impl_->db, &impl_->tr, sql);
 }
 
 util::Result<std::unique_ptr<FirebirdTable>>

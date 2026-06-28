@@ -2,6 +2,7 @@
 
 #if defined(OPENADS_WITH_MSSQL)
 
+#include "sql_backend/backend_aggregate.h"
 #include "openads/error.h"
 #include "sql_backend/mssql_uri.h"
 #include "sql_backend/sql_common.h"
@@ -257,7 +258,10 @@ util::Result<void> refetch(MssqlConnection& c, MssqlTable* tbl) {
         return util::Error{openads::AE_INTERNAL_ERROR, 0,
                            "missing table name", ""};
     }
-    const std::string sql = "SELECT * FROM " + quote_ident(tbl->sql_table);
+    std::string sql = "SELECT * FROM " + quote_ident(tbl->sql_table);
+    if (!tbl->where_filter.empty()) {
+        sql += " WHERE (" + tbl->where_filter + ")";
+    }
     auto qr = c.query(sql);
     if (!qr) return qr.error();
     tds::QueryResult result = std::move(qr).value();
@@ -484,6 +488,235 @@ util::Result<void> MssqlConnection::delete_record(MssqlTable* tbl) {
     tbl->pending_append = false;
     if (auto rf = refetch(*this, tbl); !rf) return rf.error();
     reset_cursor_bof(tbl);
+    return util::Result<void>{};
+}
+
+util::Result<void> MssqlConnection::exec_sql(const std::string& sql) {
+    if (!valid()) {
+        return util::Error{openads::AE_NO_CONNECTION, 0, "MSSQL not connected", ""};
+    }
+    auto qr = query(sql);
+    if (!qr) return qr.error();
+    if (!qr.value().ok) {
+        return util::Error{
+            static_cast<std::int32_t>(qr.value().error_number), 0,
+            qr.value().message.empty() ? std::string("MSSQL exec failed")
+                                       : qr.value().message,
+            ""};
+    }
+    return util::Result<void>{};
+}
+
+util::Result<void>
+MssqlConnection::set_filter(MssqlTable* tbl, const std::string& where) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql set_filter", ""};
+    }
+    tbl->where_builder.aof_filter = where;
+    tbl->where_filter = tbl->where_builder.build();
+    if (auto rf = refetch(*this, tbl); !rf) return rf.error();
+    reset_cursor_bof(tbl);
+    return util::Result<void>{};
+}
+
+util::Result<std::vector<engine::AggValue>>
+MssqlConnection::aggregate(MssqlTable* tbl,
+                             const std::string& where_sql,
+                             const std::vector<engine::AggSpec>& specs) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql aggregate", ""};
+    }
+    std::vector<AggregateFieldDesc> fields;
+    fields.reserve(tbl->field_count());
+    for (std::size_t i = 0; i < tbl->field_count(); ++i) {
+        fields.push_back({tbl->field_name(i), tbl->field_type(i)});
+    }
+    std::string bad;
+    const std::string sql = build_aggregate_sql(
+        quote_ident(tbl->sql_table), where_sql, specs, fields,
+        quote_ident, &bad);
+    if (sql.empty()) {
+        return util::Error{5001, 0, "invalid mssql aggregate field: " + bad, ""};
+    }
+    auto qr = query(sql);
+    if (!qr) return qr.error();
+    const tds::QueryResult& result = qr.value();
+    if (!result.ok) {
+        return util::Error{
+            static_cast<std::int32_t>(result.error_number), 0,
+            result.message.empty() ? std::string("MSSQL aggregate failed")
+                                   : result.message,
+            ""};
+    }
+    std::vector<std::string> vals;
+    vals.resize(specs.size());
+    if (!result.rows.empty()) {
+        const auto& row = result.rows[0];
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+            if (i < row.size() && !row[i].is_null) vals[i] = row[i].value;
+            else vals[i].clear();
+        }
+    }
+    return parse_aggregate_row(specs, fields, vals, !result.rows.empty());
+}
+
+namespace {
+
+std::size_t column_index_ci(const MssqlTable& tbl, const std::string& name) {
+    for (std::size_t i = 0; i < tbl.field_count(); ++i) {
+        if (ci_equal(tbl.field_name(i), name)) return i;
+    }
+    return static_cast<std::size_t>(-1);
+}
+
+int compare_keys(const std::string& a, const std::string& b, bool soft) {
+    if (soft) return a.compare(b);
+    return (a < b) ? -1 : (a > b) ? 1 : 0;
+}
+
+std::string mssql_record_lock_key(const MssqlTable& tbl, std::size_t pos) {
+    std::string k = "R\x1f" + tbl.sql_table;
+    if (!tbl.bof && !tbl.eof && pos < tbl.data.rows.size()) {
+        const auto& row = tbl.data.rows[pos];
+        for (std::size_t pk : tbl.pk_cols) {
+            if (pk < row.size() && !row[pk].is_null) k += "\x1f" + row[pk].value;
+        }
+    }
+    return k;
+}
+
+std::string mssql_table_lock_key(const MssqlTable& tbl) {
+    return "T\x1f" + tbl.sql_table;
+}
+
+util::Result<int> mssql_applock(MssqlConnection& c, const std::string& key,
+                                bool acquire) {
+    std::string esc;
+    for (char ch : key) {
+        if (ch == '\'') esc += '\'';
+        esc += ch;
+    }
+    const std::string sql =
+        acquire
+            ? "DECLARE @r int; EXEC @r = sp_getapplock @Resource=N'" + esc +
+              "', @LockMode='Exclusive', @LockOwner='Session', @LockTimeout=0; "
+              "SELECT @r;"
+            : "DECLARE @r int; EXEC @r = sp_releaseapplock @Resource=N'" + esc +
+              "', @LockOwner='Session'; SELECT @r;";
+    auto qr = c.query(sql);
+    if (!qr) return qr.error();
+    const tds::QueryResult& result = qr.value();
+    if (!result.ok || result.rows.empty() || result.rows[0].empty()) {
+        return util::Error{5001, 0, "applock returned no value", ""};
+    }
+    return std::atoi(result.rows[0][0].value.c_str());
+}
+
+}  // namespace
+
+util::Result<bool> MssqlConnection::seek_index(MssqlTable* tbl,
+                                               const std::string& column,
+                                               const std::string& key,
+                                               bool soft,
+                                               bool last_key) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql seek", ""};
+    }
+    if (!is_safe_identifier(column)) {
+        return util::Error{5001, 0, "invalid seek column", column};
+    }
+    const std::size_t ci = column_index_ci(*tbl, column);
+    if (ci == static_cast<std::size_t>(-1)) {
+        return util::Error{5063, 0, "seek column not found", column};
+    }
+    if (tbl->data.rows.empty()) {
+        tbl->last_seek_found = false;
+        return false;
+    }
+    std::size_t lo = 0;
+    std::size_t hi = tbl->data.rows.size();
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        const auto& cell = tbl->data.rows[mid][ci];
+        const std::string val = cell.is_null ? std::string{} : cell.value;
+        const int cmp = compare_keys(val, key, soft);
+        if (cmp < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    std::size_t hit = lo;
+    if (last_key && hit > 0) {
+        const auto& cell = tbl->data.rows[hit - 1][ci];
+        const std::string val = cell.is_null ? std::string{} : cell.value;
+        if (compare_keys(val, key, soft) <= 0) hit = hit - 1;
+    }
+    if (hit >= tbl->data.rows.size()) {
+        tbl->last_seek_found = false;
+        return false;
+    }
+    const auto& cell = tbl->data.rows[hit][ci];
+    const std::string val = cell.is_null ? std::string{} : cell.value;
+    const int cmp = compare_keys(val, key, soft);
+    const bool found = soft ? (cmp <= 0) : (cmp == 0);
+    if (found) {
+        tbl->pos = hit;
+        tbl->bof = false;
+        tbl->eof = false;
+        tbl->last_seek_found = true;
+        return true;
+    }
+    tbl->last_seek_found = false;
+    return false;
+}
+
+util::Result<void> MssqlConnection::lock_record(MssqlTable* tbl,
+                                                std::uint32_t recno) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql lock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0)
+            ? (tbl->bof || tbl->eof ? static_cast<std::size_t>(-1) : tbl->pos)
+            : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->data.rows.size()) {
+        return util::Error{5026, 0, "no current record", ""};
+    }
+    auto r = mssql_applock(*this, mssql_record_lock_key(*tbl, pos), true);
+    if (!r) return r.error();
+    if (r.value() < 0) return util::Error{5035, 0, "record locked", ""};
+    return util::Result<void>{};
+}
+
+util::Result<void> MssqlConnection::unlock_record(MssqlTable* tbl,
+                                                  std::uint32_t recno) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql unlock", ""};
+    }
+    const std::size_t pos =
+        (recno == 0)
+            ? (tbl->bof || tbl->eof ? static_cast<std::size_t>(-1) : tbl->pos)
+            : static_cast<std::size_t>(recno - 1);
+    if (pos >= tbl->data.rows.size()) return util::Result<void>{};
+    auto r = mssql_applock(*this, mssql_record_lock_key(*tbl, pos), false);
+    if (!r) return r.error();
+    return util::Result<void>{};
+}
+
+util::Result<void> MssqlConnection::lock_table(MssqlTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql lock", ""};
+    }
+    auto r = mssql_applock(*this, mssql_table_lock_key(*tbl), true);
+    if (!r) return r.error();
+    if (r.value() < 0) return util::Error{5035, 0, "table locked", ""};
+    return util::Result<void>{};
+}
+
+util::Result<void> MssqlConnection::unlock_table(MssqlTable* tbl) {
+    if (!valid() || tbl == nullptr) {
+        return util::Error{5001, 0, "invalid mssql unlock", ""};
+    }
+    auto r = mssql_applock(*this, mssql_table_lock_key(*tbl), false);
+    if (!r) return r.error();
     return util::Result<void>{};
 }
 

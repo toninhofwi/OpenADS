@@ -1,8 +1,10 @@
 #pragma once
 
+#include "sql_backend/backend_tx_manager.h"
 #include "sql_backend/odbc_table.h"
 #include "sql_backend/odbc_uri.h"
 #include "sql_backend/sql_common.h"
+#include "engine/aggregate.h"
 #include "util/result.h"
 
 #include <cstdint>
@@ -41,6 +43,13 @@ public:
     util::Result<void> goto_top(OdbcTable* tbl);
     util::Result<void> goto_bottom(OdbcTable* tbl);
     util::Result<void> skip(OdbcTable* tbl, std::int32_t step);
+
+    util::Result<void> set_filter(OdbcTable* tbl, const std::string& where);
+
+    util::Result<std::vector<engine::AggValue>>
+        aggregate(OdbcTable* tbl,
+                  const std::string& where_sql,
+                  const std::vector<engine::AggSpec>& specs);
 
     util::Result<bool>          at_eof(OdbcTable* tbl) const;
     util::Result<bool>          at_bof(OdbcTable* tbl) const;
@@ -85,9 +94,13 @@ public:
 
     util::Result<void> exec_sql(const std::string& sql);
 
+    BackendTxManager& tx_manager() noexcept { return tx_mgr_; }
+    const BackendTxManager& tx_manager() const noexcept { return tx_mgr_; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    BackendTxManager      tx_mgr_;
 };
 
 } // namespace openads::sql_backend

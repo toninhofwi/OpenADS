@@ -12,6 +12,7 @@
 
 #include "sql_backend/backend_tx_manager.h"
 #include "sql_backend/mssql_table.h"
+#include "engine/aggregate.h"
 #include "sql_backend/tds_protocol.h"
 #include "sql_backend/tds_tls_channel.h"
 #include "util/result.h"
@@ -47,6 +48,26 @@ public:
     // The connection must be authenticated (valid() == true).
     // SQL text is backend-generated; NEVER put secrets or credentials in sql.
     util::Result<tds::QueryResult> query(const std::string& sql);
+
+    util::Result<void> exec_sql(const std::string& sql);
+
+    util::Result<void> set_filter(MssqlTable* tbl, const std::string& where);
+
+    util::Result<std::vector<engine::AggValue>>
+        aggregate(MssqlTable* tbl,
+                  const std::string& where_sql,
+                  const std::vector<engine::AggSpec>& specs);
+
+    util::Result<bool> seek_index(MssqlTable* tbl,
+                                  const std::string& column,
+                                  const std::string& key,
+                                  bool soft,
+                                  bool last_key);
+
+    util::Result<void> lock_record(MssqlTable* tbl, std::uint32_t recno);
+    util::Result<void> unlock_record(MssqlTable* tbl, std::uint32_t recno);
+    util::Result<void> lock_table(MssqlTable* tbl);
+    util::Result<void> unlock_table(MssqlTable* tbl);
 
     // Discover primary-key column names via INFORMATION_SCHEMA.
     util::Result<std::vector<std::string>>

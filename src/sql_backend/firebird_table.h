@@ -1,5 +1,8 @@
 #pragma once
 
+#include "sql_backend/backend_field_optimizer.h"
+#include "sql_backend/backend_where_builder.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -63,6 +66,10 @@ struct FirebirdTable {
     bool                                  is_result = false;
     std::vector<std::vector<std::string>> result_rows;
     std::vector<std::vector<bool>>        result_nulls;
+
+    std::string where_filter;
+    BackendFieldOptimizer field_optimizer;
+    BackendWhereBuilder   where_builder;
 };
 
 } // namespace openads::sql_backend
