@@ -13222,10 +13222,19 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
     if (o == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "no active order");
     }
-    // ACE convention: usDir == 0 (ADS_ASCENDING) → forward; non-zero
-    // (ADS_DESCENDING) → reverse.
-    const_cast<openads::engine::Order*>(o)->set_descending_traverse(
-        usDir != 0);
+    // Real ADS semantics: AdsSetIndexDirection REVERSES the current
+    // traversal direction — it is not an absolute set. rddads' / X#'s
+    // OrdDescend() proves this: the RDD reads the current direction
+    // (AdsIsIndexDescending) and, when it differs from the requested one,
+    // calls AdsSetIndexDirection(hIndex, TRUE) — always TRUE, in both the
+    // asc→desc and desc→asc cases. So TRUE means "flip", not "descend".
+    // Treating usDir as an absolute 0/1 wedged FWH xbrowse header sorting:
+    // the first double-click flipped to descending and every later click
+    // re-requested TRUE, which an absolute set left descending forever.
+    // (void)usDir — the value is a legacy flag; the operation is a toggle.
+    (void)usDir;
+    auto* mo = const_cast<openads::engine::Order*>(o);
+    mo->set_descending_traverse(!mo->descending_traverse());
     return ok();
 }
 
@@ -23595,6 +23604,27 @@ UNSIGNED32 ENTRYPOINT AdsIsIndexCustom(ADSHANDLE, UNSIGNED16* p)
 UNSIGNED32 ENTRYPOINT AdsIsIndexDescending(ADSHANDLE hIndex, UNSIGNED16* p) {
     if (p == nullptr) return openads::AE_INTERNAL_ERROR;
     *p = 0;
+    // For the ACTIVE order, report the *effective* traversal direction —
+    // the dynamic flag AdsSetIndexDirection toggles — not the index's baked
+    // physical descending flag. rddads' OrdDescend() reads this to decide
+    // whether to flip; if it always saw the physical flag it could never
+    // observe a dynamic reversal, and FWH xbrowse header re-sorting (which
+    // toggles via OrdDescend) would stick after the first click.
+    {
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        auto& m  = index_bindings();
+        auto it  = m.find(hIndex);
+        // The active binding is the only one with no parked IIndex (its
+        // index lives in Table::order_). Parked/inactive bindings have no
+        // dynamic traverse state, so fall through to the physical flag.
+        if (it != m.end() && !it->second.parked && it->second.table) {
+            if (auto* o = it->second.table->order()) {
+                *p = o->descending_traverse() ? 1 : 0;
+                return openads::AE_SUCCESS;
+            }
+        }
+    }
     auto* idx = iindex_for_handle(hIndex);
     if (idx == nullptr) return openads::AE_INTERNAL_ERROR;
     *p = idx->descending() ? 1 : 0;
