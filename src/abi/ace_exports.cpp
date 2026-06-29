@@ -9868,31 +9868,24 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         // their ADSHANDLE; the registry only stores raw pointers.
         static std::unordered_map<Handle,
             std::unique_ptr<openads::network::RemoteIndex>> remote_indexes;
-        const auto& ids = r.value();
-        std::uint16_t out_n = static_cast<std::uint16_t>(ids.size());
+        const auto& entries = r.value();
+        std::uint16_t out_n = static_cast<std::uint16_t>(entries.size());
         if (pu16ArrayLen != nullptr && *pu16ArrayLen < out_n) {
             out_n = *pu16ArrayLen;
         }
         for (std::uint16_t i = 0; i < out_n; ++i) {
             auto ri = std::make_unique<openads::network::RemoteIndex>();
-            ri->conn   = rt->conn;
-            ri->id     = ids[i];
-            ri->tbl_id = rt->id;
-            ri->parent = rt;
+            ri->conn      = rt->conn;
+            ri->id        = entries[i].id;
+            ri->tbl_id    = rt->id;
+            ri->parent    = rt;
+            ri->tag_name  = entries[i].tag;
             Handle gh = s.registry.register_object(
                 HandleKind::RemoteIndex, ri.get());
             ahIndex[i] = gh;
             remote_indexes.emplace(gh, std::move(ri));
-            UNSIGNED8 tbuf[32] = {0};
-            UNSIGNED16 tlen = sizeof(tbuf);
-            if (AdsGetIndexName(gh, tbuf, &tlen) == 0) {
-                std::string tag(reinterpret_cast<char*>(tbuf), tlen);
-                while (!tag.empty() && tag.back() == ' ') tag.pop_back();
-                rt->index_by_tag.emplace_back(tag, ids[i]);
-            } else {
-                rt->index_by_tag.emplace_back("", ids[i]);
-            }
-            if (rt->active_index_id == 0) rt->active_index_id = ids[i];
+            rt->index_by_tag.emplace_back(entries[i].tag, entries[i].id);
+            if (rt->active_index_id == 0) rt->active_index_id = entries[i].id;
         }
         if (pu16ArrayLen != nullptr) *pu16ArrayLen = out_n;
         return ok();
@@ -10342,14 +10335,16 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
         static std::unordered_map<Handle,
             std::unique_ptr<openads::network::RemoteIndex>> remote_indexes;
         auto ri = std::make_unique<openads::network::RemoteIndex>();
-        ri->conn   = rt->conn;
-        ri->id     = r.value();
-        ri->tbl_id = rt->id;
-        ri->parent = rt;
+        ri->conn     = rt->conn;
+        ri->id       = r.value();
+        ri->tbl_id   = rt->id;
+        ri->parent   = rt;
+        ri->tag_name = tag;
         Handle gh = s.registry.register_object(
             HandleKind::RemoteIndex, ri.get());
         *phIndex = gh;
         remote_indexes.emplace(gh, std::move(ri));
+        rt->index_by_tag.emplace_back(tag, r.value());
         return ok();
     }
     Table* t = get_table(hTable);
@@ -13200,6 +13195,10 @@ UNSIGNED32 ENTRYPOINT AdsGetIndexExpr(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 
 UNSIGNED32 ENTRYPOINT AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                            UNSIGNED16* pusBufLen) {
+    if (auto* ri = get_remote_index(hIndex)) {
+        openads::abi::copy_to_caller(pucBuf, pusBufLen, ri->tag_name);
+        return ok();
+    }
     auto& m = index_bindings();
     auto it = m.find(hIndex);
     if (it == m.end()) {

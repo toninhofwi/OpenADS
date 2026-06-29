@@ -1210,6 +1210,18 @@ DispatchResult Session::dispatch(const Frame& f) {
                 index_h_[iid] = arr[i];
                 index_table_[iid] = tid;
                 write_u32_le(iid, reply.payload);
+                std::string tag;
+                UNSIGNED8 tbuf[256] = {0};
+                UNSIGNED16 tlen = static_cast<UNSIGNED16>(sizeof(tbuf) - 1);
+                if (AdsGetIndexName(arr[i], tbuf, &tlen) == 0) {
+                    tag.assign(reinterpret_cast<char*>(tbuf), tlen);
+                    while (!tag.empty() && tag.back() == ' ') tag.pop_back();
+                }
+                auto tn = static_cast<std::uint16_t>(tag.size());
+                reply.payload.push_back(static_cast<std::uint8_t>( tn       & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((tn >> 8) & 0xFFu));
+                reply.payload.insert(reply.payload.end(),
+                                     tag.begin(), tag.end());
             }
             break;
         }

@@ -121,7 +121,11 @@ public:
                                               const std::vector<std::uint32_t>& recnos);
     util::Result<std::uint16_t> get_aof_opt_level(std::uint32_t id);
     // M12.16 — remote index handle subsystem.
-    util::Result<std::vector<std::uint32_t>>
+    struct OpenIndexEntry {
+        std::uint32_t id = 0;
+        std::string   tag;
+    };
+    util::Result<std::vector<OpenIndexEntry>>
                                 open_index(std::uint32_t table_id,
                                            const std::string& path);
     util::Result<void>          close_index(std::uint32_t index_id);
@@ -303,6 +307,7 @@ struct RemoteIndex {
     RemoteConnection* conn  = nullptr;
     std::uint32_t     id    = 0;     // server-side index id
     std::uint32_t     tbl_id = 0;    // server-side table id this binds to
+    std::string       tag_name;      // CDX/NTX tag (AdsGetIndexName / OrdName)
     // M12.17 — back-pointer so AdsSeek / AdsSeekLast / AdsSkipUnique
     // can invalidate the parent table's row cache after the cursor
     // moves on the server side.

@@ -1153,7 +1153,7 @@ RemoteConnection::get_aof_opt_level(std::uint32_t id) {
 // M12.16 — remote index handle subsystem.
 // =====================================================================
 
-util::Result<std::vector<std::uint32_t>>
+util::Result<std::vector<RemoteConnection::OpenIndexEntry>>
 RemoteConnection::open_index(std::uint32_t table_id,
                               const std::string& path) {
     Frame req; req.opcode = Opcode::OpenIndex;
@@ -1171,12 +1171,41 @@ RemoteConnection::open_index(std::uint32_t table_id,
         return util::Error{5000, 0,
             "OpenIndex: short payload", path};
     }
-    std::vector<std::uint32_t> ids;
-    ids.reserve(n);
-    for (std::uint16_t i = 0; i < n; ++i) {
-        ids.push_back(read_u32_le(pl.data() + 2 + 4u * i));
+    std::vector<OpenIndexEntry> out;
+    out.reserve(n);
+    const size_t legacy_end = 2u + 4u * n;
+    if (pl.size() == legacy_end) {
+        for (std::uint16_t i = 0; i < n; ++i) {
+            OpenIndexEntry e;
+            e.id = read_u32_le(pl.data() + 2 + 4u * i);
+            out.push_back(std::move(e));
+        }
+        return out;
     }
-    return ids;
+    size_t off = 2;
+    for (std::uint16_t i = 0; i < n; ++i) {
+        if (off + 6 > pl.size()) {
+            return util::Error{5000, 0,
+                "OpenIndex: short tag payload", path};
+        }
+        OpenIndexEntry e;
+        e.id = read_u32_le(pl.data() + off);
+        off += 4;
+        std::uint16_t tlen = read_u16_le(pl.data() + off);
+        off += 2;
+        if (off + tlen > pl.size()) {
+            return util::Error{5000, 0,
+                "OpenIndex: truncated tag name", path};
+        }
+        if (tlen > 0) {
+            e.tag.assign(reinterpret_cast<const char*>(pl.data() + off),
+                         tlen);
+            while (!e.tag.empty() && e.tag.back() == ' ') e.tag.pop_back();
+        }
+        off += tlen;
+        out.push_back(std::move(e));
+    }
+    return out;
 }
 
 util::Result<void> RemoteConnection::close_index(std::uint32_t index_id) {

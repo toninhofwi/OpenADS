@@ -96,6 +96,11 @@ TEST_CASE("remote AdsGotoTop/AdsSkip accept RemoteIndex handles") {
                              &hIndex) == 0);
     REQUIRE(hIndex != 0);
 
+    UNSIGNED8 nm[32] = {0};
+    UNSIGNED16 nl = sizeof(nm);
+    REQUIRE(AdsGetIndexName(hIndex, nm, &nl) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(nm), nl) == "COLONIA");
+
     // Simulate rddads: navigation via the index handle, not the table.
     REQUIRE(AdsGotoTop(hIndex) == 0);
 
