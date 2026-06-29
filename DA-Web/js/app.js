@@ -69,6 +69,10 @@
     return data;
   }
 
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   function setStatus(msg, type = 'info') {
     const bar = document.getElementById('status-msg');
     if (bar) bar.textContent = msg;
@@ -4352,11 +4356,46 @@
     setStatus('Running import…');
 
     try {
-      const data = await apiFetch('api/import_sap_dd.php', {
+      const started = await apiFetch('api/import_sap_dd.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, source, dest, user, password, sapLib }),
       });
+      const jobId = started.jobId;
+      if (!jobId) throw new Error('Import job did not start');
+
+      // RCB 06/29/2026: Keep the modal alive while the CLI worker imports the
+      // DD, so Apache/FastCGI does not need to hold one long request open.
+      resEl.style.display = 'block';
+      resEl.style.background = '#1e1e2e';
+      resEl.style.color = '#cdd6f4';
+      resEl.style.whiteSpace = 'pre-wrap';
+      resEl.textContent = 'Import queued...';
+
+      let job = null;
+      while (true) {
+        await delay(1000);
+        job = await apiFetch(`api/import_sap_dd_status.php?jobId=${encodeURIComponent(jobId)}`);
+        const log = Array.isArray(job.log) ? job.log.slice(-8).map(x => `  ${x.message}`) : [];
+        const elapsed = Number(job.elapsed || 0);
+        resEl.textContent = [
+          `Import status: ${job.status || 'running'}`,
+          `Phase: ${job.phase || ''}`,
+          `Message: ${job.message || ''}`,
+          elapsed ? `Elapsed: ${elapsed}s` : '',
+          '',
+          ...log,
+        ].filter(Boolean).join('\n');
+        setStatus(job.message || 'Import running...');
+
+        if (job.status === 'complete') break;
+        if (job.status === 'failed') {
+          const err = new Error(job.message || job.error || 'Import failed');
+          err.data = job;
+          throw err;
+        }
+      }
+      const data = job.result || {};
 
       const lines = [
         `✓ Import complete`,

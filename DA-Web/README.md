@@ -136,21 +136,32 @@ Restart Apache after any DLL change.
 `import_sap_dd.php` calls a native binary (`openads_import_dd.exe` on Windows) to read a SAP DD and write the OpenADS copy. After each build, deploy it:
 
 ```bat
-copy F:\OpenADS\build\msvc-x64\tools\import_dd\Release\openads_import_dd.exe C:\php\
+copy <project-root>\build\msvc-x64\tools\import_dd\Release\openads_import_dd.exe C:\php\
 ```
 
-**Binary search order** — `import_sap_dd.php` looks for the binary in this order and uses the first match:
+**Binary search order** — during SAP DD import, DA-Web starts a PHP CLI worker
+that locates the native import tool. It checks these explicit locations, then
+uses the newest existing binary found:
 
 | Priority | Location | Notes |
 |----------|----------|-------|
 | 1 | `OPENADS_IMPORT_DD_BIN` env var | Set this to override everything else |
-| 2 | `<project-root>\bin\openads_import_dd.exe` | Manual copy; useful for production |
-| 3 | `<project-root>\build\msvc-x64\tools\import_dd\Release\openads_import_dd.exe` | Dev build output (Windows) |
-| 4 | `<project-root>\build\msvc-x64\tools\import_dd\Debug\openads_import_dd.exe` | Dev debug build (Windows) |
-| 5 | `<project-root>\build\ninja-linux\tools\import_dd\openads_import_dd` | Dev build output (Linux) |
-| 6 | `openads_import_dd.exe` in `PATH` | Fallback; finds `C:\php\` if it is on PATH |
+| 2 | `C:\php\openads_import_dd.exe` | Windows deployment copy |
+| 3 | `<project-root>\bin\openads_import_dd.exe` | Manual project-local copy; useful for production |
+| 4 | `<project-root>\build\msvc-x64\tools\import_dd\Release\openads_import_dd.exe` | MSVC Release build output |
+| 5 | `<project-root>\build\msvc-x64\tools\import_dd\Debug\openads_import_dd.exe` | MSVC Debug build output |
+| 6 | `<project-root>\build\ninja-clang\tools\import_dd\openads_import_dd.exe` | Clang/Ninja Windows build output |
+| 7 | `<project-root>\build\ninja-linux\tools\import_dd\openads_import_dd` | Linux build output |
 
-> **Note:** The development machine (where `F:\OpenADS` is the project root) picks up the binary from priority 3 automatically — no copy to `C:\php` is needed for local development. Copy to `C:\php` (or set `OPENADS_IMPORT_DD_BIN`) only when deploying to a server where the build directory is not present.
+If none of those explicit files exist, DA-Web falls back to `openads_import_dd.exe`
+on `PATH` (`openads_import_dd` on non-Windows platforms). The newest-binary rule
+prevents an older Release build from shadowing a freshly rebuilt Debug or
+deployed copy.
+
+> **Note:** `<project-root>` is the repository root that contains `DA-Web/`;
+> do not hard-code a development drive letter in deployment instructions. Copy
+> to `C:\php` or set `OPENADS_IMPORT_DD_BIN` when deploying to a server where
+> the build directory is not present.
 
 **SAP library (`ace64.dll`) search order** — `import_sap_dd.php` also locates the SAP ACE engine:
 

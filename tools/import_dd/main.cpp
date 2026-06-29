@@ -780,6 +780,7 @@ int main(int argc, char** argv) {
     int written_memberships = 0;
     int written_perms       = 0;
     int written_db_props    = 0;
+    std::vector<std::string> admin_principals;
     {
         auto opened = openads::engine::DataDict::open(dest);
         if (!opened) {
@@ -841,6 +842,13 @@ int main(int argc, char** argv) {
                 if (!r) warnings.push_back("add_user_to_group(" + canonical + ",DB:Admin): " + r.error().message);
                 else    ++written_memberships;
             }
+            admin_principals.push_back(canonical);
+            if (!user.empty() && ci_lower(user) != ci_lower(canonical)) {
+                auto r = dd.add_user_to_group(user, "DB:Admin");
+                if (!r) warnings.push_back("add_user_to_group(" + user + ",DB:Admin): " + r.error().message);
+                else    ++written_memberships;
+                admin_principals.push_back(user);
+            }
         }
 
         for (const auto& p : perms) {
@@ -848,6 +856,36 @@ int main(int argc, char** argv) {
             if (r) ++written_perms;
             else warnings.push_back("grant_permission(" + p.obj_type + "," + p.obj_name + "," + p.grantee + "): " + r.error().message);
         }
+
+        // RCB 06/29/2026: DB:Admin is an administrative bypass in the OpenADS
+        // core, but DA-Web's direct permission grids read system.permissions.
+        // Persist explicit full grants after SAP ACL import so newly imported
+        // DDs show the same administrative reality that the engine enforces.
+        constexpr std::uint32_t admin_mask =
+            openads::engine::DataDict::DD_PERM_SELECT |
+            openads::engine::DataDict::DD_PERM_UPDATE |
+            openads::engine::DataDict::DD_PERM_EXECUTE |
+            openads::engine::DataDict::DD_PERM_INSERT |
+            openads::engine::DataDict::DD_PERM_DELETE |
+            0x040u | 0x080u | 0x100u | 0x200u; // access/create/alter/drop
+        auto grant_admin_full = [&](const std::string& grantee) {
+            auto grant_one = [&](const std::string& obj_type,
+                                 const std::string& obj_name) {
+                auto r = dd.grant_permission(obj_type, obj_name, grantee, admin_mask);
+                if (r) ++written_perms;
+                else warnings.push_back("grant_permission(" + obj_type + "," +
+                    obj_name + "," + grantee + "): " + r.error().message);
+            };
+            grant_one("Database", "Database");
+            for (const auto& kv : dd.tables())    grant_one("Table", kv.first);
+            for (const auto& kv : dd.views())     grant_one("View", kv.first);
+            for (const auto& kv : dd.procs())     grant_one("StoredProc", kv.first);
+            for (const auto& kv : dd.functions()) grant_one("Function", kv.first);
+            for (const auto& kv : dd.links())     grant_one("Link", kv.first);
+        };
+        grant_admin_full("DB:Admin");
+        for (const auto& principal : admin_principals)
+            grant_admin_full(principal);
 
         // Remove all SAP-written encrypted Permission records from the dest file.
         // Even when system.permissions returned 0 rows (SAP stores real ACLs in
