@@ -9,6 +9,7 @@ these are **not** meant to run headless in CI — they're "swap your
 |--------|-------|-------|
 | `adt-native/` | Harbour console + `hbmk2` | Native `.adt` / `.adi` / `.adm` create, append, index seek — **by glokcode**. |
 | `harbour-hbmk2/` | Harbour console + `hbmk2` (`.hbp`) | Turnkey `.hbp` template — drop in a `.prg`, set `OPENADS_LIB`, run `hbmk2`. x64 + x86 variants, Windows + POSIX wrappers. |
+| `harbour_remote/` | Harbour + `rddads` over TCP | Remote `AdsConnect60` → `AdsCreateIndex` on server → browse `CCOLONIA`. Console smoke (`build_and_run.cmd`) + optional FiveWin GUI. |
 | `fivewin/` | FiveWin (FWH) + Harbour | Commercial GUI lib — not vendored; install your own FWH. |
 | `xsharp-winforms/` | X# + WinForms | X# runtime not vendored; install from xsharp.eu. |
 | `postgresql/` | C + ACE API + CMake | OpenADS Plus PostgreSQL backend — connect by `postgresql://` URI, read + insert through the ACE API. Needs `-DOPENADS_WITH_POSTGRESQL=ON`. |

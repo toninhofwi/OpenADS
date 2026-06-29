@@ -1,0 +1,30 @@
+# OpenADS — Harbour remote colonias demo (FiveWin GUI, x64).
+#
+#   set OPENADS_LIB=...
+#   set FWDIR=c:\fwteam
+#   hbmk2 colonias_gui.hbp
+#
+# FiveWin (FWH) is commercial — not vendored. Install separately.
+
+colonias.prg
+colonias_common.prg
+adsindex.c
+
+-comp=msvc64
+-w3
+-es2
+
+-i${HB_INSTALL}/contrib/rddads
+-i${OPENADS_ROOT}/include/openads
+-i${FWDIR}/include
+
+-lrddads
+-L${HB_INSTALL}/lib/win/msvc64
+-L${OPENADS_LIB}
+-lace64
+-L${FWDIR}/lib
+-lFiveHGC64
+-lFiveHC64
+
+-llegacy_stdio_definitions
+-loldnames

@@ -910,6 +910,50 @@ openads::network::RemoteIndex* get_remote_index(ADSHANDLE h) {
         h, HandleKind::RemoteIndex);
 }
 
+namespace {
+
+// Registry handle for a RemoteTable pointer (for apply_relations_for_handle).
+Handle handle_for_remote_table(openads::network::RemoteTable* rt) {
+    if (rt == nullptr) return 0;
+    auto& s = state();
+    Handle found = 0;
+    s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+        if (found) return;
+        if (k == HandleKind::RemoteTable &&
+            static_cast<openads::network::RemoteTable*>(p) == rt)
+            found = h;
+    });
+    return found;
+}
+
+// rddads passes hOrdCurrent (a RemoteIndex handle) to AdsGotoTop /
+// AdsSkip / etc. Activate the tag on the parent table first.
+openads::util::Result<void>
+remote_activate_index(openads::network::RemoteIndex* ri) {
+    if (ri == nullptr || ri->parent == nullptr || ri->conn == nullptr) {
+        return openads::util::Error{
+            openads::AE_INTERNAL_ERROR, 0,
+            "remote index: missing parent or connection", ""};
+    }
+    if (ri->parent->active_index_id != ri->id) {
+        auto r = ri->conn->set_order(ri->parent->id, ri->id);
+        if (!r) return r.error();
+        ri->parent->active_index_id = ri->id;
+    }
+    return {};
+}
+
+void remote_index_nav_preamble(openads::network::RemoteIndex* ri) {
+    if (ri == nullptr || ri->parent == nullptr) return;
+    ri->parent->found_cached  = true;
+    ri->parent->current_found = false;
+    ri->parent->row_valid     = false;
+    ri->parent->prefetch_queue.clear();
+    ri->parent->prefetch_consumed = 0;
+}
+
+} // namespace
+
 // Latch set by AdsSeekLast. AdsSeek consults this to suppress its
 // empty-key always-found quirk when called as part of rddads'
 // AdsSeekLast retry chain. AdsSkip clears it.
@@ -6936,6 +6980,16 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
+    if (auto* ri = get_remote_index(hTable)) {
+        remote_index_nav_preamble(ri);
+        auto act = remote_activate_index(ri);
+        if (!act) return fail(act.error());
+        auto r = ri->conn->goto_top(ri->parent);
+        if (!r) return fail(r.error());
+        if (Handle th = handle_for_remote_table(ri->parent))
+            apply_relations_for_handle(th);
+        return ok();
+    }
     if (auto* rt = get_remote_table(hTable)) {
         // M12.18 — rt-aware overload parses the row trailer in the
         // same RTT, so AdsGetField immediately after GoTop hits
@@ -6963,6 +7017,16 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
+    if (auto* ri = get_remote_index(hTable)) {
+        remote_index_nav_preamble(ri);
+        auto act = remote_activate_index(ri);
+        if (!act) return fail(act.error());
+        auto r = ri->conn->goto_bottom(ri->parent);
+        if (!r) return fail(r.error());
+        if (Handle th = handle_for_remote_table(ri->parent))
+            apply_relations_for_handle(th);
+        return ok();
+    }
     if (auto* rt = get_remote_table(hTable)) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoBottom clears Found()
         auto r = rt->conn->goto_bottom(rt);
@@ -6988,6 +7052,16 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
 
 UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
+    if (auto* ri = get_remote_index(hTable)) {
+        remote_index_nav_preamble(ri);
+        auto act = remote_activate_index(ri);
+        if (!act) return fail(act.error());
+        auto r = ri->conn->skip(ri->parent, lRows);
+        if (!r) return fail(r.error());
+        if (Handle th = handle_for_remote_table(ri->parent))
+            apply_relations_for_handle(th);
+        return ok();
+    }
     if (auto* rt = get_remote_table(hTable)) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: Skip clears Found()
         // M12.21 — sequential prefetch: Skip(1) drains the queue
@@ -10853,10 +10927,21 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
 
 UNSIGNED32 ENTRYPOINT AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
                           UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
-                          UNSIGNED8* pucCondition, UNSIGNED32 /*ulOptions*/,
-                          UNSIGNED16 /*usKeyType*/, ADSHANDLE* phIndex) {
+                          UNSIGNED8* pucCondition, UNSIGNED32 ulOptions,
+                          UNSIGNED16 usKeyType, ADSHANDLE* phIndex) {
+    if (phIndex == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null index out-param");
+    }
+    // Legacy API: remote tables route through AdsCreateIndex61 (M12.16).
+    if (get_remote_table(hTable) != nullptr) {
+        return AdsCreateIndex61(hTable, pucFile, pucTag, pucExpr, pucCondition,
+                                nullptr, ulOptions,
+                                usKeyType ? usKeyType
+                                          : static_cast<UNSIGNED16>(ADS_DEFAULT),
+                                phIndex);
+    }
     Table* t = get_table(hTable);
-    if (!t || phIndex == nullptr) {
+    if (!t) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
     }
     auto file = openads::abi::to_internal(pucFile, 0);

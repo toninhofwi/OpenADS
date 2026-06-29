@@ -1,0 +1,26 @@
+# OpenADS — Harbour remote colonias demo (console, x64).
+#
+#   set OPENADS_LIB=C:\path\to\OpenADS\build\default\src\Release
+#   hbmk2 colonias_console.hbp
+#
+# Requires Harbour contrib/rddads built for msvc64. OpenADS' ace64.dll
+# must sit next to the exe (or first on PATH) — not SAP's DLL.
+
+colonias_console.prg
+colonias_common.prg
+adsindex.c
+
+-comp=msvc64
+-w3
+-es2
+
+-i${HB_INSTALL}/contrib/rddads
+-i${OPENADS_ROOT}/include/openads
+
+-lrddads
+-L${HB_INSTALL}/lib/win/msvc64
+-L${OPENADS_LIB}
+-lace64
+
+-llegacy_stdio_definitions
+-loldnames
