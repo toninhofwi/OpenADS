@@ -13,10 +13,9 @@ The flow mirrors a typical Harbour + `rddads` remote app:
 4. `AdsCreateIndex( "CCOLONIA.CDX", "COLONIA", "COLONIA", "", 0 )`
 5. `OrdSetFocus( "COLONIA" )` → navigate / xBrowse
 
-> **OpenADS engine note:** remote index handles (`hOrdCurrent`) must be
-> accepted by `AdsGotoTop` / `AdsSkip` in `ace64.dll`. Builds before the
-> harbour_remote work routed only table handles and hung on the first
-> `INDEX ON` / post-create `DBGoTop`. Use a current `openace64.dll`.
+> Generic engine support lives in OpenADS core (`network/remote_index_nav.*`,
+> `AdsCreateIndex` → `AdsCreateIndex61` on remote tables). The Harbour
+> wrapper is `tools/harbour_patch/ads_create_index.c` / `rddads-compat.patch`.
 
 ## Files
 
@@ -25,7 +24,7 @@ The flow mirrors a typical Harbour + `rddads` remote app:
 | `colonias_common.prg` | `InicializarOpenADS()` — connect, open table, `AdsCreateIndex`, focus tag. |
 | `colonias_console.prg` | Headless smoke (`colonias_console.exe`). |
 | `colonias.prg` | FiveWin `xBrowse` GUI (`colonias.exe`). |
-| `adsindex.c` | Harbour wrapper: `AdsCreateIndex( cBag, cTag, cExpr, … )` → `AdsCreateIndex61`. |
+| `../../tools/harbour_patch/ads_create_index.c` | Harbour `AdsCreateIndex()` wrapper (also in `rddads-compat.patch`). |
 | `colonias_console.hbp` | `hbmk2` project — console build. |
 | `colonias_gui.hbp` | `hbmk2` project — FiveWin GUI build. |
 | `build.cmd` | Build console demo + copy `ace64.dll`. |

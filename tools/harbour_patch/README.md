@@ -22,6 +22,21 @@ HB_WITH_ADS=/path/to/openads-sdk \
 
 ## Patch contents
 
+### `contrib/rddads/adsfunc.c`
+
+Adds `HB_FUNC( ADSCREATEINDEX )` — Harbour-level wrapper around
+`AdsCreateIndex61` for the current ADSCDX work area:
+
+```xbase
+AdsCreateIndex( cBagFile, cTag, cExpr, [cFor], [nOptions] ) -> lOk
+```
+
+OpenADS' `ace64.dll` implements remote `AdsCreateIndex61` and accepts
+`hOrdCurrent` (a remote index handle) in `AdsGotoTop` / `AdsSkip`.
+Until this patch is applied and `rddads` rebuilt, link the standalone
+`tools/harbour_patch/ads_create_index.c` into your `hbmk2` project
+(do not link both — duplicate symbol).
+
 ### `contrib/rddads/rddads.h`
 
 Adds an inline `ADSFIELD( UNSIGNED16 n )` helper, guarded by

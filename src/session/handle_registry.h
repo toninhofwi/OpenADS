@@ -77,6 +77,16 @@ public:
         return it == slots_.end() ? HandleKind::None : it->second.kind;
     }
 
+    // Reverse lookup: find the handle registered for a live object pointer.
+    Handle find_handle(HandleKind kind, const void* ptr) const {
+        if (ptr == nullptr) return 0;
+        std::lock_guard<std::mutex> lk(mu_);
+        for (auto& [h, slot] : slots_) {
+            if (slot.kind == kind && slot.ptr == ptr) return h;
+        }
+        return 0;
+    }
+
 private:
     struct Slot { HandleKind kind = HandleKind::None; void* ptr = nullptr; };
 

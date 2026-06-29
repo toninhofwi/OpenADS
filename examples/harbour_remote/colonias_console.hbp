@@ -8,7 +8,7 @@
 
 colonias_console.prg
 colonias_common.prg
-adsindex.c
+../../tools/harbour_patch/ads_create_index.c
 
 -comp=msvc64
 -w3

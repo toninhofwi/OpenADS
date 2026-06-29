@@ -1,8 +1,11 @@
 /*
- * Harbour wrapper for legacy AdsCreateIndex() — uses the current ADSCDX
- * work area's hTable and delegates to AdsCreateIndex61 (remote-aware).
+ * OpenADS Harbour extension — AdsCreateIndex() for contrib/rddads.
  *
- * Signature (Harbour):
+ * Linked standalone until rddads-compat.patch is applied to Harbour's
+ * contrib/rddads/adsfunc.c and rddads is rebuilt. Do not link this file
+ * together with a patched rddads (duplicate HB_FUNC symbol).
+ *
+ * Harbour signature:
  *   AdsCreateIndex( cBagFile, cTag, cExpr, [cFor], [nOptions] ) -> lOk
  */
 #include "hbapi.h"
