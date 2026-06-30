@@ -74,6 +74,7 @@
 #include "drivers/adm/adm_memo.h"
 #include "drivers/fpt/fpt_memo.h"
 #include "drivers/memory/memory_driver.h"
+#include "platform/path.h"
 #include "platform/proc.h"
 #include "platform/time.h"
 #include "sql/parser.h"
@@ -5606,8 +5607,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (tp.extension() == ".dbf" || tp.extension() == ".DBF") {
         fs::path cdx = tp; cdx.replace_extension(".cdx");
         std::error_code ec;
-        if (fs::exists(cdx, ec)) {
-            std::string cdxs = cdx.string();
+        std::string cdx_path =
+            openads::platform::resolve_case_insensitive(cdx.string());
+        if (fs::exists(cdx_path, ec)) {
+            std::string cdxs = cdx_path;
             std::vector<UNSIGNED8> b(cdxs.size() + 1);
             std::memcpy(b.data(), cdxs.data(), cdxs.size());
             // Up to 64 tag handles is plenty for a production CDX.
@@ -5622,8 +5625,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (tp.extension() == ".adt" || tp.extension() == ".ADT") {
         fs::path adi = tp; adi.replace_extension(".adi");
         std::error_code ec;
-        if (fs::exists(adi, ec)) {
-            std::string adis = adi.string();
+        std::string adi_path =
+            openads::platform::resolve_case_insensitive(adi.string());
+        if (fs::exists(adi_path, ec)) {
+            std::string adis = adi_path;
             std::vector<UNSIGNED8> b(adis.size() + 1);
             std::memcpy(b.data(), adis.data(), adis.size());
             ADSHANDLE arr[64] = {0};
@@ -9975,19 +9980,35 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         // filename ".../sub/t.adx".  A single-component relative path
         // (p.filename() == p) takes the same first branch and is unaffected.
         fs::path candidate = table_dir / p;
-        if (!fs::exists(candidate)) {
-            fs::path by_name = table_dir / p.filename();
-            if (fs::exists(by_name)) {
-                p = by_name;
-            } else {
-                p = candidate;  // preserve original path for the real "not found" error
-            }
-        } else {
+        fs::path by_name   = table_dir / p.filename();
+        auto resolve_ci = [](const fs::path& cand) -> fs::path {
+            if (fs::exists(cand)) return cand;
+            std::string ci = openads::platform::resolve_case_insensitive(
+                cand.string());
+            if (ci != cand.string() && fs::exists(ci)) return fs::path(ci);
+            return cand;
+        };
+        if (fs::exists(candidate)) {
             p = candidate;
+        } else if (fs::exists(by_name)) {
+            p = by_name;
+        } else {
+            fs::path ci = resolve_ci(by_name);
+            if (fs::exists(ci)) {
+                p = ci;
+            } else {
+                ci = resolve_ci(candidate);
+                p = fs::exists(ci) ? ci : candidate;
+            }
         }
     }
     if (!p.has_extension()) {
         p.replace_extension(".cdx");
+    }
+    if (!fs::exists(p)) {
+        std::string ci = openads::platform::resolve_case_insensitive(
+            p.string());
+        if (ci != p.string() && fs::exists(ci)) p = fs::path(ci);
     }
     auto path = p.string();
 
