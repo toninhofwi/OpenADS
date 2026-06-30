@@ -87,8 +87,16 @@ private:
     };
     struct KeyHash {
         std::size_t operator()(const Key& k) const noexcept {
-            return std::hash<const void*>{}(k.file) ^
-                   std::hash<std::uint64_t>{}(k.offset);
+            // FNV-1a 64-bit — avoids XOR clustering on sequential offsets.
+            std::uint64_t h = 1469598103934665603ULL;
+            auto mix = [&](std::uint64_t v) {
+                h ^= v;
+                h *= 1099511628211ULL;
+            };
+            mix(static_cast<std::uint64_t>(
+                reinterpret_cast<std::uintptr_t>(k.file)));
+            mix(k.offset);
+            return static_cast<std::size_t>(h);
         }
     };
     std::unordered_map<Key, int, KeyHash> held_;

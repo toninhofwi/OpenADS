@@ -52,6 +52,63 @@ std::uint32_t crc32c(const std::uint8_t* data, std::size_t n) {
     return ~crc;
 }
 
+struct WalScan {
+    std::vector<TxRecord> records;
+    std::size_t           end_pos = 0;
+};
+
+WalScan scan_wal_buffer(const std::uint8_t* buf, std::size_t got_n) {
+    WalScan out;
+    std::size_t pos = 0;
+    while (pos + WAL_HEADER_LEN + 4 <= got_n) {
+        if (read_u32_le(buf + pos) != WAL_MAGIC) break;
+        std::uint8_t  type_byte = buf[pos + 4];
+        std::uint16_t plen      = read_u16_le(buf + pos + 6);
+        std::uint64_t tx_id     = read_u64_le(buf + pos + 8);
+        std::uint64_t lsn       = read_u64_le(buf + pos + 16);
+        std::size_t rec_size = WAL_HEADER_LEN + plen + 4;
+        if (pos + rec_size > got_n) break;
+        std::uint32_t stored_crc =
+            read_u32_le(buf + pos + WAL_HEADER_LEN + plen);
+        std::uint32_t calc_crc = crc32c(buf + pos, WAL_HEADER_LEN + plen);
+        if (stored_crc != calc_crc) break;
+
+        TxRecord r;
+        r.type  = static_cast<TxRecordType>(type_byte);
+        r.tx_id = tx_id;
+        r.lsn   = lsn;
+        if (r.type == TxRecordType::Update && plen >= 10) {
+            const std::uint8_t* p = buf + pos + WAL_HEADER_LEN;
+            std::uint16_t pl = read_u16_le(p + 0);
+            std::size_t off = 2 + static_cast<std::size_t>(pl);
+            if (off + 4 > plen) { out.records.push_back(std::move(r)); pos += rec_size; continue; }
+            r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
+            r.update.recno = read_u32_le(p + off); off += 4;
+            if (off + 2 > plen) { out.records.push_back(std::move(r)); pos += rec_size; continue; }
+            std::uint16_t bl = read_u16_le(p + off);
+            if (off + 2 + bl > plen) { out.records.push_back(std::move(r)); pos += rec_size; continue; }
+            r.update.before.assign(p + off + 2, p + off + 2 + bl);
+            off += 2 + bl;
+            if (off + 2 > plen) { out.records.push_back(std::move(r)); pos += rec_size; continue; }
+            std::uint16_t al = read_u16_le(p + off);
+            if (off + 2 + al > plen) { out.records.push_back(std::move(r)); pos += rec_size; continue; }
+            r.update.after.assign(p + off + 2, p + off + 2 + al);
+        } else if (r.type == TxRecordType::Append && plen >= 6) {
+            const std::uint8_t* p = buf + pos + WAL_HEADER_LEN;
+            std::uint16_t pl = read_u16_le(p + 0);
+            if (2 + static_cast<std::size_t>(pl) + 4 > plen) {
+                out.records.push_back(std::move(r)); pos += rec_size; continue;
+            }
+            r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
+            r.update.recno = read_u32_le(p + 2 + pl);
+        }
+        out.records.push_back(std::move(r));
+        pos += rec_size;
+    }
+    out.end_pos = pos;
+    return out;
+}
+
 } // namespace
 
 util::Result<void> TxLog::open(const std::string& path) {
@@ -73,10 +130,16 @@ util::Result<void> TxLog::open(const std::string& path) {
     next_lsn_.store(1);
     last_synced_lsn_.store(0, std::memory_order_relaxed);
     if (write_offset_ > 0) {
-        auto recs = read_all();
-        if (!recs) return recs.error();
+        std::vector<std::uint8_t> buf(static_cast<std::size_t>(write_offset_), 0);
+        auto got = file_.read_at(0, buf.data(), buf.size());
+        if (!got) return got.error();
+        const std::size_t got_n = got.value();
+        WalScan scan = scan_wal_buffer(buf.data(), got_n);
+        if (scan.end_pos != write_offset_) {
+            return util::Error{5103, 0, "tx log corrupt or truncated", path_};
+        }
         std::uint64_t hi = 0;
-        for (auto& r : recs.value()) if (r.lsn > hi) hi = r.lsn;
+        for (auto& r : scan.records) if (r.lsn > hi) hi = r.lsn;
         next_lsn_.store(hi + 1);
         last_synced_lsn_.store(hi, std::memory_order_release);   // already on disk
     }
@@ -230,60 +293,12 @@ util::Result<void> TxLog::sync() {
 }
 
 util::Result<std::vector<TxRecord>> TxLog::read_all() {
-    std::vector<TxRecord> out;
-    if (write_offset_ == 0) return out;
+    if (write_offset_ == 0) return std::vector<TxRecord>{};
 
     std::vector<std::uint8_t> buf(static_cast<std::size_t>(write_offset_), 0);
     auto got = file_.read_at(0, buf.data(), buf.size());
     if (!got) return got.error();
-    std::size_t got_n = got.value();
-
-    std::size_t pos = 0;
-    while (pos + WAL_HEADER_LEN + 4 <= got_n) {
-        if (read_u32_le(buf.data() + pos) != WAL_MAGIC) break;
-        std::uint8_t  type_byte = buf[pos + 4];
-        std::uint16_t plen      = read_u16_le(buf.data() + pos + 6);
-        std::uint64_t tx_id     = read_u64_le(buf.data() + pos + 8);
-        std::uint64_t lsn       = read_u64_le(buf.data() + pos + 16);
-        std::size_t rec_size = WAL_HEADER_LEN + plen + 4;
-        if (pos + rec_size > got_n) break;
-        std::uint32_t stored_crc =
-            read_u32_le(buf.data() + pos + WAL_HEADER_LEN + plen);
-        std::uint32_t calc_crc =
-            crc32c(buf.data() + pos, WAL_HEADER_LEN + plen);
-        if (stored_crc != calc_crc) break;
-
-        TxRecord r;
-        r.type  = static_cast<TxRecordType>(type_byte);
-        r.tx_id = tx_id;
-        r.lsn   = lsn;
-        if (r.type == TxRecordType::Update && plen >= 10) {
-            const std::uint8_t* p = buf.data() + pos + WAL_HEADER_LEN;
-            std::uint16_t pl = read_u16_le(p + 0);
-            std::size_t off = 2 + static_cast<std::size_t>(pl);
-            if (off + 4 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
-            r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
-            r.update.recno = read_u32_le(p + off); off += 4;
-            if (off + 2 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
-            std::uint16_t bl = read_u16_le(p + off);
-            if (off + 2 + bl > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
-            r.update.before.assign(p + off + 2, p + off + 2 + bl);
-            off += 2 + bl;
-            if (off + 2 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
-            std::uint16_t al = read_u16_le(p + off);
-            if (off + 2 + al > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
-            r.update.after.assign(p + off + 2, p + off + 2 + al);
-        } else if (r.type == TxRecordType::Append && plen >= 6) {
-            const std::uint8_t* p = buf.data() + pos + WAL_HEADER_LEN;
-            std::uint16_t pl = read_u16_le(p + 0);
-            if (2 + static_cast<std::size_t>(pl) + 4 > plen) { out.push_back(std::move(r)); pos += rec_size; continue; }
-            r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
-            r.update.recno = read_u32_le(p + 2 + pl);
-        }
-        out.push_back(std::move(r));
-        pos += rec_size;
-    }
-    return out;
+    return scan_wal_buffer(buf.data(), got.value()).records;
 }
 
 util::Result<void> TxLog::truncate() {

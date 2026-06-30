@@ -45,7 +45,7 @@ TEST_CASE("TxLog: append BEGIN / UPDATE / COMMIT and read them back") {
     fs::remove(p);
 }
 
-TEST_CASE("TxLog: corrupt CRC truncates the read") {
+TEST_CASE("TxLog: corrupt CRC prevents reopen") {
     auto p = fs::temp_directory_path() / "openads_m5x_txlog_crc.bin";
     fs::remove(p);
     {
@@ -70,12 +70,9 @@ TEST_CASE("TxLog: corrupt CRC truncates the read") {
     }
     {
         TxLog log;
-        REQUIRE(log.open(p.string()).has_value());
-        auto recs = log.read_all();
-        REQUIRE(recs.has_value());
-        // Only the BEGIN survives; the COMMIT is dropped at the CRC boundary.
-        CHECK(recs.value().size() == 1);
-        CHECK(recs.value()[0].type == TxRecordType::Begin);
+        auto opened = log.open(p.string());
+        CHECK_FALSE(opened.has_value());
+        CHECK(opened.error().code == 5103);
     }
     fs::remove(p);
 }
@@ -111,12 +108,12 @@ TEST_CASE("TxLog: assigns monotonically increasing LSNs and sync_to is idempoten
     fs::remove(p);
 }
 
-TEST_CASE("TxLog: group commit — many threads append, single fsync covers all") {
+TEST_CASE("TxLog: group commit — many threads append, single fsync covers all [slow]") {
     auto p = fs::temp_directory_path() / "openads_m54_txlog_groupcommit.bin";
     fs::remove(p);
 
     constexpr int N_THREADS  = 4;
-    constexpr int N_PER_THR  = 10;
+    constexpr int N_PER_THR  = 50;
 
     std::vector<std::uint64_t> commit_lsns(N_THREADS * N_PER_THR);
 

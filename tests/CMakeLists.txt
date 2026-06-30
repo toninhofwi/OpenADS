@@ -327,7 +327,9 @@ if(OPENADS_WITH_SQLITE)
     target_link_libraries(openads_unit_tests PRIVATE openads_sqlite3)
 endif()
 
-add_test(NAME openads_unit_tests COMMAND openads_unit_tests)
+# Default CI/fast tier: skip stress tests tagged [slow].
+add_test(NAME openads_unit_tests COMMAND openads_unit_tests -e="*[slow]*")
+add_test(NAME openads_unit_tests_slow COMMAND openads_unit_tests -tc="*[slow]*")
 
 # SQL URI backend smoke (sqlite://): runs a focused doctest subset in CI.
 if(OPENADS_WITH_POSTGRESQL)

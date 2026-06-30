@@ -129,8 +129,9 @@ Our new DD needs to keep permissions information.  Permissions are granted to gr
       procedure, priority, enabled, comment }` in `DataDict::triggers_`.
       Persisted as `TRIGGER` rows in the text format. Event mask uses
       ADS_BEFORE/AFTER_INSERT/UPDATE/DELETE bits. Execution is a no-op
-      stub (trigger definition is stored and queryable; user code not
-      called). 5 tests in `tests/unit/abi_dd_trigger_test.cpp`. (2026-05-26)
+      stored and queryable. DML paths fire matching triggers via
+      `fire_triggers_` / `trig_execute_body_` (BEFORE/INSTEAD OF/AFTER).
+      5 tests in `tests/unit/abi_dd_trigger_test.cpp`. (2026-05-26)
 
 - [x] **DD stored procedures** — `AdsDDCreateProcedure` /
       `AdsDDDropProcedure` / `AdsDDGetProcProperty` /
@@ -210,11 +211,10 @@ Our new DD needs to keep permissions information.  Permissions are granted to gr
 
 ### Open
 
-- [ ] **VFP table support** (DBF `0x30` / `0x31` / `0x32`).
-      `table.cpp` rejects unknown VFP header signatures. Autoinc, V/Q types,
-      and NULL-bitmap work separately; combined `0x32` (autoinc + nullable
-      columns) may not parse correctly yet — see `docs/known-issues.md`.
-      Needs a `VfpDriver` for `_NullFlags` and VFP autoinc when combined.
+- [x] **VFP table support** (DBF `0x30` / `0x31` / `0x32`).
+      `CdxDriver` handles VFP via `dbf_common` (`_NullFlags`, autoinc,
+      nullable bitmap). Combined `0x32` (autoinc + nullable) covered by
+      `tests/unit/dbf_vfp_0x32_combined_test.cpp`. (2026-06-30)
 
 ---
 
