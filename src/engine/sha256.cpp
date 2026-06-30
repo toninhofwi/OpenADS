@@ -104,7 +104,7 @@ Sha256Digest sha256_impl(const std::uint8_t* data, std::size_t len) {
     }
     block[rem] = 0x80u;
     if (rem < 56) {
-        for (int i = 0; i < 8; ++i) {
+        for (std::size_t i = 0; i < 8; ++i) {
             block[56 + i] = static_cast<std::uint8_t>(
                 (total_bits >> ((7 - i) * 8)) & 0xFFu);
         }
@@ -112,7 +112,7 @@ Sha256Digest sha256_impl(const std::uint8_t* data, std::size_t len) {
     } else {
         sha256_compress(state, block);
         std::memset(block, 0, 64);
-        for (int i = 0; i < 8; ++i) {
+        for (std::size_t i = 0; i < 8; ++i) {
             block[56 + i] = static_cast<std::uint8_t>(
                 (total_bits >> ((7 - i) * 8)) & 0xFFu);
         }
@@ -120,11 +120,12 @@ Sha256Digest sha256_impl(const std::uint8_t* data, std::size_t len) {
     }
 
     Sha256Digest out{};
-    for (int i = 0; i < 8; ++i) {
-        out[i * 4]     = static_cast<std::uint8_t>((state[i] >> 24) & 0xFFu);
-        out[i * 4 + 1] = static_cast<std::uint8_t>((state[i] >> 16) & 0xFFu);
-        out[i * 4 + 2] = static_cast<std::uint8_t>((state[i] >> 8) & 0xFFu);
-        out[i * 4 + 3] = static_cast<std::uint8_t>(state[i] & 0xFFu);
+    for (std::size_t i = 0; i < 8; ++i) {
+        const std::size_t b = i * 4;
+        out[b]     = static_cast<std::uint8_t>((state[i] >> 24) & 0xFFu);
+        out[b + 1] = static_cast<std::uint8_t>((state[i] >> 16) & 0xFFu);
+        out[b + 2] = static_cast<std::uint8_t>((state[i] >> 8) & 0xFFu);
+        out[b + 3] = static_cast<std::uint8_t>(state[i] & 0xFFu);
     }
     return out;
 }
@@ -151,7 +152,7 @@ Sha256Digest hmac_sha256(std::string_view key, std::string_view message) {
 
     std::uint8_t ipad[64];
     std::uint8_t opad[64];
-    for (int i = 0; i < 64; ++i) {
+    for (std::size_t i = 0; i < 64; ++i) {
         ipad[i] = static_cast<std::uint8_t>(k[i] ^ 0x36u);
         opad[i] = static_cast<std::uint8_t>(k[i] ^ 0x5Cu);
     }
