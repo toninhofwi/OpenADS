@@ -56,6 +56,10 @@ util::Result<MssqlConnection> MssqlConnection::open(const MssqlUri& uri) {
     params.database    = uri.database;
 
     std::vector<std::uint8_t> login7 = tds::build_login7(params);
+    if (login7.size() <= 8) {
+        return util::Error{openads::AE_LOGIN_FAILED, 0,
+                           "TDS LOGIN7 credentials exceed 65535-byte limit", ""};
+    }
     // build_login7 already prepends the 8-byte TDS header; the channel's
     // send_tds adds its own header, so strip the embedded one and let the
     // channel frame (and segment) the LOGIN7 structure itself.

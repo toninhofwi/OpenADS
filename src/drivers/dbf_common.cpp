@@ -12,7 +12,7 @@ namespace {
 DbfFamily classify(std::uint8_t version) {
     switch (version) {
         case 0x03: case 0x83:
-        case 0xC3:                          // M11.2 — encrypted variant
+        case 0xC3: case 0xC4:               // M11.2 — encrypted variants
         case 0xF5:                          // FoxPro 2.x with FPT memo
         case 0xFB:                          // FoxBASE
             return DbfFamily::Clipper;
@@ -52,7 +52,7 @@ util::Result<DbfHeader> parse_dbf_header(const std::uint8_t* data,
     h.header_length     = read_u16_le(data + 8);
     h.record_length     = read_u16_le(data + 10);
     h.family            = classify(h.version);
-    h.encrypted         = (h.version == 0xC3);
+    h.encrypted         = (h.version == 0xC3 || h.version == 0xC4);
     return h;
 }
 

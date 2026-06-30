@@ -121,6 +121,18 @@ public:
     bool has_encryption_key() const noexcept { return encryption_key_set_; }
     const std::array<std::uint8_t, 32>&
         encryption_key() const noexcept { return encryption_key_; }
+    const std::array<std::uint8_t, 32>&
+        encryption_key_legacy() const noexcept {
+        return encryption_key_legacy_;
+    }
+    const std::array<std::uint8_t, 32>&
+        encryption_key_pbkdf2() const noexcept {
+        return encryption_key_pbkdf2_;
+    }
+
+    // Per-connection SET DELETED visibility (default: show deleted).
+    bool show_deleted() const noexcept { return show_deleted_; }
+    void set_show_deleted(bool v) noexcept { show_deleted_ = v; }
     bool owns_table_ptr(const engine::Table* t) const;
 
     // M11.7 — string-compare collation. `Binary` (default) compares
@@ -165,9 +177,13 @@ private:
     // for now). DLL handles freed in destructor.
     std::unordered_map<std::string, Procedure>                 procedures_;
 
-    // M11.2 — encryption key derived from the connection password.
+    // M11.2 — encryption keys derived from the connection password.
+    // legacy (0xC3 header) and PBKDF2 (0xC4 header).
     std::array<std::uint8_t, 32>                               encryption_key_{};
+    std::array<std::uint8_t, 32>                               encryption_key_legacy_{};
+    std::array<std::uint8_t, 32>                               encryption_key_pbkdf2_{};
     bool                                                       encryption_key_set_ = false;
+    bool                                                       show_deleted_ = true;
     // M11.7 — string compare collation (default = byte-exact).
     Collation                                                  collation_ =
         Collation::Binary;

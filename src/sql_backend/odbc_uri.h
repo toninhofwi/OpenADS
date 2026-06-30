@@ -11,6 +11,8 @@ namespace openads::sql_backend {
 //   odbc:DSN=mydsn;UID=u;PWD=p;
 struct OdbcUri {
     std::string connstr;
+    // Optional password kept out of |connstr| (Oracle URIs, hardened ODBC).
+    std::string password;
 };
 
 bool parse_odbc_uri(const std::string& uri, OdbcUri& out);

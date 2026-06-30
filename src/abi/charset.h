@@ -31,4 +31,8 @@ std::string         utf16le_to_utf8(const std::uint16_t* in,
                                     std::size_t units);
 std::vector<std::uint16_t> utf8_to_utf16le(const std::string& utf8);
 
+// Safe UNSIGNED16 assignment — returns false when |n| exceeds 65535.
+bool assign_u16(std::uint16_t* out, std::size_t n) noexcept;
+std::uint16_t clamp_u16(std::size_t n) noexcept;
+
 } // namespace openads::abi

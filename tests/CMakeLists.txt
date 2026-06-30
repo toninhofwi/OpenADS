@@ -179,6 +179,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_case_test.cpp
     unit/abi_aep_test.cpp
     unit/abi_encryption_test.cpp
+    unit/pbkdf2_test.cpp
     unit/abi_sql_scalar_fn_test.cpp
     unit/abi_sql_insert_select_test.cpp
     unit/abi_sql_derived_test.cpp

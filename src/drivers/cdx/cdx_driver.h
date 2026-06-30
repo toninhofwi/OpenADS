@@ -45,6 +45,7 @@ public:
     // to transparently encrypt / decrypt record bodies. Encrypts
     // every existing record on demand for plain → encrypted upgrade.
     bool encrypted() const noexcept { return encrypted_; }
+    std::uint8_t header_version() const noexcept { return header_version_; }
     bool partial_encrypted() const noexcept { return partial_enc_; }
     bool record_encrypted(std::uint32_t recno) const noexcept;
     util::Result<void>
@@ -105,6 +106,7 @@ private:
     // M11.2 — encryption state. encrypted_ mirrors the header byte;
     // aes_ is populated once the connection's password key is bound.
     bool                        encrypted_ = false;
+    std::uint8_t                header_version_ = 0;
     bool                        partial_enc_ = false;
     std::uint32_t               enc_bitmap_offset_ = 0;
     std::vector<std::uint8_t>   enc_bitmap_;

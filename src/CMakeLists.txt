@@ -38,6 +38,8 @@ add_library(openads_core STATIC
     engine/aof_expr.cpp
     engine/aof_eval.cpp
     engine/aes.cpp
+    engine/sha256.cpp
+    engine/pbkdf2.cpp
     engine/tx.cpp
     engine/tx_log.cpp
     engine/lsn_map.cpp

@@ -1217,7 +1217,9 @@ UNSIGNED32 sqlite_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
         auto r = st->conn->describe_table(st);
         if (!r) return fail(r.error());
     }
-    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    if (!openads::abi::assign_u16(pusCnt, st->fields.size())) {
+        return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+    }
     return ok();
 }
 
@@ -1527,7 +1529,9 @@ UNSIGNED32 odbc_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
         auto r = st->conn->describe_table(st);
         if (!r) return fail(r.error());
     }
-    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    if (!openads::abi::assign_u16(pusCnt, st->fields.size())) {
+        return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+    }
     return ok();
 }
 
@@ -1828,7 +1832,9 @@ UNSIGNED32 mssql_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
     auto* st = get_mssql_table(hTable);
     if (!st) return fail(openads::AE_INTERNAL_ERROR, "");
     if (pusCnt == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    *pusCnt = static_cast<UNSIGNED16>(st->field_count());
+    if (!openads::abi::assign_u16(pusCnt, st->field_count())) {
+        return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+    }
     return ok();
 }
 
@@ -2125,7 +2131,9 @@ UNSIGNED32 firebird_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
         auto r = st->conn->describe_table(st);
         if (!r) return fail(r.error());
     }
-    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    if (!openads::abi::assign_u16(pusCnt, st->fields.size())) {
+        return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+    }
     return ok();
 }
 
@@ -2438,7 +2446,9 @@ UNSIGNED32 maria_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
         auto r = st->conn->describe_table(st);
         if (!r) return fail(r.error());
     }
-    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    if (!openads::abi::assign_u16(pusCnt, st->fields.size())) {
+        return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+    }
     return ok();
 }
 
@@ -2783,7 +2793,9 @@ UNSIGNED32 postgres_num_fields(ADSHANDLE hTable, UNSIGNED16* pusCnt) {
         auto r = st->conn->describe_table(st);
         if (!r) return fail(r.error());
     }
-    *pusCnt = static_cast<UNSIGNED16>(st->fields.size());
+    if (!openads::abi::assign_u16(pusCnt, st->fields.size())) {
+        return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+    }
     return ok();
 }
 
@@ -4751,7 +4763,8 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
         openads::sql_backend::OracleUri oruri;
         if (openads::sql_backend::parse_oracle_uri(path, oruri)) {
             openads::sql_backend::OdbcUri ouri;
-            ouri.connstr = openads::sql_backend::oracle_to_odbc_connstr(oruri);
+            ouri.connstr   = openads::sql_backend::oracle_to_odbc_connstr(oruri);
+            ouri.password  = oruri.password;
             auto opened = openads::sql_backend::OdbcConnection::open(ouri);
             if (!opened) return fail(opened.error());
             auto holder =
@@ -7150,7 +7163,9 @@ UNSIGNED32 ENTRYPOINT AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
             rt->fields = std::move(r).value();
             rt->fields_cached = true;
         }
-        *pusFields = static_cast<UNSIGNED16>(rt->fields.size());
+        if (!openads::abi::assign_u16(pusFields, rt->fields.size())) {
+            return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+        }
         return ok();
     }
     if (auto* ops = openads::abi::backend_table_ops_for(hTable))
@@ -7158,7 +7173,9 @@ UNSIGNED32 ENTRYPOINT AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* p = projection_for(hTable); p != nullptr) {
-        *pusFields = static_cast<UNSIGNED16>(p->size());
+        if (!openads::abi::assign_u16(pusFields, p->size())) {
+            return fail(openads::AE_INTERNAL_ERROR, "field count exceeds 65535");
+        }
     } else {
         *pusFields = t->field_count();
     }
@@ -7599,7 +7616,7 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOpti
         }
         *pulRecordCount = pass;
     } else if (bFilterOption == ADS_RESPECTFILTERS &&
-               !openads::engine::show_deleted()) {
+               !t->show_deleted_records()) {
         // ADS_RESPECTFILTERS: count live records only when deleted records
         // are hidden (SET DELETED ON). Walk the raw record range, skipping
         // deleted rows, then restore the cursor to its original position.
@@ -15106,11 +15123,19 @@ UNSIGNED32 ENTRYPOINT AdsConvertOemToAnsi(UNSIGNED8* pucBuf, UNSIGNED32* pulLen)
     if (pucBuf == nullptr || pulLen == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
-    auto utf8 = openads::engine::cp437_to_utf8(
-        pucBuf, static_cast<std::size_t>(*pulLen));
-    std::size_t out_len = utf8.size();
+    const std::size_t in_len = static_cast<std::size_t>(*pulLen);
+    // In-place callers must allocate at least 3x the OEM byte length
+    // (worst-case UTF-8 expansion). pulLen carries OEM length in.
+    const std::size_t buf_cap = in_len * 3u;
+    auto utf8 = openads::engine::cp437_to_utf8(pucBuf, in_len);
+    const std::size_t out_len = utf8.size();
+    if (out_len > buf_cap) {
+        *pulLen = static_cast<UNSIGNED32>(out_len);
+        return fail(openads::AE_INSUFFICIENT_BUFFER,
+                    "output buffer too small for UTF-8 expansion");
+    }
     std::memcpy(pucBuf, utf8.data(), out_len);
-    if (out_len < *pulLen) pucBuf[out_len] = '\0';
+    if (out_len < in_len) pucBuf[out_len] = '\0';
     *pulLen = static_cast<UNSIGNED32>(out_len);
     return ok();
 }
@@ -15119,12 +15144,17 @@ UNSIGNED32 ENTRYPOINT AdsConvertAnsiToOem(UNSIGNED8* pucBuf, UNSIGNED32* pulLen)
     if (pucBuf == nullptr || pulLen == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
+    const std::size_t in_len = static_cast<std::size_t>(*pulLen);
     auto cp = openads::engine::utf8_to_cp437(
-        reinterpret_cast<const char*>(pucBuf),
-        static_cast<std::size_t>(*pulLen));
-    std::size_t out_len = cp.size();
+        reinterpret_cast<const char*>(pucBuf), in_len);
+    const std::size_t out_len = cp.size();
+    if (out_len > in_len) {
+        *pulLen = static_cast<UNSIGNED32>(out_len);
+        return fail(openads::AE_INSUFFICIENT_BUFFER,
+                    "output buffer too small for OEM conversion");
+    }
     std::memcpy(pucBuf, cp.data(), out_len);
-    if (out_len < *pulLen) pucBuf[out_len] = '\0';
+    if (out_len < in_len) pucBuf[out_len] = '\0';
     *pulLen = static_cast<UNSIGNED32>(out_len);
     return ok();
 }
@@ -23104,7 +23134,11 @@ UNSIGNED32 ENTRYPOINT AdsGetDeleted(UNSIGNED16* p) {
     // show_deleted()==true means "show deleted records" which is
     // SET DELETED OFF (the Clipper default). AdsGetDeleted returns
     // 1 when deleted records ARE visible, matching ACE semantics.
-    *p = openads::engine::show_deleted() ? 1 : 0;
+    bool visible = openads::engine::show_deleted();
+    if (Connection* c = lookup_connection(resolve_connection_handle(0))) {
+        visible = c->show_deleted();
+    }
+    *p = visible ? 1 : 0;
     return ok();
 }
 // AdsGetDouble already defined elsewhere in this file.
@@ -23953,7 +23987,13 @@ UNSIGNED32 ENTRYPOINT AdsSetServerType(UNSIGNED16 usServerOptions) {
     return openads::AE_SUCCESS;
 }
 UNSIGNED32 ENTRYPOINT AdsShowDeleted(UNSIGNED16 us) {
-    openads::engine::set_show_deleted(us != 0);
+    const bool visible = us != 0;
+    openads::engine::set_show_deleted(visible);
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    if (Connection* c = lookup_connection(resolve_connection_handle(0))) {
+        c->set_show_deleted(visible);
+    }
     return openads::AE_SUCCESS;
 }
 UNSIGNED32 ENTRYPOINT AdsShowError(UNSIGNED8* pucErrText) {

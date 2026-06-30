@@ -17,6 +17,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace openads::session { class Connection; }
+
 namespace openads::engine {
 
 bool show_deleted() noexcept;
@@ -54,6 +56,10 @@ public:
     const std::string& path() const noexcept { return path_; }
     const std::string& alias() const noexcept { return alias_; }
     void set_alias(std::string a) noexcept { alias_ = std::move(a); }
+
+    void set_owner(openads::session::Connection* c) noexcept { owner_ = c; }
+    openads::session::Connection* owner() const noexcept { return owner_; }
+    bool show_deleted_records() const noexcept;
 
     OpenMode  open_mode()  const noexcept { return mode_; }
     LockingMode locking_mode() const noexcept { return locking_; }
@@ -439,6 +445,7 @@ private:
     std::vector<std::uint8_t>                     record_buf_;
     std::string                                   path_;
     std::string                                   alias_;
+    openads::session::Connection*                 owner_ = nullptr;
     std::unordered_map<std::string, std::string>  ri_snapshot_;
     bool                                          pending_append_ = false;
     bool                                          deferred_flush_ = false;

@@ -72,8 +72,10 @@ bool parse_oracle_uri(const std::string& uri, OracleUri& out) {
 
 std::string oracle_to_odbc_connstr(const OracleUri& uri) {
     std::ostringstream os;
+    // Password is supplied separately at connect time (OdbcUri::password)
+    // so it is not embedded in a persisted/logged connection string.
     os << "DRIVER={Oracle ODBC Driver};DBQ=//" << uri.host << ':' << uri.port
-       << '/' << uri.service << ";UID=" << uri.user << ";PWD=" << uri.password;
+       << '/' << uri.service << ";UID=" << uri.user;
     return os.str();
 }
 

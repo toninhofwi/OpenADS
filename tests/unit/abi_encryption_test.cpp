@@ -83,7 +83,7 @@ TEST_CASE("M11.2 encrypt + reopen with correct password roundtrips") {
         std::ifstream f(dir / "data.dbf", std::ios::binary);
         char ver = 0;
         f.read(&ver, 1);
-        CHECK(static_cast<std::uint8_t>(ver) == 0xC3);
+        CHECK(static_cast<std::uint8_t>(ver) == 0xC4);
     }
 
     // Reopen + read → first tag is "AAAAA" again (decrypted on read).

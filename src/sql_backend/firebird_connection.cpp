@@ -387,34 +387,66 @@ void free_xsqlda_buffers(XSQLDA* sqlda) {
     }
 }
 
+struct XsqldaGuard {
+    XSQLDA* ptr = nullptr;
+    explicit XsqldaGuard(int n) : ptr(alloc_xsqlda(n)) {}
+    ~XsqldaGuard() {
+        if (ptr) {
+            free_xsqlda_buffers(ptr);
+            std::free(ptr);
+        }
+    }
+    XsqldaGuard(const XsqldaGuard&)            = delete;
+    XsqldaGuard& operator=(const XsqldaGuard&) = delete;
+    XsqldaGuard(XsqldaGuard&& o) noexcept : ptr(o.ptr) { o.ptr = nullptr; }
+    XsqldaGuard& operator=(XsqldaGuard&& o) noexcept {
+        if (this != &o) {
+            if (ptr) {
+                free_xsqlda_buffers(ptr);
+                std::free(ptr);
+            }
+            ptr = o.ptr;
+            o.ptr = nullptr;
+        }
+        return *this;
+    }
+};
+
+struct FbStmtGuard {
+    isc_db_handle*    db  = nullptr;
+    isc_stmt_handle   stmt = 0;
+    ~FbStmtGuard() {
+        if (stmt && db) {
+            ISC_STATUS_ARRAY st{};
+            isc_dsql_free_statement(st, &stmt, DSQL_drop);
+        }
+    }
+    FbStmtGuard(const FbStmtGuard&)            = delete;
+    FbStmtGuard& operator=(const FbStmtGuard&) = delete;
+};
+
 // Run a SELECT and materialise all rows as strings (nulls flagged).
 util::Result<SqlRows> exec_query(isc_db_handle* db, isc_tr_handle* tr,
                                  const std::string& sql) {
     ISC_STATUS_ARRAY st;
-    isc_stmt_handle  stmt = 0;
-    if (isc_dsql_allocate_statement(st, db, &stmt); status_failed(st)) {
+    FbStmtGuard stmt_guard;
+    stmt_guard.db = db;
+    if (isc_dsql_allocate_statement(st, db, &stmt_guard.stmt); status_failed(st)) {
         return fb_error("firebird alloc stmt", st);
     }
 
-    XSQLDA* out = alloc_xsqlda(20);
-    auto teardown = [&]() {
-        free_xsqlda_buffers(out);
-        std::free(out);
-        if (stmt) {
-            ISC_STATUS_ARRAY s2;
-            isc_dsql_free_statement(s2, &stmt, DSQL_drop);
-        }
-    };
+    XsqldaGuard out_guard(20);
+    XSQLDA* out = out_guard.ptr;
 
-    isc_dsql_prepare(st, tr, &stmt, 0, sql.c_str(), kSqlDialect, out);
-    if (status_failed(st)) { auto e = fb_error("firebird prepare", st); teardown(); return e; }
+    isc_dsql_prepare(st, tr, &stmt_guard.stmt, 0, sql.c_str(), kSqlDialect, out);
+    if (status_failed(st)) return fb_error("firebird prepare", st);
 
     if (out->sqld > out->sqln) {
         const int n = out->sqld;
-        std::free(out);
-        out = alloc_xsqlda(n);
-        isc_dsql_describe(st, &stmt, 1, out);
-        if (status_failed(st)) { auto e = fb_error("firebird describe", st); teardown(); return e; }
+        out_guard = XsqldaGuard(n);
+        out = out_guard.ptr;
+        isc_dsql_describe(st, &stmt_guard.stmt, 1, out);
+        if (status_failed(st)) return fb_error("firebird describe", st);
     }
 
     // Allocate per-column buffers; force the null indicator on every column.
@@ -424,12 +456,14 @@ util::Result<SqlRows> exec_query(isc_db_handle* db, isc_tr_handle* tr,
         int len = v.sqllen;
         if (dtype == SQL_VARYING) len += 2;
         v.sqldata = static_cast<char*>(std::malloc(static_cast<std::size_t>(len) + 1));
+        if (!v.sqldata) return util::Error{5001, 0, "firebird alloc sqldata", ""};
         v.sqltype |= 1;
         v.sqlind = static_cast<short*>(std::malloc(sizeof(short)));
+        if (!v.sqlind) return util::Error{5001, 0, "firebird alloc sqlind", ""};
     }
 
-    isc_dsql_execute(st, tr, &stmt, kSqlDialect, nullptr);
-    if (status_failed(st)) { auto e = fb_error("firebird execute", st); teardown(); return e; }
+    isc_dsql_execute(st, tr, &stmt_guard.stmt, kSqlDialect, nullptr);
+    if (status_failed(st)) return fb_error("firebird execute", st);
 
     SqlRows res;
     res.col_names.reserve(static_cast<std::size_t>(out->sqld));
@@ -440,9 +474,10 @@ util::Result<SqlRows> exec_query(isc_db_handle* db, isc_tr_handle* tr,
     }
 
     while (true) {
-        const ISC_STATUS fetch = isc_dsql_fetch(st, &stmt, kSqlDialect, out);
+        const ISC_STATUS fetch =
+            isc_dsql_fetch(st, &stmt_guard.stmt, kSqlDialect, out);
         if (fetch == 100L) break;          // end of cursor
-        if (fetch != 0) { auto e = fb_error("firebird fetch", st); teardown(); return e; }
+        if (fetch != 0) return fb_error("firebird fetch", st);
         std::vector<std::string> row;
         std::vector<bool>        rn;
         row.reserve(static_cast<std::size_t>(out->sqld));
@@ -456,7 +491,6 @@ util::Result<SqlRows> exec_query(isc_db_handle* db, isc_tr_handle* tr,
         res.nulls.push_back(std::move(rn));
     }
 
-    teardown();
     return res;
 }
 
@@ -559,22 +593,16 @@ util::Result<void> exec_param_dml(isc_db_handle* db, isc_tr_handle* tr,
         return util::Error{5001, 0, "firebird param count mismatch", ""};
     }
     ISC_STATUS_ARRAY st;
-    isc_stmt_handle  stmt = 0;
-    if (isc_dsql_allocate_statement(st, db, &stmt); status_failed(st)) {
+    FbStmtGuard stmt_guard;
+    stmt_guard.db = db;
+    if (isc_dsql_allocate_statement(st, db, &stmt_guard.stmt); status_failed(st)) {
         return fb_error("firebird alloc stmt", st);
     }
 
     const int n = static_cast<int>(params.size());
-    XSQLDA* in = alloc_xsqlda(n);
+    XsqldaGuard in_guard(n);
+    XSQLDA* in = in_guard.ptr;
     in->sqld = static_cast<short>(n);
-    auto teardown = [&]() {
-        free_xsqlda_buffers(in);
-        std::free(in);
-        if (stmt) {
-            ISC_STATUS_ARRAY s2;
-            isc_dsql_free_statement(s2, &stmt, DSQL_drop);
-        }
-    };
 
     for (int i = 0; i < n; ++i) {
         bind_fb_param(in->sqlvar[i],
@@ -582,19 +610,10 @@ util::Result<void> exec_param_dml(isc_db_handle* db, isc_tr_handle* tr,
                       params[static_cast<std::size_t>(i)]);
     }
 
-    isc_dsql_prepare(st, tr, &stmt, 0, sql.c_str(), kSqlDialect, in);
-    if (status_failed(st)) {
-        auto e = fb_error("firebird prepare", st);
-        teardown();
-        return e;
-    }
-    isc_dsql_execute(st, tr, &stmt, kSqlDialect, in);
-    if (status_failed(st)) {
-        auto e = fb_error("firebird execute", st);
-        teardown();
-        return e;
-    }
-    teardown();
+    isc_dsql_prepare(st, tr, &stmt_guard.stmt, 0, sql.c_str(), kSqlDialect, in);
+    if (status_failed(st)) return fb_error("firebird prepare", st);
+    isc_dsql_execute(st, tr, &stmt_guard.stmt, kSqlDialect, in);
+    if (status_failed(st)) return fb_error("firebird execute", st);
     return util::Result<void>{};
 }
 

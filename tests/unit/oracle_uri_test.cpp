@@ -41,7 +41,8 @@ TEST_CASE("oracle URI: maps to Oracle ODBC connection string") {
     OracleUri u;
     REQUIRE(parse_oracle_uri("oracle://u:p@host:1521/SVC", u));
     CHECK(oracle_to_odbc_connstr(u) ==
-          "DRIVER={Oracle ODBC Driver};DBQ=//host:1521/SVC;UID=u;PWD=p");
+          "DRIVER={Oracle ODBC Driver};DBQ=//host:1521/SVC;UID=u");
+    CHECK(u.password == "p");
 }
 
 TEST_CASE("oracle URI: rejects non-oracle schemes and malformed URIs") {

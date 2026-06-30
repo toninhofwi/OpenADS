@@ -109,17 +109,34 @@ static void push_ucs2le(std::vector<uint8_t>& out, const std::string& s) {
 }
 
 std::vector<uint8_t> build_login7(const Login7Params& p) {
-    // Obfuscate the password first (result is bytes, not chars).
-    auto pw_obs = obfuscate_password(p.password);
-
     // Variable-data region starts at LOGIN7 structure offset 94.
     static constexpr size_t VARDATA_OFFSET = 94;
+    static constexpr size_t kMaxTdsStr = 0xFFFFu;
+
+    auto fits_u16 = [](size_t n) { return n <= kMaxTdsStr; };
+
+    // Reject strings that would truncate in OffsetLength uint16_t fields.
+    if (!fits_u16(p.hostname.size()) || !fits_u16(p.username.size()) ||
+        !fits_u16(p.password.size()) || !fits_u16(p.app_name.size()) ||
+        !fits_u16(p.server_name.size()) || !fits_u16(p.database.size())) {
+        return {};
+    }
+
+    // Obfuscate the password first (result is bytes, not chars).
+    auto pw_obs = obfuscate_password(p.password);
+    if (!fits_u16(pw_obs.size())) return {};
 
     // Build variable data and collect offsets/lengths.
     // Offsets are relative to LOGIN7 structure start.
     std::vector<uint8_t> var;
+    bool invalid = false;
     // Helper lambda: append UCS-2LE string and return (offset, char-count).
     auto append_str = [&](const std::string& s) -> std::pair<uint16_t, uint16_t> {
+        const size_t next = VARDATA_OFFSET + var.size() + s.size() * 2;
+        if (!fits_u16(next - VARDATA_OFFSET) || !fits_u16(s.size())) {
+            invalid = true;
+            return {0, 0};
+        }
         uint16_t offset = static_cast<uint16_t>(VARDATA_OFFSET + var.size());
         uint16_t cch    = static_cast<uint16_t>(s.size());  // char count (ASCII)
         push_ucs2le(var, s);
@@ -130,6 +147,11 @@ std::vector<uint8_t> build_login7(const Login7Params& p) {
     // obfuscated blob is 2 bytes per character.  (A live SQL Server rejects the
     // login with error 18456 if this is set to the byte count.)
     auto append_pw = [&]() -> std::pair<uint16_t, uint16_t> {
+        const size_t next = VARDATA_OFFSET + var.size() + pw_obs.size();
+        if (!fits_u16(next - VARDATA_OFFSET) || !fits_u16(p.password.size())) {
+            invalid = true;
+            return {0, 0};
+        }
         uint16_t offset = static_cast<uint16_t>(VARDATA_OFFSET + var.size());
         uint16_t cch    = static_cast<uint16_t>(p.password.size());  // char count
         var.insert(var.end(), pw_obs.begin(), pw_obs.end());
@@ -144,8 +166,14 @@ std::vector<uint8_t> build_login7(const Login7Params& p) {
     // Unused, CltIntName, Language: all zero (empty).
     auto [ibDatabase,   cchDatabase]   = append_str(p.database);
 
+    if (invalid) return {};
+
     // Total LOGIN7 structure size.
-    uint32_t struct_len = static_cast<uint32_t>(VARDATA_OFFSET + var.size());
+    const size_t struct_len_sz = VARDATA_OFFSET + var.size();
+    if (struct_len_sz > 0xFFFFFFFFu || 8 + struct_len_sz > kMaxTdsStr) {
+        return {};
+    }
+    uint32_t struct_len = static_cast<uint32_t>(struct_len_sz);
     // Total packet size (8-byte TDS header + LOGIN7 structure).
     uint16_t pkt_total  = static_cast<uint16_t>(8 + struct_len);
 

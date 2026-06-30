@@ -89,7 +89,8 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     rec_count_ = hdr.value().record_count;
     rec_len_   = hdr.value().record_length;
     hdr_len_   = hdr.value().header_length;
-    encrypted_ = hdr.value().encrypted;
+    encrypted_      = hdr.value().encrypted;
+    header_version_ = hdr.value().version;
 
     if (hdr_len_ < 33) {
         return util::Error{5103, 0, "DBF header length below 33 bytes", path};
@@ -467,8 +468,9 @@ CdxDriver::encrypt_in_place(const std::array<std::uint8_t, 32>& key) {
             return w.error();
         }
     }
-    std::uint8_t v = 0xC3;
+    std::uint8_t v = 0xC4;  // PBKDF2-derived key (0xC3 = legacy zero-pad)
     auto wh = file_.write_at(0, &v, 1);
+    header_version_ = v;
     if (!wh) return wh.error();
     return {};
 }

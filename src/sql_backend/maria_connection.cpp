@@ -21,7 +21,13 @@ namespace {
 util::Result<void> reload_pk_snapshot(MYSQL* conn, MariaTable* tbl);
 
 std::string quote_ident(const std::string& name) {
-    return '`' + name + '`';
+    std::string out = "`";
+    for (char c : name) {
+        if (c == '`') out += "``";
+        else          out += c;
+    }
+    out += '`';
+    return out;
 }
 
 std::string escape_literal(MYSQL* conn, const std::string& value) {

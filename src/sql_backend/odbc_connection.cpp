@@ -507,12 +507,21 @@ util::Result<OdbcConnection> OdbcConnection::open(const OdbcUri& uri) {
                           odbc_diag(SQL_HANDLE_ENV, conn.impl_->env));
     }
 
+    std::string connect_str = uri.connstr;
+    if (!uri.password.empty()) {
+        connect_str += ";PWD=";
+        connect_str += uri.password;
+    }
+
     SQLCHAR     outbuf[2048];
     SQLSMALLINT outlen = 0;
     SQLRETURN r = SQLDriverConnect(
-        conn.impl_->dbc, nullptr, sqlstr(uri.connstr), SQL_NTS,
+        conn.impl_->dbc, nullptr, sqlstr(connect_str), SQL_NTS,
         outbuf, static_cast<SQLSMALLINT>(sizeof(outbuf)), &outlen,
         SQL_DRIVER_NOPROMPT);
+    if (!uri.password.empty()) {
+        for (char& ch : connect_str) ch = '\0';
+    }
     if (!SQL_SUCCEEDED(r)) {
         return odbc_error("odbc connect",
                           odbc_diag(SQL_HANDLE_DBC, conn.impl_->dbc));

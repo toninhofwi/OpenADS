@@ -1,5 +1,7 @@
 #include "session/connection.h"
 
+#include "engine/pbkdf2.h"
+
 #include "drivers/adm/adm_memo.h"
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/dbt/dbt_memo.h"
@@ -180,9 +182,14 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     if (encryption_key_set_) {
         if (auto* cdx = dynamic_cast<
                 openads::drivers::cdx::CdxDriver*>(holder->driver())) {
-            (void)cdx->set_encryption_key(encryption_key_);
+            std::array<std::uint8_t, 32> key = encryption_key_legacy_;
+            if (cdx->header_version() == 0xC4) {
+                key = encryption_key_pbkdf2_;
+            }
+            (void)cdx->set_encryption_key(key);
         }
     }
+    holder->set_owner(this);
 
     // Auto-attach a memo store if the table has M-fields or Binary fields.
     bool has_memo_field = false;
@@ -246,6 +253,7 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
 util::Result<Handle> Connection::adopt_table(engine::Table table,
                                              const std::string& relative_path) {
     auto holder = std::make_unique<engine::Table>(std::move(table));
+    holder->set_owner(this);
     Handle h = next_table_handle_++;
     if (tx_.active()) {
         holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));
@@ -678,16 +686,12 @@ bool Connection::owns_table_ptr(const engine::Table* t) const {
 }
 
 void Connection::set_encryption_password(const std::string& password) {
-    // M11.2 — pragmatic key derivation for the OpenADS-only encrypted
-    // format: zero-pad the password to 32 bytes and truncate if
-    // longer. Strong passwords are the user's responsibility; this
-    // does not implement PBKDF2 / Argon2 (no SHA-256 in tree). The
-    // resulting key feeds AES-256-CTR per record.
-    encryption_key_.fill(0);
-    std::size_t n = std::min<std::size_t>(password.size(),
-                                          encryption_key_.size());
-    std::memcpy(encryption_key_.data(), password.data(), n);
-    encryption_key_set_ = true;
+    // M11.2 — PBKDF2-HMAC-SHA256 for new tables (header 0xC4). Legacy
+    // tables (0xC3) still use zero-padded password bytes.
+    encryption_key_legacy_ = engine::derive_legacy_encryption_key(password);
+    encryption_key_pbkdf2_ = engine::derive_encryption_key(password);
+    encryption_key_       = encryption_key_pbkdf2_;
+    encryption_key_set_   = true;
 }
 
 Connection::~Connection() {

@@ -1,5 +1,7 @@
 #include "engine/table.h"
 
+#include "session/connection.h"
+
 #include "openads/error.h"
 #include "engine/index_expr.h"
 
@@ -36,11 +38,28 @@ void set_epoch(std::uint16_t v) noexcept { g_epoch.store(v); }
 
 } // namespace openads::engine
 
-namespace openads::abi { inline bool show_deleted() noexcept {
+namespace openads::abi {
+
+inline bool show_deleted_for(const openads::engine::Table* t) noexcept {
+    if (t != nullptr) {
+        if (auto* owner = t->owner()) {
+            return owner->show_deleted();
+        }
+    }
     return openads::engine::show_deleted();
-} }
+}
+
+inline bool show_deleted() noexcept {
+    return openads::engine::show_deleted();
+}
+
+}  // namespace openads::abi
 
 namespace openads::engine {
+
+bool Table::show_deleted_records() const noexcept {
+    return openads::abi::show_deleted_for(this);
+}
 
 namespace {
 
@@ -316,7 +335,7 @@ util::Result<void> Table::goto_top() {
         // If everything's deleted (or filtered out by the index +
         // delete combo) → Limbo so DBGOTOP reports BOF+EOF both
         // true (Clipper / DBFCDX convention for "no visible row").
-        if (!openads::abi::show_deleted()) {
+        if (!openads::abi::show_deleted_for(this)) {
             while (r.value().positioned) {
                 if (auto ld = load_record_(r.value().recno); !ld) {
                     return ld.error();
@@ -344,7 +363,7 @@ util::Result<void> Table::goto_top() {
     }
     // SET DELETE ON without an active index: walk forward over the
     // raw record range until a live row appears.
-    if (!openads::abi::show_deleted()) {
+    if (!openads::abi::show_deleted_for(this)) {
         std::uint32_t r = 1;
         while (r <= driver_->record_count() && is_deleted()) {
             ++r;
@@ -384,7 +403,7 @@ util::Result<void> Table::goto_bottom() {
             !key_in_top_scope_(idx->current_key())) {
             state_ = State::Eof; recno_ = 0; return {};
         }
-        if (!openads::abi::show_deleted()) {
+        if (!openads::abi::show_deleted_for(this)) {
             while (r.value().positioned) {
                 if (auto ld = load_record_(r.value().recno); !ld) {
                     return ld.error();
@@ -405,7 +424,7 @@ util::Result<void> Table::goto_bottom() {
     }
     if (auto r = load_record_(n); !r) return r.error();
     // SET DELETE ON without active index: walk back to first live.
-    if (!openads::abi::show_deleted()) {
+    if (!openads::abi::show_deleted_for(this)) {
         std::uint32_t r = n;
         while (r >= 1 && is_deleted()) {
             if (r == 1) {
@@ -507,7 +526,7 @@ util::Result<void> Table::skip(std::int32_t delta) {
         // tree in reverse from the caller's perspective.
         bool effective_forward = (delta > 0) ^ order_->descending_traverse();
         util::Result<drivers::SeekOutcome> r = drivers::SeekOutcome{};
-        const bool skip_deleted = !openads::abi::show_deleted();
+        const bool skip_deleted = !openads::abi::show_deleted_for(this);
         std::int32_t want = std::abs(delta);
         std::int32_t taken = 0;
         // Clipper convention: SKIP that overshoots the order leaves
@@ -583,7 +602,7 @@ util::Result<void> Table::skip(std::int32_t delta) {
     // SET DELETED is ON (show_deleted() == false) and rows rejected by
     // an active filter. The index-order path above already skips
     // deleted rows; the natural-order path must do the same.
-    const bool skip_deleted = !openads::abi::show_deleted();
+    const bool skip_deleted = !openads::abi::show_deleted_for(this);
     auto must_skip = [&]() -> bool {
         if (state_ != State::Positioned) return false;
         if (skip_deleted && is_deleted()) return true;
@@ -1372,7 +1391,7 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
     // re-derive `exact` from the row we actually land on (Clipper/DBFCDX:
     // if the only matching rows are deleted, Found() is .F. and the cursor
     // sits on the next live record or Eof).
-    if (!openads::abi::show_deleted()) {
+    if (!openads::abi::show_deleted_for(this)) {
         std::string del_key = key;
         del_key.resize(idx->key_length(), ' ');
         while (r.value().positioned) {
@@ -1420,7 +1439,7 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
         }
         auto load = load_record_(last_recno);
         if (!load) return load.error();
-        if (!openads::abi::show_deleted()) {
+        if (!openads::abi::show_deleted_for(this)) {
             while (is_deleted()) {
                 auto step = idx->prev();
                 if (!step || !step.value().positioned) {

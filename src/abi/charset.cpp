@@ -130,4 +130,14 @@ utf8_to_utf16le(const std::string& utf8) {
     return out;
 }
 
+bool assign_u16(std::uint16_t* out, std::size_t n) noexcept {
+    if (out == nullptr || n > 0xFFFFu) return false;
+    *out = static_cast<std::uint16_t>(n);
+    return true;
+}
+
+std::uint16_t clamp_u16(std::size_t n) noexcept {
+    return static_cast<std::uint16_t>(std::min<std::size_t>(n, 0xFFFFu));
+}
+
 } // namespace openads::abi
