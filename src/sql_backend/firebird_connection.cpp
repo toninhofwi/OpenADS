@@ -413,8 +413,9 @@ struct XsqldaGuard {
 };
 
 struct FbStmtGuard {
-    isc_db_handle*    db  = nullptr;
+    isc_db_handle*    db   = nullptr;
     isc_stmt_handle   stmt = 0;
+    FbStmtGuard() = default;
     ~FbStmtGuard() {
         if (stmt && db) {
             ISC_STATUS_ARRAY st{};
