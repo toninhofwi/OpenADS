@@ -489,6 +489,9 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
                     break;
                 sk = nx;
             }
+            if (sk.value().recno != recno) {
+                idx->invalidate_cursor();
+            }
         }
     }
     return {};
@@ -501,7 +504,13 @@ util::Result<void> Table::refresh_record_buffer() {
 
 util::Result<void> Table::skip(std::int32_t delta) {
     if (!recno_sequence_.empty()) {
-        if (delta == 0) return {};
+        if (delta == 0) {
+            if (state_ == State::Bof) sequence_idx_ = -1;
+            else if (state_ == State::Eof)
+                sequence_idx_ =
+                    static_cast<std::int64_t>(recno_sequence_.size());
+            return {};
+        }
         std::int64_t idx = sequence_idx_;
         if (state_ == State::Bof) idx = -1;
         if (state_ == State::Eof)

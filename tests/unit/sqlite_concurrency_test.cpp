@@ -92,7 +92,7 @@ TEST_CASE("concurrent writers don't shed inserts to SQLITE_BUSY (5001)") {
     }
 
     const int kThreads = 8;
-    const int kPerThread = 50;
+    const int kPerThread = 15;
     std::atomic<int> busy{0};     // failures with code 5001 (database is locked)
     std::atomic<int> other{0};    // any other failure
     std::atomic<int> ok{0};

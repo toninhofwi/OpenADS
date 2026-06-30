@@ -71,15 +71,14 @@ util::Result<void> TxLog::open(const std::string& path) {
     // Resume LSN counter from the highest LSN already on disk so newly
     // appended records can never collide with surviving ones.
     next_lsn_.store(1);
-    last_synced_lsn_ = 0;
+    last_synced_lsn_.store(0, std::memory_order_relaxed);
     if (write_offset_ > 0) {
         auto recs = read_all();
-        if (recs) {
-            std::uint64_t hi = 0;
-            for (auto& r : recs.value()) if (r.lsn > hi) hi = r.lsn;
-            next_lsn_.store(hi + 1);
-            last_synced_lsn_ = hi;   // already on disk
-        }
+        if (!recs) return recs.error();
+        std::uint64_t hi = 0;
+        for (auto& r : recs.value()) if (r.lsn > hi) hi = r.lsn;
+        next_lsn_.store(hi + 1);
+        last_synced_lsn_.store(hi, std::memory_order_release);   // already on disk
     }
     return {};
 }
@@ -206,10 +205,10 @@ util::Result<void> TxLog::append_abort(std::uint64_t tx_id) {
 
 util::Result<void> TxLog::sync_to(std::uint64_t lsn) {
     // Fast-path: already durable.
-    if (last_synced_lsn_ >= lsn) return {};
+    if (last_synced_lsn_.load(std::memory_order_acquire) >= lsn) return {};
 
     std::lock_guard<std::mutex> lk(sync_mu_);
-    if (last_synced_lsn_ >= lsn) return {};   // racing winner already synced
+    if (last_synced_lsn_.load(std::memory_order_relaxed) >= lsn) return {};
 
     // High-water mark BEFORE the fsync. Any record with an LSN <= hwm
     // is fully written by the time we issue the sync (append_mu_ has
@@ -217,7 +216,7 @@ util::Result<void> TxLog::sync_to(std::uint64_t lsn) {
     std::uint64_t hwm = next_lsn_.load();
     auto r = file_.sync();
     if (!r) return r.error();
-    last_synced_lsn_ = hwm > 0 ? hwm - 1 : 0;
+    last_synced_lsn_.store(hwm > 0 ? hwm - 1 : 0, std::memory_order_release);
     return {};
 }
 
@@ -226,7 +225,7 @@ util::Result<void> TxLog::sync() {
     std::uint64_t hwm = next_lsn_.load();
     auto r = file_.sync();
     if (!r) return r.error();
-    last_synced_lsn_ = hwm > 0 ? hwm - 1 : 0;
+    last_synced_lsn_.store(hwm > 0 ? hwm - 1 : 0, std::memory_order_release);
     return {};
 }
 
@@ -294,7 +293,7 @@ util::Result<void> TxLog::truncate() {
     file_ = std::move(cre).value();
     write_offset_ = 0;
     next_lsn_.store(1);
-    last_synced_lsn_ = 0;
+    last_synced_lsn_.store(0, std::memory_order_release);
     return {};
 }
 

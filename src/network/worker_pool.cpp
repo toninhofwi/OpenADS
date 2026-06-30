@@ -162,7 +162,7 @@ void WorkerPool::worker_loop(Worker& w) {
 
     // Teardown: close + destroy every remaining session (dtor unregisters),
     // then the wake channel.
-    for (Socket sk : w.session_socks) { Socket s = sk; sock_close(s); }
+    for (Socket& sk : w.session_socks) sock_close(sk);
     w.sessions.clear();
     w.session_socks.clear();
     w.live.store(0);

@@ -34,6 +34,9 @@ private:
     std::uint64_t      length_ = 0;
 };
 
+// Per-Table refcount map for nested OS byte-range locks. Each Table
+// workarea owns one LockMgr; ABI access is serialized per connection,
+// so held_ is not guarded by a mutex here.
 class LockMgr {
 public:
     util::Result<LockHandle>

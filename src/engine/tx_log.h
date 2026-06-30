@@ -62,16 +62,28 @@ public:
         : file_(std::move(o.file_)),
           write_offset_(o.write_offset_),
           path_(std::move(o.path_)),
-          next_lsn_(o.next_lsn_.load()),
-          last_synced_lsn_(o.last_synced_lsn_) {}
+          next_lsn_(o.next_lsn_.load(std::memory_order_relaxed)),
+          last_synced_lsn_(o.last_synced_lsn_.load(std::memory_order_relaxed)) {
+        o.write_offset_ = 0;
+        o.path_.clear();
+        o.next_lsn_.store(1, std::memory_order_relaxed);
+        o.last_synced_lsn_.store(0, std::memory_order_relaxed);
+    }
 
     TxLog& operator=(TxLog&& o) noexcept {
         if (this != &o) {
             file_           = std::move(o.file_);
             write_offset_   = o.write_offset_;
             path_           = std::move(o.path_);
-            next_lsn_.store(o.next_lsn_.load());
-            last_synced_lsn_ = o.last_synced_lsn_;
+            next_lsn_.store(o.next_lsn_.load(std::memory_order_relaxed),
+                            std::memory_order_relaxed);
+            last_synced_lsn_.store(
+                o.last_synced_lsn_.load(std::memory_order_relaxed),
+                std::memory_order_relaxed);
+            o.write_offset_ = 0;
+            o.path_.clear();
+            o.next_lsn_.store(1, std::memory_order_relaxed);
+            o.last_synced_lsn_.store(0, std::memory_order_relaxed);
         }
         return *this;
     }
@@ -121,7 +133,9 @@ public:
     // Force every appended record to disk regardless of LSN.
     util::Result<void> sync();
 
-    std::uint64_t last_synced_lsn() const noexcept { return last_synced_lsn_; }
+    std::uint64_t last_synced_lsn() const noexcept {
+        return last_synced_lsn_.load(std::memory_order_acquire);
+    }
     std::uint64_t high_water_lsn () const noexcept { return next_lsn_.load(); }
 
     // Read every record in the log from the start. Truncates the
@@ -145,7 +159,7 @@ private:
 
     // Group-commit state.
     std::atomic<std::uint64_t> next_lsn_       {1};
-    std::uint64_t              last_synced_lsn_ = 0;
+    std::atomic<std::uint64_t> last_synced_lsn_ {0};
     std::mutex                 sync_mu_;
     std::mutex                 append_mu_;     // serialises file_.write_at
 };

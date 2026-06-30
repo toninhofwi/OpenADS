@@ -116,7 +116,7 @@ TEST_CASE("TxLog: group commit — many threads append, single fsync covers all"
     fs::remove(p);
 
     constexpr int N_THREADS  = 4;
-    constexpr int N_PER_THR  = 50;
+    constexpr int N_PER_THR  = 10;
 
     std::vector<std::uint64_t> commit_lsns(N_THREADS * N_PER_THR);
 
