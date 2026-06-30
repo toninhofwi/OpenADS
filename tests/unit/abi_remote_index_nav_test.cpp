@@ -59,6 +59,36 @@ void make_colonias_dbf(const fs::path& dir) {
     REQUIRE(AdsDisconnect(hConn) == 0);
 }
 
+// Like make_colonias_dbf but also builds a *production* CDX
+// (CCOLONIA.CDX, same base name as the table) with a NOMBRE tag, then
+// closes everything. A later remote open must auto-bind this bag.
+// NOMBRE ascending = Av. Amsterdam(rec3), Av. Hidalgo(rec1),
+// Calle Orizaba(rec2) — so an ordered GotoTop lands on rec 3, distinct
+// from natural order's rec 1.
+void make_colonias_dbf_with_prod_index(const fs::path& dir) {
+    make_colonias_dbf(dir);
+
+    UNSIGNED8 srv[512];
+    const auto sp = dir.string();
+    std::memcpy(srv, sp.c_str(), sp.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hT = 0;
+    UNSIGNED8 tname[] = "CCOLONIA.DBF";
+    UNSIGNED8 alias[] = "CCOLONIA";
+    REQUIRE(AdsOpenTable(hConn, tname, alias, ADS_CDX, 0, 0, 0, 0, &hT) == 0);
+    ADSHANDLE hIndex = 0;
+    UNSIGNED8 bag[]  = "CCOLONIA.CDX";
+    UNSIGNED8 tag[]  = "NOMBRE";
+    UNSIGNED8 expr[] = "NOMBRE";
+    REQUIRE(AdsCreateIndex61(hT, bag, tag, expr,
+                             nullptr, nullptr, ADS_COMPOUND, 512,
+                             &hIndex) == 0);
+    REQUIRE(AdsCloseTable(hT) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+}
+
 ADSHANDLE remote_connect(const fs::path& dir, std::uint16_t port) {
     std::string uri = "tcp://127.0.0.1:" + std::to_string(port) + "/" +
                       dir.generic_string();
@@ -113,6 +143,64 @@ TEST_CASE("remote AdsGotoTop/AdsSkip accept RemoteIndex handles") {
     CHECK(r2 != r1);
 
     REQUIRE(AdsCloseIndex(hIndex) == 0);
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    srv.stop();
+}
+
+// rddads' DbSetOrder(<number>) over the wire: open a table whose
+// production CDX already exists, then resolve the order by ordinal
+// (AdsGetIndexHandleByOrder) and by name (AdsGetIndexHandle) and
+// navigate by the resulting RemoteIndex handle. Before the fix the
+// remote open never bound the production bag, so AdsGetNumIndexes was 0
+// and by-ordinal resolution failed — CDX silently fell back to natural
+// order (the fivedbu "remote shows no index" report).
+TEST_CASE("remote DbSetOrder by number/name uses production index") {
+    using openads::network::Server;
+    auto dir = fs::temp_directory_path() / "openads_remote_prod_idx";
+    make_colonias_dbf_with_prod_index(dir);
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(dir, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "CCOLONIA.DBF";
+    UNSIGNED8 alias[] = "CCOLONIA";
+    REQUIRE(AdsOpenTable(hConn, tname, alias, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    // Production CDX auto-bound on open → one order visible remotely.
+    UNSIGNED16 nidx = 0;
+    REQUIRE(AdsGetNumIndexes(hTable, &nidx) == 0);
+    CHECK(nidx >= 1u);
+
+    // DbSetOrder(1): resolve ordinal -> RemoteIndex handle.
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 1, &hOrd) == 0);
+    REQUIRE(hOrd != 0);
+
+    UNSIGNED8  nm[32] = {0};
+    UNSIGNED16 nl = sizeof(nm);
+    REQUIRE(AdsGetIndexName(hOrd, nm, &nl) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(nm), nl) == "NOMBRE");
+
+    // Navigate by the order handle (rddads passes hOrdCurrent). Ordered
+    // GotoTop must land on rec 3 (Av. Amsterdam), NOT natural rec 1.
+    REQUIRE(AdsGotoTop(hOrd) == 0);
+    UNSIGNED32 rec = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec) == 0);
+    CHECK(rec == 3u);
+
+    // DbSetOrder("NOMBRE"): resolve by name to the same handle.
+    ADSHANDLE hByName = 0;
+    UNSIGNED8 want[] = "NOMBRE";
+    REQUIRE(AdsGetIndexHandle(hTable, want, &hByName) == 0);
+    CHECK(hByName == hOrd);
+
     REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
 

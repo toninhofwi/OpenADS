@@ -541,6 +541,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 tbls_.erase(it);
                 srv_->add_session_table(sid_, -1);
             }
+            ordered_tables_.erase(id);
             reply.opcode = Opcode::CloseTableAck;
             break;
         }
@@ -559,7 +560,17 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("GotoTop: lookup failed"); break; }
-            (void)tbl->goto_top();
+            // Ordered: navigate the ABI handle (it carries the order) and
+            // mirror the position onto the engine cursor pack_row_trailer
+            // reads from. Natural order: engine table directly.
+            ADSHANDLE hord =
+                ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
+            if (hord != 0) {
+                (void)AdsGotoTop(hord);
+                sync_engine_cursor(id);
+            } else {
+                (void)tbl->goto_top();
+            }
             reply.opcode = Opcode::GotoTopAck;
             pack_row_trailer(reply, id);
             break;
@@ -594,6 +605,18 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("Skip: lookup failed"); break; }
+            // Ordered: skip on the ABI handle and sync. Lookahead prefetch
+            // walks the engine table in natural order, so disable it here —
+            // correctness of the index walk beats the PgDn round-trip save.
+            ADSHANDLE hord =
+                ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
+            if (hord != 0) {
+                (void)AdsSkip(hord, step);
+                sync_engine_cursor(id);
+                reply.opcode = Opcode::SkipAck;
+                pack_row_trailer(reply, id, 0);
+                break;
+            }
             (void)tbl->skip(step);
             reply.opcode = Opcode::SkipAck;
             pack_row_trailer(reply, id, lookahead);
@@ -854,10 +877,17 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("GotoBottom: lookup failed"); break; }
-            auto rb = tbl->goto_bottom();
-            if (!rb) {
-                reply = err("GotoBottom: " + rb.error().message);
-                break;
+            ADSHANDLE hord =
+                ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
+            if (hord != 0) {
+                (void)AdsGotoBottom(hord);
+                sync_engine_cursor(id);
+            } else {
+                auto rb = tbl->goto_bottom();
+                if (!rb) {
+                    reply = err("GotoBottom: " + rb.error().message);
+                    break;
+                }
             }
             reply.opcode = Opcode::GotoBottomAck;
             pack_row_trailer(reply, id);
@@ -981,8 +1011,17 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("GetNumIndexes: lookup failed"); break; }
-            std::uint16_t n = static_cast<std::uint16_t>(
-                tbl->all_indexes().size());
+            // Indexes are opened on the ABI handle (incl. the production
+            // CDX auto-opened there), not the engine table — count via the
+            // ABI handle so OrdCount() / DBOI_ORDERCOUNT is non-zero
+            // remotely. Falls back to the engine table's view if no ABI
+            // handle has been promoted yet.
+            std::uint16_t n = 0;
+            if (ADSHANDLE ht = ensure_abi_handle(id); ht != 0) {
+                (void)AdsGetNumIndexes(ht, &n);
+            } else {
+                n = static_cast<std::uint16_t>(tbl->all_indexes().size());
+            }
             reply.opcode = Opcode::GetNumIndexesAck;
             reply.payload.push_back(static_cast<std::uint8_t>( n       & 0xFFu));
             reply.payload.push_back(static_cast<std::uint8_t>((n >> 8) & 0xFFu));
@@ -1247,6 +1286,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (iit == index_h_.end()) { reply = err("SetOrder: bad index id"); break; }
             UNSIGNED32 rrc = AdsSetIndexOrderByHandle(ht, iit->second);
             if (rrc != 0) { reply = err("SetOrder", rrc); break; }
+            ordered_tables_.insert(tid);
             sync_engine_cursor(tid);
             reply.opcode = Opcode::SetOrderAck;
             break;
@@ -1264,6 +1304,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             UNSIGNED32 rrc = AdsSetIndexOrder(ht,
                 tag.empty() ? nullptr : tb.data());
             if (rrc != 0) { reply = err("SetOrderByName: " + tag, rrc); break; }
+            if (tag.empty()) ordered_tables_.erase(tid);
+            else             ordered_tables_.insert(tid);
             sync_engine_cursor(tid);
             reply.opcode = Opcode::SetOrderByNameAck;
             break;

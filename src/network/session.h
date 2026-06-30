@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace openads::engine { class Table; }
@@ -75,6 +76,12 @@ private:
     std::unordered_map<std::uint32_t, ADSHANDLE>                index_h_;
     // M12.16 — reverse map index_id -> table_id.
     std::unordered_map<std::uint32_t, std::uint32_t>            index_table_;
+    // Table ids with an active controlling order. Index ops set the order
+    // on the ABI handle (tbls_h_), not the engine table, so when one is
+    // active GotoTop / GotoBottom / Skip must navigate the ABI handle and
+    // sync the engine cursor — otherwise they walk natural order and the
+    // remote browse shows no index.
+    std::unordered_set<std::uint32_t>                          ordered_tables_;
     ADSHANDLE     abi_conn_ = 0;
     ADSHANDLE     abi_stmt_ = 0;
     std::uint32_t next_id_ = 1;

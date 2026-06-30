@@ -298,6 +298,11 @@ struct RemoteTable {
     std::uint32_t active_index_id = 0;
     // Tag name → server wire index id (populated at AdsOpenIndex).
     std::vector<std::pair<std::string, std::uint32_t>> index_by_tag;
+    // Parallel to index_by_tag: the ABI ADSHANDLE (registry handle, 64-bit)
+    // wrapping each opened index. Lets AdsGetIndexHandle (by tag) and
+    // AdsGetIndexHandleByOrder (by ordinal) resolve to a usable remote
+    // index handle over the wire — the path rddads' DbSetOrder() takes.
+    std::vector<std::uint64_t> index_handles;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag

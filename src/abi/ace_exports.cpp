@@ -5170,7 +5170,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     if (phTable == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                         "phTable is null");
     auto& s = state();
-    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    std::unique_lock<std::recursive_mutex> lk(s.mu);
     // M12.5 — remote connection handle: route through wire client.
     if (auto* rc = s.registry.lookup<openads::network::RemoteConnection>(
             hConnect, HandleKind::RemoteConnection)) {
@@ -5192,6 +5192,44 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
             HandleKind::RemoteTable, rt.get());
         remote_tables.emplace(gh, std::move(rt));
         *phTable = gh;
+        // Mirror the local M-AOF.6 production-index auto-open over the
+        // wire: opening <base>.dbf binds <base>.cdx (or <base>.adi for
+        // ADT) when the server has it, so rddads / X# see the production
+        // tags as navigable orders — and DbSetOrder(n) resolves them —
+        // without an explicit AdsOpenIndex. The client can't stat the
+        // server FS, so attempt the open and ignore "no such bag".
+        //
+        // Release s.mu first: AdsOpenIndex issues a wire round-trip whose
+        // server handler (in-process for local serverd / tests) re-enters
+        // the ABI and takes s.mu on another thread. Holding it across the
+        // blocking call would deadlock. The client AdsOpenIndex re-locks
+        // for its own bookkeeping after the wire reply, which is fine.
+        lk.unlock();
+        {
+            std::filesystem::path tp(name);
+            std::string ext = tp.extension().string();
+            for (auto& c : ext)
+                c = static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(c)));
+            std::string bag;
+            if (ext == ".dbf")      bag = tp.stem().string() + ".cdx";
+            else if (ext == ".adt") bag = tp.stem().string() + ".adi";
+            if (!bag.empty()) {
+                std::vector<UNSIGNED8> b(bag.size() + 1);
+                std::memcpy(b.data(), bag.data(), bag.size());
+                ADSHANDLE arr[64] = {0};
+                UNSIGNED16 alen = 64;
+                (void)AdsOpenIndex(gh, b.data(), arr, &alen);
+                // ADS semantics: auto-opening the production index leaves
+                // the controlling order natural (0) until DbSetOrder picks
+                // one. AdsOpenIndex optimistically marks the first tag
+                // active; undo that so the first nav-by-index actually
+                // sends SetOrder to the server.
+                if (auto* rtp = get_remote_table(gh)) {
+                    rtp->active_index_id = 0;
+                }
+            }
+        }
         return ok();
     }
 #if defined(OPENADS_WITH_SQLITE)
@@ -9884,7 +9922,17 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 HandleKind::RemoteIndex, ri.get());
             ahIndex[i] = gh;
             remote_indexes.emplace(gh, std::move(ri));
-            rt->index_by_tag.emplace_back(entries[i].tag, entries[i].id);
+            // Dedup by tag: production-CDX auto-open and a later explicit
+            // AdsOpenIndex on the same bag must not register the order
+            // twice, or AdsGetNumIndexes / by-order resolution skew.
+            bool known = false;
+            for (auto& kv : rt->index_by_tag) {
+                if (kv.first == entries[i].tag) { known = true; break; }
+            }
+            if (!known) {
+                rt->index_by_tag.emplace_back(entries[i].tag, entries[i].id);
+                rt->index_handles.push_back(static_cast<std::uint64_t>(gh));
+            }
             if (rt->active_index_id == 0) rt->active_index_id = entries[i].id;
         }
         if (pu16ArrayLen != nullptr) *pu16ArrayLen = out_n;
@@ -13048,6 +13096,29 @@ UNSIGNED32 ENTRYPOINT AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
     while (!name.empty() && (name.back() == ' ' || name.back() == '\0')) {
         name.pop_back();
     }
+    // Remote table: resolve the tag to its wire index handle (parallel to
+    // index_by_tag). rddads' DbSetOrder("<tag>") and FWH xbrowse header
+    // sort both go through here.
+    if (auto* rt = get_remote_table(hTable)) {
+        const std::size_t n = std::min(rt->index_by_tag.size(),
+                                       rt->index_handles.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::string& tag = rt->index_by_tag[i].first;
+            if (tag.size() != name.size()) continue;
+            bool eq = true;
+            for (std::size_t k = 0; k < tag.size(); ++k) {
+                if (std::toupper(static_cast<unsigned char>(tag[k])) !=
+                    std::toupper(static_cast<unsigned char>(name[k]))) {
+                    eq = false; break;
+                }
+            }
+            if (eq) {
+                *phIndex = static_cast<ADSHANDLE>(rt->index_handles[i]);
+                return ok();
+            }
+        }
+        return fail(openads::AE_INTERNAL_ERROR, "remote index name not found");
+    }
 #if defined(OPENADS_WITH_POSTGRESQL)
     // SQL backend (postgresql): resolve an already-open PG index by its
     // tag/column name. AdsOpenIndex creates the PostgresIndex handle; this
@@ -13155,8 +13226,22 @@ extern "C++" std::vector<ADSHANDLE> ordered_index_handles_for(Table* t) {
 
 UNSIGNED32 ENTRYPOINT AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
                                     ADSHANDLE* phIndex) {
+    if (phIndex == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    // Remote table: resolve the ordinal to one of the wire index handles
+    // registered at open (production auto-open) / AdsOpenIndex. This is the
+    // path rddads' DbSetOrder(<number>) takes — without it, CDX falls back
+    // to natural order and remote browses show no index.
+    if (auto* rt = get_remote_table(hTable)) {
+        if (rt->index_handles.empty()) {
+            return fail(openads::AE_INTERNAL_ERROR, "no remote index");
+        }
+        std::size_t idx = (usOrder == 0 || usOrder > rt->index_handles.size())
+                              ? 0 : static_cast<std::size_t>(usOrder - 1);
+        *phIndex = static_cast<ADSHANDLE>(rt->index_handles[idx]);
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || phIndex == nullptr) {
+    if (!t) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
     std::vector<ADSHANDLE> ordered = ordered_index_handles_for(t);
