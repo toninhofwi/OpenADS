@@ -36,7 +36,8 @@
    - RCB 06/30/2026: Added core `system.permission_grants` and `system.permission_issues` catalogs so clients can inspect direct grants and permission health without materializing SAP-compatible zero rows from `system.permissions`.
    - RCB 06/30/2026: Health permission checks now run through core `system.permission_issues`; remote PMSys_OpenADS Health dropped from about 3.2 seconds to about 0.22 seconds.
    - RCB 07/01/2026: Health RI checks now validate parent/child tags, tag field references, field counts, and field type/length/decimal compatibility for RI tables.
+   - RCB 07/01/2026: Health procedure/function checks now validate readable metadata, parameter strings, function return types, body balance, and source header names.
+   - RCB 07/01/2026: SAP import warning history now has a DA-Web API endpoint and modal review panel for recent warning-bearing imports.
 
    Remaining:
-   - Add stored procedure/function parse checks.
-   - Add SAP import warning history and review.
+   - None currently tracked.

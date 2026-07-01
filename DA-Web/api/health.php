@@ -84,6 +84,157 @@ function health_field_signature(array $field): string
         . (int)($field['dec'] ?? 0);
 }
 
+function health_split_commas(string $s): array
+{
+    $parts = [];
+    $buf = '';
+    $depth = 0;
+    $len = strlen($s);
+    for ($i = 0; $i < $len; $i++) {
+        $ch = $s[$i];
+        if ($ch === '(') $depth++;
+        elseif ($ch === ')' && $depth > 0) $depth--;
+        if ($ch === ',' && $depth === 0) {
+            $parts[] = trim($buf);
+            $buf = '';
+            continue;
+        }
+        $buf .= $ch;
+    }
+    $parts[] = trim($buf);
+    return $parts;
+}
+
+function health_valid_datatype(string $type): bool
+{
+    $type = trim($type);
+    if ($type === '') return false;
+    return (bool)preg_match(
+        '/^[A-Za-z][A-Za-z0-9_]*(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?$/',
+        $type
+    );
+}
+
+function health_validate_params(string $params, string $kind): array
+{
+    $params = trim($params);
+    if ($params === '') return [];
+
+    $issues = [];
+    if ($kind === 'function') {
+        foreach (health_split_commas($params) as $i => $part) {
+            if ($part === '') continue;
+            if (!preg_match('/^([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$/', $part, $m)) {
+                $issues[] = 'param ' . ($i + 1) . ' should be "name TYPE"';
+                continue;
+            }
+            if (!health_valid_datatype($m[2])) {
+                $issues[] = 'param ' . $m[1] . ' has an unrecognized type "' . trim($m[2]) . '"';
+            }
+        }
+        return $issues;
+    }
+
+    foreach (explode(';', $params) as $i => $part) {
+        $part = trim($part);
+        if ($part === '') continue;
+        $pieces = array_map('trim', explode(',', $part));
+        $name = $pieces[0] ?? '';
+        $type = $pieces[1] ?? '';
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
+            $issues[] = 'param ' . ($i + 1) . ' has an invalid or missing name';
+        }
+        if ($type === '' || !preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $type)) {
+            $issues[] = 'param ' . ($name ?: (string)($i + 1)) . ' has an invalid or missing type';
+        }
+        if (isset($pieces[2]) && $pieces[2] !== '' && !preg_match('/^\d+$/', $pieces[2])) {
+            $issues[] = 'param ' . ($name ?: (string)($i + 1)) . ' has a non-numeric size';
+        }
+        if (isset($pieces[3]) && $pieces[3] !== '' && !preg_match('/^\d+$/', $pieces[3])) {
+            $issues[] = 'param ' . ($name ?: (string)($i + 1)) . ' has non-numeric decimals';
+        }
+    }
+    return $issues;
+}
+
+function health_validate_sql_text(string $body): array
+{
+    $issues = [];
+    $paren = 0;
+    $single = false;
+    $double = false;
+    $lineComment = false;
+    $blockComment = false;
+    $len = strlen($body);
+
+    for ($i = 0; $i < $len; $i++) {
+        $ch = $body[$i];
+        $next = ($i + 1 < $len) ? $body[$i + 1] : '';
+
+        if ($lineComment) {
+            if ($ch === "\n") $lineComment = false;
+            continue;
+        }
+        if ($blockComment) {
+            if ($ch === '*' && $next === '/') {
+                $blockComment = false;
+                $i++;
+            }
+            continue;
+        }
+        if ($single) {
+            if ($ch === "'" && $next === "'") {
+                $i++;
+            } elseif ($ch === "'") {
+                $single = false;
+            }
+            continue;
+        }
+        if ($double) {
+            if ($ch === '"' && $next === '"') {
+                $i++;
+            } elseif ($ch === '"') {
+                $double = false;
+            }
+            continue;
+        }
+
+        if ($ch === '-' && $next === '-') {
+            $lineComment = true;
+            $i++;
+        } elseif ($ch === '/' && $next === '*') {
+            $blockComment = true;
+            $i++;
+        } elseif ($ch === "'") {
+            $single = true;
+        } elseif ($ch === '"') {
+            $double = true;
+        } elseif ($ch === '(') {
+            $paren++;
+        } elseif ($ch === ')') {
+            $paren--;
+            if ($paren < 0) {
+                $issues[] = 'unexpected closing parenthesis';
+                $paren = 0;
+            }
+        }
+    }
+
+    if ($single) $issues[] = 'unterminated string literal';
+    if ($double) $issues[] = 'unterminated quoted identifier';
+    if ($blockComment) $issues[] = 'unterminated block comment';
+    if ($paren > 0) $issues[] = 'unclosed parenthesis';
+    return array_values(array_unique($issues));
+}
+
+function health_proc_source_name(string $body): string
+{
+    if (preg_match('/^\s*(?:CREATE\s+)?(?:PROCEDURE|FUNCTION)\s+([A-Za-z_][A-Za-z0-9_]*)/i', $body, $m)) {
+        return $m[1];
+    }
+    return '';
+}
+
 try {
     $perf = api_perf_start();
     $conn = AdsConnection::connect($opts);
@@ -94,6 +245,8 @@ try {
     $tableFields = [];
     $tableTags = [];
     $objects = ['database' => ['database' => true]];
+    $procNames = [];
+    $funcNames = [];
     $users = [];
     $groups = [];
 
@@ -156,11 +309,17 @@ try {
     }
     foreach (health_rows($conn, 'SELECT PROC_NAME FROM system.storedprocedures') as $row) {
         $name = health_value($row, ['PROC_NAME']);
-        if ($name !== '') $objects[health_ci($name)] = true;
+        if ($name !== '') {
+            $objects[health_ci($name)] = true;
+            $procNames[] = $name;
+        }
     }
     foreach (health_rows($conn, 'SELECT FUNC_NAME FROM system.functions') as $row) {
         $name = health_value($row, ['FUNC_NAME']);
-        if ($name !== '') $objects[health_ci($name)] = true;
+        if ($name !== '') {
+            $objects[health_ci($name)] = true;
+            $funcNames[] = $name;
+        }
     }
     api_perf_mark($perf, 'objects');
 
@@ -332,6 +491,101 @@ try {
         }
     }
     api_perf_mark($perf, 'dependencies');
+
+    foreach ($procNames as $name) {
+        try {
+            $inputParams = $dict->getProcProperty($name, 800);
+            $outputParams = $dict->getProcProperty($name, 801);
+            $container = $dict->getProcProperty($name, 802);
+            $body = $dict->getProcProperty($name, 803);
+            try {
+                $script = $dict->getProcProperty($name, 805);
+                if (trim($body) === '' && trim($script) !== '') $body = $script;
+            } catch (Throwable) {}
+
+            $inIssues = health_validate_params($inputParams, 'procedure');
+            if (!empty($inIssues)) {
+                health_add($checks, 'warning', 'Procedures', $name,
+                    'Stored procedure input parameters could not be parsed cleanly.',
+                    implode('; ', $inIssues));
+            }
+            $outIssues = health_validate_params($outputParams, 'procedure');
+            if (!empty($outIssues)) {
+                health_add($checks, 'warning', 'Procedures', $name,
+                    'Stored procedure output parameters could not be parsed cleanly.',
+                    implode('; ', $outIssues));
+            }
+
+            $trimBody = trim($body);
+            if ($trimBody === '' && trim($container) === '') {
+                health_add($checks, 'warning', 'Procedures', $name,
+                    'Stored procedure has no body or external container metadata.');
+            } elseif ($trimBody !== '') {
+                $sourceName = health_proc_source_name($trimBody);
+                if ($sourceName !== '' && strcasecmp($sourceName, $name) !== 0) {
+                    health_add($checks, 'warning', 'Procedures', $name,
+                        'Stored procedure source header names a different object.', $sourceName);
+                }
+                $bodyIssues = health_validate_sql_text($trimBody);
+                if (!empty($bodyIssues)) {
+                    health_add($checks, 'error', 'Procedures', $name,
+                        'Stored procedure body has unbalanced SQL text.',
+                        implode('; ', $bodyIssues));
+                }
+            }
+        } catch (Throwable $e) {
+            health_add($checks, 'error', 'Procedures', $name,
+                'Stored procedure metadata could not be read.', $e->getMessage());
+        }
+    }
+
+    foreach ($funcNames as $name) {
+        try {
+            $body = $dict->getFunctionProperty($name, 700);
+            $inputParams = $dict->getFunctionProperty($name, 701);
+            $returnType = trim($dict->getFunctionProperty($name, 702));
+
+            $inIssues = health_validate_params($inputParams, 'function');
+            if (!empty($inIssues)) {
+                health_add($checks, 'warning', 'Functions', $name,
+                    'Function input parameters could not be parsed cleanly.',
+                    implode('; ', $inIssues));
+            }
+            if ($returnType === '') {
+                health_add($checks, 'error', 'Functions', $name,
+                    'Function has no return type.');
+            } elseif (!health_valid_datatype($returnType)) {
+                health_add($checks, 'warning', 'Functions', $name,
+                    'Function return type is not recognized by the DA-Web parser.', $returnType);
+            }
+
+            $trimBody = trim($body);
+            if ($trimBody === '') {
+                health_add($checks, 'warning', 'Functions', $name,
+                    'Function body is empty.');
+            } else {
+                $sourceName = health_proc_source_name($trimBody);
+                if ($sourceName !== '' && strcasecmp($sourceName, $name) !== 0) {
+                    health_add($checks, 'warning', 'Functions', $name,
+                        'Function source header names a different object.', $sourceName);
+                }
+                $bodyIssues = health_validate_sql_text($trimBody);
+                if (!empty($bodyIssues)) {
+                    health_add($checks, 'error', 'Functions', $name,
+                        'Function body has unbalanced SQL text.',
+                        implode('; ', $bodyIssues));
+                }
+                if (!preg_match('/\bRETURN\b/i', $trimBody)) {
+                    health_add($checks, 'info', 'Functions', $name,
+                        'Function body does not contain an explicit RETURN keyword.');
+                }
+            }
+        } catch (Throwable $e) {
+            health_add($checks, 'error', 'Functions', $name,
+                'Function metadata could not be read.', $e->getMessage());
+        }
+    }
+    api_perf_mark($perf, 'procedures');
 
     foreach (health_rows($conn, 'SELECT * FROM system.permission_issues') as $row) {
         health_add(

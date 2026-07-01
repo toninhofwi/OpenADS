@@ -413,6 +413,58 @@ html, body {
 .health-sev.info { background: #89b4fa; }
 .health-sev.ok { background: #a6e3a1; }
 
+.import-history {
+  margin-top: 12px;
+  border-top: 1px solid #313244;
+  padding-top: 10px;
+  font-size: 12px;
+  color: #a6adc8;
+}
+
+.import-history-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: #cdd6f4;
+  font-weight: 600;
+}
+
+.import-history-item {
+  border: 1px solid #313244;
+  background: #181825;
+  border-radius: 4px;
+  margin-top: 6px;
+  padding: 8px;
+}
+
+.import-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.import-history-name {
+  color: #cdd6f4;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-history-count {
+  color: #f9e2af;
+  white-space: nowrap;
+}
+
+.import-history-warnings {
+  margin: 6px 0 0 0;
+  padding-left: 18px;
+  color: #f9e2af;
+  line-height: 1.5;
+}
+
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
 .btn {
   display: inline-flex;

@@ -4408,6 +4408,40 @@
   }
 
   // ── Modal: Import SAP DD ──────────────────────────────────────────────────
+  async function loadImportSapDDHistory() {
+    const el = document.getElementById('isdd-history');
+    if (!el) return;
+    el.innerHTML = '<div class="import-history-title"><span>Recent import warnings</span><span>Loading...</span></div>';
+    try {
+      const resp = await apiFetch('api/import_sap_dd_history.php?limit=12');
+      const items = (resp.items || []).filter(x => Number(x.warningCount || 0) > 0);
+      if (!items.length) {
+        el.innerHTML = '<div class="import-history-title"><span>Recent import warnings</span><span>none</span></div>';
+        return;
+      }
+      const rows = items.slice(0, 6).map(item => {
+        const whenRaw = item.finishedAt || item.updatedAt || item.createdAt || '';
+        const when = whenRaw ? new Date(whenRaw).toLocaleString() : '';
+        const name = item.name || item.dest || item.id;
+        const warnings = (item.warnings || []).slice(0, 20)
+          .map(w => `<li>${escHtml(w)}</li>`).join('');
+        const more = (item.warnings || []).length > 20
+          ? `<li>${escHtml((item.warnings.length - 20) + ' more warnings')}</li>` : '';
+        return `
+          <details class="import-history-item">
+            <summary class="import-history-row">
+              <span class="import-history-name" title="${escAttr(name)}">${escHtml(name)}</span>
+              <span class="import-history-count">${Number(item.warningCount || 0)} warning${Number(item.warningCount || 0) === 1 ? '' : 's'}${when ? ' · ' + escHtml(when) : ''}</span>
+            </summary>
+            <ul class="import-history-warnings">${warnings}${more}</ul>
+          </details>`;
+      }).join('');
+      el.innerHTML = `<div class="import-history-title"><span>Recent import warnings</span><span>${items.length}</span></div>${rows}`;
+    } catch (err) {
+      el.innerHTML = `<div class="import-history-title"><span>Recent import warnings</span><span>${escHtml(err.message)}</span></div>`;
+    }
+  }
+
   function openImportSapDDModal() {
     clearModalErr('isdd-err');
     const res = document.getElementById('isdd-result');
@@ -4415,6 +4449,7 @@
     const btn = document.getElementById('isdd-run');
     if (btn) { btn.textContent = 'Import'; btn.disabled = false; }
     openModal('modal-import-sap-dd');
+    loadImportSapDDHistory();
     setTimeout(() => document.getElementById('isdd-name')?.focus(), 50);
   }
 
@@ -4503,6 +4538,7 @@
       resEl.style.color = '#cfffd1';
       resEl.style.whiteSpace = 'pre';
       resEl.textContent = lines.join('\n');
+      loadImportSapDDHistory();
 
       btn.textContent = 'Done';
       btn.disabled = false;
