@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
                 stats.errors.fetch_add(1);
                 return;
             }
-            const std::uint32_t id = idr.value();
+            const std::uint32_t id = idr.value().id;
             auto& tr = results[static_cast<std::size_t>(c)];
 
             while (now_ms() < t_end) {

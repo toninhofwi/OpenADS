@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
             if (!rc.connect("127.0.0.1", port, dir).has_value()) { fail(); return; }
             auto idr = rc.open_table(tname);
             if (!idr.has_value()) { fail(); return; }
-            std::uint32_t id = idr.value();
+            std::uint32_t id = idr.value().id;
 
             while (now_ms() < t_end) {
                 int roll = static_cast<int>(rng() % 100);
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
                     if (!rc.connect("127.0.0.1", port, dir).has_value()) { fail(); return; }
                     auto r2 = rc.open_table(tname);
                     if (!r2.has_value()) { fail(); return; }
-                    id = r2.value();
+                    id = r2.value().id;
                 }
             }
             rc.close_table(id);
