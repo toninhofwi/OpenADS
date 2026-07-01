@@ -666,7 +666,8 @@
         return;
       }
 
-      const inheritBadge = permsResp?.canInherit
+      const userHasGroups = (groupsResp.groups || []).length > 0;
+      const inheritBadge = (permsResp?.canInherit || userHasGroups)
         ? `<span style="font-size:11px;color:#a6e3a1;margin-left:8px;" title="User inherits rights from group memberships">&#8679; Inherits from groups</span>`
         : '';
 
@@ -950,7 +951,8 @@
           ? groups.map(g => `<span style="background:#313244;border-radius:3px;padding:1px 6px;font-size:11px;color:#cba6f7;">${escHtml(g)}</span>`).join(' ')
           : '<span style="color:#585b70;font-size:11px;">no groups</span>';
 
-        const legend = canInherit
+        const effectiveCanInherit = resp.canInherit ?? canInherit;
+        const legend = effectiveCanInherit
           ? `<div style="padding:3px 6px;font-size:11px;color:#a6adc8;background:#181825;border-bottom:1px solid #313244;">
                Inheriting from: ${groupList}
                &nbsp;&nbsp;

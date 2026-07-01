@@ -2542,6 +2542,31 @@ DataDict::find_permission(const std::string& grantee,
     return it == permissions_by_grantee_object_.end() ? nullptr : it->second;
 }
 
+uint32_t DataDict::get_permission_mask(const std::string& grantee,
+                                       const std::string& obj_name,
+                                       int object_type_code,
+                                       bool include_inherited) const {
+    uint32_t mask = 0;
+    if (const auto* pe = find_permission(grantee, obj_name, object_type_code))
+        mask |= pe->bitmask;
+
+    if (!include_inherited) return mask;
+
+    const auto grantee_ci = ci_name(grantee);
+    if (groups_.find(grantee) != groups_.end()) return mask;
+    for (const auto& g : groups_) {
+        if (ci_name(g) == grantee_ci) return mask;
+    }
+
+    auto mg = memberships_.find(grantee_ci);
+    if (mg == memberships_.end()) return mask;
+    for (const auto& group : mg->second) {
+        if (const auto* pe = find_permission(group, obj_name, object_type_code))
+            mask |= pe->bitmask;
+    }
+    return mask;
+}
+
 std::string DataDict::trigger_event_key_(const std::string& table_alias,
                                          std::uint32_t event_mask,
                                          std::uint32_t timing) {

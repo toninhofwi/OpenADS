@@ -278,6 +278,59 @@ TEST_CASE("Perms: bitmask bit positions — INSERT is 0x10, DELETE is 0x20") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("Perms: AdsDDGetPermissions returns direct or inherited masks") {
+    auto dir = fs::temp_directory_path() / "openads_perm_get_effective";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf");
+    openads_test::make_dd(
+        dir / "test.add",
+        "TABLE tbl=tbl.dbf\n"
+        "USER alice\n"
+        "USERPROP alice;prop_1101=pw\n"
+        "GROUP readers\n"
+        "MEMBER alice=readers\n"
+        "DBPROP prop_5=1\n");
+
+    ADSHANDLE hConn = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(hConn != 0);
+
+    UNSIGNED8 tbl[] = "tbl";
+    UNSIGNED8 user[] = "alice";
+    UNSIGNED8 group[] = "readers";
+
+    REQUIRE(AdsDDGrantPermission(hConn, ADS_DD_TABLE_OBJECT, tbl, nullptr,
+                                 group,
+                                 ADS_PERMISSION_READ | ADS_PERMISSION_INSERT) == 0);
+    REQUIRE(AdsDDGrantPermission(hConn, ADS_DD_TABLE_OBJECT, tbl, nullptr,
+                                 user, ADS_PERMISSION_INHERIT) == 0);
+
+    UNSIGNED32 mask = 0;
+    REQUIRE(AdsDDGetPermissions(hConn, user, ADS_DD_TABLE_OBJECT, tbl, nullptr,
+                                0, &mask) == 0);
+    CHECK(mask == ADS_PERMISSION_INHERIT);
+
+    mask = 0;
+    REQUIRE(AdsDDGetPermissions(hConn, user, ADS_DD_TABLE_OBJECT, tbl, nullptr,
+                                1, &mask) == 0);
+    CHECK((mask & ADS_PERMISSION_INHERIT) != 0);
+    CHECK((mask & ADS_PERMISSION_READ) != 0);
+    CHECK((mask & ADS_PERMISSION_INSERT) != 0);
+    CHECK((mask & ADS_PERMISSION_DELETE) == 0);
+
+    UNSIGNED8 upper_user[] = "ALICE";
+    UNSIGNED8 upper_tbl[] = "TBL";
+    mask = 0;
+    REQUIRE(AdsDDGetPermissions(hConn, upper_user, ADS_DD_TABLE_OBJECT,
+                                upper_tbl, nullptr, 1, &mask) == 0);
+    CHECK((mask & ADS_PERMISSION_READ) != 0);
+    CHECK((mask & ADS_PERMISSION_INSERT) != 0);
+
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 // ---------------------------------------------------------------------------
 // New tests: check_perm() cache, GRANT SQL, cache invalidation
 // ---------------------------------------------------------------------------

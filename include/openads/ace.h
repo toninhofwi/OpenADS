@@ -857,6 +857,38 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pu
 #define ADS_DD_TABLE_PERMISSION_DELETE       3
 #define ADS_DD_TABLE_PERMISSION_FULL         4
 
+// Data dictionary object type codes for AdsDDGet/GrantPermission.
+#define ADS_DD_TABLE_OBJECT                  1
+#define ADS_DD_COLUMN_OBJECT                 4
+#define ADS_DD_FIELD_OBJECT                  4
+#define ADS_DD_VIEW_OBJECT                   6
+#define ADS_DD_USER_OBJECT                   8
+#define ADS_DD_USER_GROUP_OBJECT             9
+#define ADS_DD_PROCEDURE_OBJECT              10
+#define ADS_DD_DATABASE_OBJECT               11
+#define ADS_DD_LINK_OBJECT                   12
+#define ADS_DD_FUNCTION_OBJECT               18
+#define ADS_DD_PUBLICATION_OBJECT            19
+#define ADS_DD_SUBSCRIPTION_OBJECT           20
+
+// SAP-compatible AdsDDGet/GrantPermission bit masks.
+#define ADS_PERMISSION_READ                  0x00000001u
+#define ADS_PERMISSION_UPDATE                0x00000002u
+#define ADS_PERMISSION_EXECUTE               0x00000004u
+#define ADS_PERMISSION_INHERIT               0x00000008u
+#define ADS_PERMISSION_INSERT                0x00000010u
+#define ADS_PERMISSION_DELETE                0x00000020u
+#define ADS_PERMISSION_LINK_ACCESS           0x00000040u
+#define ADS_PERMISSION_CREATE                0x00000080u
+#define ADS_PERMISSION_ALTER                 0x00000100u
+#define ADS_PERMISSION_DROP                  0x00000200u
+#define ADS_PERMISSION_WITH_GRANT            0x80000000u
+#define ADS_PERMISSION_ALL                   0x80000000u
+#define ADS_PERMISSION_ALL_WITH_GRANT        0x80000000u
+#define ADS_GET_PERMISSIONS_WITH_GRANT       0x80000000u
+#define ADS_GET_PERMISSIONS_CREATE           0x40000000u
+#define ADS_GET_PERMISSIONS_CREATE_WITH_GRANT 0xC0000000u
+
 #define ADS_TABLE_CACHE_NONE                 0
 #define ADS_TABLE_CACHE_READS                1
 #define ADS_TABLE_CACHE_WRITES               2
@@ -1487,6 +1519,25 @@ UNSIGNED32 ENTRYPOINT AdsDDGetUserTableRights(ADSHANDLE hConnect,
                                              UNSIGNED8* pucTable,
                                              UNSIGNED8* pucUser,
                                              UNSIGNED32* pulLevel);
+UNSIGNED32 ENTRYPOINT AdsDDGetPermissions  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucGrantee,
+                                             UNSIGNED16 usObjectType,
+                                             UNSIGNED8* pucObjectName,
+                                             UNSIGNED8* pucParentName,
+                                             UNSIGNED16 usGetInherited,
+                                             UNSIGNED32* pulPermissions);
+UNSIGNED32 ENTRYPOINT AdsDDGrantPermission (ADSHANDLE hConnect,
+                                             UNSIGNED16 usObjectType,
+                                             UNSIGNED8* pucObjectName,
+                                             UNSIGNED8* pucParentName,
+                                             UNSIGNED8* pucGrantee,
+                                             UNSIGNED32 ulPermissions);
+UNSIGNED32 ENTRYPOINT AdsDDRevokePermission(ADSHANDLE hConnect,
+                                             UNSIGNED16 usObjectType,
+                                             UNSIGNED8* pucObjectName,
+                                             UNSIGNED8* pucParentName,
+                                             UNSIGNED8* pucGrantee,
+                                             UNSIGNED32 ulPermissions);
 
 UNSIGNED32 ENTRYPOINT AdsDDGetFieldProperty (ADSHANDLE hConnect,
                                              UNSIGNED8* pucTable,

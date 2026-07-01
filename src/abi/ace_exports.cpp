@@ -12862,8 +12862,13 @@ UNSIGNED32 ENTRYPOINT AdsDDDropView(ADSHANDLE hConn, UNSIGNED8* pucName) {
 static const char* dd_type_name_from_code(UNSIGNED16 code) {
     switch (code) {
         case  1: return "Table";
+        case  4: return "Field";
         case  6: return "View";
+        case  8: return "User";
+        case  9: return "Group";
         case 10: return "StoredProc";
+        case 11: return "Database";
+        case 12: return "Link";
         case 18: return "Function";
         default: return "Table";
     }
@@ -12883,7 +12888,7 @@ UNSIGNED32 ENTRYPOINT AdsDDGetPermissions(ADSHANDLE hConn,
                                 UNSIGNED16  usObjectType,
                                 UNSIGNED8*  pucObjectName,
                                 UNSIGNED8*  /*pucParentName*/,
-                                UNSIGNED16  /*usGetInherited*/,
+                                UNSIGNED16  usGetInherited,
                                 UNSIGNED32* pulPermissions) {
     if (pulPermissions == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulPermissions = 0;
@@ -12891,13 +12896,8 @@ UNSIGNED32 ENTRYPOINT AdsDDGetPermissions(ADSHANDLE hConn,
     if (dd == nullptr) return ok();
     auto grantee = openads::abi::to_internal(pucGrantee,     0);
     auto objname = openads::abi::to_internal(pucObjectName,  0);
-    auto objtype = dd_type_name_from_code(usObjectType);
-    for (const auto& pe : dd->permissions()) {
-        if (pe.grantee == grantee && pe.object_type == objtype && pe.object_name == objname) {
-            *pulPermissions = pe.bitmask;
-            break;
-        }
-    }
+    *pulPermissions = dd->get_permission_mask(
+        grantee, objname, static_cast<int>(usObjectType), usGetInherited != 0);
     return ok();
 }
 

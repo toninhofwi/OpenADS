@@ -399,6 +399,10 @@ public:
     const PermissionEntry* find_permission(const std::string& grantee,
                                            const std::string& obj_name,
                                            int object_type_code) const;
+    uint32_t get_permission_mask(const std::string& grantee,
+                                 const std::string& obj_name,
+                                 int object_type_code,
+                                 bool include_inherited) const;
 
     using FieldPropsMap = std::unordered_map<std::string,
                               std::unordered_map<std::string,
