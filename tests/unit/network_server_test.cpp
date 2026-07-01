@@ -770,7 +770,7 @@ TEST_CASE("M12.11 batch fetch returns multiple rows in one frame") {
                 .has_value());
     auto tid_r = rc.open_table("data.dbf");
     REQUIRE(tid_r.has_value());
-    std::uint32_t tid = tid_r.value();
+    std::uint32_t tid = tid_r.value().id;
     REQUIRE(rc.goto_top(tid).has_value());
 
     // Fetch up to 5 rows in a single round-trip.
@@ -822,7 +822,7 @@ TEST_CASE("Tier-2 FetchWhere filters rows server-side in one round-trip") {
     REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
     auto tid_r = rc.open_table("data.dbf");
     REQUIRE(tid_r.has_value());
-    std::uint32_t tid = tid_r.value();
+    std::uint32_t tid = tid_r.value().id;
     REQUIRE(rc.goto_top(tid).has_value());
 
     auto trim = [](std::string s) {
@@ -870,7 +870,7 @@ TEST_CASE("Tier-2 FetchWhere caps each batch at max_rows matches and resumes") {
     REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
     auto tid_r = rc.open_table("data.dbf");
     REQUIRE(tid_r.has_value());
-    std::uint32_t tid = tid_r.value();
+    std::uint32_t tid = tid_r.value().id;
     REQUIRE(rc.goto_top(tid).has_value());
 
     auto trim = [](std::string s) {
@@ -920,7 +920,7 @@ TEST_CASE("Tier-2 FetchWhere honours a boolean (.OR.) predicate") {
     REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
     auto tid_r = rc.open_table("data.dbf");
     REQUIRE(tid_r.has_value());
-    std::uint32_t tid = tid_r.value();
+    std::uint32_t tid = tid_r.value().id;
     REQUIRE(rc.goto_top(tid).has_value());
 
     auto trim = [](std::string s) {
@@ -1073,7 +1073,7 @@ TEST_CASE("Tier-2 FetchWhere filters a large table server-side at scale") {
     REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
     auto tid_r = rc.open_table("data.dbf");
     REQUIRE(tid_r.has_value());
-    std::uint32_t tid = tid_r.value();
+    std::uint32_t tid = tid_r.value().id;
 
     auto trim = [](std::string s) {
         while (!s.empty() && s.back() == ' ') s.pop_back();
@@ -1126,7 +1126,7 @@ TEST_CASE("Tier-2 FetchWhere returns recno per row when WANT_RECNO is set") {
     REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string()).has_value());
     auto tid_r = rc.open_table("data.dbf");
     REQUIRE(tid_r.has_value());
-    std::uint32_t tid = tid_r.value();
+    std::uint32_t tid = tid_r.value().id;
     REQUIRE(rc.goto_top(tid).has_value());
 
     // TAG >= 'BBBB' matches BBBB (recno 2) and CCCC (recno 3)

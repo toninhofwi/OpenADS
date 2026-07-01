@@ -5193,13 +5193,14 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         // an extension; mirror the local path and default to .dbf so
         // the server resolves it.
         if (!std::filesystem::path(name).has_extension()) name += ".dbf";
-        auto id = rc->open_table(name);
-        if (!id) return fail(id.error());
+        auto otr = rc->open_table(name);
+        if (!otr) return fail(otr.error());
+        auto& ot = otr.value();
         static std::unordered_map<Handle,
             std::unique_ptr<openads::network::RemoteTable>> remote_tables;
         auto rt = std::make_unique<openads::network::RemoteTable>();
         rt->conn = rc;
-        rt->id   = id.value();
+        rt->id   = ot.id;
         rt->name = name;
         rt->alias = std::filesystem::path(name).stem().string();
         Handle gh = s.registry.register_object(
@@ -5210,8 +5211,11 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         // wire: opening <base>.dbf binds <base>.cdx (or <base>.adi for
         // ADT) when the server has it, so rddads / X# see the production
         // tags as navigable orders — and DbSetOrder(n) resolves them —
-        // without an explicit AdsOpenIndex. The client can't stat the
-        // server FS, so attempt the open and ignore "no such bag".
+        // without an explicit AdsOpenIndex.
+        //
+        // The server's OpenTableAck may include the production bag path
+        // (stat-only, no ABI). Use it when available; otherwise derive
+        // it from the table name as a fallback.
         //
         // Release s.mu first: AdsOpenIndex issues a wire round-trip whose
         // server handler (in-process for local serverd / tests) re-enters
@@ -5220,14 +5224,20 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         // for its own bookkeeping after the wire reply, which is fine.
         lk.unlock();
         {
-            std::filesystem::path tp(name);
-            std::string ext = tp.extension().string();
-            for (auto& c : ext)
-                c = static_cast<char>(std::tolower(
-                        static_cast<unsigned char>(c)));
             std::string bag;
-            if (ext == ".dbf")      bag = tp.stem().string() + ".cdx";
-            else if (ext == ".adt") bag = tp.stem().string() + ".adi";
+            // Prefer the bag path the server confirmed exists.
+            if (!ot.prod_bag_path.empty()) {
+                bag = ot.prod_bag_path;
+            } else {
+                // Fallback: derive from the table name.
+                std::filesystem::path tp(name);
+                std::string ext = tp.extension().string();
+                for (auto& c : ext)
+                    c = static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(c)));
+                if (ext == ".dbf")      bag = tp.stem().string() + ".cdx";
+                else if (ext == ".adt") bag = tp.stem().string() + ".adi";
+            }
             if (!bag.empty()) {
                 std::vector<UNSIGNED8> b(bag.size() + 1);
                 std::memcpy(b.data(), bag.data(), bag.size());
@@ -5241,6 +5251,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                 // sends SetOrder to the server.
                 if (auto* rtp = get_remote_table(gh)) {
                     rtp->active_index_id = 0;
+                    // Store the confirmed production bag path so
+                    // AdsGetIndexFilename / OrdBagName works locally.
+                    if (!ot.prod_bag_path.empty())
+                        rtp->prod_bag_path = ot.prod_bag_path;
                 }
             }
         }
@@ -9921,6 +9935,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             ri->tbl_id    = rt->id;
             ri->parent    = rt;
             ri->tag_name  = entries[i].tag;
+            ri->bag_path  = entries[i].bag_path;
             Handle gh = s.registry.register_object(
                 HandleKind::RemoteIndex, ri.get());
             ahIndex[i] = gh;
@@ -9937,6 +9952,13 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 rt->index_handles.push_back(static_cast<std::uint64_t>(gh));
             }
             if (rt->active_index_id == 0) rt->active_index_id = entries[i].id;
+        }
+        // Store the production bag path on the parent table so
+        // AdsGetIndexFilename / OrdBagName can serve without a wire
+        // round-trip even before any explicit AdsOpenIndex call.
+        if (!entries.empty() && !entries[0].bag_path.empty() &&
+            rt->prod_bag_path.empty()) {
+            rt->prod_bag_path = entries[0].bag_path;
         }
         if (pu16ArrayLen != nullptr) *pu16ArrayLen = out_n;
         return ok();
@@ -23529,6 +23551,34 @@ UNSIGNED32 ENTRYPOINT AdsGetIndexCondition(ADSHANDLE hIndex, UNSIGNED8* p,
 UNSIGNED32 ENTRYPOINT AdsGetIndexFilename(ADSHANDLE hIndex, UNSIGNED16 /*usOrder*/,
                                UNSIGNED8* p, UNSIGNED16* l) {
     if (l == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    // Remote index: return the bag_path stored when the index was opened.
+    // This lets FWH/rddads serve OrdBagName() / DBOI_BAGNAME without a
+    // wire round-trip.
+    if (auto* ri = get_remote_index(hIndex)) {
+        if (!ri->bag_path.empty()) {
+            openads::abi::copy_to_caller(p, l, ri->bag_path);
+            return ok();
+        }
+        // Fallback: derive from the parent table name if bag_path is empty
+        // (e.g. old server that doesn't emit it yet).
+        if (ri->parent && !ri->parent->name.empty()) {
+            namespace fs = std::filesystem;
+            fs::path tp(ri->parent->name);
+            std::string fallback;
+            auto ext = tp.extension().string();
+            for (auto& c : ext)
+                c = static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(c)));
+            if (ext == ".dbf")      fallback = tp.stem().string() + ".cdx";
+            else if (ext == ".adt") fallback = tp.stem().string() + ".adi";
+            else                    fallback = ri->parent->name;
+            openads::abi::copy_to_caller(p, l, fallback);
+            return ok();
+        }
+        if (p && *l > 0) p[0] = 0;
+        *l = 0;
+        return ok();
+    }
     auto& m = index_bindings();
     auto it = m.find(hIndex);
     if (it == m.end()) {

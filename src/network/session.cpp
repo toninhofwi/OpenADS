@@ -573,6 +573,46 @@ DispatchResult Session::dispatch(const Frame& f) {
             srv_->add_session_table(sid_, +1);
             reply.opcode = Opcode::OpenTableAck;
             write_u32_le(id, reply.payload);
+            // M-AOF.6 mirror: detect the production CDX/ADI on the server
+            // filesystem and include it in the ack so the client can skip
+            // the speculative AdsOpenIndex round-trip.  We only STAT the
+            // file here — no ABI calls that could deadlock in the
+            // embedded-server case (the client holds s.mu while waiting
+            // for this ack).
+            {
+                auto* tbl = sess_conn_->lookup_table(th.value());
+                if (tbl) {
+                    std::filesystem::path tp(tbl->path());
+                    std::string ext = tp.extension().string();
+                    for (auto& c : ext)
+                        c = static_cast<char>(std::tolower(
+                                static_cast<unsigned char>(c)));
+                    std::string bag;
+                    if (ext == ".dbf")      bag = tp.stem().string() + ".cdx";
+                    else if (ext == ".adt") bag = tp.stem().string() + ".adi";
+                    if (!bag.empty()) {
+                        std::error_code ec;
+                        std::filesystem::path bagp = tp.parent_path() / bag;
+                        if (!std::filesystem::exists(bagp, ec)) {
+                            // Case-insensitive fallback.
+                            std::string ci = openads::platform::
+                                resolve_case_insensitive(bagp.string());
+                            if (!ci.empty())
+                                bagp = std::filesystem::path(ci);
+                        }
+                        if (std::filesystem::exists(bagp, ec)) {
+                            // Append: [u16 bag_len][bag_bytes]
+                            auto bn = static_cast<std::uint16_t>(bag.size());
+                            reply.payload.push_back(
+                                static_cast<std::uint8_t>( bn       & 0xFFu));
+                            reply.payload.push_back(
+                                static_cast<std::uint8_t>((bn >> 8) & 0xFFu));
+                            reply.payload.insert(reply.payload.end(),
+                                                 bag.begin(), bag.end());
+                        }
+                    }
+                }
+            }
             break;
         }
         case Opcode::CloseTable: {
@@ -1312,6 +1352,25 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply.payload.push_back(static_cast<std::uint8_t>((tn >> 8) & 0xFFu));
                 reply.payload.insert(reply.payload.end(),
                                      tag.begin(), tag.end());
+            }
+            // Append the production bag path so the client can serve
+            // AdsGetIndexFilename / OrdBagName without a wire round-trip.
+            // All tags in this OpenIndex response come from the same bag
+            // (the first tag handle is enough to query the bag path).
+            {
+                UNSIGNED8 bbuf[512] = {0};
+                UNSIGNED16 blen = static_cast<UNSIGNED16>(sizeof(bbuf) - 1);
+                std::string bag;
+                if (alen > 0 &&
+                    AdsGetIndexFilename(arr[0], 0, bbuf, &blen) == 0 &&
+                    blen > 0) {
+                    bag.assign(reinterpret_cast<char*>(bbuf), blen);
+                }
+                auto bn = static_cast<std::uint16_t>(bag.size());
+                reply.payload.push_back(static_cast<std::uint8_t>( bn       & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((bn >> 8) & 0xFFu));
+                reply.payload.insert(reply.payload.end(),
+                                     bag.begin(), bag.end());
             }
             break;
         }

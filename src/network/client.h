@@ -74,7 +74,18 @@ public:
         return transport_ && transport_->valid();
     }
 
-    util::Result<std::uint32_t> open_table(const std::string& rel);
+    // M12.16 — remote index handle subsystem.
+    struct OpenIndexEntry {
+        std::uint32_t id = 0;
+        std::string   tag;
+        std::string   bag_path;  // production CDX/NTX/ADI filename
+    };
+    // M-AOF.6 — extended OpenTableAck carries production bag path.
+    struct OpenTableResult {
+        std::uint32_t id = 0;
+        std::string   prod_bag_path;  // production CDX/ADI filename (if found)
+    };
+    util::Result<OpenTableResult> open_table(const std::string& rel);
     util::Result<void>          close_table(std::uint32_t id);
     util::Result<void>          goto_top(std::uint32_t id);
     util::Result<void>          goto_top(RemoteTable* rt);
@@ -120,11 +131,6 @@ public:
                                               std::uint16_t option,
                                               const std::vector<std::uint32_t>& recnos);
     util::Result<std::uint16_t> get_aof_opt_level(std::uint32_t id);
-    // M12.16 — remote index handle subsystem.
-    struct OpenIndexEntry {
-        std::uint32_t id = 0;
-        std::string   tag;
-    };
     util::Result<std::vector<OpenIndexEntry>>
                                 open_index(std::uint32_t table_id,
                                            const std::string& path);
@@ -303,6 +309,10 @@ struct RemoteTable {
     // AdsGetIndexHandleByOrder (by ordinal) resolve to a usable remote
     // index handle over the wire — the path rddads' DbSetOrder() takes.
     std::vector<std::uint64_t> index_handles;
+    // Production index bag path (e.g. "customers.cdx"). Populated from the
+    // OpenTableAck auto-open or AdsOpenIndex. Lets AdsGetIndexFilename
+    // (OrdBagName) return the bag name without a separate wire round-trip.
+    std::string prod_bag_path;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag
@@ -313,6 +323,7 @@ struct RemoteIndex {
     std::uint32_t     id    = 0;     // server-side index id
     std::uint32_t     tbl_id = 0;    // server-side table id this binds to
     std::string       tag_name;      // CDX/NTX tag (AdsGetIndexName / OrdName)
+    std::string       bag_path;      // production CDX/NTX/ADI filename (AdsGetIndexFilename / OrdBagName)
     // M12.17 — back-pointer so AdsSeek / AdsSeekLast / AdsSkipUnique
     // can invalidate the parent table's row cache after the cursor
     // moves on the server side.

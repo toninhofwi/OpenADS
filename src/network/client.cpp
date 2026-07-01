@@ -251,7 +251,7 @@ void RemoteConnection::disconnect() noexcept {
     transport_.reset();
 }
 
-util::Result<std::uint32_t>
+util::Result<RemoteConnection::OpenTableResult>
 RemoteConnection::open_table(const std::string& rel) {
     Frame req;
     req.opcode = Opcode::OpenTable;
@@ -263,11 +263,26 @@ RemoteConnection::open_table(const std::string& rel) {
                            std::string(rep.value().payload.begin(),
                                        rep.value().payload.end())};
     }
-    if (rep.value().payload.size() < 4) {
+    const auto& pl = rep.value().payload;
+    if (pl.size() < 4) {
         return util::Error{5000, 0,
             "OpenTable: ack payload too short", ""};
     }
-    return read_u32_le(rep.value().payload.data());
+    OpenTableResult result;
+    result.id = read_u32_le(pl.data());
+    // Parse optional production bag path appended by the server.
+    // Old servers send exactly 4 bytes; new servers append:
+    //   [u16 bag_len][bag_bytes]
+    size_t off = 4;
+    if (off + 2 <= pl.size()) {
+        std::uint16_t blen = read_u16_le(pl.data() + off);
+        off += 2;
+        if (blen > 0 && off + blen <= pl.size()) {
+            result.prod_bag_path.assign(
+                reinterpret_cast<const char*>(pl.data() + off), blen);
+        }
+    }
+    return result;
 }
 
 util::Result<void> RemoteConnection::close_table(std::uint32_t id) {
@@ -1183,6 +1198,10 @@ RemoteConnection::open_index(std::uint32_t table_id,
         return out;
     }
     size_t off = 2;
+    // bag_path is appended after all tag entries by the server so
+    // AdsGetIndexFilename / OrdBagName can serve without a wire
+    // round-trip.  Parse it after the tag loop.
+    std::string bag_path;
     for (std::uint16_t i = 0; i < n; ++i) {
         if (off + 6 > pl.size()) {
             return util::Error{5000, 0,
@@ -1204,6 +1223,21 @@ RemoteConnection::open_index(std::uint32_t table_id,
         }
         off += tlen;
         out.push_back(std::move(e));
+    }
+    // Parse trailing bag path (u16-prefixed) if present. Older servers
+    // don't emit it, so the payload may end here — that's fine.
+    if (off + 2 <= pl.size()) {
+        std::uint16_t blen = read_u16_le(pl.data() + off);
+        off += 2;
+        if (blen > 0 && off + blen <= pl.size()) {
+            bag_path.assign(reinterpret_cast<const char*>(pl.data() + off),
+                            blen);
+        }
+    }
+    // Propagate the bag path to every entry so the caller can store it
+    // on each RemoteIndex without special-casing.
+    if (!bag_path.empty()) {
+        for (auto& e : out) e.bag_path = bag_path;
     }
     return out;
 }
