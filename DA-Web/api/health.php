@@ -199,7 +199,7 @@ function health_validate_sql_text(string $body): array
             continue;
         }
 
-        if ($ch === '-' && $next === '-') {
+        if (($ch === '-' && $next === '-') || ($ch === '/' && $next === '/')) {
             $lineComment = true;
             $i++;
         } elseif ($ch === '/' && $next === '*') {

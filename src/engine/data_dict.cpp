@@ -651,6 +651,19 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
     for (std::size_t i = 0; i < total; ++i) {
         std::size_t base = hdr_len + i * rec_len;
         if (base + rec_len > buf.size()) break;
+        if (static_cast<uint8_t>(buf[base]) != 0x04u) continue;
+        auto obj_id = le32(buf, base + 5);
+        auto obj_type = trim_char(buf, base + 13, 10);
+        auto obj_name = trim_char(buf, base + 23, 200);
+        if (!obj_name.empty()) {
+            id_to_name[obj_id] = obj_name;
+            id_to_type[obj_id] = obj_type;
+        }
+    }
+
+    for (std::size_t i = 0; i < total; ++i) {
+        std::size_t base = hdr_len + i * rec_len;
+        if (base + rec_len > buf.size()) break;
 
         BinaryRecord r;
         uint8_t status = static_cast<uint8_t>(buf[base]);
@@ -686,12 +699,6 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         // Populate in-memory maps from active records we understand.
         const BinaryRecord& rec = binary_recs_.back();
         if (!rec.active) continue;
-
-        // Maintain id lookup tables for cross-record references.
-        if (!rec.obj_name.empty()) {
-            id_to_name[rec.obj_id] = rec.obj_name;
-            id_to_type[rec.obj_id] = rec.obj_type;
-        }
 
         if (rec.obj_type == "Table" && !rec.obj_name.empty() &&
             !rec.prop_null && !rec.property.empty()) {
@@ -1094,7 +1101,12 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
             //   +25: delete_rule      [1 byte]
             if (binary_format_ && rec.property.size() == 4 &&
                 base + 225 + 26 <= buf.size()) {
-                auto rule_str = [](uint8_t v) -> std::string {
+                auto update_rule_str = [](uint8_t v) -> std::string {
+                    if (v == 1) return "Cascade";
+                    if (v == 3) return "SetNull";
+                    return "Restrict";
+                };
+                auto delete_rule_str = [](uint8_t v) -> std::string {
                     if (v == 2) return "Cascade";
                     if (v == 3) return "SetNull";
                     return "Restrict";
@@ -1113,8 +1125,8 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
                 e.child      = look(chi_tbl);
                 e.parent_tag = look(par_key);
                 e.child_tag  = look(chi_key);
-                e.update_opt = rule_str(upd);
-                e.delete_opt = rule_str(del);
+                e.update_opt = update_rule_str(upd);
+                e.delete_opt = delete_rule_str(del);
             } else {
                 auto parts = split_nul(rec.property);
                 while (parts.size() < 7) parts.emplace_back();
