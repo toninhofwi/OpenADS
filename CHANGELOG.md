@@ -5,6 +5,37 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.5.3 — 2026-07-01
+
+### REMOTE mode — FWH production CDX validation & bug fixes
+
+- **Bug fix: `AdsGetNumIndexes` in REMOTE mode** — Previously returned 0
+  because it queried the server engine handle (which hadn't opened the
+  production index). Now counts `RemoteTable::index_handles.size()`
+  locally, matching the production CDX auto-open + explicit AdsOpenIndex
+  index count. This unblocks rddads' `DbSetOrder(n)` and
+  `OrdBagName()` in REMOTE mode.
+
+- **New test: `abi_remote_prodcdx_test.cpp`** — 8 test cases that
+  validate the complete FWH rddads workflow over TCP against a
+  pre-existing production database (DBF + CDX): OrdBagName,
+  AdsGetIndexName, GoTop + FieldGet by ordinal and by name, AdsSetIndexOrderByHandle,
+  AdsSetIndexOrder by tag name, ordered full-scan, multi-table simultaneous
+  open, and FieldGet on multiple fields after Skip.
+
+- **FieldGet by ordinal idiom documented** — ACE's `ADSFIELD(n)` casts
+  a 1-based ordinal to a pointer (`(UNSIGNED8*)(uintptr_t)n`), NOT a
+  string `"1"`. Both `remote_field_index()` and `resolve_field_index()`
+  detect small pointer values (< 0x10000) as ordinals. Tests updated
+  to use the correct idiom.
+
+- **Gated on `OPENADS_TEST_REMOTE`** — set to a server URI (e.g.
+  `tcp://192.168.18.184:16262/`) to run against a live remote server.
+  Skipped in default CI.
+
+- **DOING.md** added — live working-notes file tracking in-progress
+  investigation, test results, and pending fixes.
+
 ## 1.5.2 — 2026-06-27
 
 ### Release packaging

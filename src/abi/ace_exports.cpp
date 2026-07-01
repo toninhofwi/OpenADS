@@ -13110,9 +13110,13 @@ UNSIGNED32 ENTRYPOINT AdsCreateFTSIndex(ADSHANDLE   hTable,
 UNSIGNED32 ENTRYPOINT AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
     if (pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
-        auto r = rt->conn->get_num_indexes(rt->id);
-        if (!r) return fail(r.error());
-        *pusCount = r.value();
+        // Count indexes opened locally on the RemoteTable (production
+        // CDX auto-open + explicit AdsOpenIndex). Going to the server
+        // via get_num_indexes() would return 0 because the server's
+        // engine handle hasn't opened the production index yet.
+        *pusCount = static_cast<UNSIGNED16>(
+            std::min(rt->index_handles.size(),
+                     static_cast<std::size_t>(0xFFFF)));
         return ok();
     }
     Table* t = get_table(hTable);
