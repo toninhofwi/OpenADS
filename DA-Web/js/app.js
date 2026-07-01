@@ -213,7 +213,8 @@
         // free-table directory: nothing to show at the root level
       } else if (type === 'category') {
         const cat = a['data-cat'] || '';
-        if      (cat === 'users')  openNewUserModal(dd);
+        if      (cat === 'health') openHealthTab(dd);
+        else if (cat === 'users')  openNewUserModal(dd);
         else if (cat === 'groups') openNewGroupModal(dd);
         else if (cat === 'tables') openNewTableModal(dd);
         else if (cat === 'ri')     openNewRiModal(dd);
@@ -445,6 +446,10 @@
            </div>
            <div id="group-tbl-${tabId}"     style="flex:1;min-height:0;overflow:hidden;"></div>
            <div id="group-members-${tabId}" style="flex:1;min-height:0;overflow:hidden;display:none;"></div>`;
+        const grpNote = document.getElementById('grp-perm-note-' + tabId);
+        if (grpNote) {
+          grpNote.innerHTML = `Field rows reflect table-level permissions ${perfBadge(resp.perf)}`;
+        }
 
         // ── Permissions grid ───────────────────────────────────────────────────
         const TYPE_LABEL = { 1:'Table', 4:'Field', 6:'View', 10:'Stored Proc', 18:'Function' };
@@ -703,6 +708,10 @@
          </div>
          <div id="user-perm-${tabId}" style="flex:1;min-height:0;overflow:hidden;"></div>
          <div id="user-eff-${tabId}"  style="flex:1;min-height:0;overflow:hidden;display:none;"></div>`;
+      const permNote = document.getElementById('perm-ro-note-' + tabId);
+      if (permNote) {
+        permNote.innerHTML = `Alter/Drop columns are read-only ${perfBadge(permsResp?.perf)}`;
+      }
 
       // ── Built-in DB: group badges (read-only, cannot be edited via OpenADS) ──
       const builtins = groupsResp.builtinGroups || [];
@@ -988,7 +997,8 @@
         });
 
         // Build a wrapper that holds the legend + the grid div
-        effEl.innerHTML = legend + `<div id="user-eff-grid-${tabId}" style="height:calc(100% - 28px);"></div>`;
+        effEl.innerHTML = legend.replace('</div>', ` ${perfBadge(resp.perf)}</div>`) +
+          `<div id="user-eff-grid-${tabId}" style="height:calc(100% - 28px);"></div>`;
 
         new Tabulator('#user-eff-grid-' + tabId, { /* global Tabulator */
           data: resp.data,
@@ -1172,6 +1182,73 @@
   });
 
   // ── DB Properties tab ────────────────────────────────────────────────────────
+  // RCB 06/30/2026: DD Health is the first cockpit-style admin surface. It
+  // aggregates server/DD checks without making each client inspect raw system
+  // tables differently.
+  function openHealthTab(dd) {
+    const existing = state.tabs.find(t => t.type === 'health' && t.dd === dd);
+    if (existing) { activateTab(existing.id); return; }
+    const id = 'tab-' + (state.nextTabId++);
+    state.tabs.push({ id, title: `Health: ${dd}`, type: 'health', dd });
+    renderTabs();
+    activateTab(id);
+    loadHealth(id, dd);
+  }
+
+  function loadHealth(tabId, dd) {
+    const container = document.getElementById('health-' + tabId);
+    if (!container) return;
+    container.innerHTML = `<div class="alert alert-info" style="margin:8px;">Running checks...</div>`;
+
+    apiFetch(`api/health.php?dd=${encodeURIComponent(dd)}`)
+      .then(resp => {
+        if (resp.error) {
+          container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;
+          return;
+        }
+        const s = resp.summary || {};
+        const checks = resp.checks || [];
+        const countBox = (label, count, cls) =>
+          `<div class="health-count ${cls}">
+             <span>${escHtml(label)}</span><strong>${Number(count || 0)}</strong>
+           </div>`;
+        container.innerHTML = `
+          <div class="health-panel">
+            <div class="health-toolbar">
+              <button class="btn btn-sm" id="health-refresh-${tabId}">Refresh</button>
+              <span>${escHtml(dd)}</span>
+              ${perfBadge(resp.perf)}
+              ${resp.remote ? '<span class="health-note">remote filesystem checks skipped</span>' : ''}
+            </div>
+            <div class="health-summary">
+              ${countBox('Errors', s.error, 'error')}
+              ${countBox('Warnings', s.warning, 'warning')}
+              ${countBox('Info', s.info, 'info')}
+              ${countBox('OK', s.ok, 'ok')}
+            </div>
+            <div id="health-grid-${tabId}" class="health-grid"></div>
+          </div>`;
+        document.getElementById('health-refresh-' + tabId)?.addEventListener('click', () => loadHealth(tabId, dd));
+        /* global Tabulator */
+        new Tabulator('#health-grid-' + tabId, {
+          data: checks,
+          layout: 'fitColumns',
+          placeholder: 'No health findings',
+          columns: [
+            { title: 'Severity', field: 'severity', width: 95, formatter: cell =>
+                `<span class="health-sev ${escAttr(cell.getValue())}">${escHtml(cell.getValue())}</span>` },
+            { title: 'Area', field: 'area', width: 130 },
+            { title: 'Object', field: 'object', widthGrow: 1, minWidth: 160 },
+            { title: 'Message', field: 'message', widthGrow: 2, minWidth: 280 },
+            { title: 'Detail', field: 'detail', widthGrow: 2, minWidth: 220 },
+          ],
+        });
+      })
+      .catch(err => {
+        container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(err.message)}</div>`;
+      });
+  }
+
   function openDbPropsTab(dd) {
     const existing = state.tabs.find(t => t.type === 'dbprops' && t.dd === dd);
     if (existing) { activateTab(existing.id); return; }
@@ -2205,6 +2282,8 @@
           panel.innerHTML = `<div class="data-panel" id="ri-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'dbprops') {
           panel.innerHTML = `<div class="data-panel" id="dbprops-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
+        } else if (tab.type === 'health') {
+          panel.innerHTML = `<div class="data-panel" id="health-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading...</div></div>`;
         } else if (tab.type === 'table_props') {
           panel.innerHTML = `<div class="data-panel" id="table-props-${tab.id}" style="display:flex;flex-direction:column;flex:1;overflow:hidden;overflow-y:auto;"><div class="alert alert-info" style="margin:8px;">Loading…</div></div>`;
         } else if (tab.type === 'view') {
@@ -4317,6 +4396,16 @@
   }
 
   function escAttr(s) { return escHtml(s); }
+
+  function perfBadge(perf) {
+    if (!perf || typeof perf.totalMs !== 'number') return '';
+    const marks = perf.marksMs || {};
+    const title = Object.entries(marks)
+      .map(([k, v]) => `${k}: ${v} ms`)
+      .join('\\n');
+    const tip = title ? ` title="${escAttr(title)}"` : '';
+    return `<span style="font-size:10px;color:#6c7086;margin-left:6px;"${tip}>${perf.totalMs} ms</span>`;
+  }
 
   // ── Modal: Import SAP DD ──────────────────────────────────────────────────
   function openImportSapDDModal() {

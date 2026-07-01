@@ -85,6 +85,10 @@ private:
     ADSHANDLE     abi_conn_ = 0;
     ADSHANDLE     abi_stmt_ = 0;
     std::uint32_t next_id_ = 1;
+    // RCB 06/30/2026: Remote sessions keep DD credentials so lazy server-side
+    // ABI handles used by SQL/index operations authenticate the same user.
+    std::string   session_user_;
+    std::string   session_password_;
     // M12.21 option C — set from the Connect payload's capability word.
     bool          client_prefetch_ok_ = false;
 

@@ -23,9 +23,7 @@ if ($table === '') {
 api_validate_identifier($table, 'table name');
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 function timing_str(int $t): string {
     return match($t) { 1 => 'BEFORE', 2 => 'INSTEAD OF', 4 => 'AFTER', default => '' };

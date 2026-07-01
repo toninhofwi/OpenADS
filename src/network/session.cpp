@@ -161,8 +161,22 @@ bool Session::ensure_abi_conn() {
         ? sess_conn_->data_dir() : sess_conn_->dd_path();
     std::vector<UNSIGNED8> srvbuf(conn_path.size() + 1);
     std::memcpy(srvbuf.data(), conn_path.c_str(), conn_path.size() + 1);
+    // RCB 06/30/2026: The server creates this ABI handle lazily for remote
+    // SQL/index operations. Reuse the original DD login so login-required
+    // dictionaries do not fail after the first remote Connect succeeds.
+    std::vector<UNSIGNED8> userbuf;
+    std::vector<UNSIGNED8> pwbuf;
+    auto make_arg = [](const std::string& s, std::vector<UNSIGNED8>& out)
+        -> UNSIGNED8* {
+        if (s.empty()) return nullptr;
+        out.resize(s.size() + 1);
+        std::memcpy(out.data(), s.c_str(), s.size() + 1);
+        return out.data();
+    };
+    UNSIGNED8* user = make_arg(session_user_, userbuf);
+    UNSIGNED8* pw = make_arg(session_password_, pwbuf);
     return AdsConnect60(srvbuf.data(), ADS_LOCAL_SERVER,
-                        nullptr, nullptr, 0, &abi_conn_) == 0;
+                        user, pw, 0, &abi_conn_) == 0;
 }
 
 // M12.16 — open a parallel ABI handle alongside the engine
@@ -488,8 +502,45 @@ DispatchResult Session::dispatch(const Frame& f) {
                             static_cast<UNSIGNED32>(co.error().code));
                 break;
             }
+            // RCB 06/30/2026: Remote Connect opens the engine Connection
+            // directly, bypassing local AdsConnect60. Mirror DD login handling
+            // here so the session username, permissions, and later lazy ABI
+            // connection all represent the same authenticated DD user.
+            if (co.value().has_dd()) {
+                auto* dd = co.value().dd();
+                std::string login_req = dd->get_db_property("prop_5");
+                bool is_raw_zero = (login_req.size() >= 2 &&
+                    static_cast<unsigned char>(login_req[0]) == 0 &&
+                    static_cast<unsigned char>(login_req[1]) == 0);
+                bool require_login = (!login_req.empty() &&
+                    login_req != "0" && login_req != "False" && !is_raw_zero);
+                if (require_login) {
+                    if (user.empty()) {
+                        reply = err("Connect: login required but no username supplied",
+                                    openads::AE_LOGIN_FAILED);
+                        break;
+                    }
+                    if (!dd->has_user(user)) {
+                        reply = err("Connect: unknown user",
+                                    openads::AE_LOGIN_FAILED);
+                        break;
+                    }
+                    std::string stored = dd->get_user_property(user, "prop_1101");
+                    if (stored != pw) {
+                        reply = err("Connect: invalid password",
+                                    openads::AE_LOGIN_FAILED);
+                        break;
+                    }
+                }
+                if (!user.empty()) {
+                    co.value().set_username(user);
+                    if (dd->has_any_acl()) dd->build_perm_cache(user);
+                }
+            }
             sess_conn_ = std::make_unique<openads::session::Connection>(
                 std::move(co).value());
+            session_user_ = user;
+            session_password_ = pw;
             srv_->set_session_user(sid_, user, dir);
             reply.opcode = Opcode::ConnectAck;
             std::string ackmsg = "connected:" + dir;

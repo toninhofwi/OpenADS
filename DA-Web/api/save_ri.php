@@ -22,9 +22,7 @@ if ($riName === '') {
 }
 api_validate_identifier($riName, 'RI name');
 
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 function ruleInt(string $v): int {
     return match(trim($v)) {

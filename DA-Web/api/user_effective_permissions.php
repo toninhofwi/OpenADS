@@ -44,9 +44,11 @@ if ($ddName === '' || $userName === '') {
 
 $c    = $_SESSION['connections'][$ddName];
 $opts = api_ads_connect_opts($c);
+$perf = api_perf_start();
 
 try {
     $conn = AdsConnection::connect($opts);
+    api_perf_mark($perf, 'connect');
 
     $PERM_COLS = ['SELECT','INSERT','UPDATE','DELETE','EXECUTE','ALTER','DROP'];
 
@@ -62,6 +64,7 @@ try {
         }
         $stmt->close();
     } catch (Throwable $e) {}
+    api_perf_mark($perf, 'groups');
 
     // ── Step 2: single pass over system.permissions (filtered to user + groups) ─────
     // Collect rows for the user and all their groups in one filtered scan.
@@ -73,29 +76,32 @@ try {
     $permMaps   = [];   // lc_grantee => [ key => row ]
     $canInherit = false;
 
-    // Scan and filter in PHP so imported mixed-case group names still match
-    // memberships such as General/general or DB:Admin/db:Admin.
-    $stmt = $conn->query("SELECT * FROM system.permissions");
-    while ($row = $stmt->fetchAssoc()) {
-        $granteeLc = strtolower(trim((string)($row['GRANTEE'] ?? '')));
-        $isUser    = ($granteeLc === $userLc);
-        $isGroup   = isset($groupsLcSet[$granteeLc]);
-        if (!$isUser && !$isGroup) continue;
+    // RCB 06/30/2026: Load each relevant principal with a GRANTEE predicate so
+    // OpenADS can push the filter into system.permissions materialization.
+    $loadPrincipal = function (string $principal) use ($conn, &$permMaps, &$canInherit, $userLc): void {
+        $qprincipal = api_sql_quote($principal);
+        $stmt = $conn->query("SELECT * FROM system.permissions WHERE GRANTEE = '$qprincipal'");
+        while ($row = $stmt->fetchAssoc()) {
+            $granteeLc = strtolower(trim((string)($row['GRANTEE'] ?? '')));
+            $type      = (string)(int)($row['OBJ_TYPE'] ?? 0);
+            $name      = strtolower(trim((string)($row['OBJ_NAME'] ?? '')));
+            $parent    = strtolower(trim((string)($row['PARENT']   ?? '')));
+            $key       = $type === '4' ? "4\0{$parent}\0{$name}" : "{$type}\0{$name}";
 
-        $type   = (string)(int)($row['OBJ_TYPE'] ?? 0);
-        $name   = strtolower(trim((string)($row['OBJ_NAME'] ?? '')));
-        $parent = strtolower(trim((string)($row['PARENT']   ?? '')));
-        $key    = $type === '4' ? "4\0{$parent}\0{$name}" : "{$type}\0{$name}";
+            if (!isset($permMaps[$granteeLc])) $permMaps[$granteeLc] = [];
+            $permMaps[$granteeLc][$key] = $row;
 
-        if (!isset($permMaps[$granteeLc])) $permMaps[$granteeLc] = [];
-        $permMaps[$granteeLc][$key] = $row;
-
-        if ($isUser && !$canInherit && ($row['INHERIT'] ?? '0') === '1') {
-            $canInherit = true;
+            if ($granteeLc === $userLc && !$canInherit && ($row['INHERIT'] ?? '0') === '1') {
+                $canInherit = true;
+            }
         }
-    }
-    $stmt->close();
+        $stmt->close();
+    };
+
+    $loadPrincipal($userName);
+    foreach ($userGroups as $g) $loadPrincipal($g);
     $canInherit = $canInherit || count($userGroups) > 0;
+    api_perf_mark($perf, 'permissions');
 
     $directMap = $permMaps[$userLc] ?? [];
 
@@ -204,12 +210,14 @@ try {
         while ($row = $stmt->fetchAssoc()) $rows[] = $buildRow(trim($row['FUNC_NAME']), '18', '');
         $stmt->close();
     } catch (Throwable $e) {}
+    api_perf_mark($perf, 'objects');
 
     $conn->close();
     echo json_encode([
         'data'       => $rows,
         'canInherit' => $canInherit,
         'groups'     => $userGroups,
+        'perf'       => api_perf_finish($perf),
     ]);
 } catch (Throwable $e) {
     api_exception(500, $e);

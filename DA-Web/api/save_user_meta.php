@@ -27,9 +27,7 @@ if (str_contains($user, "\0")) {
 }
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 function perm_flag(mixed $v): bool {
     return strcasecmp((string)($v ?? ''), 'Yes') === 0 || (string)($v ?? '') === '1';

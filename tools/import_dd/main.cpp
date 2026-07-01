@@ -16,7 +16,7 @@
 //   { "ok": true,  "memberships": N, "permissions": N, "warnings": [...] }
 //   { "ok": false, "error": "...",                      "warnings": [...] }
 //
-// Called from DA-Web via exec(); the PHP side parses the JSON result.
+// Called by administration clients or scripts; callers parse the JSON result.
 
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
@@ -858,9 +858,9 @@ int main(int argc, char** argv) {
         }
 
         // RCB 06/29/2026: DB:Admin is an administrative bypass in the OpenADS
-        // core, but DA-Web's direct permission grids read system.permissions.
+        // core, but clients commonly inspect system.permissions directly.
         // Persist explicit full grants after SAP ACL import so newly imported
-        // DDs show the same administrative reality that the engine enforces.
+        // DDs expose the same administrative reality that the engine enforces.
         constexpr std::uint32_t admin_mask =
             openads::engine::DataDict::DD_PERM_SELECT |
             openads::engine::DataDict::DD_PERM_UPDATE |

@@ -5,6 +5,9 @@
 
 /** Maximum SQL payload length accepted by execute_sql (admin console). */
 const API_SQL_MAX_LENGTH = 1048576;
+/** RCB 06/30/2026: DA-Web defaults OpenADS remote connections to 6264 because
+ * 6262 is commonly occupied by SAP ADS on administrator workstations. */
+const API_OPENADS_REMOTE_PORT = 6264;
 
 /**
  * Emit a JSON error response and exit.
@@ -32,6 +35,31 @@ function api_error(int $httpStatus, string $message, int $code = 0, array $extra
 function api_exception(int $httpStatus, Throwable $e, array $extra = []): void
 {
     api_error($httpStatus, $e->getMessage(), (int)$e->getCode(), $extra);
+}
+
+/**
+ * RCB 06/30/2026: Lightweight API timing markers for admin diagnostics.
+ * Permission and metadata endpoints can expose slow server/catalog phases
+ * without each caller inventing its own stopwatch format.
+ */
+function api_perf_start(): array
+{
+    return ['start' => microtime(true), 'marks' => []];
+}
+
+function api_perf_mark(array &$perf, string $name): void
+{
+    $elapsed = (microtime(true) - (float)$perf['start']) * 1000.0;
+    $perf['marks'][$name] = round($elapsed, 1);
+}
+
+function api_perf_finish(array $perf): array
+{
+    $total = (microtime(true) - (float)$perf['start']) * 1000.0;
+    return [
+        'totalMs' => round($total, 1),
+        'marksMs' => $perf['marks'],
+    ];
 }
 
 /**
@@ -106,10 +134,19 @@ function api_ads_connect_opts(array $c): array
         $connType = 'local';
     }
     if ($connType === 'remote' && !preg_match('#^(tcp|tls)://#i', $path)) {
-        $path = 'tcp://127.0.0.1:6262/' . $path;
+        $path = 'tcp://127.0.0.1:' . API_OPENADS_REMOTE_PORT . '/' . $path;
     }
 
-    $opts = ['path' => $path, 'server_type' => $connType, 'connType' => $connType];
+    $serverType = $connType === 'remote'
+        ? (defined('ADS_REMOTE_SERVER') ? ADS_REMOTE_SERVER : 2)
+        : (defined('ADS_LOCAL_SERVER') ? ADS_LOCAL_SERVER : 1);
+
+    $opts = [
+        'path' => $path,
+        'serverType' => $serverType,
+        'server_type' => $connType,
+        'connType' => $connType,
+    ];
     if (($c['username'] ?? '') !== '') {
         $opts['user'] = $c['username'];
     }

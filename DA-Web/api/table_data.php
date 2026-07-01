@@ -66,9 +66,7 @@ if ($orderby !== '') {
     }
 }
 
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 try {
     $conn = AdsConnection::connect($opts);

@@ -64,8 +64,9 @@ public:
         std::string user_defined;
         std::string validation_expr;
         std::string validation_msg;
-        // RCB 06/27/2026: Persist SAP-style DD table properties so DA-Web can
-        // edit them now and the table-open path can consume them later.
+        // RCB 06/27/2026: Persist SAP-style DD table properties so any
+        // administration client can edit them and table-open paths can consume
+        // the runtime properties that affect all clients.
         std::string auto_create;     // "0" or "1" (ADS_DD_TABLE_AUTO_CREATE=203)
         std::string memo_block_size; // decimal UNSIGNED16 (ADS_DD_TABLE_MEMO_BLOCK_SIZE=215)
         std::string caching;         // ADS_TABLE_CACHE_* value (ADS_DD_TABLE_CACHING=217)
@@ -101,6 +102,8 @@ public:
     util::Result<void> remove_index_file(const std::string& table_alias,
                                          const std::string& index_path);
     const std::vector<IndexEntry>& indexes() const noexcept { return indexes_; }
+    const std::vector<const IndexEntry*>&
+        indexes_for_table(const std::string& table_alias) const;
 
     // ---- USER + MEMBER (M10.1) ------------------------------------------
     util::Result<void> create_user(const std::string& user);
@@ -120,6 +123,8 @@ public:
     const std::unordered_set<std::string>& users() const noexcept { return users_; }
     const std::unordered_map<std::string, std::unordered_set<std::string>>&
         memberships() const noexcept { return memberships_; }
+    const std::vector<std::string>&
+        users_in_group(const std::string& group) const;
 
     // ---- GROUP (M-DD-SQL) ------------------------------------------------
     util::Result<void> create_group(const std::string& group);
@@ -164,7 +169,14 @@ public:
     const std::unordered_map<std::string, RiEntry>&
         ri() const noexcept { return ri_; }
     std::unordered_map<std::string, RiEntry>&
-        ri()       noexcept { return ri_; }
+        ri()       noexcept {
+            invalidate_metadata_indexes_();
+            return ri_;
+        }
+    const std::vector<const RiEntry*>&
+        ri_by_parent_table(const std::string& table_alias) const;
+    const std::vector<const RiEntry*>&
+        ri_by_child_table(const std::string& table_alias) const;
 
     // ---- Field properties (M-DD-FIELD) ----------------------------------
     util::Result<void> set_field_property(const std::string& table,
@@ -229,7 +241,16 @@ public:
     const std::unordered_map<std::string, TriggerEntry>&
         triggers() const noexcept { return triggers_; }
     std::unordered_map<std::string, TriggerEntry>&
-        triggers()       noexcept { return triggers_; }
+        triggers()       noexcept {
+            invalidate_metadata_indexes_();
+            return triggers_;
+        }
+    const std::vector<const TriggerEntry*>&
+        triggers_for_table(const std::string& table_alias) const;
+    const std::vector<const TriggerEntry*>&
+        triggers_for_event(const std::string& table_alias,
+                           std::uint32_t event_mask,
+                           std::uint32_t timing) const;
 
     // ---- Stored procedures (M-DD-PROC) ----------------------------------
     struct ProcEntry {
@@ -334,7 +355,7 @@ public:
                                     const std::string& object_name) const;
 
     bool has_any_acl() const noexcept { return !permissions_.empty(); }
-    bool has_acl_for_object(const std::string& object_name) const noexcept;
+    bool has_acl_for_object(const std::string& object_name) const;
 
     struct EffectivePermEntry {
         std::string object_name;
@@ -371,6 +392,13 @@ public:
 
     const std::vector<PermissionEntry>&
         permissions() const noexcept { return permissions_; }
+    const std::vector<const PermissionEntry*>&
+        permissions_by_grantee(const std::string& grantee) const;
+    const std::vector<const PermissionEntry*>&
+        permissions_by_object(const std::string& object_name) const;
+    const PermissionEntry* find_permission(const std::string& grantee,
+                                           const std::string& obj_name,
+                                           int object_type_code) const;
 
     using FieldPropsMap = std::unordered_map<std::string,
                               std::unordered_map<std::string,
@@ -415,6 +443,16 @@ private:
                        std::unordered_map<std::string, int>>
                                                  table_perms_;
     std::vector<PermissionEntry>                 permissions_;
+    mutable bool                                 perm_indexes_valid_ = false;
+    mutable std::unordered_map<std::string,
+                               std::vector<const PermissionEntry*>>
+                                                 permissions_by_grantee_ci_;
+    mutable std::unordered_map<std::string,
+                               std::vector<const PermissionEntry*>>
+                                                 permissions_by_object_ci_;
+    mutable std::unordered_map<std::string,
+                               const PermissionEntry*>
+                                                 permissions_by_grantee_object_;
     std::unordered_map<std::string,
                        std::unordered_map<std::string,
                                           std::unordered_map<std::string, std::string>>>
@@ -424,6 +462,23 @@ private:
     std::unordered_map<std::string, FunctionEntry> functions_;
     std::unordered_map<std::string, ViewEntry>     views_;
 
+    // RCB 06/30/2026: Metadata consumers often need rows scoped to one table,
+    // group, RI parent/child, or trigger event. Keep these reverse lookups in
+    // the DD core so every API client avoids repeated full metadata scans.
+    mutable bool metadata_indexes_valid_ = false;
+    mutable std::unordered_map<std::string, std::vector<const IndexEntry*>>
+                                                 indexes_by_table_ci_;
+    mutable std::unordered_map<std::string, std::vector<std::string>>
+                                                 users_by_group_ci_;
+    mutable std::unordered_map<std::string, std::vector<const RiEntry*>>
+                                                 ri_by_parent_table_ci_;
+    mutable std::unordered_map<std::string, std::vector<const RiEntry*>>
+                                                 ri_by_child_table_ci_;
+    mutable std::unordered_map<std::string, std::vector<const TriggerEntry*>>
+                                                 triggers_by_table_ci_;
+    mutable std::unordered_map<std::string, std::vector<const TriggerEntry*>>
+                                                 triggers_by_event_ci_;
+
     // RCB 2026-06-27: The cache key is the normalized DD user name; this
     // keeps effective permissions stable for AdsSys/adssys/ADSSYS logins.
     // Per-user effective-permission cache: username -> object_name -> merged_bits.
@@ -432,7 +487,30 @@ private:
     mutable std::unordered_map<std::string,
                 std::unordered_map<std::string, uint32_t>> perm_cache_;
 
-    void invalidate_perm_cache_() noexcept { perm_cache_.clear(); }
+    void build_permission_indexes_() const;
+    void build_metadata_indexes_() const;
+    void invalidate_metadata_indexes_() noexcept {
+        metadata_indexes_valid_ = false;
+        indexes_by_table_ci_.clear();
+        users_by_group_ci_.clear();
+        ri_by_parent_table_ci_.clear();
+        ri_by_child_table_ci_.clear();
+        triggers_by_table_ci_.clear();
+        triggers_by_event_ci_.clear();
+    }
+    static std::string permission_key_(const std::string& grantee,
+                                       const std::string& obj_name,
+                                       int object_type_code);
+    static std::string trigger_event_key_(const std::string& table_alias,
+                                          std::uint32_t event_mask,
+                                          std::uint32_t timing);
+    void invalidate_perm_cache_() noexcept {
+        perm_cache_.clear();
+        perm_indexes_valid_ = false;
+        permissions_by_grantee_ci_.clear();
+        permissions_by_object_ci_.clear();
+        permissions_by_grantee_object_.clear();
+    }
 
     // SAP proprietary binary .add format state (set by load_add_binary_()).
     struct BinaryRecord {

@@ -31,21 +31,24 @@ if ($ddName === '' || $userName === '') {
 }
 
 $c    = $_SESSION['connections'][$ddName];
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
+$perf = api_perf_start();
 
 try {
     $conn = AdsConnection::connect($opts);
+    api_perf_mark($perf, 'connect');
 
     // ── Step 1: load all permissions for this user into a map ──────────────────
     // Key for top-level objects:  type . "\0" . lowercase(obj_name)
     // Key for field objects:      "4\0" . lowercase(parent) . "\0" . lowercase(obj_name)
     $permMap    = [];
     $canInherit = false;
-    $stmt = $conn->query('SELECT * FROM system.permissions');
+    // RCB 06/30/2026: Ask the server for this user's permission rows only.
+    // OpenADS pushes this predicate into system.permissions materialization, so
+    // DA-Web no longer forces every DD client to scan the full matrix locally.
+    $quser = api_sql_quote($userName);
+    $stmt = $conn->query("SELECT * FROM system.permissions WHERE GRANTEE = '$quser'");
     while ($row = $stmt->fetchAssoc()) {
-        if (strcasecmp((string)($row['GRANTEE'] ?? ''), $userName) !== 0) continue;
         $type   = (string)(int)($row['OBJ_TYPE'] ?? 0);
         $name   = strtolower(trim((string)($row['OBJ_NAME']  ?? '')));
         $parent = strtolower(trim((string)($row['PARENT']     ?? '')));
@@ -59,6 +62,7 @@ try {
         if (!$canInherit && ($row['INHERIT'] ?? '0') === '1') $canInherit = true;
     }
     $stmt->close();
+    api_perf_mark($perf, 'permissions');
 
     // ── Step 2: helper to build one output row ──────────────────────────────────
     // Any non-'0' value means granted (handles "1" normal and "2" admin level).
@@ -142,9 +146,14 @@ try {
         }
         $stmt->close();
     } catch (Throwable $e) {}
+    api_perf_mark($perf, 'objects');
 
     $conn->close();
-    echo json_encode(['data' => $rows, 'canInherit' => $canInherit]);
+    echo json_encode([
+        'data' => $rows,
+        'canInherit' => $canInherit,
+        'perf' => api_perf_finish($perf),
+    ]);
 } catch (Throwable $e) {
     api_exception(500, $e);
 }

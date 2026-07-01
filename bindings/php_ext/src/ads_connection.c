@@ -1,7 +1,20 @@
 #include "php_ads.h"
 #include "ads_arginfo.h"
 
+#include <ctype.h>
+
 zend_object_handlers ads_connection_handlers;
+
+static int ads_str_eq_ci(const char *s, size_t len, const char *lit)
+{
+    size_t i = 0;
+    for (; i < len && lit[i] != '\0'; ++i) {
+        if (tolower((unsigned char)s[i]) != tolower((unsigned char)lit[i])) {
+            return 0;
+        }
+    }
+    return i == len && lit[i] == '\0';
+}
 
 /* -----------------------------------------------------------------------
  * Object lifecycle
@@ -37,6 +50,7 @@ static void ads_connection_free_object(zend_object *obj)
  *   "user"       => username          (optional)
  *   "password"   => password          (optional)
  *   "serverType" => int bitmask       (default: ADS_LOCAL_SERVER|ADS_REMOTE_SERVER)
+ *   "server_type" / "connType" => "local" or "remote" alias
  *   "options"    => int ulOptions     (default: 0)
  * --------------------------------------------------------------------- */
 PHP_METHOD(AdsConnection, connect)
@@ -78,6 +92,20 @@ PHP_METHOD(AdsConnection, connect)
     zv = zend_hash_str_find(ht, "serverType", sizeof("serverType") - 1);
     if (zv) {
         usServerType = (UNSIGNED16)zval_get_long(zv);
+    } else {
+        zv = zend_hash_str_find(ht, "server_type", sizeof("server_type") - 1);
+        if (!zv) {
+            zv = zend_hash_str_find(ht, "connType", sizeof("connType") - 1);
+        }
+        if (zv && Z_TYPE_P(zv) == IS_STRING) {
+            const char *st = Z_STRVAL_P(zv);
+            size_t st_len = Z_STRLEN_P(zv);
+            if (ads_str_eq_ci(st, st_len, "remote")) {
+                usServerType = ADS_REMOTE_SERVER;
+            } else if (ads_str_eq_ci(st, st_len, "local")) {
+                usServerType = ADS_LOCAL_SERVER;
+            }
+        }
     }
 
     /* Optional: ulOptions */

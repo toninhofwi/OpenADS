@@ -21,9 +21,7 @@ if ($table === '') {
 api_validate_identifier($table, 'table name');
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 // ── ADS trigger helper (returns trigger list via API) ────────────────────────
 function readTriggers(AdsConnection $conn, AdsDictionary $dict2, string $table): array {

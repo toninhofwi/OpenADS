@@ -2146,6 +2146,7 @@ DataDict::add_index_file(const std::string& table_alias,
     e.index_path  = index_path;
     e.comment     = comment;
     indexes_.push_back(std::move(e));
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2159,6 +2160,7 @@ DataDict::remove_index_file(const std::string& table_alias,
                        e.index_path  == index_path;
             }),
         indexes_.end());
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2193,6 +2195,7 @@ util::Result<void> DataDict::delete_user(const std::string& user) {
     users_.erase(lo);
     memberships_.erase(lo);
     user_props_.erase(lo);
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2213,6 +2216,7 @@ DataDict::add_user_to_group(const std::string& user,
         group[2] == ':')
         groups_.insert(group);
     memberships_[ci_name(user)].insert(group);
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2226,6 +2230,7 @@ DataDict::remove_user_from_group(const std::string& user,
         it->second.erase(group);
         if (it->second.empty()) memberships_.erase(it);
     }
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2258,6 +2263,7 @@ util::Result<void> DataDict::delete_group(const std::string& group) {
     groups_.erase(group);
     // Remove all memberships referencing this group.
     for (auto& [u, gs] : memberships_) gs.erase(group);
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2299,11 +2305,13 @@ util::Result<void> DataDict::create_ri(const RiEntry& e) {
     if (e.name.empty())
         return util::Error{5000, 0, "DD RI name empty", ""};
     ri_[e.name] = e;
+    invalidate_metadata_indexes_();
     return save();
 }
 
 util::Result<void> DataDict::remove_ri(const std::string& name) {
     ri_.erase(name);
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2463,11 +2471,178 @@ static bool has_ci_group(const std::unordered_set<std::string>& groups,
 
 } // namespace
 
-bool DataDict::has_acl_for_object(const std::string& object_name) const noexcept {
+bool DataDict::has_acl_for_object(const std::string& object_name) const {
+    return !permissions_by_object(object_name).empty();
+}
+
+std::string DataDict::permission_key_(const std::string& grantee,
+                                      const std::string& obj_name,
+                                      int object_type_code) {
+    return ci_name(grantee) + '\x1f' + ci_name(obj_name) + '\x1f' +
+           std::to_string(object_type_code);
+}
+
+void DataDict::build_permission_indexes_() const {
+    if (perm_indexes_valid_) return;
+    permissions_by_grantee_ci_.clear();
+    permissions_by_object_ci_.clear();
+    permissions_by_grantee_object_.clear();
+    permissions_by_grantee_ci_.reserve(permissions_.size());
+    permissions_by_object_ci_.reserve(permissions_.size());
+    permissions_by_grantee_object_.reserve(permissions_.size());
+
+    // RCB 06/30/2026: Build DD permission indexes in core so local and remote
+    // clients share one fast metadata path instead of each UI scanning the full
+    // system.permissions compatibility surface independently.
     for (const auto& pe : permissions_) {
-        if (pe.object_name == object_name) return true;
+        permissions_by_grantee_ci_[ci_name(pe.grantee)].push_back(&pe);
+        permissions_by_object_ci_[ci_name(pe.object_name)].push_back(&pe);
+        permissions_by_grantee_object_.emplace(
+            permission_key_(pe.grantee, pe.object_name, pe.object_type_code),
+            &pe);
     }
-    return false;
+    perm_indexes_valid_ = true;
+}
+
+const std::vector<const DataDict::PermissionEntry*>&
+DataDict::permissions_by_grantee(const std::string& grantee) const {
+    build_permission_indexes_();
+    static const std::vector<const PermissionEntry*> kEmpty;
+    auto it = permissions_by_grantee_ci_.find(ci_name(grantee));
+    return it == permissions_by_grantee_ci_.end() ? kEmpty : it->second;
+}
+
+const std::vector<const DataDict::PermissionEntry*>&
+DataDict::permissions_by_object(const std::string& object_name) const {
+    build_permission_indexes_();
+    static const std::vector<const PermissionEntry*> kEmpty;
+    auto it = permissions_by_object_ci_.find(ci_name(object_name));
+    return it == permissions_by_object_ci_.end() ? kEmpty : it->second;
+}
+
+const DataDict::PermissionEntry*
+DataDict::find_permission(const std::string& grantee,
+                          const std::string& obj_name,
+                          int object_type_code) const {
+    build_permission_indexes_();
+    auto it = permissions_by_grantee_object_.find(
+        permission_key_(grantee, obj_name, object_type_code));
+    return it == permissions_by_grantee_object_.end() ? nullptr : it->second;
+}
+
+std::string DataDict::trigger_event_key_(const std::string& table_alias,
+                                         std::uint32_t event_mask,
+                                         std::uint32_t timing) {
+    return ci_name(table_alias) + '\x1f' + std::to_string(event_mask) + '\x1f' +
+           std::to_string(timing);
+}
+
+void DataDict::build_metadata_indexes_() const {
+    if (metadata_indexes_valid_) return;
+    indexes_by_table_ci_.clear();
+    users_by_group_ci_.clear();
+    ri_by_parent_table_ci_.clear();
+    ri_by_child_table_ci_.clear();
+    triggers_by_table_ci_.clear();
+    triggers_by_event_ci_.clear();
+    indexes_by_table_ci_.reserve(indexes_.size());
+    users_by_group_ci_.reserve(memberships_.size());
+    ri_by_parent_table_ci_.reserve(ri_.size());
+    ri_by_child_table_ci_.reserve(ri_.size());
+    triggers_by_table_ci_.reserve(triggers_.size());
+    triggers_by_event_ci_.reserve(triggers_.size());
+
+    // RCB 06/30/2026: These secondary DD indexes are intentionally small and
+    // lazy. They avoid scanning all metadata on common client queries while
+    // keeping DD load and save behavior simple.
+    for (const auto& e : indexes_)
+        indexes_by_table_ci_[ci_name(e.table_alias)].push_back(&e);
+
+    for (const auto& [user, groups] : memberships_) {
+        for (const auto& group : groups)
+            users_by_group_ci_[ci_name(group)].push_back(user);
+    }
+    for (auto& [group, users] : users_by_group_ci_)
+        std::sort(users.begin(), users.end());
+
+    for (const auto& [name, rule] : ri_) {
+        (void)name;
+        ri_by_parent_table_ci_[ci_name(rule.parent)].push_back(&rule);
+        ri_by_child_table_ci_[ci_name(rule.child)].push_back(&rule);
+    }
+
+    for (const auto& [name, trig] : triggers_) {
+        (void)name;
+        triggers_by_table_ci_[ci_name(trig.table_alias)].push_back(&trig);
+        if (trig.enabled) {
+            triggers_by_event_ci_[trigger_event_key_(
+                trig.table_alias, trig.event_mask, trig.timing)].push_back(&trig);
+        }
+    }
+    auto by_priority = [](const TriggerEntry* a, const TriggerEntry* b) {
+        return a->priority < b->priority;
+    };
+    for (auto& [table, list] : triggers_by_table_ci_) {
+        (void)table;
+        std::sort(list.begin(), list.end(), by_priority);
+    }
+    for (auto& [event_key, list] : triggers_by_event_ci_) {
+        (void)event_key;
+        std::sort(list.begin(), list.end(), by_priority);
+    }
+
+    metadata_indexes_valid_ = true;
+}
+
+const std::vector<const DataDict::IndexEntry*>&
+DataDict::indexes_for_table(const std::string& table_alias) const {
+    build_metadata_indexes_();
+    static const std::vector<const IndexEntry*> kEmpty;
+    auto it = indexes_by_table_ci_.find(ci_name(table_alias));
+    return it == indexes_by_table_ci_.end() ? kEmpty : it->second;
+}
+
+const std::vector<std::string>&
+DataDict::users_in_group(const std::string& group) const {
+    build_metadata_indexes_();
+    static const std::vector<std::string> kEmpty;
+    auto it = users_by_group_ci_.find(ci_name(group));
+    return it == users_by_group_ci_.end() ? kEmpty : it->second;
+}
+
+const std::vector<const DataDict::RiEntry*>&
+DataDict::ri_by_parent_table(const std::string& table_alias) const {
+    build_metadata_indexes_();
+    static const std::vector<const RiEntry*> kEmpty;
+    auto it = ri_by_parent_table_ci_.find(ci_name(table_alias));
+    return it == ri_by_parent_table_ci_.end() ? kEmpty : it->second;
+}
+
+const std::vector<const DataDict::RiEntry*>&
+DataDict::ri_by_child_table(const std::string& table_alias) const {
+    build_metadata_indexes_();
+    static const std::vector<const RiEntry*> kEmpty;
+    auto it = ri_by_child_table_ci_.find(ci_name(table_alias));
+    return it == ri_by_child_table_ci_.end() ? kEmpty : it->second;
+}
+
+const std::vector<const DataDict::TriggerEntry*>&
+DataDict::triggers_for_table(const std::string& table_alias) const {
+    build_metadata_indexes_();
+    static const std::vector<const TriggerEntry*> kEmpty;
+    auto it = triggers_by_table_ci_.find(ci_name(table_alias));
+    return it == triggers_by_table_ci_.end() ? kEmpty : it->second;
+}
+
+const std::vector<const DataDict::TriggerEntry*>&
+DataDict::triggers_for_event(const std::string& table_alias,
+                             std::uint32_t event_mask,
+                             std::uint32_t timing) const {
+    build_metadata_indexes_();
+    static const std::vector<const TriggerEntry*> kEmpty;
+    auto it = triggers_by_event_ci_.find(
+        trigger_event_key_(table_alias, event_mask, timing));
+    return it == triggers_by_event_ci_.end() ? kEmpty : it->second;
 }
 
 // Build the effective-permission cache for the named user.
@@ -2499,12 +2674,12 @@ void DataDict::build_perm_cache(const std::string& username) const {
     // here — we need the sentinel bit preserved so get_effective_permission()
     // can distinguish level 4 from level 3.  Expansion happens at check time.
     std::unordered_map<std::string, uint32_t> obj_bits;
-    for (const auto& pe : permissions_) {
-        if (principals.find(pe.grantee) == principals.end() &&
-            principals.find(ci_name(pe.grantee)) == principals.end()) {
-            continue;
+    std::unordered_set<const PermissionEntry*> seen;
+    for (const auto& principal : principals) {
+        for (const auto* pe : permissions_by_grantee(principal)) {
+            if (seen.insert(pe).second)
+                obj_bits[pe->object_name] |= pe->bitmask;
         }
-        obj_bits[pe.object_name] |= pe.bitmask;
     }
     perm_cache_[lo] = std::move(obj_bits);
 }
@@ -2593,9 +2768,21 @@ DataDict::get_all_effective_perms(const std::string& username) const {
     // Build object_type lookup from the raw permission entries.
     std::unordered_map<std::string, std::string> obj_type_map;
     std::unordered_map<std::string, int>          obj_code_map;
-    for (const auto& pe : permissions_) {
-        obj_type_map[pe.object_name] = pe.object_type;
-        obj_code_map[pe.object_name] = pe.object_type_code;
+    std::unordered_set<const PermissionEntry*> seen_entries;
+    std::unordered_set<std::string> principals{lo};
+    auto mg = memberships_.find(lo);
+    if (mg != memberships_.end()) {
+        for (const auto& g : mg->second) {
+            principals.insert(g);
+            principals.insert(ci_name(g));
+        }
+    }
+    for (const auto& principal : principals) {
+        for (const auto* pe : permissions_by_grantee(principal)) {
+            if (!seen_entries.insert(pe).second) continue;
+            obj_type_map[pe->object_name] = pe->object_type;
+            obj_code_map[pe->object_name] = pe->object_type_code;
+        }
     }
 
     const auto& user_map = perm_cache_.at(lo);
@@ -2691,6 +2878,7 @@ util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
     if (e.name.empty() || e.table_alias.empty())
         return util::Error{5000, 0, "DD trigger name/table empty", ""};
     triggers_[e.table_alias + "::" + e.name] = e;
+    invalidate_metadata_indexes_();
     return save();
 }
 
@@ -2702,6 +2890,7 @@ util::Result<void> DataDict::drop_trigger(const std::string& name) {
         if (ep) erase_key = ep->table_alias + "::" + ep->name;
     }
     triggers_.erase(erase_key);
+    invalidate_metadata_indexes_();
     return save();
 }
 

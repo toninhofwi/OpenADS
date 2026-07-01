@@ -320,6 +320,9 @@ html, body {
 /* RCB 06/27/2026: Table property branch uses an ASCII fallback to avoid
    adding another icon-font dependency. */
 .jstree-icon-properties::before { content: "#"; font-style: normal; font-weight: 700; color: #89b4fa; }
+/* RCB 06/30/2026: Health is a DD-level admin check surface, so use a simple
+   ASCII mark that remains readable when emoji fonts are unavailable. */
+.jstree-icon-health::before     { content: "+"; font-style: normal; font-weight: 700; color: #a6e3a1; }
 
 /* ── Status bar ───────────────────────────────────────────────────────────── */
 #statusbar {
@@ -335,6 +338,80 @@ html, body {
 }
 
 #statusbar span { white-space: nowrap; }
+
+/* DD Health panel */
+.health-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  min-height: 0;
+}
+
+.health-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #a6adc8;
+  flex-wrap: wrap;
+}
+
+.health-note {
+  font-size: 11px;
+  color: #f9e2af;
+}
+
+.health-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.health-count {
+  border: 1px solid #313244;
+  background: #181825;
+  border-radius: 4px;
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 42px;
+}
+
+.health-count span {
+  color: #a6adc8;
+}
+
+.health-count strong {
+  font-size: 20px;
+  color: #cdd6f4;
+}
+
+.health-count.error strong { color: #f38ba8; }
+.health-count.warning strong { color: #f9e2af; }
+.health-count.info strong { color: #89b4fa; }
+.health-count.ok strong { color: #a6e3a1; }
+
+.health-grid {
+  min-height: 260px;
+  flex: 1;
+}
+
+.health-sev {
+  display: inline-block;
+  min-width: 58px;
+  text-align: center;
+  border-radius: 3px;
+  padding: 2px 6px;
+  color: #1e1e2e;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.health-sev.error { background: #f38ba8; }
+.health-sev.warning { background: #f9e2af; }
+.health-sev.info { background: #89b4fa; }
+.health-sev.ok { background: #a6e3a1; }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
 .btn {

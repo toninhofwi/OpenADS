@@ -3135,8 +3135,9 @@ openads::util::Result<void> ri_check_insert(Connection* conn, Table& child) {
     std::string child_alias = ri_alias_for_path(conn, child.path());
     if (child_alias.empty()) return {};
 
-    for (auto& [rname, rule] : dd->ri()) {
-        if (rule.child != child_alias) continue;
+    for (const auto* rulep : dd->ri_by_child_table(child_alias)) {
+        const auto& rule = *rulep;
+        const std::string& rname = rule.name;
         // rule.parent_tag is the parent index tag name; by convention (single-field
         // PK/FK) the same name identifies the FK field in the child.
         std::string fk_val = ri_trim(ri_read_field(child, rule.parent_tag));
@@ -3173,8 +3174,9 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
     std::string parent_alias = ri_alias_for_path(conn, parent.path());
     if (parent_alias.empty()) return {};
 
-    for (auto& [rname, rule] : dd->ri()) {
-        if (rule.parent != parent_alias) continue;
+    for (const auto* rulep : dd->ri_by_parent_table(parent_alias)) {
+        const auto& rule = *rulep;
+        const std::string& rname = rule.name;
         std::string pk_val = ri_trim(ri_read_field(parent, rule.parent_tag));
         if (pk_val.empty()) continue;
 
@@ -3261,15 +3263,12 @@ void snapshot_ri_pks(Table* t) {
     if (!dd || dd->ri().empty()) return;
     std::string alias = ri_alias_for_path(conn, t->path());
     if (alias.empty()) return;
-    bool is_parent = false;
-    for (auto& [rname, rule] : dd->ri()) {
-        if (rule.parent == alias) { is_parent = true; break; }
-    }
-    if (!is_parent) return;
+    const auto& parent_rules = dd->ri_by_parent_table(alias);
+    if (parent_rules.empty()) return;
     auto& snap = t->ri_snapshot();
     snap.clear();
-    for (auto& [rname, rule] : dd->ri()) {
-        if (rule.parent != alias) continue;
+    for (const auto* rulep : parent_rules) {
+        const auto& rule = *rulep;
         snap[rule.parent_tag] = ri_trim(ri_read_field(*t, rule.parent_tag));
     }
 }
@@ -4183,8 +4182,9 @@ openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
     std::string parent_alias = ri_alias_for_path(conn, parent.path());
     if (parent_alias.empty()) return {};
 
-    for (auto& [rname, rule] : dd->ri()) {
-        if (rule.parent != parent_alias) continue;
+    for (const auto* rulep : dd->ri_by_parent_table(parent_alias)) {
+        const auto& rule = *rulep;
+        const std::string& rname = rule.name;
 
         unsigned upd_opt = ADS_DD_RI_RESTRICT;
         if (!rule.update_opt.empty()) {
@@ -8222,30 +8222,11 @@ bool fire_triggers_(Handle hConn, Connection* conn,
     auto* dd = conn->dd();
     if (!dd) return false;
 
-    using TE = openads::engine::DataDict::TriggerEntry;
-    std::vector<const TE*> matched;
-    for (const auto& [name, trig] : dd->triggers()) {
-        if (!trig.enabled) continue;
-        if (trig.event_mask != event_mask) continue;
-        if (trig.timing != timing) continue;
-        // case-insensitive alias compare
-        const auto& ta = trig.table_alias;
-        if (ta.size() != table_alias.size()) continue;
-        bool match = true;
-        for (std::size_t i = 0; i < ta.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(ta[i])) !=
-                std::tolower(static_cast<unsigned char>(table_alias[i]))) {
-                match = false; break;
-            }
-        }
-        if (!match) continue;
-        matched.push_back(&trig);
-    }
+    // RCB 06/30/2026: Trigger firing is on every DML path, so ask the DD for
+    // enabled triggers already scoped by table/event/timing and sorted by
+    // priority instead of scanning the full trigger catalogue for each row.
+    const auto& matched = dd->triggers_for_event(table_alias, event_mask, timing);
     if (matched.empty()) return false;
-
-    // Sort by priority ascending (lower priority number fires first)
-    std::sort(matched.begin(), matched.end(),
-              [](const TE* a, const TE* b){ return a->priority < b->priority; });
 
     // Collect __new / __old field values if WANT_VALUES option is set (bit 0x01).
     // If any trigger in the set requires values, collect them for all.
@@ -12103,7 +12084,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
         return false;
     };
 
-    // RCB 06/27/2026: Support the table properties DA-Web now exposes.
+    // RCB 06/27/2026: Support SAP-style DD table properties for any client
+    // using the ACE-compatible table-property API.
     if (usProp == ADS_DD_COMMENT ||
         usProp == ADS_DD_USER_DEFINED_PROP ||
         usProp == ADS_DD_TABLE_VALIDATION_EXPR ||
@@ -15742,10 +15724,76 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
 // _sys_*.adt scratch files to disk. This stops data-directory leaks, removes
 // the pointless DD-memory -> disk -> cursor round trip, and keeps client
 // behavior stable because the SQL executor still receives a normal Table.
+extern "C++" {
+
+namespace {
+
+struct SystemTableFilter {
+    std::optional<std::string> grantee;
+    std::optional<std::string> object_name;
+    std::optional<std::string> table_name;
+    std::optional<std::string> group_name;
+    std::optional<std::string> user_name;
+};
+
+extern "C++" std::optional<SystemTableFilter>
+extract_system_table_filter_(const openads::sql::SelectStmt& st) {
+    if (!st.where) return std::nullopt;
+    SystemTableFilter filter;
+    bool found = false;
+
+    auto visit = [&](const openads::sql::WhereExpr& node,
+                     auto&& visit_ref) -> bool {
+        using Kind = openads::sql::WhereExpr::Kind;
+        if (node.kind == Kind::And) {
+            bool ok = true;
+            for (const auto& child : node.children) {
+                if (child) ok = visit_ref(*child, visit_ref) && ok;
+            }
+            return ok;
+        }
+        if (node.kind != Kind::Cmp) return false;
+        const auto& cmp = node.cmp;
+        if (cmp.op != openads::sql::WhereOp::Eq ||
+            cmp.lhs_fn != openads::sql::WhereFn::None ||
+            !cmp.column_alias.empty() || cmp.is_numeric ||
+            cmp.subquery || cmp.is_outer_ref) {
+            return true;
+        }
+        std::string col = cmp.column;
+        for (auto& ch : col)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (col == "grantee") {
+            filter.grantee = cmp.literal;
+            found = true;
+        } else if (col == "obj_name") {
+            filter.object_name = cmp.literal;
+            found = true;
+        } else if (col == "table_name") {
+            filter.table_name = cmp.literal;
+            found = true;
+        } else if (col == "group_name") {
+            filter.group_name = cmp.literal;
+            found = true;
+        } else if (col == "user_name") {
+            filter.user_name = cmp.literal;
+            found = true;
+        }
+        return true;
+    };
+
+    if (!visit(*st.where, visit) || !found) return std::nullopt;
+    return filter;
+}
+
+} // namespace
+
 // Build a read-only memory table that materialises one of the system.*
 // virtual tables from the connection's DataDict state. `sys_name` is the part
 // after "system." (already lower-cased by the caller).
-extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std::string sys_name) {
+extern "C++" openads::util::Result<Table>
+build_system_table(Connection* c, std::string sys_name,
+                   const SystemTableFilter* filter = nullptr) {
     for (auto& ch : sys_name) ch = static_cast<char>(
         std::tolower(static_cast<unsigned char>(ch)));
 
@@ -15898,9 +15946,16 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
             {"COMMENT",    'C', 200, 0},
         };
         std::vector<std::vector<std::string>> rows;
-        for (const auto& e : dd->indexes()) {
-            if (!dd_can_view_object_metadata(c, e.table_alias)) continue;
+        auto add_index_row = [&](const auto& e) {
+            if (!dd_can_view_object_metadata(c, e.table_alias)) return;
             rows.push_back({e.table_alias, e.index_path, e.comment});
+        };
+        if (filter && filter->table_name) {
+            for (const auto* e : dd->indexes_for_table(*filter->table_name))
+                add_index_row(*e);
+        } else {
+            for (const auto& e : dd->indexes())
+                add_index_row(e);
         }
         return build(cols, rows);
     }
@@ -15958,8 +16013,8 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
                                 const std::string& alias,
                                 const std::string& tag) -> std::string {
             std::vector<std::string> bags;
-            for (const auto& ie : dd->indexes())
-                if (ie.table_alias == alias) bags.push_back(ie.index_path);
+            for (const auto* ie : dd->indexes_for_table(alias))
+                bags.push_back(ie->index_path);
             {
                 fs::path tp(table_rel);
                 std::string ext = tp.extension().string();
@@ -15991,6 +16046,10 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         for (const auto& kv : dd->tables()) {
             const std::string& alias = kv.first;
             const std::string& rel   = kv.second;
+            if (filter && filter->table_name &&
+                openads::engine::DataDict::ci_name(alias) !=
+                    openads::engine::DataDict::ci_name(*filter->table_name))
+                continue;
             if (!dd_can_view_object_metadata(c, alias)) continue;
             std::string tag = dd->get_table_property(alias, 202);
             if (tag.empty()) continue;
@@ -16027,11 +16086,18 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         const std::vector<Col> cols = {{"GROUP_NAME", 'C', 200, 0}};
         std::unordered_set<std::string> seen;
         std::vector<std::vector<std::string>> rows;
-        for (const auto& g : dd->groups())
+        auto add_group_row = [&](const std::string& g) {
+            if (filter && filter->group_name &&
+                openads::engine::DataDict::ci_name(g) !=
+                    openads::engine::DataDict::ci_name(*filter->group_name))
+                return;
             if (seen.insert(g).second) rows.push_back({g});
+        };
+        for (const auto& g : dd->groups())
+            add_group_row(g);
         for (const auto& kv : dd->memberships())
             for (const auto& g : kv.second)
-                if (seen.insert(g).second) rows.push_back({g});
+                add_group_row(g);
         return build(cols, rows);
     }
     if (sys_name == "usergroupmembers") {
@@ -16041,9 +16107,151 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
             {"USER_NAME",  'C', 200, 0},
         };
         std::vector<std::vector<std::string>> rows;
-        for (const auto& kv : dd->memberships())
-            for (const auto& grp : kv.second)
-                rows.push_back({grp, kv.first});   // group, user
+        if (filter && filter->group_name) {
+            for (const auto& user : dd->users_in_group(*filter->group_name))
+                if (!filter->user_name ||
+                    openads::engine::DataDict::ci_name(user) ==
+                        openads::engine::DataDict::ci_name(*filter->user_name))
+                    rows.push_back({*filter->group_name, user});
+        } else if (filter && filter->user_name) {
+            for (const auto& grp : dd->groups_of(*filter->user_name))
+                rows.push_back({grp, openads::engine::DataDict::ci_name(*filter->user_name)});
+        } else {
+            for (const auto& kv : dd->memberships())
+                for (const auto& grp : kv.second)
+                    rows.push_back({grp, kv.first});   // group, user
+        }
+        return build(cols, rows);
+    }
+    if (sys_name == "permission_grants") {
+        // RCB 06/30/2026: Expose only persisted DD permission grants for
+        // health checks and administration clients. system.permissions keeps
+        // SAP-compatible zero rows, but that compatibility surface is too
+        // expensive for clients that only need actual grant records.
+        const std::vector<Col> cols = {
+            {"OBJ_NAME",      'C', 200, 0},
+            {"OBJ_TYPE",      'N',   3, 0},
+            {"OBJ_TYPE_NAME", 'C',  40, 0},
+            {"GRANTEE",       'C', 200, 0},
+            {"GRANTEE_TYPE",  'C',  10, 0},
+            {"BITMASK",       'C',  20, 0},
+        };
+
+        std::vector<const openads::engine::DataDict::PermissionEntry*> perm_src;
+        if (filter && filter->grantee && filter->object_name) {
+            auto by_grantee = dd->permissions_by_grantee(*filter->grantee);
+            perm_src.reserve(by_grantee.size());
+            const auto obj_ci = openads::engine::DataDict::ci_name(*filter->object_name);
+            for (const auto* pe : by_grantee) {
+                if (openads::engine::DataDict::ci_name(pe->object_name) == obj_ci)
+                    perm_src.push_back(pe);
+            }
+        } else if (filter && filter->grantee) {
+            auto by_grantee = dd->permissions_by_grantee(*filter->grantee);
+            perm_src.assign(by_grantee.begin(), by_grantee.end());
+        } else if (filter && filter->object_name) {
+            auto by_object = dd->permissions_by_object(*filter->object_name);
+            perm_src.assign(by_object.begin(), by_object.end());
+        } else {
+            perm_src.reserve(dd->permissions().size());
+            for (const auto& pe : dd->permissions())
+                perm_src.push_back(&pe);
+        }
+
+        std::vector<std::vector<std::string>> rows;
+        rows.reserve(perm_src.size());
+        for (const auto* pe : perm_src) {
+            rows.push_back({
+                pe->object_name,
+                std::to_string(pe->object_type_code),
+                pe->object_type,
+                pe->grantee,
+                pe->grantee_is_group ? "GROUP" : "USER",
+                std::to_string(pe->bitmask),
+            });
+        }
+        return build(cols, rows);
+    }
+    if (sys_name == "permission_issues") {
+        // RCB 06/30/2026: Run permission-grant health checks in core so
+        // remote administration clients receive only findings instead of
+        // pulling every grant row across the client/server boundary.
+        const std::vector<Col> cols = {
+            {"SEVERITY", 'C',  20, 0},
+            {"AREA",     'C',  40, 0},
+            {"OBJECT",   'C', 200, 0},
+            {"MESSAGE",  'C', 250, 0},
+            {"DETAIL",   'C', 250, 0},
+        };
+
+        std::unordered_set<std::string> users_ci;
+        std::unordered_set<std::string> groups_ci;
+        std::unordered_set<std::string> objects_ci;
+        users_ci.reserve(dd->users().size());
+        groups_ci.reserve(dd->groups().size() + 4);
+        objects_ci.reserve(dd->tables().size() + dd->views().size() +
+                           dd->procs().size() + dd->functions().size() +
+                           dd->links().size() + dd->users().size() +
+                           dd->groups().size() + 8);
+
+        for (const auto& u : dd->users()) {
+            users_ci.insert(openads::engine::DataDict::ci_name(u));
+            objects_ci.insert(openads::engine::DataDict::ci_name(u));
+        }
+        for (const auto& g : dd->groups()) {
+            groups_ci.insert(openads::engine::DataDict::ci_name(g));
+            objects_ci.insert(openads::engine::DataDict::ci_name(g));
+        }
+        for (const auto& g : {"DB:Admin", "DB:Backup", "DB:Debug", "DB:Public"})
+            groups_ci.insert(openads::engine::DataDict::ci_name(g));
+        for (const auto& [name, _] : dd->tables())
+            objects_ci.insert(openads::engine::DataDict::ci_name(name));
+        for (const auto& [name, _] : dd->views())
+            objects_ci.insert(openads::engine::DataDict::ci_name(name));
+        for (const auto& [name, _] : dd->procs())
+            objects_ci.insert(openads::engine::DataDict::ci_name(name));
+        for (const auto& [name, _] : dd->functions())
+            objects_ci.insert(openads::engine::DataDict::ci_name(name));
+        for (const auto& [name, _] : dd->links())
+            objects_ci.insert(openads::engine::DataDict::ci_name(name));
+        objects_ci.insert("database");
+
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& pe : dd->permissions()) {
+            const auto grantee_ci =
+                openads::engine::DataDict::ci_name(pe.grantee);
+            if (!users_ci.count(grantee_ci) && !groups_ci.count(grantee_ci)) {
+                rows.push_back({
+                    "warning",
+                    "Permissions",
+                    pe.grantee,
+                    "Permission grant references a missing user or group.",
+                    pe.object_name,
+                });
+            }
+
+            bool object_known = false;
+            const auto obj_ci =
+                openads::engine::DataDict::ci_name(pe.object_name);
+            if (pe.object_type == "User") {
+                object_known = users_ci.count(obj_ci) != 0;
+            } else if (pe.object_type == "Group") {
+                object_known = groups_ci.count(obj_ci) != 0;
+            } else if (pe.object_type == "Database") {
+                object_known = true;
+            } else {
+                object_known = objects_ci.count(obj_ci) != 0;
+            }
+            if (!pe.object_name.empty() && !object_known) {
+                rows.push_back({
+                    "warning",
+                    "Permissions",
+                    pe.object_name,
+                    "Permission grant references a missing DD object.",
+                    pe.grantee,
+                });
+            }
+        }
         return build(cols, rows);
     }
     if (sys_name == "permissions") {
@@ -16170,8 +16378,29 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         };
 
         std::unordered_set<std::string> seen_top;
+        std::vector<const openads::engine::DataDict::PermissionEntry*> perm_src;
+        if (filter && filter->grantee && filter->object_name) {
+            auto by_grantee = dd->permissions_by_grantee(*filter->grantee);
+            perm_src.reserve(by_grantee.size());
+            const auto obj_ci = openads::engine::DataDict::ci_name(*filter->object_name);
+            for (const auto* pe : by_grantee) {
+                if (openads::engine::DataDict::ci_name(pe->object_name) == obj_ci)
+                    perm_src.push_back(pe);
+            }
+        } else if (filter && filter->grantee) {
+            auto by_grantee = dd->permissions_by_grantee(*filter->grantee);
+            perm_src.assign(by_grantee.begin(), by_grantee.end());
+        } else if (filter && filter->object_name) {
+            auto by_object = dd->permissions_by_object(*filter->object_name);
+            perm_src.assign(by_object.begin(), by_object.end());
+        } else {
+            perm_src.reserve(dd->permissions().size());
+            for (const auto& pe : dd->permissions())
+                perm_src.push_back(&pe);
+        }
 
-        for (const auto& pe : dd->permissions()) {
+        for (const auto* pe_ptr : perm_src) {
+            const auto& pe = *pe_ptr;
             const std::string type_code = std::to_string(pe.object_type_code);
             if (!seen_top.insert(top_key(pe.grantee, pe.object_name,
                                          type_code)).second)
@@ -16249,13 +16478,33 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
         struct Grantee { std::string name; bool is_group; };
         std::vector<Grantee> grantees;
         grantees.reserve(dd->users().size() + dd->groups().size());
-        for (const auto& u : dd->users())
+        for (const auto& u : dd->users()) {
+            if (filter && filter->grantee &&
+                openads::engine::DataDict::ci_name(u) !=
+                    openads::engine::DataDict::ci_name(*filter->grantee))
+                continue;
             grantees.push_back({u, false});
-        for (const auto& g : dd->groups())
+        }
+        for (const auto& g : dd->groups()) {
+            if (filter && filter->grantee &&
+                openads::engine::DataDict::ci_name(g) !=
+                    openads::engine::DataDict::ci_name(*filter->grantee))
+                continue;
             grantees.push_back({g, true});
+        }
 
+        // RCB 06/30/2026: Direct permission existence is now checked through
+        // DataDict's indexed lookup, so compatibility zero rows do not depend
+        // on rescanning all DD Permission entries for each grantee/object pair.
         for (const auto& gr : grantees) {
             for (const auto& obj : objects) {
+                if (filter && filter->object_name &&
+                    openads::engine::DataDict::ci_name(obj.name) !=
+                        openads::engine::DataDict::ci_name(*filter->object_name))
+                    continue;
+                if (dd->find_permission(gr.name, obj.name,
+                                        std::stoi(obj.code)) != nullptr)
+                    continue;
                 const auto key = top_key(gr.name, obj.name, obj.code);
                 if (!seen_top.insert(key).second) continue;
                 emit_top_row(obj.name, obj.code, obj.type, gr.name, gr.is_group,
@@ -16406,9 +16655,8 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
             return "";
         };
         std::vector<std::vector<std::string>> rows;
-        for (const auto& kv : dd->triggers()) {
-            const auto& e = kv.second;
-            if (!dd_can_view_object_metadata(c, e.table_alias)) continue;
+        auto add_trigger_row = [&](const auto& e) {
+            if (!dd_can_view_object_metadata(c, e.table_alias)) return;
             rows.push_back({e.name, e.table_alias,
                             std::to_string(e.event_mask),
                             timing_str(e.timing),
@@ -16417,6 +16665,13 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
                             std::to_string(e.priority),
                             e.enabled ? "T" : "F",
                             std::to_string(e.options)});
+        };
+        if (filter && filter->table_name) {
+            for (const auto* e : dd->triggers_for_table(*filter->table_name))
+                add_trigger_row(*e);
+        } else {
+            for (const auto& kv : dd->triggers())
+                add_trigger_row(kv.second);
         }
         return build(cols, rows);
     }
@@ -16518,6 +16773,8 @@ extern "C++" openads::util::Result<Table> build_system_table(Connection* c, std:
     }
     return openads::util::Error{openads::AE_NO_FILE_FOUND, 0, sys_name, ""};
 }
+
+} // extern "C++"
 
 // Dispatch for ADS built-in sp_* stored procedures. Returns true and sets *prc
 // if the name was recognized; caller falls through to the DLL path otherwise.
@@ -17462,7 +17719,7 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 
     // Open a table by name, transparently resolving "system.*" virtual tables
     // to memory tables materialized from DD state.
-    auto open_or_sys = [c](const std::string& tname,
+    auto open_or_sys = [c, &sql](const std::string& tname,
                             openads::engine::TableType  ttype,
                             openads::engine::OpenMode   omode,
                             openads::engine::LockingMode lmode)
@@ -17473,7 +17730,12 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
             for (auto& ch : px) ch = static_cast<char>(
                 std::tolower(static_cast<unsigned char>(ch)));
             if (px == "system.") {
-                auto mt = build_system_table(c, tname.substr(7));
+                std::optional<SystemTableFilter> filter;
+                if (auto parsed_for_filter = openads::sql::parse_select(sql)) {
+                    filter = extract_system_table_filter_(parsed_for_filter.value());
+                }
+                auto mt = build_system_table(
+                    c, tname.substr(7), filter ? &filter.value() : nullptr);
                 if (!mt) return mt.error();
                 return c->adopt_table(std::move(mt).value(), tname);
             }

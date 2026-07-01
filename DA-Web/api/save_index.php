@@ -37,9 +37,7 @@ if ($origTag !== '') {
 }
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 // Determine index file extension: .cdx for DBF tables, .adi for ADT.
 // For free-table directories, probe the filesystem; for DD connections

@@ -18,9 +18,7 @@ if ($table === '' || !in_array($kind, ['fields', 'indexes', 'triggers'], true)) 
 api_validate_identifier($table, 'table name');
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 // ── DBF/ADT binary header field reader ─────────────────────────────────────
 // Returns array of ['Field', 'Type' (letter), 'Size', 'Dec'] from a .dbf or .adt file.

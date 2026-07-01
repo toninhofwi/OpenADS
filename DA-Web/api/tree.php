@@ -22,9 +22,7 @@ function loadDicts(string $file): array {
 function getConn(string $ddName): ?AdsConnection {
     if (!isset($_SESSION['connections'][$ddName])) return null;
     $c = $_SESSION['connections'][$ddName];
-    $opts = ['path' => $c['path']];
-    if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-    if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+    $opts = api_ads_connect_opts($c);
     return AdsConnection::connect($opts);
 }
 
@@ -103,6 +101,7 @@ if ($action === 'dd_children') {
 
     // Data dictionary: return category nodes.
     $categories = [
+        ['id' => "cat_{$ddName}_health",     'text' => 'Health',            'icon' => 'jstree-icon-health', 'leaf' => true],
         ['id' => "cat_{$ddName}_tables",     'text' => 'Tables',            'icon' => 'jstree-icon-tables'],
         ['id' => "cat_{$ddName}_views",      'text' => 'Views',             'icon' => 'jstree-icon-views'],
         ['id' => "cat_{$ddName}_procs",      'text' => 'Stored Procedures', 'icon' => 'jstree-icon-procs'],
@@ -114,7 +113,9 @@ if ($action === 'dd_children') {
         ['id' => "cat_{$ddName}_links",      'text' => 'Links',             'icon' => 'jstree-icon-links'],
     ];
     foreach ($categories as &$c) {
-        $c['children'] = true;
+        $isLeaf = !empty($c['leaf']);
+        unset($c['leaf']);
+        $c['children'] = !$isLeaf;
         $c['a_attr']   = ['data-dd' => $ddName, 'data-type' => 'category',
                           'data-cat' => substr($c['id'], strlen("cat_{$ddName}_"))];
     }

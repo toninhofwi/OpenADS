@@ -35,20 +35,23 @@ if ($ddName === '' || $groupName === '') {
 }
 
 $c    = $_SESSION['connections'][$ddName];
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
+$perf = api_perf_start();
 
 try {
     $conn = AdsConnection::connect($opts);
+    api_perf_mark($perf, 'connect');
 
     // ── Step 1: load all permissions for this group into a map ──────────────────
     // Key for top-level objects:  type . "\0" . lowercase(obj_name)
     // Key for field objects:      "4\0" . lowercase(parent) . "\0" . lowercase(obj_name)
     $permMap = [];
-    $stmt = $conn->query('SELECT * FROM system.permissions');
+    // RCB 06/30/2026: Ask the server for this group's permission rows only.
+    // OpenADS pushes this predicate into system.permissions materialization, so
+    // DA-Web no longer scans the full compatibility matrix for every group.
+    $qgroup = api_sql_quote($groupName);
+    $stmt = $conn->query("SELECT * FROM system.permissions WHERE GRANTEE = '$qgroup'");
     while ($row = $stmt->fetchAssoc()) {
-        if (strcasecmp((string)($row['GRANTEE'] ?? ''), $groupName) !== 0) continue;
         // OBJ_TYPE is a DBF numeric column → may be float; cast to string for keys.
         $type   = (string)(int)($row['OBJ_TYPE'] ?? 0);
         $name   = strtolower(trim((string)($row['OBJ_NAME']  ?? '')));
@@ -61,6 +64,7 @@ try {
         $permMap[$key] = $row;
     }
     $stmt->close();
+    api_perf_mark($perf, 'permissions');
 
     // ── Step 2: helper to build one output row ──────────────────────────────────
     // Any non-'0' value ("1" = normal grant, "2" = admin/WITH-GRANT level) means granted.
@@ -147,9 +151,13 @@ try {
         }
         $stmt->close();
     } catch (Throwable $e) {}
+    api_perf_mark($perf, 'objects');
 
     $conn->close();
-    echo json_encode(['data' => $rows]);
+    echo json_encode([
+        'data' => $rows,
+        'perf' => api_perf_finish($perf),
+    ]);
 } catch (Throwable $e) {
     api_exception(500, $e);
 }

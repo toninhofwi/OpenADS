@@ -22,9 +22,7 @@ if ($table !== '') {
 }
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 // Use composite key for unambiguous resolution when table is known
 $trigKey = ($table !== '') ? "$table::$name" : $name;

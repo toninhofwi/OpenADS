@@ -42,9 +42,7 @@ if ($table !== '') {
 }
 
 $c = api_require_connection($ddName);
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 // Convert display labels to raw numeric codes
 function eventCode(string $s): string {

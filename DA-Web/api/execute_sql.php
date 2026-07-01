@@ -22,9 +22,7 @@ if (strlen($sql) > API_SQL_MAX_LENGTH) {
 $c = api_require_connection($ddName);
 
 try {
-    $opts = ['path' => $c['path']];
-    if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-    if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+    $opts = api_ads_connect_opts($c);
     $conn = AdsConnection::connect($opts);
 
     $upperSql = ltrim(strtoupper($sql));

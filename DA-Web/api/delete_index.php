@@ -20,9 +20,7 @@ if ($table === '' || $tag === '') {
 api_validate_identifier($table, 'table name');
 api_validate_identifier($tag, 'index tag');
 
-$opts = ['path' => $c['path']];
-if (($c['username'] ?? '') !== '') $opts['user']     = $c['username'];
-if (($c['password'] ?? '') !== '') $opts['password'] = $c['password'];
+$opts = api_ads_connect_opts($c);
 
 try {
     $conn = AdsConnection::connect($opts);
