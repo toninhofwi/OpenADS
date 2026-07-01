@@ -5,7 +5,7 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
-## 1.5.3 — 2026-07-01
+## 1.6.0 — 2026-07-01
 
 ### REMOTE mode — FWH production CDX validation & bug fixes
 
