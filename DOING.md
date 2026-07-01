@@ -121,26 +121,32 @@ hasta que pide una navegación.
    handle no tenía el production index abierto. **Fix:** contar
    `rt->index_handles.size()` localmente (ace_exports.cpp:13110).
 
-2. **FieldGet por ordinal con string "1"** — Los tests usaban
+2. **FieldGet crashea después de OpenTable en REMOTE** — El buffer del
+   registro estaba vacío después del open. En LOCAL el cursor queda en
+   BOF con buffer válido. **Fix:** GoTop implícito después del auto-open
+   del production CDX en `AdsOpenTable90` (ace_exports.cpp:5260).
+   Un round-trip extra por tabla abierta, trivial comparado con el crash.
+
+3. **FieldGet por ordinal con string "1"** — Los tests usaban
    `(UNSIGNED8*)"1"` (string literal) que en 64-bit tiene dirección
    alta (>0x10000), por lo que el detector de ordinal no lo reconoce.
    **Fix del test:** usar el idiom ACE correcto
    `reinterpret_cast<UNSIGNED8*>(static_cast<std::uintptr_t>(1))`.
    El código del DLL ya era correcto.
 
-3. **AdsGetIndexName retorna tag vacío** — El CDX de customer tiene
+4. **AdsGetIndexName retorna tag vacío** — El CDX de customer tiene
    un tag estructural cuyo nombre es todo padding (se trimea a vacío).
    **Fix del test:** aceptar nombre vacío como válido para tags CDX
    estructurales de dBASE.
 
-4. **Test AdsSetIndexOrderByHandle asumía 2+ tags** — customer.cdx solo
+5. **Test AdsSetIndexOrderByHandle asumía 2+ tags** — customer.cdx solo
    tiene 1 tag. **Fix del test:** trabajar con 1 tag, comparar solo
    cuando hay 2+.
 
 ### Pendiente
 
-- [ ] Implementar fix para el crash de FieldGet en REMOTE (requiere
-      decisión: GotoTop implícito en cliente vs record buffer en OpenTableAck)
+- [x] Implementar fix para el crash de FieldGet en REMOTE → **Hecho: GoTop
+       implícito después de AdsOpenTable90 en modo REMOTE**
 - [ ] Agregar test de memo fields en REMOTE (las tablas actuales no tienen .fpt)
 - [ ] Agregar test con `RddSetDefault("ADSCDX")` para reproducir el caso exacto del usuario
 - [ ] Verificar que el fix funciona con la app real del usuario FWH

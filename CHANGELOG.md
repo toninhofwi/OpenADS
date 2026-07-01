@@ -16,6 +16,14 @@ the real ACE SDK.
   index count. This unblocks rddads' `DbSetOrder(n)` and
   `OrdBagName()` in REMOTE mode.
 
+- **Bug fix: implicit GoTop after `AdsOpenTable90` in REMOTE mode** —
+  After table open + production CDX auto-open, the client had no record
+  buffer, causing crashes on `AdsGetField` / `AdsGetRecordCount` etc.
+  LOCAL mode leaves the cursor at BOF with a valid buffer; REMOTE left
+  the buffer empty. Now sends an implicit `GotoTop` on table open to
+  populate the record cache, matching LOCAL semantics. This eliminates
+  the need for an explicit `DbGoTop()` after `USE` in FWH.
+
 - **New test: `abi_remote_prodcdx_test.cpp`** — 8 test cases that
   validate the complete FWH rddads workflow over TCP against a
   pre-existing production database (DBF + CDX): OrdBagName,

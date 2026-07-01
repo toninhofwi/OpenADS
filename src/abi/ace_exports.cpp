@@ -5258,6 +5258,16 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                 }
             }
         }
+        // Implicit GoTop in REMOTE mode: after the production CDX
+        // auto-open the client has no record buffer yet.  LOCAL mode
+        // leaves the cursor at BOF with a valid buffer; REMOTE leaves
+        // the buffer empty, so AdsGetField / AdsGetRecordCount etc.
+        // would read uninitialized memory.  One extra round-trip on
+        // table open positions the cursor on record 1 and populates
+        // the record cache, matching LOCAL semantics.
+        if (auto* rtp = get_remote_table(gh)) {
+            (void)AdsGotoTop(gh);
+        }
         return ok();
     }
 #if defined(OPENADS_WITH_SQLITE)
