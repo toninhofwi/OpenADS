@@ -157,6 +157,40 @@ TEST_CASE("M9.17 AdsGetFieldW = AdsGetStringW alias") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("AdsSetFieldW stores UTF-16 data") {
+    const auto dir = fs::temp_directory_path() / "openads_setfieldw";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 leaf[16] = "data";
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    REQUIRE(AdsAppendRecord(hTable) == 0);
+
+    UNSIGNED8 fld[] = "TXT";
+    UNSIGNED16 val_w[] = {'W', 'i', 'd', 'e', 0};
+    REQUIRE(AdsSetFieldW(hTable, fld, val_w, 4) == 0);
+
+    UNSIGNED16 buf_w[16] = {0};
+    UNSIGNED32 cap = 16;
+    REQUIRE(AdsGetFieldW(hTable, fld, buf_w, &cap, 0) == 0);
+    CHECK(buf_w[0] == 'W');
+    CHECK(buf_w[1] == 'i');
+    CHECK(buf_w[2] == 'd');
+    CHECK(buf_w[3] == 'e');
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M9.17 W variants honour ADSFIELD-style numeric field index") {
     const auto dir = fs::temp_directory_path() / "openads_m9_17_w_numeric";
     std::error_code ec;

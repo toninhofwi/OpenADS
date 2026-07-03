@@ -100,6 +100,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+extern "C++" {
 namespace {
 
 using openads::engine::Table;
@@ -9202,6 +9203,11 @@ UNSIGNED32 ENTRYPOINT AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
+UNSIGNED32 ENTRYPOINT AdsSetLong(ADSHANDLE hTable, UNSIGNED8* pucField,
+                      SIGNED32 lValue) {
+    return AdsSetDouble(hTable, pucField, static_cast<double>(lValue));
+}
+
 UNSIGNED32 ENTRYPOINT AdsSetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
                           std::int64_t llValue) {
     return AdsSetDouble(hTable, pucField, static_cast<double>(llValue));
@@ -9222,6 +9228,29 @@ void julian_to_ymd(SIGNED32 jd, int& y, int& m, int& d) {
     L = J / 11;
     m = static_cast<int>(J + 2 - 12 * L);
     y = static_cast<int>(100 * (N - 49) + I + L);
+}
+
+void compact_ace_date_value(const UNSIGNED8* value, UNSIGNED16 len,
+                            std::string* out) {
+    if (out == nullptr) return;
+    std::string s(value ? reinterpret_cast<const char*>(value) : "",
+                  value ? static_cast<std::size_t>(len) : 0u);
+    if (s.size() == 10 && s[4] == '-' && s[7] == '-') {
+        *out = s.substr(0, 4) + s.substr(5, 2) + s.substr(8, 2);
+        return;
+    }
+    if (s.size() == 8) {
+        bool all_digits = true;
+        for (char c : s) {
+            all_digits = all_digits &&
+                std::isdigit(static_cast<unsigned char>(c)) != 0;
+        }
+        if (all_digits) {
+            *out = s;
+            return;
+        }
+    }
+    *out = s;
 }
 
 } // namespace
@@ -9569,6 +9598,28 @@ UNSIGNED32 ENTRYPOINT AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
     auto r = t->set_field(idx, val);
     if (!r) return fail(r.error());
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsSetDate(ADSHANDLE hTable, UNSIGNED8* pucField,
+                      UNSIGNED8* pucValue, UNSIGNED16 usLen) {
+    if (pucField != nullptr &&
+        reinterpret_cast<std::uintptr_t>(pucField) >= 0x10000u) {
+        std::string val(pucValue ? reinterpret_cast<const char*>(pucValue) : "",
+                        pucValue ? static_cast<std::size_t>(usLen) : 0u);
+        std::string escaped;
+        escaped.reserve(val.size() + 2);
+        for (char c : val) { escaped += c; if (c == '\'') escaped += c; }
+        if (set_stmt_param(hTable, reinterpret_cast<const char*>(pucField),
+                           "'" + escaped + "'")) {
+            return ok();
+        }
+    }
+    std::string compact;
+    compact_ace_date_value(pucValue, usLen, &compact);
+    std::vector<UNSIGNED8> bytes(compact.begin(), compact.end());
+    bytes.push_back(0);
+    return AdsSetString(hTable, pucField, bytes.data(),
+                        static_cast<UNSIGNED32>(compact.size()));
 }
 
 // --- M9.18 lock retry policy ----------------------------------------------
@@ -15776,6 +15827,7 @@ struct SqlStatement {
     // place to store :name -> SQL-literal pairs that AdsExecuteSQL can substitute
     // before handing the final SQL to the parser.
     std::unordered_map<std::string, std::string> params;
+    UNSIGNED32 sql_timeout = 0;
     // Per-statement table-open overrides set by AdsStmt* helpers.
     UNSIGNED16  table_type   = 0;   // 0 = ADS_DEFAULT → CDX
     UNSIGNED16  lock_type    = 0;   // 0 = default → compatible locking
@@ -15789,6 +15841,11 @@ struct SqlStatement {
 
 std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>>& stmt_map() {
     static std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>> m;
+    return m;
+}
+
+std::unordered_map<ADSHANDLE, UNSIGNED32>& sql_timeout_map() {
+    static std::unordered_map<ADSHANDLE, UNSIGNED32> m;
     return m;
 }
 
@@ -15832,6 +15889,7 @@ ADSHANDLE stmt_register(std::unique_ptr<SqlStatement> stmt) {
 void stmt_unregister(ADSHANDLE h) {
     std::lock_guard<std::mutex> lk(stmt_mu());
     stmt_map().erase(h);
+    sql_timeout_map().erase(h);
 }
 
 // RCB 2026-05-22 17:03 — Statement handles live in stmt_map() which is a plain
@@ -15850,6 +15908,12 @@ bool set_stmt_param(ADSHANDLE h, const char* pname, std::string literal) {
     if (!key.empty() && key[0] == ':') key.erase(0, 1);
     it->second->params[key] = std::move(literal);
     return true;
+}
+
+UNSIGNED32 inherited_sql_timeout(ADSHANDLE hConnect) {
+    auto& m = sql_timeout_map();
+    auto it = m.find(hConnect);
+    return it == m.end() ? 0 : it->second;
 }
 
 openads::engine::TableType stmt_table_type(const SqlStatement& s) {
@@ -15880,6 +15944,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::RemoteConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->remote = rc;
+        stmt->sql_timeout = inherited_sql_timeout(hConnect);
         *phStatement = stmt_register(std::move(stmt));
         return ok();
     }
@@ -15888,6 +15953,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::SqliteConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->sqlite = sc;
+        stmt->sql_timeout = inherited_sql_timeout(hConnect);
         stmt->sql_username = sql_uri_username(hConnect);
         *phStatement = stmt_register(std::move(stmt));
         return ok();
@@ -15898,6 +15964,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::MssqlConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->mssql_conn = mc;
+        stmt->sql_timeout = inherited_sql_timeout(hConnect);
         stmt->sql_username = sql_uri_username(hConnect);
         *phStatement = stmt_register(std::move(stmt));
         return ok();
@@ -15907,6 +15974,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
     if (auto* pc = get_postgres_conn(hConnect)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->postgres = pc;
+        stmt->sql_timeout = inherited_sql_timeout(hConnect);
         stmt->sql_username = sql_uri_username(hConnect);
         *phStatement = stmt_register(std::move(stmt));
         return ok();
@@ -15917,6 +15985,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::MariaConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->maria = mc;
+        stmt->sql_timeout = inherited_sql_timeout(hConnect);
         stmt->sql_username = sql_uri_username(hConnect);
         *phStatement = stmt_register(std::move(stmt));
         return ok();
@@ -15927,6 +15996,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::OdbcConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->odbc = oc;
+        stmt->sql_timeout = inherited_sql_timeout(hConnect);
         stmt->odbc_dialect = odbc_dialect_for(hConnect);
         stmt->sql_username = sql_uri_username(hConnect);
         *phStatement = stmt_register(std::move(stmt));
@@ -15938,6 +16008,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
             hConnect, HandleKind::FirebirdConnection)) {
         auto stmt = std::make_unique<SqlStatement>();
         stmt->firebird = fc;
+        stmt->sql_timeout = inherited_sql_timeout(hConnect);
         stmt->sql_username = sql_uri_username(hConnect);
         *phStatement = stmt_register(std::move(stmt));
         return ok();
@@ -15947,6 +16018,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phSta
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto stmt = std::make_unique<SqlStatement>();
     stmt->conn = c;
+    stmt->sql_timeout = inherited_sql_timeout(hConnect);
     *phStatement = stmt_register(std::move(stmt));
     return ok();
 }
@@ -25696,6 +25768,12 @@ UNSIGNED32 ENTRYPOINT AdsSetField(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* puc
     return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         pucBuf, ulLen);
 }
+UNSIGNED32 ENTRYPOINT AdsSetFieldW(ADSHANDLE hObj, UNSIGNED8* pId,
+                        UNSIGNED16* pwcBuf, UNSIGNED32 ulLen) {
+    UNSIGNED8 nm[64];
+    return AdsSetStringW(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                         pwcBuf, ulLen);
+}
 UNSIGNED32 ENTRYPOINT AdsSetEmpty(ADSHANDLE hObj, UNSIGNED8* pId) {
     UNSIGNED8 nm[64];
     UNSIGNED8 blank = 0;
@@ -25736,6 +25814,53 @@ UNSIGNED32 ENTRYPOINT AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucB
                                 pucBuf, &cap, 0);
     if (pusLen) *pusLen = static_cast<UNSIGNED16>(cap);
     return rc;
+}
+
+UNSIGNED32 ENTRYPOINT AdsSetSQLTimeout(ADSHANDLE hObj, UNSIGNED32 ulTimeout) {
+    if (auto* st = stmt_lookup(hObj)) {
+        st->sql_timeout = ulTimeout;
+        std::lock_guard<std::mutex> lk(stmt_mu());
+        sql_timeout_map()[hObj] = ulTimeout;
+        return ok();
+    }
+
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    bool valid = s.registry.lookup<Connection>(hObj, HandleKind::Connection) ||
+        s.registry.lookup<openads::network::RemoteConnection>(
+            hObj, HandleKind::RemoteConnection);
+#if defined(OPENADS_WITH_SQLITE)
+    valid = valid || s.registry.lookup<openads::sql_backend::SqliteConnection>(
+        hObj, HandleKind::SqliteConnection);
+#endif
+#if defined(OPENADS_WITH_MSSQL)
+    valid = valid || s.registry.lookup<openads::sql_backend::MssqlConnection>(
+        hObj, HandleKind::MssqlConnection);
+#endif
+#if defined(OPENADS_WITH_POSTGRESQL)
+    valid = valid || s.registry.lookup<openads::sql_backend::PostgresConnection>(
+        hObj, HandleKind::PostgresConnection);
+#endif
+#if defined(OPENADS_WITH_MARIADB)
+    valid = valid || s.registry.lookup<openads::sql_backend::MariaConnection>(
+        hObj, HandleKind::MariaConnection);
+#endif
+#if defined(OPENADS_WITH_ODBC)
+    valid = valid || s.registry.lookup<openads::sql_backend::OdbcConnection>(
+        hObj, HandleKind::OdbcConnection);
+#endif
+#if defined(OPENADS_WITH_FIREBIRD)
+    valid = valid || s.registry.lookup<openads::sql_backend::FirebirdConnection>(
+        hObj, HandleKind::FirebirdConnection);
+#endif
+    if (!valid) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE,
+                    "unknown SQL timeout handle");
+    }
+
+    std::lock_guard<std::mutex> stmt_lk(stmt_mu());
+    sql_timeout_map()[hObj] = ulTimeout;
+    return ok();
 }
 
 // ---------------------------------------------------------------------------
@@ -26339,3 +26464,5 @@ UNSIGNED32 ENTRYPOINT AdsAggregateClose(ADSHANDLE hRes) {
 }
 
 } // extern "C"  — AdsAggregate* export block
+
+} // extern "C++"

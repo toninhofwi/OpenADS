@@ -42,16 +42,16 @@ which is intentionally gitignored.
 
 - SAP `tests/tools/ace64.dll` exposes 574 `Ads*`/`ObsAds*` symbols.
 - SAP `tests/tools/ace64_v12.dll` exposes 578 `Ads*`/`ObsAds*` symbols.
-- OpenADS `src/openads_ace.def` exports 388 symbols total, including 383
+- OpenADS `src/openads_ace.def` exports 392 symbols total, including 387
   `Ads*`/`ObsAds*` API symbols, CRT shims, and OpenADS-specific extensions.
 - The built `bindings/python/bin/openace64.dll` exports 363 symbols total.
-- Against the bundled SAP v11 fixture, 333 of 574 SAP `Ads*`/`ObsAds*` exports
+- Against the bundled SAP v11 fixture, 337 of 574 SAP `Ads*`/`ObsAds*` exports
   are present in `src/openads_ace.def`.
-- Against the bundled SAP v12 fixture, 337 of 578 SAP `Ads*`/`ObsAds*` exports
+- Against the bundled SAP v12 fixture, 341 of 578 SAP `Ads*`/`ObsAds*` exports
   are present in `src/openads_ace.def`.
-- Against the bundled SAP v11 fixture, 241 SAP `Ads*`/`ObsAds*` exports are not
+- Against the bundled SAP v11 fixture, 237 SAP `Ads*`/`ObsAds*` exports are not
   present in `src/openads_ace.def`.
-- Against the bundled SAP v12 fixture, 241 SAP `Ads*`/`ObsAds*` exports are not
+- Against the bundled SAP v12 fixture, 237 SAP `Ads*`/`ObsAds*` exports are not
   present in `src/openads_ace.def`.
 - OpenADS currently has 46 `Ads*` API exports that are compatibility aliases or
   OpenADS extensions not present in the SAP v12 fixture.
@@ -285,18 +285,14 @@ AdsSetBOFFlag
 AdsSetCollationLang
 AdsSetCollationSequence
 AdsSetCursorAOF
-*AdsSetDate
-AdsSetFieldW
 AdsSetFilter100
 AdsSetFlushFlag
 AdsSetHandleLong
 AdsSetInternalError
 AdsSetLastError
-*AdsSetLong
 AdsSetPacketSize
 AdsSetProperty
 AdsSetRightsChecking
-*AdsSetSQLTimeout
 AdsSetStringFromCodePage
 AdsSetTableCharType
 AdsSetTableTransactionFree
@@ -334,8 +330,12 @@ AdsGetTableLockType
 AdsPackTable120
 AdsPrepareSQLW
 AdsRestructureTable120
+AdsSetDate
 AdsSetDateFormat60
 AdsSetExact22
+AdsSetFieldW
+AdsSetLong
+AdsSetSQLTimeout
 AdsVerifySQLW
 ```
 

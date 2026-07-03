@@ -199,6 +199,8 @@ UNSIGNED32 ENTRYPOINT AdsGetString (ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED16 usOption);
 UNSIGNED32 ENTRYPOINT AdsGetLong   (ADSHANDLE hTable, UNSIGNED8* pucField,
                               SIGNED32* plVal);
+UNSIGNED32 ENTRYPOINT AdsSetLong   (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              SIGNED32 lVal);
 // SAP ACE W-variants keep field names as ASCII (UNSIGNED8*); only
 // the data buffer (pucValueW / pucBufW) is wide-char UTF-16LE.
 // Harbour's ads1.c passes ADSFIELD(n) (UNSIGNED8*) — matching SAP.
@@ -1357,6 +1359,10 @@ UNSIGNED32 ENTRYPOINT AdsSetFilter         (ADSHANDLE hTable,
 UNSIGNED32 ENTRYPOINT AdsSetJulian         (ADSHANDLE hTable,
                                              UNSIGNED8* pucField,
                                              SIGNED32 lJulian);
+UNSIGNED32 ENTRYPOINT AdsSetDate           (ADSHANDLE hTable,
+                                             UNSIGNED8* pucField,
+                                             UNSIGNED8* pucValue,
+                                             UNSIGNED16 usLen);
 UNSIGNED32 ENTRYPOINT AdsSetLongLong       (ADSHANDLE hTable,
                                              UNSIGNED8* pucField,
                                              int64_t llValue);
@@ -1906,6 +1912,8 @@ UNSIGNED32 ENTRYPOINT AdsStmtSetTableCollation  (ADSHANDLE hStatement, UNSIGNED8
 UNSIGNED32 ENTRYPOINT AdsStmtSetTableRights     (ADSHANDLE hStatement, UNSIGNED16 usCheckRights);
 UNSIGNED32 ENTRYPOINT AdsSetField         (ADSHANDLE hObj, UNSIGNED8* pucFldId,
                                            UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
+UNSIGNED32 ENTRYPOINT AdsSetFieldW        (ADSHANDLE hObj, UNSIGNED8* pucFldId,
+                                           UNSIGNED16* pwcBuf, UNSIGNED32 ulLen);
 UNSIGNED32 ENTRYPOINT AdsSetEmpty         (ADSHANDLE hObj, UNSIGNED8* pucFldId);
 UNSIGNED32 ENTRYPOINT AdsSetNull          (ADSHANDLE hTable, UNSIGNED8* pucFldId);
 UNSIGNED32 ENTRYPOINT AdsSetShort         (ADSHANDLE hObj, UNSIGNED8* pucFldId, SIGNED32 sValue);
@@ -1916,6 +1924,7 @@ UNSIGNED32 ENTRYPOINT AdsSetTimeStamp     (ADSHANDLE hObj, UNSIGNED8* pucFldId,
                                            UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
 UNSIGNED32 ENTRYPOINT AdsGetDate          (ADSHANDLE hObj, UNSIGNED8* pucFldId,
                                            UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsSetSQLTimeout    (ADSHANDLE hObj, UNSIGNED32 ulTimeout);
 
 // ── Task 2: AdsFetchWhere result-set API ─────────────────────────────────────
 // Server-side filtered scan over the wire.  `AdsFetchWhere` sends `pszExpr`

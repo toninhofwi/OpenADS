@@ -85,6 +85,40 @@ fs::path stage_char_dbf(const fs::path& dir,
     return p;
 }
 
+fs::path stage_date_numeric_dbf(const fs::path& dir) {
+    fs::create_directories(dir);
+    auto p = dir / "data.dbf";
+    fs::remove(p);
+    std::vector<std::uint8_t> file;
+    auto push = [&](const void* d, std::size_t n) {
+        const auto* b = static_cast<const std::uint8_t*>(d);
+        file.insert(file.end(), b, b + n);
+    };
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0] = 0x03;
+    hdr[4] = 0;
+    hdr[8] = 32 + 32 * 2 + 1;
+    hdr[10] = 1 + 8 + 8;
+    push(hdr.data(), hdr.size());
+    std::array<std::uint8_t, 32> fd{};
+    std::strncpy(reinterpret_cast<char*>(fd.data()), "WHEN", 11);
+    fd[11] = 'D';
+    fd[16] = 8;
+    push(fd.data(), fd.size());
+    fd = {};
+    std::strncpy(reinterpret_cast<char*>(fd.data()), "COUNT", 11);
+    fd[11] = 'N';
+    fd[16] = 8;
+    fd[17] = 0;
+    push(fd.data(), fd.size());
+    file.push_back(0x0D);
+    file.push_back(0x1A);
+    std::ofstream(p, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+    return p;
+}
+
 }  // namespace
 
 TEST_CASE("M9.23 AdsGetLongLong reads numeric field as int64") {
@@ -145,6 +179,69 @@ TEST_CASE("M9.23 AdsSetFieldRaw writes raw bytes verbatim") {
     CHECK(buf[3] == 0xEF);
 
     REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ACE setters: AdsSetDate and AdsSetLong write table fields") {
+    auto dir = fs::temp_directory_path() / "openads_set_date_long";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_date_numeric_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    UNSIGNED8 leaf[16] = "data";
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    REQUIRE(AdsAppendRecord(hTable) == 0);
+
+    UNSIGNED8 date_fld[16] = "WHEN";
+    UNSIGNED8 date_val[16] = "2026-07-03";
+    REQUIRE(AdsSetDate(hTable, date_fld, date_val, 10) == 0);
+    UNSIGNED8 num_fld[16] = "COUNT";
+    REQUIRE(AdsSetLong(hTable, num_fld, -1234) == 0);
+
+    UNSIGNED8 out[32] = {0};
+    UNSIGNED32 cap = sizeof(out);
+    REQUIRE(AdsGetField(hTable, date_fld, out, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(out), cap) == "20260703");
+
+    std::memset(out, 0, sizeof(out));
+    cap = sizeof(out);
+    REQUIRE(AdsGetField(hTable, num_fld, out, &cap, 0) == 0);
+    std::string n(reinterpret_cast<char*>(out), cap);
+    while (!n.empty() && n.front() == ' ') n.erase(n.begin());
+    CHECK(n == "-1234");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ACE SQL timeout accepts connection and statement handles") {
+    auto dir = fs::temp_directory_path() / "openads_sql_timeout";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    REQUIRE(AdsSetSQLTimeout(hConn, 7) == 0);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+    REQUIRE(AdsSetSQLTimeout(hStmt, 3) == 0);
+    CHECK(AdsSetSQLTimeout(0xABCDEFu, 1) != 0);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }

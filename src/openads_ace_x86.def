@@ -335,6 +335,7 @@ EXPORTS
     AdsSetAOF@12                = AdsSetAOF
     AdsSetBinary@28             = AdsSetBinary
     AdsSetCollation@8           = AdsSetCollation
+    AdsSetDate@18               = AdsSetDate
     AdsSetDateFormat@4          = AdsSetDateFormat
     AdsSetDateFormat60@8        = AdsSetDateFormat60
     AdsSetDecimals@2            = AdsSetDecimals
@@ -346,6 +347,7 @@ EXPORTS
     AdsSetExact@2               = AdsSetExact
     AdsSetExact22@6             = AdsSetExact22
     AdsSetField@16              = AdsSetField
+    AdsSetFieldW@20             = AdsSetFieldW
     AdsSetFieldRaw@16           = AdsSetFieldRaw
     AdsSetFilter@8              = AdsSetFilter
     AdsSetIndexDirection@6      = AdsSetIndexDirection
@@ -355,6 +357,7 @@ EXPORTS
     AdsSetLogical@10            = AdsSetLogical
     AdsSetLockCycle@8           = AdsSetLockCycle
     AdsSetLockRetryCount@8      = AdsSetLockRetryCount
+    AdsSetLong@16               = AdsSetLong
     AdsSetLongLong@16           = AdsSetLongLong
     AdsSetMilliseconds@12       = AdsSetMilliseconds
     AdsSetMoney@16              = AdsSetMoney
@@ -368,6 +371,7 @@ EXPORTS
     AdsSetSearchPath@4          = AdsSetSearchPath
     AdsSetServerType@2          = AdsSetServerType
     AdsSetShort@12              = AdsSetShort
+    AdsSetSQLTimeout@12         = AdsSetSQLTimeout
     AdsSetString@16             = AdsSetString
     AdsSetStringW@16            = AdsSetStringW
     AdsSetTime@16               = AdsSetTime

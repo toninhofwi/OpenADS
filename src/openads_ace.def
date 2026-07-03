@@ -388,6 +388,7 @@ EXPORTS
     AdsStmtSetTableCollation
     AdsStmtSetTableRights
     AdsSetField
+    AdsSetFieldW
     AdsSetEmpty
     AdsSetNull
     AdsSetShort
@@ -395,6 +396,9 @@ EXPORTS
     AdsSetTime
     AdsSetTimeStamp
     AdsGetDate
+    AdsSetDate
+    AdsSetLong
+    AdsSetSQLTimeout
 
     ; RI property get/set.
     AdsDDGetRefIntegrityProperty
