@@ -127,6 +127,10 @@ DA-Web/config/dictionaries.json
 /ACE64_API_COMPAT_REPORT.local.md
 /chm_extract.local/
 
+# SAP proprietary documentation — local reference only, never committed
+/advantage.chm
+/ADSLocalServerInfo.txt
+
 # PMSys live data — not stored in repository
 testdata/pmsys/
 /third_party/sqlcipher/
