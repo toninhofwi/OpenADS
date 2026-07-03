@@ -277,6 +277,8 @@ UNSIGNED32 ENTRYPOINT AdsPackTable120  (ADSHANDLE hTable,
 UNSIGNED32 ENTRYPOINT AdsZapTable      (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsSetAOF        (ADSHANDLE hTable, UNSIGNED8* pucCondition,
                               UNSIGNED16 usResolve);
+UNSIGNED32 ENTRYPOINT AdsSetAOF100     (ADSHANDLE hTable, void* pvFilter,
+                              UNSIGNED32 ulOptions);
 UNSIGNED32 ENTRYPOINT AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
 UNSIGNED32 ENTRYPOINT AdsClearAOF      (ADSHANDLE hTable);
@@ -780,6 +782,10 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirectW  (ADSHANDLE hStatement, UNSIGNED16* p
 // Resolution / connection options.
 #define ADS_RESOLVE_DYNAMIC   0
 #define ADS_RESOLVE_IMMEDIATE 1
+
+// AdsSetRightsChecking options.
+#define ADS_RESPECT_RIGHTS_CHECKING 1
+#define ADS_IGNORE_RIGHTS_CHECKING  2
 #define ADS_NOT_AUTO_OPEN     0x00000004
 #define ADS_READ_ALL_COLUMNS  0x00000010
 #define ADS_COMPRESS_ALWAYS   0x00000020
@@ -1344,6 +1350,7 @@ UNSIGNED32 ENTRYPOINT AdsIsTableLocked     (ADSHANDLE hTable,
                                              UNSIGNED16* pbLocked);
 UNSIGNED32 ENTRYPOINT AdsRefreshAOF        (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsRegisterCallbackFunction(void* pCallback);
+UNSIGNED32 ENTRYPOINT AdsRegisterCallbackFunction101(void* pCallback, SIGNED64 qCallbackID);
 UNSIGNED32 ENTRYPOINT AdsRegisterProgressCallback(void* pCallback);
 UNSIGNED32 ENTRYPOINT AdsSetDateFormat     (UNSIGNED8* pucFormat);
 UNSIGNED32 ENTRYPOINT AdsSetDateFormat60   (ADSHANDLE hConnect,
@@ -1849,6 +1856,11 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable120(ADSHANDLE hConnect,
 UNSIGNED32 ENTRYPOINT AdsCancelUpdate90  (ADSHANDLE hTable, UNSIGNED32 ulOptions);
 UNSIGNED32 ENTRYPOINT AdsSetProperty90   (ADSHANDLE hObj, UNSIGNED32 ulOperation,
                                           UNSIGNED64* puqValue);
+UNSIGNED32 ENTRYPOINT AdsSetProperty     (ADSHANDLE hObj, UNSIGNED32 ulOperation,
+                                          UNSIGNED32* pulValue);
+UNSIGNED32 ENTRYPOINT AdsSetRightsChecking(UNSIGNED32 ulOptions);
+UNSIGNED32 ENTRYPOINT AdsSetTableTransactionFree(ADSHANDLE hTable,
+                                          UNSIGNED16 usTransFree);
 UNSIGNED32 ENTRYPOINT AdsFindConnection25(UNSIGNED8* pucFullPath,
                                           ADSHANDLE* phConnect);
 UNSIGNED32 ENTRYPOINT AdsGetTableHandle25(ADSHANDLE hConnect, UNSIGNED8* pucName,
@@ -1921,6 +1933,8 @@ UNSIGNED32 ENTRYPOINT AdsSetMoney         (ADSHANDLE hObj, UNSIGNED8* pucFldId, 
 UNSIGNED32 ENTRYPOINT AdsSetTime          (ADSHANDLE hObj, UNSIGNED8* pucFldId,
                                            UNSIGNED8* pucValue, UNSIGNED16 usLen);
 UNSIGNED32 ENTRYPOINT AdsSetTimeStamp     (ADSHANDLE hObj, UNSIGNED8* pucFldId,
+                                           UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
+UNSIGNED32 ENTRYPOINT AdsSetTimeStampRaw  (ADSHANDLE hObj, UNSIGNED8* pucFldId,
                                            UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
 UNSIGNED32 ENTRYPOINT AdsGetDate          (ADSHANDLE hObj, UNSIGNED8* pucFldId,
                                            UNSIGNED8* pucBuf, UNSIGNED16* pusLen);

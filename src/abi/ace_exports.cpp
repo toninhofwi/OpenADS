@@ -14501,6 +14501,18 @@ UNSIGNED32 ENTRYPOINT AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
     return ok();
 }
 
+// AdsSetAOF100 — wide/dual-encoding sibling of AdsSetAOF. Per the SAP
+// docs, ulOptions can additionally carry ADS_ENCODE_UTF8 / ADS_ENCODE_UTF16
+// to select the encoding of pvFilter; the numeric values of those flags
+// are not published anywhere available to this build, so only the
+// default (neither flag set) ANSI/OEM path is handled here -- pvFilter
+// is read the same as AdsSetAOF's pucFilter. usResolve/ulOptions carry
+// no other effect since AdsSetAOF itself does not consult them yet.
+UNSIGNED32 ENTRYPOINT AdsSetAOF100(ADSHANDLE hTable, void* pvFilter,
+                        UNSIGNED32 /*ulOptions*/) {
+    return AdsSetAOF(hTable, reinterpret_cast<UNSIGNED8*>(pvFilter), 0);
+}
+
 UNSIGNED32 ENTRYPOINT AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                              UNSIGNED8* /*pucBuf*/, UNSIGNED16* /*pusLen*/) {
     if (auto* rt = get_remote_table(hTable)) {
@@ -18893,7 +18905,13 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                 if (tbl->is_deleted()) continue;
                 if (!tbl->passes_filter()) continue;
                 for (const auto& a : assns) {
-                    if (a.value.is_numeric) {
+                    // RCB 2026-07-03 — UPDATE ... SET col = NULL: same
+                    // blank-out treatment as the INSERT VALUES NULL literal
+                    // above; see that comment for the DBF-has-no-NULL caveat.
+                    if (a.value.is_null) {
+                        auto wr = tbl->set_field(a.field_index, std::string());
+                        if (!wr) return fail(wr.error());
+                    } else if (a.value.is_numeric) {
                         auto wr = tbl->set_field(a.field_index, a.value.number);
                         if (!wr) return fail(wr.error());
                     } else {
@@ -19167,7 +19185,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                         ins.value().columns[i].c_str(), ""};
                 }
                 const auto& v = vals[i];
-                if (v.is_numeric) {
+                // RCB 2026-07-03 — INSERT ... VALUES (NULL, ...): blank the
+                // field the same way AdsSetEmpty/AdsSetNull already do for a
+                // direct table-field call. DBF has no SQL NULL representation
+                // (see AdsSetNull), so this is the closest we can store; a
+                // real _NullFlags bit write for nullable ADT/VFP columns is
+                // deferred (tracked separately from the statement-param fix).
+                if (v.is_null) {
+                    auto wr = tbl->set_field(
+                        static_cast<std::uint16_t>(fidx), std::string());
+                    if (!wr) return wr.error();
+                } else if (v.is_numeric) {
                     auto wr = tbl->set_field(
                         static_cast<std::uint16_t>(fidx), v.number);
                     if (!wr) return wr.error();
@@ -24545,6 +24573,9 @@ UNSIGNED32 ENTRYPOINT AdsRefreshAOF(ADSHANDLE hTable) {
     return ok();
 }
 UNSIGNED32 ENTRYPOINT AdsRegisterCallbackFunction(void*) { ADS_STUB(openads::AE_SUCCESS); }
+// 64-bit callback ID sibling for 64-bit platforms; behaves identically
+// to AdsRegisterCallbackFunction (see its stub note above).
+UNSIGNED32 ENTRYPOINT AdsRegisterCallbackFunction101(void*, SIGNED64) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 ENTRYPOINT AdsRegisterProgressCallback(void*) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 ENTRYPOINT AdsSetDateFormat(UNSIGNED8* pucFormat) {
     if (pucFormat != nullptr && pucFormat[0] != 0)
@@ -25276,6 +25307,37 @@ UNSIGNED32 ENTRYPOINT AdsSetProperty90(ADSHANDLE /*hObj*/, UNSIGNED32 /*ulOperat
                             UNSIGNED64* /*puqValue*/) {
     return ok();
 }
+// Pre-90 (32-bit value) sibling of AdsSetProperty90; same no-op treatment.
+UNSIGNED32 ENTRYPOINT AdsSetProperty(ADSHANDLE /*hObj*/, UNSIGNED32 /*ulOperation*/,
+                          UNSIGNED32* /*pulValue*/) {
+    return ok();
+}
+
+// AdsSetRightsChecking — global, process-wide legacy rights-checking
+// mode. Real rights enforcement in OpenADS happens server-side in the
+// DD engine regardless of this client-side flag (see project notes on
+// DD engine enforcement), so this only records the caller's requested
+// mode for round-tripping; it does not change enforcement behavior.
+namespace {
+std::atomic<UNSIGNED32> g_rights_checking{ADS_IGNORE_RIGHTS_CHECKING};
+}
+UNSIGNED32 ENTRYPOINT AdsSetRightsChecking(UNSIGNED32 ulOptions) {
+    if (ulOptions != ADS_RESPECT_RIGHTS_CHECKING &&
+        ulOptions != ADS_IGNORE_RIGHTS_CHECKING) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsSetRightsChecking: invalid option");
+    }
+    g_rights_checking.store(ulOptions);
+    return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsSetTableTransactionFree(ADSHANDLE hTable,
+                                      UNSIGNED16 usTransFree) {
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    t->set_transaction_free(usTransFree != 0);
+    return ok();
+}
 
 // OpenADS keys connections/tables by handle, not by path/name, so
 // report "not found" — X# then opens a fresh connection/table.
@@ -25780,7 +25842,21 @@ UNSIGNED32 ENTRYPOINT AdsSetEmpty(ADSHANDLE hObj, UNSIGNED8* pId) {
     return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         &blank, 0);
 }
+// RCB 2026-07-03 — AdsSetNull previously always aliased to AdsSetEmpty.
+// For a prepared-statement parameter, AdsSetEmpty routes through
+// AdsSetString, which stores the *quoted* literal '' (see
+// set_stmt_param callers above) — that substitutes an empty-string
+// literal into the SQL text instead of the NULL keyword, breaking
+// parameterized queries on typed (numeric/date) columns and changing
+// IS NULL semantics on text columns. Try the statement-handle path
+// first with the unquoted literal NULL (matching the raw-literal
+// convention AdsSetLogical/AdsSetDouble already use for stmt params)
+// before falling back to the table-field blank-out path.
 UNSIGNED32 ENTRYPOINT AdsSetNull(ADSHANDLE hObj, UNSIGNED8* pId) {
+    if (pId != nullptr &&
+        set_stmt_param(hObj, reinterpret_cast<const char*>(pId), "NULL")) {
+        return ok();
+    }
     return AdsSetEmpty(hObj, pId);     // DBF has no SQL NULL — store empty
 }
 UNSIGNED32 ENTRYPOINT AdsSetShort(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED32 sValue) {
@@ -25804,6 +25880,15 @@ UNSIGNED32 ENTRYPOINT AdsSetTimeStamp(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8*
     UNSIGNED8 nm[64];
     return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
                         pucBuf, ulLen);
+}
+// Raw-bytes sibling of AdsSetTimeStamp, following the AdsSetFieldRaw /
+// AdsGetFieldRaw convention already used elsewhere in this file: bypass
+// string formatting and write pucBuf's bytes directly into the field.
+UNSIGNED32 ENTRYPOINT AdsSetTimeStampRaw(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
+                              UNSIGNED32 ulLen) {
+    UNSIGNED8 nm[64];
+    return AdsSetFieldRaw(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                          pucBuf, ulLen);
 }
 UNSIGNED32 ENTRYPOINT AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
                       UNSIGNED16* pusLen) {

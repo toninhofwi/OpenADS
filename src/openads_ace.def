@@ -69,6 +69,7 @@ EXPORTS
     AdsPackTable120
     AdsZapTable
     AdsSetAOF
+    AdsSetAOF100
     AdsGetAOFOptLevel
     AdsClearAOF
     AdsGetMemoLength
@@ -254,6 +255,7 @@ EXPORTS
     AdsRefreshAOF
     AdsRefreshRecord
     AdsRegisterCallbackFunction
+    AdsRegisterCallbackFunction101
     AdsReindex
     AdsRestructureTable
     AdsRestructureTable120
@@ -346,6 +348,9 @@ EXPORTS
     AdsReindex61
     AdsRestructureTable90
     AdsSetProperty90
+    AdsSetProperty
+    AdsSetRightsChecking
+    AdsSetTableTransactionFree
     AdsGetMemoBlockSize
 
     ; M12.23 — further entry points the X# Advantage RDD binds by name.
@@ -395,6 +400,7 @@ EXPORTS
     AdsSetMoney
     AdsSetTime
     AdsSetTimeStamp
+    AdsSetTimeStampRaw
     AdsGetDate
     AdsSetDate
     AdsSetLong

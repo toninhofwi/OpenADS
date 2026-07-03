@@ -312,6 +312,12 @@ struct InsertLiteral {
     bool        is_numeric = false;
     std::string text;          // raw string content if !is_numeric
     double      number     = 0.0;
+    // RCB 2026-07-03 — bare NULL keyword (unquoted, no digits) in a
+    // VALUES/SET literal position. Needed so AdsSetNull's statement-param
+    // substitution (which emits the literal NULL rather than the quoted
+    // string '') parses instead of falling through to read_numeric_literal
+    // and failing with 7200. When true, is_numeric/text/number are unused.
+    bool        is_null    = false;
 };
 
 struct InsertStmt {

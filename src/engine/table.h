@@ -337,6 +337,14 @@ public:
     // doesn't require re-walking the AST. Cleared by clear_filter().
     void          set_aof_opt_level(int v) noexcept { aof_opt_level_ = v; }
     int           aof_opt_level() const noexcept    { return aof_opt_level_; }
+
+    // AdsSetTableTransactionFree — records the caller's intent that
+    // updates to this table bypass transaction semantics (immediate,
+    // visible to other clients, never rolled back). Stored here so
+    // AdsIsTableTransactionFree can report it back; the transaction
+    // commit/rollback path does not yet consult this flag.
+    void          set_transaction_free(bool v) noexcept { transaction_free_ = v; }
+    bool          transaction_free() const noexcept     { return transaction_free_; }
     bool passes_filter() {
         return !filter_ || filter_(*this);
     }
@@ -452,6 +460,7 @@ private:
     bool                                          cache_enabled_  = false;
     bool                                          last_seek_found_ = false;
     bool                                          aof_active_      = false;
+    bool                                          transaction_free_ = false;
     int                                           aof_opt_level_   = 0;
     std::string                                   filter_expr_;    // source filter expression string
     std::string                                   aof_expr_;       // source AOF expression string

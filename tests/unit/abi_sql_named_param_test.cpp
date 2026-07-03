@@ -125,6 +125,103 @@ TEST_CASE("AdsExecuteSQL: named params with prefix overlap (:p1 vs :p10) keep va
     fs::remove_all(dir, ec);
 }
 
+// RCB 2026-07-03 — AdsSetNull on a statement parameter previously stored
+// the quoted literal '' (via AdsSetEmpty -> AdsSetString), which the SQL
+// parser accepted as a plain string literal and silently wrote wrong data
+// instead of failing or storing NULL. It now substitutes the bare NULL
+// keyword, and parse_insert/parse_update recognize it (InsertLiteral::
+// is_null) instead of erroring out of read_numeric_literal with a 7200.
+// Confirms the row is actually written (not a parse failure) and the NULL
+// column comes back blank while the sibling bound param keeps its value.
+TEST_CASE("AdsExecuteSQL: AdsSetNull on a statement parameter") {
+    auto dir = fs::temp_directory_path() / "openads_named_param_null";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_numeric_dbf(dir, 2, 6);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == 0);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    std::string sql = "INSERT INTO data (C01,C02) VALUES (:p1,:p2)";
+    std::vector<UNSIGNED8> sqlbuf(sql.begin(), sql.end());
+    sqlbuf.push_back('\0');
+    REQUIRE(AdsPrepareSQL(hStmt, sqlbuf.data()) == 0);
+
+    UNSIGNED8 p1[] = "p1";
+    UNSIGNED8 p2[] = "p2";
+    REQUIRE(AdsSetNull(hStmt, p1) == 0);
+    REQUIRE(AdsSetDouble(hStmt, p2, 42.0) == 0);
+
+    ADSHANDLE hCur = 0xDEADBEEF;
+    REQUIRE(AdsExecuteSQL(hStmt, &hCur) == 0);
+
+    UNSIGNED8 leaf[16] = "data";
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX, 1, 1, 0, 1, &hTable) == 0);
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hTable, 0, &cnt) == 0);
+    CHECK(cnt == 1);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    CHECK(get_field_trimmed(hTable, "C01") == "");
+    CHECK(get_field_trimmed(hTable, "C02") == "42");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+// RCB 2026-07-03 — same NULL-literal support for UPDATE ... SET col = :param
+// (UpdateAssign::value reuses InsertLiteral, so this exercises the parser
+// branch added in parse_update alongside parse_insert's).
+TEST_CASE("AdsExecuteSQL: AdsSetNull on an UPDATE statement parameter") {
+    auto dir = fs::temp_directory_path() / "openads_named_param_null_update";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_numeric_dbf(dir, 2, 6);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 leaf[16] = "data";
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX, 1, 1, 0, 1, &hTable) == 0);
+    REQUIRE(AdsAppendRecord(hTable) == 0);
+    UNSIGNED8 fC01[] = "C01";
+    UNSIGNED8 fC02[] = "C02";
+    REQUIRE(AdsSetDouble(hTable, fC01, 7.0) == 0);
+    REQUIRE(AdsSetDouble(hTable, fC02, 8.0) == 0);
+    REQUIRE(AdsCloseTable(hTable) == 0);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+    std::string sql = "UPDATE data SET C01 = :p1";
+    std::vector<UNSIGNED8> sqlbuf(sql.begin(), sql.end());
+    sqlbuf.push_back('\0');
+    REQUIRE(AdsPrepareSQL(hStmt, sqlbuf.data()) == 0);
+    UNSIGNED8 p1[] = "p1";
+    REQUIRE(AdsSetNull(hStmt, p1) == 0);
+    ADSHANDLE hCur = 0xDEADBEEF;
+    REQUIRE(AdsExecuteSQL(hStmt, &hCur) == 0);
+
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX, 1, 1, 0, 1, &hTable) == 0);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    CHECK(get_field_trimmed(hTable, "C01") == "");
+    CHECK(get_field_trimmed(hTable, "C02") == "8");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 // REGRESSION — the substituted SQL must not be clipped to a fixed buffer.
 // A prepared INSERT whose final text exceeds 4096 bytes (e.g. a multi-row
 // INSERT) was truncated, producing a parse error or lost rows.

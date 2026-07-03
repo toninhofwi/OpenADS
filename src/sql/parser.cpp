@@ -2040,7 +2040,13 @@ util::Result<UpdateStmt> parse_update(const std::string& sql) {
             return util::Error{7200, 0,
                 "expected '=' after column name", sql};
         }
-        if (c.peek_char('\'')) {
+        // RCB 2026-07-03 — same NULL-keyword recognition as parse_insert's
+        // VALUES literal (see InsertLiteral::is_null); UpdateAssign::value
+        // reuses InsertLiteral, so SET col = :param bound via AdsSetNull
+        // needs the same handling here.
+        if (c.match_keyword("NULL")) {
+            a.value.is_null = true;
+        } else if (c.peek_char('\'')) {
             auto s = c.read_string_literal();
             if (!s) return s.error();
             a.value.is_numeric = false;
@@ -2165,7 +2171,13 @@ util::Result<InsertStmt> parse_insert(const std::string& sql) {
         std::vector<InsertLiteral> row;
         for (;;) {
             InsertLiteral lit;
-            if (c.peek_char('\'')) {
+            // RCB 2026-07-03 — recognize the bare NULL keyword as a VALUES
+            // literal (see InsertLiteral::is_null). Must be checked before
+            // read_numeric_literal, which would otherwise reject "NULL"
+            // with a 7200 parse error (no digits).
+            if (c.match_keyword("NULL")) {
+                lit.is_null = true;
+            } else if (c.peek_char('\'')) {
                 auto s = c.read_string_literal();
                 if (!s) return s.error();
                 lit.is_numeric = false;
