@@ -5,6 +5,27 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.6.1 — 2026-07-02
+
+### REMOTE mode — production CDX auto-open in subdirectories
+
+- **Bug fix: `ensure_abi_handle()` used basename-only table paths** — When
+  `openads_serverd` handled remote `OpenIndex` for a table opened as
+  `orders/workorders.dbf`, the lazy ABI handle was reopened as
+  `workorders.dbf` at the data root. Production CDX auto-bind then failed
+  (`AdsGetNumIndexes` / rddads `OrdCount()` returned 0) even though the
+  CDX sat beside the DBF in a subdirectory. The session now stores the
+  original `OpenTable` payload and reopens with that relative path; the
+  `OpenTableAck` production-bag hint is also sent relative to the data
+  root.
+
+- **Regression tests** — `remote production CDX auto-open in subdirectory`
+  (embedded server) and `REMOTE: workorders subdirectory auto-binds
+  production CDX` (live server, gated on `OPENADS_TEST_REMOTE`).
+
+Reported by FWH users opening large DBF/CDX tables via Harbour `ADSRDD` /
+`TDataBase` over `tcp://` against `openads_serverd`.
+
 ## 1.6.0 — 2026-07-01
 
 ### REMOTE mode — FWH production CDX validation & bug fixes

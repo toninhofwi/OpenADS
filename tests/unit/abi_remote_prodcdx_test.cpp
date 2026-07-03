@@ -319,6 +319,41 @@ TEST_CASE("REMOTE: ordered full-scan counts match record count"
 }
 
 // ===========================================================================
+// TEST 6b: workorders in subdirectory (iMac /tmp/openads_mac/orders/)
+// ===========================================================================
+TEST_CASE("REMOTE: workorders subdirectory auto-binds production CDX"
+          * doctest::skip(remote_uri_env() == nullptr)) {
+    RemoteFixture f;
+    REQUIRE(f.connect(remote_uri_env()));
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(f.hConn, (UNSIGNED8*)"orders/workorders.dbf",
+                          (UNSIGNED8*)"WO",
+                          ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    UNSIGNED16 nidx = 0;
+    REQUIRE(AdsGetNumIndexes(hTable, &nidx) == 0);
+    CHECK(nidx > 0);
+    std::printf("  orders/workorders.dbf: AdsGetNumIndexes = %u\n", nidx);
+
+    ADSHANDLE hIdx = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 1, &hIdx) == 0);
+    UNSIGNED8 bag[256] = {0};
+    UNSIGNED16 baglen = sizeof(bag);
+    REQUIRE(AdsGetIndexFilename(hIdx, 0, bag, &baglen) == 0);
+    std::string bagname(reinterpret_cast<char*>(bag), baglen);
+    CHECK(!bagname.empty());
+    std::printf("  OrdBagName = '%s'\n", bagname.c_str());
+
+    UNSIGNED32 recs = 0;
+    REQUIRE(AdsGetRecordCount(hTable, 0, &recs) == 0);
+    std::printf("  Record count = %u\n", recs);
+    CHECK(recs > 0u);
+
+    AdsCloseTable(hTable);
+    f.close();
+}
+
+// ===========================================================================
 // TEST 7: Multiple tables open simultaneously
 // ===========================================================================
 TEST_CASE("REMOTE: multiple tables open simultaneously"

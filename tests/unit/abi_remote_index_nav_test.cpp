@@ -209,6 +209,44 @@ TEST_CASE("remote DbSetOrder by number/name uses production index") {
     srv.stop();
 }
 
+// Production CDX beside a table in a subdirectory: ensure_abi_handle must
+// reopen with the same relative path the client used, not basename-only.
+TEST_CASE("remote production CDX auto-open in subdirectory") {
+    using openads::network::Server;
+    auto base = fs::temp_directory_path() / "openads_remote_prod_subdir";
+    auto data = base / "data";
+    make_colonias_dbf_with_prod_index(data);
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(base, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "data/CCOLONIA.DBF";
+    UNSIGNED8 alias[] = "CCOLONIA";
+    REQUIRE(AdsOpenTable(hConn, tname, alias, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    UNSIGNED16 nidx = 0;
+    REQUIRE(AdsGetNumIndexes(hTable, &nidx) == 0);
+    CHECK(nidx >= 1u);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 1, &hOrd) == 0);
+    REQUIRE(hOrd != 0);
+    REQUIRE(AdsGotoTop(hOrd) == 0);
+    UNSIGNED32 rec = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec) == 0);
+    CHECK(rec == 3u);
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    std::error_code ec;
+    fs::remove_all(base, ec);
+    srv.stop();
+}
+
 TEST_CASE("remote legacy AdsCreateIndex routes to AdsCreateIndex61") {
     using openads::network::Server;
     auto dir = fs::temp_directory_path() / "openads_remote_idx_legacy";

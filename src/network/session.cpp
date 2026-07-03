@@ -136,6 +136,7 @@ void Session::cleanup() {
         (void)AdsCloseTable(h);
     }
     cursor_tbls_.clear();
+    tbl_open_paths_.clear();
     for (auto& [id, h] : tbls_h_) {
         (void)AdsCloseTable(h);
     }
@@ -200,10 +201,26 @@ ADSHANDLE Session::ensure_abi_handle(std::uint32_t id) {
     if (!ensure_abi_conn()) return 0;
     auto* tbl = sess_conn_->lookup_table(eit->second);
     if (!tbl) return 0;
-    std::filesystem::path p(tbl->path());
-    std::string fname = p.filename().string();
-    std::vector<UNSIGNED8> nb(fname.size() + 1);
-    std::memcpy(nb.data(), fname.data(), fname.size());
+    // Reopen with the same name the client used (e.g. "orders/work.dbf"),
+    // not basename-only — otherwise production CDX auto-open binds against
+    // the wrong table when data files live in subdirectories.
+    std::string open_name;
+    if (auto pit = tbl_open_paths_.find(id); pit != tbl_open_paths_.end()) {
+        open_name = pit->second;
+    }
+    if (open_name.empty()) {
+        std::filesystem::path abs(tbl->path());
+        std::filesystem::path base(sess_conn_->data_dir());
+        std::error_code ec;
+        auto rel = std::filesystem::relative(abs, base, ec);
+        if (!ec && !rel.empty() && rel != ".") {
+            open_name = rel.generic_string();
+        } else {
+            open_name = abs.filename().string();
+        }
+    }
+    std::vector<UNSIGNED8> nb(open_name.size() + 1);
+    std::memcpy(nb.data(), open_name.data(), open_name.size());
     ADSHANDLE h = 0;
     if (AdsOpenTable(abi_conn_, nb.data(), nullptr,
                      ADS_CDX, 0, 0, 0, 0, &h) != 0) {
@@ -570,6 +587,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             std::uint32_t id = next_id_++;
             tbls_.emplace(id, th.value());
+            tbl_open_paths_.emplace(id, rel);
             srv_->add_session_table(sid_, +1);
             reply.opcode = Opcode::OpenTableAck;
             write_u32_le(id, reply.payload);
@@ -587,12 +605,12 @@ DispatchResult Session::dispatch(const Frame& f) {
                     for (auto& c : ext)
                         c = static_cast<char>(std::tolower(
                                 static_cast<unsigned char>(c)));
-                    std::string bag;
-                    if (ext == ".dbf")      bag = tp.stem().string() + ".cdx";
-                    else if (ext == ".adt") bag = tp.stem().string() + ".adi";
-                    if (!bag.empty()) {
+                    std::string bag_leaf;
+                    if (ext == ".dbf")      bag_leaf = tp.stem().string() + ".cdx";
+                    else if (ext == ".adt") bag_leaf = tp.stem().string() + ".adi";
+                    if (!bag_leaf.empty()) {
                         std::error_code ec;
-                        std::filesystem::path bagp = tp.parent_path() / bag;
+                        std::filesystem::path bagp = tp.parent_path() / bag_leaf;
                         if (!std::filesystem::exists(bagp, ec)) {
                             // Case-insensitive fallback.
                             std::string ci = openads::platform::
@@ -601,6 +619,16 @@ DispatchResult Session::dispatch(const Frame& f) {
                                 bagp = std::filesystem::path(ci);
                         }
                         if (std::filesystem::exists(bagp, ec)) {
+                            // Send the bag path relative to the connection
+                            // root so subdirectory tables round-trip the
+                            // correct production index (basename-only made
+                            // AdsOpenIndex miss when table_dir != data root).
+                            std::string bag = bag_leaf;
+                            std::filesystem::path base(sess_conn_->data_dir());
+                            auto bag_rel = std::filesystem::relative(bagp, base, ec);
+                            if (!ec && !bag_rel.empty() && bag_rel != ".") {
+                                bag = bag_rel.generic_string();
+                            }
                             // Append: [u16 bag_len][bag_bytes]
                             auto bn = static_cast<std::uint16_t>(bag.size());
                             reply.payload.push_back(
@@ -632,6 +660,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                 tbls_.erase(it);
                 srv_->add_session_table(sid_, -1);
             }
+            tbl_open_paths_.erase(id);
+            tbls_h_.erase(id);
             ordered_tables_.erase(id);
             reply.opcode = Opcode::CloseTableAck;
             break;
