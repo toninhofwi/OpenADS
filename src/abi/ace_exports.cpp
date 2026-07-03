@@ -9416,6 +9416,33 @@ UNSIGNED32 emit_utf16(UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
     return openads::AE_SUCCESS;
 }
 
+void utf16z_to_utf8(const UNSIGNED16* text, std::string* out) {
+    if (out == nullptr) return;
+    out->clear();
+    if (text == nullptr) return;
+    std::size_t units = 0;
+    while (text[units] != 0) ++units;
+    if (units == 0) return;
+
+    if (text[0] == 0xFEFFu) {
+        *out = openads::abi::utf16le_to_utf8(text + 1, units - 1);
+        return;
+    }
+    if (text[0] == 0xFFFEu) {
+        std::vector<std::uint16_t> swapped;
+        swapped.reserve(units - 1);
+        for (std::size_t i = 1; i < units; ++i) {
+            std::uint16_t v = text[i];
+            swapped.push_back(static_cast<std::uint16_t>(
+                static_cast<std::uint16_t>(v << 8) |
+                static_cast<std::uint16_t>(v >> 8)));
+        }
+        *out = openads::abi::utf16le_to_utf8(swapped.data(), swapped.size());
+        return;
+    }
+    *out = openads::abi::utf16le_to_utf8(text, units);
+}
+
 }  // namespace
 
 UNSIGNED32 ENTRYPOINT AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
@@ -11567,6 +11594,15 @@ UNSIGNED32 ENTRYPOINT AdsVerifySQL(ADSHANDLE /*hStatement*/, UNSIGNED8* pucSQL) 
     auto r = openads::sql::parse_select(sql);
     if (!r) return fail(r.error());
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsVerifySQLW(ADSHANDLE hStatement, UNSIGNED16* pwcSQL) {
+    if (pwcSQL == nullptr) return fail(openads::AE_PARSE_ERROR, "null SQL");
+    std::string sql;
+    utf16z_to_utf8(pwcSQL, &sql);
+    std::vector<UNSIGNED8> bytes(sql.begin(), sql.end());
+    bytes.push_back(0);
+    return AdsVerifySQL(hStatement, bytes.data());
 }
 
 UNSIGNED32 ENTRYPOINT AdsFailedTransactionRecovery(UNSIGNED8* pucServer) {
@@ -14559,6 +14595,16 @@ UNSIGNED32 ENTRYPOINT AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
     return write_path(v.value().as_string);
 }
 
+UNSIGNED32 ENTRYPOINT AdsBinaryToFileW(ADSHANDLE hTable, UNSIGNED8* pucField,
+                            UNSIGNED16* pwcPath) {
+    if (pwcPath == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::string path;
+    utf16z_to_utf8(pwcPath, &path);
+    std::vector<UNSIGNED8> bytes(path.begin(), path.end());
+    bytes.push_back(0);
+    return AdsBinaryToFile(hTable, pucField, bytes.data());
+}
+
 UNSIGNED32 ENTRYPOINT AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED16 /*usType*/, UNSIGNED8* pucPath) {
     if (pucPath == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -14590,6 +14636,16 @@ UNSIGNED32 ENTRYPOINT AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
     auto r = t->set_field(static_cast<std::uint16_t>(idx), payload);
     if (!r) return fail(r.error());
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsFileToBinaryW(ADSHANDLE hTable, UNSIGNED8* pucField,
+                            UNSIGNED16 usType, UNSIGNED16* pwcPath) {
+    if (pwcPath == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::string path;
+    utf16z_to_utf8(pwcPath, &path);
+    std::vector<UNSIGNED8> bytes(path.begin(), path.end());
+    bytes.push_back(0);
+    return AdsFileToBinary(hTable, pucField, usType, bytes.data());
 }
 
 // --- M9.13 binary memo (ADS_BINARY / ADS_IMAGE) ----------------------------
@@ -15905,6 +15961,14 @@ UNSIGNED32 ENTRYPOINT AdsPrepareSQL(ADSHANDLE hStatement, UNSIGNED8* pucSQL) {
     if (st == nullptr) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
     st->sql = openads::abi::to_internal(pucSQL, 0);
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsPrepareSQLW(ADSHANDLE hStatement, UNSIGNED16* pwcSQL) {
+    std::string sql;
+    utf16z_to_utf8(pwcSQL, &sql);
+    std::vector<UNSIGNED8> bytes(sql.begin(), sql.end());
+    bytes.push_back(0);
+    return AdsPrepareSQL(hStatement, bytes.data());
 }
 
 UNSIGNED32 ENTRYPOINT AdsGetNumParams(ADSHANDLE hStatement, UNSIGNED16* pusNumParams) {
@@ -23436,6 +23500,16 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
 
     *phCursor = gh;
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirectW(ADSHANDLE hStatement, UNSIGNED16* pwcSQL,
+                                ADSHANDLE* phCursor) {
+    if (pwcSQL == nullptr) return fail(openads::AE_PARSE_ERROR, "null SQL");
+    std::string sql;
+    utf16z_to_utf8(pwcSQL, &sql);
+    std::vector<UNSIGNED8> bytes(sql.begin(), sql.end());
+    bytes.push_back(0);
+    return AdsExecuteSQLDirect(hStatement, bytes.data(), phCursor);
 }
 
 // ---- Date display format (AdsSetDateFormat / AdsGetDateFormat) -------------

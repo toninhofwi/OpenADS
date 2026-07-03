@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "abi/charset.h"
 #include "engine/data_dict.h"
 #include "openads/ace.h"
 #include "openads/error.h"
@@ -112,6 +113,44 @@ TEST_CASE("ABI SQL: AdsPrepareSQL + AdsExecuteSQL") {
     REQUIRE(AdsGetRecordCount(hCursor, 0, &count) == 0);
     CHECK(count == 2);
     REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("ABI SQL: wide SQL wrappers execute and prepare SELECT") {
+    const auto dir = fs::temp_directory_path() / "openads_sql_wide_wrappers";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    auto sql_w = openads::abi::utf8_to_utf16le("SELECT * FROM data.dbf");
+    sql_w.push_back(0);
+
+    ADSHANDLE directStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &directStmt) == 0);
+    ADSHANDLE directCursor = 0;
+    REQUIRE(AdsExecuteSQLDirectW(directStmt, sql_w.data(), &directCursor) == 0);
+    UNSIGNED32 count = 0;
+    REQUIRE(AdsGetRecordCount(directCursor, 0, &count) == 0);
+    CHECK(count == 2);
+    REQUIRE(AdsCloseSQLStatement(directStmt) == 0);
+
+    ADSHANDLE prepStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &prepStmt) == 0);
+    REQUIRE(AdsPrepareSQLW(prepStmt, sql_w.data()) == 0);
+    ADSHANDLE prepCursor = 0;
+    REQUIRE(AdsExecuteSQL(prepStmt, &prepCursor) == 0);
+    count = 0;
+    REQUIRE(AdsGetRecordCount(prepCursor, 0, &count) == 0);
+    CHECK(count == 2);
+    REQUIRE(AdsCloseSQLStatement(prepStmt) == 0);
+
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }

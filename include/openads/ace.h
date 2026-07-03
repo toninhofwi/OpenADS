@@ -121,6 +121,7 @@ UNSIGNED32 ENTRYPOINT AdsGetLongLong   (ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 ENTRYPOINT AdsSetFieldRaw   (ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
 UNSIGNED32 ENTRYPOINT AdsVerifySQL     (ADSHANDLE  hStatement, UNSIGNED8* pucSQL);
+UNSIGNED32 ENTRYPOINT AdsVerifySQLW    (ADSHANDLE  hStatement, UNSIGNED16* pwcSQL);
 UNSIGNED32 ENTRYPOINT AdsFailedTransactionRecovery(UNSIGNED8* pucServer);
 UNSIGNED32 ENTRYPOINT AdsGetAllLocks   (ADSHANDLE hTable, UNSIGNED32* paRecnos,
                               UNSIGNED16* pusCount);
@@ -284,8 +285,12 @@ UNSIGNED32 ENTRYPOINT AdsGetMemoDataType  (ADSHANDLE hTable, UNSIGNED8* pucField
                                  UNSIGNED16* pusType);
 UNSIGNED32 ENTRYPOINT AdsBinaryToFile     (ADSHANDLE hTable, UNSIGNED8* pucField,
                                  UNSIGNED8* pucPath);
+UNSIGNED32 ENTRYPOINT AdsBinaryToFileW    (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED16* pwcPath);
 UNSIGNED32 ENTRYPOINT AdsFileToBinary     (ADSHANDLE hTable, UNSIGNED8* pucField,
                                  UNSIGNED16 usType, UNSIGNED8* pucPath);
+UNSIGNED32 ENTRYPOINT AdsFileToBinaryW    (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED16 usType, UNSIGNED16* pwcPath);
 UNSIGNED32 ENTRYPOINT AdsGetBinaryLength  (ADSHANDLE hTable, UNSIGNED8* pucField,
                                  UNSIGNED32* pulLength);
 UNSIGNED32 ENTRYPOINT AdsGetBinary        (ADSHANDLE hTable, UNSIGNED8* pucField,
@@ -580,9 +585,12 @@ UNSIGNED32 ENTRYPOINT AdsDDModifyLink           (ADSHANDLE   hConnect,
 UNSIGNED32 ENTRYPOINT AdsCreateSQLStatement (ADSHANDLE hConnect, ADSHANDLE* phStatement);
 UNSIGNED32 ENTRYPOINT AdsCloseSQLStatement  (ADSHANDLE hStatement);
 UNSIGNED32 ENTRYPOINT AdsPrepareSQL         (ADSHANDLE hStatement, UNSIGNED8* pucSQL);
+UNSIGNED32 ENTRYPOINT AdsPrepareSQLW        (ADSHANDLE hStatement, UNSIGNED16* pwcSQL);
 UNSIGNED32 ENTRYPOINT AdsGetNumParams       (ADSHANDLE hStatement, UNSIGNED16* pusNumParams);
 UNSIGNED32 ENTRYPOINT AdsExecuteSQL         (ADSHANDLE hStatement, ADSHANDLE* phCursor);
 UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
+                                  ADSHANDLE* phCursor);
+UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirectW  (ADSHANDLE hStatement, UNSIGNED16* pwcSQL,
                                   ADSHANDLE* phCursor);
 
 #define ADS_TOP            0

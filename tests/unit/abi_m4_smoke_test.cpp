@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "abi/charset.h"
 #include "openads/ace.h"
 #include "openads/error.h"
 #include "drivers/dbt/dbt_memo.h"
@@ -100,6 +101,27 @@ TEST_CASE("ABI M4 smoke: open table with auto-attached FPT, write memo, read bac
                               std::istreambuf_iterator<char>());
     in.close();
     CHECK(disk_content == memo_text);
+
+    auto wide_input = (dir / "wide_input.bin").string();
+    {
+        std::ofstream out(wide_input, std::ios::binary);
+        out << "wide memo payload";
+    }
+    auto wide_input_w = openads::abi::utf8_to_utf16le(wide_input);
+    wide_input_w.push_back(0);
+    REQUIRE(AdsFileToBinaryW(hTable, fld_notes, ADS_BINARY,
+                             wide_input_w.data()) == 0);
+
+    auto wide_output = (dir / "wide_output.bin").string();
+    auto wide_output_w = openads::abi::utf8_to_utf16le(wide_output);
+    wide_output_w.push_back(0);
+    REQUIRE(AdsBinaryToFileW(hTable, fld_notes, wide_output_w.data()) == 0);
+
+    std::ifstream wide_in(wide_output, std::ios::binary);
+    std::string wide_disk_content((std::istreambuf_iterator<char>(wide_in)),
+                                  std::istreambuf_iterator<char>());
+    wide_in.close();
+    CHECK(wide_disk_content == "wide memo payload");
 
     // Encryption thunks behave correctly: enable returns 5004 (pending),
     // is_*_encrypted returns 0.

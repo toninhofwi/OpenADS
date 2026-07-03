@@ -33,6 +33,7 @@ EXPORTS
     AdsAtEOF@8                  = AdsAtEOF
     AdsBeginTransaction@4       = AdsBeginTransaction
     AdsBinaryToFile@12          = AdsBinaryToFile
+    AdsBinaryToFileW@12         = AdsBinaryToFileW
     AdsCacheOpenCursors@2       = AdsCacheOpenCursors
     AdsCacheOpenTables@2        = AdsCacheOpenTables
     AdsCacheRecords@6           = AdsCacheRecords
@@ -164,9 +165,11 @@ EXPORTS
     AdsEvalTestExpr@12          = AdsEvalTestExpr
     AdsExecuteSQL@8             = AdsExecuteSQL
     AdsExecuteSQLDirect@12      = AdsExecuteSQLDirect
+    AdsExecuteSQLDirectW@12     = AdsExecuteSQLDirectW
     AdsExtractKey@12            = AdsExtractKey
     AdsFailedTransactionRecovery@4 = AdsFailedTransactionRecovery
     AdsFileToBinary@16          = AdsFileToBinary
+    AdsFileToBinaryW@16         = AdsFileToBinaryW
     AdsFilterOption@12          = AdsFilterOption
     AdsFindClose@8              = AdsFindClose
     AdsFindConnection@8         = AdsFindConnection
@@ -311,6 +314,7 @@ EXPORTS
     AdsPackTable@4              = AdsPackTable
     AdsPackTable120@12          = AdsPackTable120
     AdsPrepareSQL@8             = AdsPrepareSQL
+    AdsPrepareSQLW@8            = AdsPrepareSQLW
     AdsRecallAllRecords@4       = AdsRecallAllRecords
     AdsRecallRecord@4           = AdsRecallRecord
     AdsReindex@4                = AdsReindex
@@ -390,6 +394,7 @@ EXPORTS
     AdsUnlockRecord@8           = AdsUnlockRecord
     AdsUnlockTable@4            = AdsUnlockTable
     AdsVerifySQL@8              = AdsVerifySQL
+    AdsVerifySQLW@8             = AdsVerifySQLW
     AdsWriteAllRecords@0        = AdsWriteAllRecords
     AdsWriteRecord@4            = AdsWriteRecord
     AdsZapTable@4               = AdsZapTable

@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "abi/charset.h"
 #include "openads/ace.h"
 #include "openads/error.h"
 
@@ -153,6 +154,13 @@ TEST_CASE("M9.23 AdsVerifySQL accepts valid SELECT and rejects garbage") {
     UNSIGNED8 bad_sql[64] = "DROP TABLE data";
     CHECK(AdsVerifySQL(0, ok_sql)  == 0);
     CHECK(AdsVerifySQL(0, bad_sql) != 0);
+
+    auto ok_w = openads::abi::utf8_to_utf16le("SELECT * FROM data");
+    ok_w.push_back(0);
+    auto bad_w = openads::abi::utf8_to_utf16le("DROP TABLE data");
+    bad_w.push_back(0);
+    CHECK(AdsVerifySQLW(0, ok_w.data()) == 0);
+    CHECK(AdsVerifySQLW(0, bad_w.data()) != 0);
 }
 
 TEST_CASE("M12 wrapper setters delegate to existing global settings") {

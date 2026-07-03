@@ -74,7 +74,9 @@ EXPORTS
     AdsGetMemoLength
     AdsGetMemoDataType
     AdsBinaryToFile
+    AdsBinaryToFileW
     AdsFileToBinary
+    AdsFileToBinaryW
     AdsGetLastAutoinc
     AdsEnableEncryption
     AdsDisableEncryption
@@ -102,9 +104,11 @@ EXPORTS
     AdsCreateSQLStatement
     AdsCloseSQLStatement
     AdsPrepareSQL
+    AdsPrepareSQLW
     AdsGetNumParams
     AdsExecuteSQL
     AdsExecuteSQLDirect
+    AdsExecuteSQLDirectW
     AdsAddCustomKey
     AdsApplicationExit
     AdsCacheOpenCursors
@@ -281,6 +285,7 @@ EXPORTS
     AdsStmtSetTableReadOnly
     AdsStmtSetTableType
     AdsVerifySQL
+    AdsVerifySQLW
     AdsWriteAllRecords
 
     ; Legacy MSVC2013-era CRT shims (M8.2). Harbour's msvc64 prebuilt
