@@ -5693,6 +5693,26 @@ UNSIGNED32 ENTRYPOINT AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {
     return ok();
 }
 
+UNSIGNED32 ENTRYPOINT AdsGetTableLockType(ADSHANDLE hTable,
+                                          UNSIGNED16* pusLockType) {
+    if (pusLockType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (get_remote_table(hTable) != nullptr) {
+        *pusLockType = ADS_COMPATIBLE_LOCKING;
+        return ok();
+    }
+    if (openads::abi::backend_table_ops_for(hTable) != nullptr) {
+        *pusLockType = ADS_COMPATIBLE_LOCKING;
+        return ok();
+    }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pusLockType =
+        (t->locking_mode() == openads::engine::LockingMode::Proprietary)
+            ? ADS_PROPRIETARY_LOCKING
+            : ADS_COMPATIBLE_LOCKING;
+    return ok();
+}
+
 UNSIGNED32 ENTRYPOINT AdsGetTableFilename(ADSHANDLE hTable, UNSIGNED16 /*usOption*/,
                                UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -7255,6 +7275,127 @@ UNSIGNED32 ENTRYPOINT AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
 // metadata bridges below.
 namespace {
 
+static void uppercase_ascii(std::string& s) {
+    for (auto& c : s) {
+        c = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c)));
+    }
+}
+
+static bool field_arg_ordinal(UNSIGNED8* pucField, std::size_t limit,
+                              std::size_t* zero_based) {
+    auto p = reinterpret_cast<std::uintptr_t>(pucField);
+    if (p == 0 || p >= 0x10000u) return false;
+    std::size_t one_based = static_cast<std::size_t>(p);
+    if (one_based < 1 || one_based > limit) return false;
+    if (zero_based != nullptr) *zero_based = one_based - 1;
+    return true;
+}
+
+static bool field_name_matches(UNSIGNED8* pucField, const std::string& have) {
+    if (pucField == nullptr) return false;
+    auto p = reinterpret_cast<std::uintptr_t>(pucField);
+    if (p != 0 && p < 0x10000u) return false;
+    std::string want = openads::abi::to_internal(pucField, 0);
+    std::string normalized_have = have;
+    uppercase_ascii(want);
+    uppercase_ascii(normalized_have);
+    return want == normalized_have;
+}
+
+static bool projection_field_position(ADSHANDLE h, Table* t,
+                                      UNSIGNED8* pucField,
+                                      std::uint16_t* ordinal,
+                                      std::uint16_t* source_idx) {
+    const auto* proj = projection_for(h);
+    if (proj == nullptr || t == nullptr) return false;
+    std::size_t pos = 0;
+    if (field_arg_ordinal(pucField, proj->size(), &pos)) {
+        *ordinal = static_cast<std::uint16_t>(pos);
+        *source_idx = (*proj)[pos];
+        return true;
+    }
+    if (pucField == nullptr) return false;
+    auto p = reinterpret_cast<std::uintptr_t>(pucField);
+    if (p != 0 && p < 0x10000u) return false;
+    std::string want = openads::abi::to_internal(pucField, 0);
+    uppercase_ascii(want);
+    for (std::size_t i = 0; i < proj->size(); ++i) {
+        const auto src = (*proj)[i];
+        if (src >= t->field_count()) continue;
+        std::string have = t->field_descriptor(src).name;
+        uppercase_ascii(have);
+        if (have == want) {
+            *ordinal = static_cast<std::uint16_t>(i);
+            *source_idx = src;
+            return true;
+        }
+    }
+    return false;
+}
+
+static UNSIGNED32 backend_field_num(ADSHANDLE hTable,
+                                    const openads::abi::BackendTableOps* ops,
+                                    UNSIGNED8* pucField,
+                                    UNSIGNED16* pusNum) {
+    if (ops == nullptr || ops->num_fields == nullptr ||
+        ops->field_name == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    UNSIGNED16 count = 0;
+    UNSIGNED32 rc = ops->num_fields(hTable, &count);
+    if (rc != openads::AE_SUCCESS) return rc;
+    std::size_t pos = 0;
+    if (field_arg_ordinal(pucField, count, &pos)) {
+        *pusNum = static_cast<UNSIGNED16>(pos + 1);
+        return ok();
+    }
+    for (UNSIGNED16 i = 1; i <= count; ++i) {
+        UNSIGNED8 name[512] = {0};
+        UNSIGNED16 len = sizeof(name);
+        rc = ops->field_name(hTable, i, name, &len);
+        if (rc != openads::AE_SUCCESS) return rc;
+        if (field_name_matches(pucField,
+                std::string(reinterpret_cast<char*>(name)))) {
+            *pusNum = i;
+            return ok();
+        }
+    }
+    return fail(openads::AE_COLUMN_NOT_FOUND, "");
+}
+
+static UNSIGNED32 backend_field_offset(
+    ADSHANDLE hTable, const openads::abi::BackendTableOps* ops,
+    UNSIGNED8* pucField, UNSIGNED32* pulOffset) {
+    if (ops == nullptr || ops->num_fields == nullptr ||
+        ops->field_name == nullptr || ops->field_length == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    UNSIGNED16 count = 0;
+    UNSIGNED32 rc = ops->num_fields(hTable, &count);
+    if (rc != openads::AE_SUCCESS) return rc;
+    std::size_t want_pos = std::numeric_limits<std::size_t>::max();
+    (void)field_arg_ordinal(pucField, count, &want_pos);
+    UNSIGNED32 offset = 1;
+    for (UNSIGNED16 i = 1; i <= count; ++i) {
+        UNSIGNED8 name[512] = {0};
+        UNSIGNED16 len = sizeof(name);
+        rc = ops->field_name(hTable, i, name, &len);
+        if (rc != openads::AE_SUCCESS) return rc;
+        if (want_pos == static_cast<std::size_t>(i - 1) ||
+            field_name_matches(pucField,
+                std::string(reinterpret_cast<char*>(name)))) {
+            *pulOffset = offset;
+            return ok();
+        }
+        UNSIGNED32 field_len = 0;
+        rc = ops->field_length(hTable, name, &field_len);
+        if (rc != openads::AE_SUCCESS) return rc;
+        offset += field_len;
+    }
+    return fail(openads::AE_COLUMN_NOT_FOUND, "");
+}
+
 std::size_t remote_field_index(openads::network::RemoteTable* rt,
                                 UNSIGNED8* pucField) {
     if (!rt->fields_cached) {
@@ -7297,6 +7438,78 @@ std::size_t remote_field_index(openads::network::RemoteTable* rt,
 }
 
 } // namespace
+
+UNSIGNED32 ENTRYPOINT AdsGetFieldNum(ADSHANDLE hTable, UNSIGNED8* pucFldName,
+                                     UNSIGNED16* pusNum) {
+    if (pusNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucFldName);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        if (!openads::abi::assign_u16(pusNum, i + 1)) {
+            return fail(openads::AE_INTERNAL_ERROR, "field number exceeds 65535");
+        }
+        return ok();
+    }
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        return backend_field_num(hTable, ops, pucFldName, pusNum);
+    }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t ordinal = 0;
+    std::uint16_t src_idx = 0;
+    if (projection_field_position(hTable, t, pucFldName, &ordinal, &src_idx)) {
+        *pusNum = static_cast<UNSIGNED16>(ordinal + 1);
+        return ok();
+    }
+    if (!resolve_field_index(t, pucFldName, &src_idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusNum = static_cast<UNSIGNED16>(src_idx + 1);
+    return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsGetFieldOffset(ADSHANDLE hTable, UNSIGNED8* pucFldName,
+                                        UNSIGNED32* pulOffset) {
+    if (pulOffset == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucFldName);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        UNSIGNED32 offset = 1;
+        for (std::size_t n = 0; n < i; ++n) {
+            offset += rt->fields[n].length;
+        }
+        *pulOffset = offset;
+        return ok();
+    }
+    if (auto* ops = openads::abi::backend_table_ops_for(hTable)) {
+        return backend_field_offset(hTable, ops, pucFldName, pulOffset);
+    }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t ordinal = 0;
+    std::uint16_t src_idx = 0;
+    if (projection_field_position(hTable, t, pucFldName, &ordinal, &src_idx)) {
+        UNSIGNED32 offset = 1;
+        const auto* proj = projection_for(hTable);
+        for (std::size_t i = 0; proj != nullptr && i < ordinal; ++i) {
+            const auto prev = (*proj)[i];
+            if (prev < t->field_count()) {
+                offset += t->field_descriptor(prev).length;
+            }
+        }
+        *pulOffset = offset;
+        return ok();
+    }
+    if (!resolve_field_index(t, pucFldName, &src_idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pulOffset = t->field_descriptor(src_idx).record_offset;
+    return ok();
+}
 
 UNSIGNED32 ENTRYPOINT AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED16* pusType) {
@@ -7371,6 +7584,13 @@ UNSIGNED32 ENTRYPOINT AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
             break;
     }
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsGetFieldLength100(ADSHANDLE hTable,
+                                           UNSIGNED8* pucField,
+                                           UNSIGNED32 /*ulOptions*/,
+                                           UNSIGNED32* pulLen) {
+    return AdsGetFieldLength(hTable, pucField, pulLen);
 }
 
 UNSIGNED32 ENTRYPOINT AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
@@ -13927,6 +14147,15 @@ UNSIGNED32 ENTRYPOINT AdsPackTable(ADSHANDLE hTable) {
     auto r = t->pack();
     if (!r) return fail(r.error());
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsPackTable120(ADSHANDLE hTable,
+                                      UNSIGNED32 /*ulMemoBlockSize*/,
+                                      UNSIGNED32 ulOptions) {
+    if (ulOptions != 0) {
+        return fail(openads::AE_INTERNAL_ERROR, "reserved options must be zero");
+    }
+    return AdsPackTable(hTable);
 }
 
 UNSIGNED32 ENTRYPOINT AdsZapTable(ADSHANDLE hTable) {
@@ -24176,6 +24405,10 @@ UNSIGNED32 ENTRYPOINT AdsSetDateFormat(UNSIGNED8* pucFormat) {
         g_date_format.assign(reinterpret_cast<const char*>(pucFormat));
     return openads::AE_SUCCESS;
 }
+UNSIGNED32 ENTRYPOINT AdsSetDateFormat60(ADSHANDLE /*hConnect*/,
+                                         UNSIGNED8* pucFormat) {
+    return AdsSetDateFormat(pucFormat);
+}
 UNSIGNED32 ENTRYPOINT AdsSetDecimals(UNSIGNED16 usDecimals) {
     g_set_decimals = usDecimals;
     return openads::AE_SUCCESS;
@@ -24192,6 +24425,10 @@ UNSIGNED32 ENTRYPOINT AdsSetEpoch(UNSIGNED16 us) {
 UNSIGNED32 ENTRYPOINT AdsSetExact(UNSIGNED16 us) {
     openads::engine::set_set_exact(us != 0);
     return openads::AE_SUCCESS;
+}
+UNSIGNED32 ENTRYPOINT AdsSetExact22(ADSHANDLE /*hObj*/,
+                                    UNSIGNED16 bIgnoreSpaces) {
+    return AdsSetExact(bIgnoreSpaces);
 }
 UNSIGNED32 ENTRYPOINT AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
     if (pucFilter == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null filter");
@@ -24855,6 +25092,27 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable90(ADSHANDLE hConnect, UNSIGNED8* pucTa
                                  UNSIGNED8* pucDeleteFields,
                                  UNSIGNED8* pucChangeFields,
                                  UNSIGNED8* /*pucCollation*/) {
+    return AdsRestructureTable(hConnect, pucTableName, nullptr, usTableType,
+                               usCharType, usLockType, usCheckRights,
+                               pucAddFields, pucDeleteFields, pucChangeFields);
+}
+
+UNSIGNED32 ENTRYPOINT AdsRestructureTable120(ADSHANDLE hConnect,
+                                  UNSIGNED8* pucTableName,
+                                  UNSIGNED8* /*pucPassword*/,
+                                  UNSIGNED16 usTableType,
+                                  UNSIGNED16 usCharType,
+                                  UNSIGNED16 usLockType,
+                                  UNSIGNED16 usCheckRights,
+                                  UNSIGNED8* pucAddFields,
+                                  UNSIGNED8* pucDeleteFields,
+                                  UNSIGNED8* pucChangeFields,
+                                  UNSIGNED8* /*pucCollation*/,
+                                  UNSIGNED32 /*ulMemoBlockSize*/,
+                                  UNSIGNED32 ulOptions) {
+    if (ulOptions != 0) {
+        return fail(openads::AE_INTERNAL_ERROR, "reserved options must be zero");
+    }
     return AdsRestructureTable(hConnect, pucTableName, nullptr, usTableType,
                                usCharType, usLockType, usCheckRights,
                                pucAddFields, pucDeleteFields, pucChangeFields);

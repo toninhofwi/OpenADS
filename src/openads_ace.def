@@ -21,9 +21,12 @@ EXPORTS
     AdsAtBOF
     AdsGetField
     AdsGetFieldName
+    AdsGetFieldNum
+    AdsGetFieldOffset
     AdsGetNumFields
     AdsGetFieldType
     AdsGetFieldLength
+    AdsGetFieldLength100
     AdsGetRecordNum
     AdsGetRecordCount
     AdsGetLastError
@@ -63,6 +66,7 @@ EXPORTS
     AdsClearScope
     AdsGetScope
     AdsPackTable
+    AdsPackTable120
     AdsZapTable
     AdsSetAOF
     AdsGetAOFOptLevel
@@ -213,6 +217,7 @@ EXPORTS
     AdsGetTableCharType
     AdsGetTableConnection
     AdsGetTableFilename
+    AdsGetTableLockType
     AdsGetTableType
     AdsGotoRecord
     AdsIsConnectionAlive
@@ -247,12 +252,15 @@ EXPORTS
     AdsRegisterCallbackFunction
     AdsReindex
     AdsRestructureTable
+    AdsRestructureTable120
     AdsSetBinary
     AdsSetDateFormat
+    AdsSetDateFormat60
     AdsSetDecimals
     AdsSetDefault
     AdsSetEpoch
     AdsSetExact
+    AdsSetExact22
     AdsSetFieldRaw
     AdsSetFilter
     AdsSetJulian
@@ -416,4 +424,3 @@ EXPORTS
     AdsAggregateCount
     AdsAggregateValue
     AdsAggregateClose
-

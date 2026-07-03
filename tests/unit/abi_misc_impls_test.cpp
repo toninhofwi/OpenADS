@@ -155,6 +155,24 @@ TEST_CASE("M9.23 AdsVerifySQL accepts valid SELECT and rejects garbage") {
     CHECK(AdsVerifySQL(0, bad_sql) != 0);
 }
 
+TEST_CASE("M12 wrapper setters delegate to existing global settings") {
+    UNSIGNED8 fmt[16] = "YYYY-MM-DD";
+    REQUIRE(AdsSetDateFormat60(0, fmt) == 0);
+    UNSIGNED8 out[32] = {0};
+    UNSIGNED16 len = sizeof(out);
+    REQUIRE(AdsGetDateFormat(out, &len) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(out), len) == "YYYY-MM-DD");
+
+    REQUIRE(AdsSetExact22(0, 1) == 0);
+    UNSIGNED16 exact = 0;
+    REQUIRE(AdsGetExact22(0, &exact) == 0);
+    CHECK(exact == 1);
+
+    REQUIRE(AdsSetExact22(0, 0) == 0);
+    REQUIRE(AdsGetExact22(0, &exact) == 0);
+    CHECK(exact == 0);
+}
+
 TEST_CASE("M9.23 AdsFailedTransactionRecovery opens + closes a connection") {
     auto dir = fs::temp_directory_path() / "openads_m9_23_recovery";
     std::error_code ec;

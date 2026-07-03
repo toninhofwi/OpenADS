@@ -47,6 +47,35 @@ TEST_CASE("M9.5 AdsCreateTable: parse field defs + write DBF + open") {
     UNSIGNED32 flen = 0;
     REQUIRE(AdsGetFieldLength(hTable, fld, &flen) == 0);
     CHECK(flen == 12u);
+    flen = 0;
+    REQUIRE(AdsGetFieldLength100(hTable, fld, 0, &flen) == 0);
+    CHECK(flen == 12u);
+
+    UNSIGNED16 field_num = 0;
+    REQUIRE(AdsGetFieldNum(hTable, fld, &field_num) == 0);
+    CHECK(field_num == 2);
+
+    UNSIGNED32 offset = 0;
+    REQUIRE(AdsGetFieldOffset(hTable, fld, &offset) == 0);
+    CHECK(offset == 6u);
+
+    REQUIRE(AdsGetFieldNum(hTable, reinterpret_cast<UNSIGNED8*>(3),
+                           &field_num) == 0);
+    CHECK(field_num == 3);
+    REQUIRE(AdsGetFieldOffset(hTable, reinterpret_cast<UNSIGNED8*>(3),
+                              &offset) == 0);
+    CHECK(offset == 18u);
+    CHECK(AdsGetFieldNum(hTable, reinterpret_cast<UNSIGNED8*>(99),
+                         &field_num) != 0);
+    CHECK(AdsGetFieldOffset(hTable, reinterpret_cast<UNSIGNED8*>(99),
+                            &offset) != 0);
+
+    UNSIGNED16 lock_type = 0;
+    REQUIRE(AdsGetTableLockType(hTable, &lock_type) == 0);
+    CHECK(lock_type == ADS_COMPATIBLE_LOCKING);
+
+    REQUIRE(AdsPackTable120(hTable, ADS_DEFAULT, 0) == 0);
+    CHECK(AdsPackTable120(hTable, ADS_DEFAULT, 1) != 0);
 
     REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);

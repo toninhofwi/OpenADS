@@ -62,6 +62,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom    (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsGotoRecord    (ADSHANDLE hTable, UNSIGNED32 ulRecord);
 
 UNSIGNED32 ENTRYPOINT AdsGetTableType  (ADSHANDLE hTable, UNSIGNED16* pusType);
+UNSIGNED32 ENTRYPOINT AdsGetTableLockType(ADSHANDLE hTable, UNSIGNED16* pusLockType);
 UNSIGNED32 ENTRYPOINT AdsGetTableFilename(ADSHANDLE  hTable, UNSIGNED16 usOption,
                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
 
@@ -150,10 +151,18 @@ UNSIGNED32 ENTRYPOINT AdsGetField      (ADSHANDLE  hTable, UNSIGNED8* pucField,
                               UNSIGNED16 usOption);
 UNSIGNED32 ENTRYPOINT AdsGetFieldName  (ADSHANDLE  hTable, UNSIGNED16 usFieldNum,
                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsGetFieldNum   (ADSHANDLE  hTable, UNSIGNED8* pucFldName,
+                              UNSIGNED16* pusNum);
+UNSIGNED32 ENTRYPOINT AdsGetFieldOffset(ADSHANDLE  hTable, UNSIGNED8* pucFldName,
+                              UNSIGNED32* pulOffset);
 UNSIGNED32 ENTRYPOINT AdsGetNumFields  (ADSHANDLE  hTable, UNSIGNED16* pusFields);
 UNSIGNED32 ENTRYPOINT AdsGetFieldType  (ADSHANDLE  hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pusType);
 UNSIGNED32 ENTRYPOINT AdsGetFieldLength(ADSHANDLE  hTable, UNSIGNED8* pucField,
+                              UNSIGNED32* pulLen);
+UNSIGNED32 ENTRYPOINT AdsGetFieldLength100(ADSHANDLE hTable,
+                              UNSIGNED8* pucField,
+                              UNSIGNED32 ulOptions,
                               UNSIGNED32* pulLen);
 UNSIGNED32 ENTRYPOINT AdsGetRecordNum  (ADSHANDLE  hTable, UNSIGNED16 bFilterOption,
                               UNSIGNED32* pulRecordNum);
@@ -259,6 +268,9 @@ UNSIGNED32 ENTRYPOINT AdsGetScope      (ADSHANDLE hIndex, UNSIGNED16 usScope,
                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
 
 UNSIGNED32 ENTRYPOINT AdsPackTable     (ADSHANDLE hTable);
+UNSIGNED32 ENTRYPOINT AdsPackTable120  (ADSHANDLE hTable,
+                              UNSIGNED32 ulMemoBlockSize,
+                              UNSIGNED32 ulOptions);
 UNSIGNED32 ENTRYPOINT AdsZapTable      (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsSetAOF        (ADSHANDLE hTable, UNSIGNED8* pucCondition,
                               UNSIGNED16 usResolve);
@@ -1324,10 +1336,14 @@ UNSIGNED32 ENTRYPOINT AdsRefreshAOF        (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsRegisterCallbackFunction(void* pCallback);
 UNSIGNED32 ENTRYPOINT AdsRegisterProgressCallback(void* pCallback);
 UNSIGNED32 ENTRYPOINT AdsSetDateFormat     (UNSIGNED8* pucFormat);
+UNSIGNED32 ENTRYPOINT AdsSetDateFormat60   (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucFormat);
 UNSIGNED32 ENTRYPOINT AdsSetDecimals       (UNSIGNED16 usDecimals);
 UNSIGNED32 ENTRYPOINT AdsSetDefault        (UNSIGNED8* pucDir);
 UNSIGNED32 ENTRYPOINT AdsSetEpoch          (UNSIGNED16 usEpoch);
 UNSIGNED32 ENTRYPOINT AdsSetExact          (UNSIGNED16 bExact);
+UNSIGNED32 ENTRYPOINT AdsSetExact22        (ADSHANDLE hObj,
+                                             UNSIGNED16 bIgnoreSpaces);
 UNSIGNED32 ENTRYPOINT AdsSetFilter         (ADSHANDLE hTable,
                                              UNSIGNED8* pucExpr);
 UNSIGNED32 ENTRYPOINT AdsSetJulian         (ADSHANDLE hTable,
@@ -1803,6 +1819,19 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable90(ADSHANDLE hConnect,
                                           UNSIGNED8* pucDeleteFields,
                                           UNSIGNED8* pucChangeFields,
                                           UNSIGNED8* pucCollation);
+UNSIGNED32 ENTRYPOINT AdsRestructureTable120(ADSHANDLE hConnect,
+                                          UNSIGNED8* pucTableName,
+                                          UNSIGNED8* pucPassword,
+                                          UNSIGNED16 usTableType,
+                                          UNSIGNED16 usCharType,
+                                          UNSIGNED16 usLockType,
+                                          UNSIGNED16 usCheckRights,
+                                          UNSIGNED8* pucAddFields,
+                                          UNSIGNED8* pucDeleteFields,
+                                          UNSIGNED8* pucChangeFields,
+                                          UNSIGNED8* pucCollation,
+                                          UNSIGNED32 ulMemoBlockSize,
+                                          UNSIGNED32 ulOptions);
 UNSIGNED32 ENTRYPOINT AdsCancelUpdate90  (ADSHANDLE hTable, UNSIGNED32 ulOptions);
 UNSIGNED32 ENTRYPOINT AdsSetProperty90   (ADSHANDLE hObj, UNSIGNED32 ulOperation,
                                           UNSIGNED64* puqValue);

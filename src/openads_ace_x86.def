@@ -201,7 +201,10 @@ EXPORTS
     AdsGetField@20              = AdsGetField
     AdsGetFieldDecimals@12      = AdsGetFieldDecimals
     AdsGetFieldLength@12        = AdsGetFieldLength
+    AdsGetFieldLength100@16     = AdsGetFieldLength100
     AdsGetFieldName@12          = AdsGetFieldName
+    AdsGetFieldNum@12           = AdsGetFieldNum
+    AdsGetFieldOffset@12        = AdsGetFieldOffset
     AdsGetFieldRaw@16           = AdsGetFieldRaw
     AdsGetFieldType@12          = AdsGetFieldType
     AdsGetFieldW@20             = AdsGetFieldW
@@ -256,6 +259,7 @@ EXPORTS
     AdsGetTableConType@8        = AdsGetTableConType
     AdsGetTableFilename@16      = AdsGetTableFilename
     AdsGetTableHandle25@12      = AdsGetTableHandle25
+    AdsGetTableLockType@8       = AdsGetTableLockType
     AdsGetTableOpenOptions@8    = AdsGetTableOpenOptions
     AdsGetTableType@8           = AdsGetTableType
     AdsGetVersion@20            = AdsGetVersion
@@ -305,6 +309,7 @@ EXPORTS
     AdsOpenTable@34             = AdsOpenTable
     AdsOpenTable90@36           = AdsOpenTable90
     AdsPackTable@4              = AdsPackTable
+    AdsPackTable120@12          = AdsPackTable120
     AdsPrepareSQL@8             = AdsPrepareSQL
     AdsRecallAllRecords@4       = AdsRecallAllRecords
     AdsRecallRecord@4           = AdsRecallRecord
@@ -318,6 +323,7 @@ EXPORTS
     AdsResetConnection@4        = AdsResetConnection
     AdsRestructureTable@36      = AdsRestructureTable
     AdsRestructureTable90@40    = AdsRestructureTable90
+    AdsRestructureTable120@48   = AdsRestructureTable120
     AdsRollbackTransaction@4    = AdsRollbackTransaction
     AdsRollbackTransaction80@12 = AdsRollbackTransaction80
     AdsSeek@20                  = AdsSeek
@@ -326,6 +332,7 @@ EXPORTS
     AdsSetBinary@28             = AdsSetBinary
     AdsSetCollation@8           = AdsSetCollation
     AdsSetDateFormat@4          = AdsSetDateFormat
+    AdsSetDateFormat60@8        = AdsSetDateFormat60
     AdsSetDecimals@2            = AdsSetDecimals
     AdsSetDefault@4             = AdsSetDefault
     AdsSetDouble@16             = AdsSetDouble
@@ -333,6 +340,7 @@ EXPORTS
     AdsSetEncryptionPassword@8  = AdsSetEncryptionPassword
     AdsSetEpoch@2               = AdsSetEpoch
     AdsSetExact@2               = AdsSetExact
+    AdsSetExact22@6             = AdsSetExact22
     AdsSetField@16              = AdsSetField
     AdsSetFieldRaw@16           = AdsSetFieldRaw
     AdsSetFilter@8              = AdsSetFilter
