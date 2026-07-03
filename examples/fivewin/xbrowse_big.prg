@@ -64,7 +64,7 @@ FUNCTION Main( cMode )
             AllTrim( Transform( BIG->( RecCount() ), "999,999,999" ) ) + " records  |  " + cUri
 
    @ 0, 0 XBROWSE oBrw OF oWnd ;
-      ALIAS "BIG" AUTOCOLS ;
+      ALIAS "BIG" AUTOCOLS AUTOSORT ;
       CELL LINES NOBORDER FOOTERS
 
    oBrw:CreateFromCode()

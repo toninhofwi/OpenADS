@@ -82,7 +82,7 @@ STATIC FUNCTION ShowBrowse()
       TITLE "OpenADS — FWH xBrowse over ADS (" + AdsVersion() + ")"
 
    @ 0, 0 XBROWSE oBrw OF oWnd ;
-      ALIAS "CUST" AUTOCOLS ;
+      ALIAS "CUST" AUTOCOLS AUTOSORT ;
       CELL LINES NOBORDER FOOTERS
 
    oBrw:CreateFromCode()

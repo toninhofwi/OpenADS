@@ -52,7 +52,7 @@ FUNCTION Main( cMode )
             "  |  " + AllTrim( Str( MINI->( RecCount() ) ) ) + " records"
 
    @ 0, 0 XBROWSE oBrw OF oWnd ;
-      ALIAS "MINI" AUTOCOLS ;
+      ALIAS "MINI" AUTOCOLS AUTOSORT ;
       CELL LINES NOBORDER
 
    oBrw:CreateFromCode()
