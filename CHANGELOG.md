@@ -26,6 +26,14 @@ the real ACE SDK.
 Reported by FWH users opening large DBF/CDX tables via Harbour `ADSRDD` /
 `TDataBase` over `tcp://` against `openads_serverd`.
 
+### Release packaging (Windows)
+
+- Windows x64/x86 archives ship **both** engine DLL names at the ZIP
+  root: `openace64.dll` / `openace32.dll` (OpenADS build product) and
+  `ace64.dll` / `ace32.dll` (Harbour `rddads` / FWH drop-in), plus
+  matching `.lib` import libraries. The release workflow now verifies
+  all four files before publishing.
+
 ## 1.6.0 — 2026-07-01
 
 ### REMOTE mode — FWH production CDX validation & bug fixes

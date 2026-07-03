@@ -14,8 +14,8 @@ REM   - cmake on PATH
 REM
 REM Notes:
 REM   - mbedtls is statically linked (no runtime OpenSSL DLL deps).
-REM   - The bundled ZIP exposes ace64.dll, ace32.dll, server,
-REM     bench, and the import libs side-by-side.
+REM   - The bundled ZIP exposes openace64.dll + ace64.dll (and the
+REM     32-bit pair), import libs for both names, server, and bench.
 
 setlocal ENABLEDELAYEDEXPANSION
 if "%~1"=="" (
@@ -42,8 +42,10 @@ if errorlevel 1 exit /b 1
 cmake --build "%ROOT%/build/release-x64" --config Release -j
 if errorlevel 1 exit /b 1
 
-copy /Y "%ROOT%\build\release-x64\src\Release\ace64.dll"  "%OUT%\"
-copy /Y "%ROOT%\build\release-x64\src\Release\ace64.lib"  "%OUT%\"
+copy /Y "%ROOT%\build\release-x64\src\Release\openace64.dll" "%OUT%\"
+copy /Y "%ROOT%\build\release-x64\src\Release\openace64.lib" "%OUT%\"
+copy /Y "%ROOT%\build\release-x64\src\Release\openace64.dll" "%OUT%\ace64.dll"
+copy /Y "%ROOT%\build\release-x64\src\Release\openace64.lib" "%OUT%\ace64.lib"
 copy /Y "%ROOT%\build\release-x64\tools\serverd\Release\openads_serverd.exe" "%OUT%\openads_serverd_x64.exe"
 copy /Y "%ROOT%\build\release-x64\tools\bench\Release\openads_bench.exe"     "%OUT%\openads_bench_x64.exe"
 
@@ -55,8 +57,10 @@ if errorlevel 1 exit /b 1
 cmake --build "%ROOT%/build/release-x86" --config Release -j
 if errorlevel 1 exit /b 1
 
-copy /Y "%ROOT%\build\release-x86\src\Release\ace32.dll"  "%OUT%\"
-copy /Y "%ROOT%\build\release-x86\src\Release\ace32.lib"  "%OUT%\"
+copy /Y "%ROOT%\build\release-x86\src\Release\openace32.dll" "%OUT%\"
+copy /Y "%ROOT%\build\release-x86\src\Release\openace32.lib" "%OUT%\"
+copy /Y "%ROOT%\build\release-x86\src\Release\openace32.dll" "%OUT%\ace32.dll"
+copy /Y "%ROOT%\build\release-x86\src\Release\openace32.lib" "%OUT%\ace32.lib"
 copy /Y "%ROOT%\build\release-x86\tools\serverd\Release\openads_serverd.exe" "%OUT%\openads_serverd_x86.exe"
 copy /Y "%ROOT%\build\release-x86\tools\bench\Release\openads_bench.exe"     "%OUT%\openads_bench_x86.exe"
 

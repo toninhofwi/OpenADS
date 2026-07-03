@@ -118,24 +118,30 @@ jobs:
           New-Item -ItemType Directory -Path $stage | Out-Null
           $build = "build/${{ matrix.preset }}"
           $bits  = if ("${{ matrix.arch }}" -eq "x64") { "64" } else { "32" }
-          # The engine DLL is built as openace64.dll / openace32.dll so it
-          # can coexist with SAP's ace64.dll in the same PHP install. Ship
-          # that (DLL + import lib + exports)...
-          Copy-Item "$build/src/Release/openace$bits.dll"   "$stage/"
-          # Import library (.lib) is REQUIRED so MSVC consumers can link
-          # against the engine. Fail the release loudly if the build did not
-          # emit it, rather than silently shipping an archive with no .lib.
-          $implib = "$build/src/Release/openace$bits.lib"
-          if (-not (Test-Path $implib)) {
-              throw "Import library missing: $implib — refusing to publish a release without openace$bits.lib"
+          $builtDll = "$build/src/Release/openace$bits.dll"
+          $builtLib = "$build/src/Release/openace$bits.lib"
+          if (-not (Test-Path $builtDll)) {
+              throw "Engine DLL missing: $builtDll"
           }
-          Copy-Item $implib "$stage/"
-          Copy-Item "$build/src/Release/openace$bits.exp"   "$stage/" -ErrorAction SilentlyContinue
-          # ...plus a drop-in-named copy ace64.dll / ace32.dll (+ .lib) so
-          # Harbour rddads and legacy apps that load OpenADS by the canonical
-          # ACE name work without renaming anything.
-          Copy-Item "$build/src/Release/openace$bits.dll"   "$stage/ace$bits.dll"
-          Copy-Item $implib "$stage/ace$bits.lib"
+          if (-not (Test-Path $builtLib)) {
+              throw "Import library missing: $builtLib"
+          }
+          # Ship BOTH names at the archive root:
+          #   openace64.dll / openace32.dll — OpenADS build product (PHP ext,
+          #     side-by-side with SAP ACE)
+          #   ace64.dll     / ace32.dll     — drop-in for Harbour rddads / FWH
+          Copy-Item $builtDll "$stage/openace$bits.dll"
+          Copy-Item $builtLib "$stage/openace$bits.lib"
+          Copy-Item "$build/src/Release/openace$bits.exp" "$stage/" -ErrorAction SilentlyContinue
+          Copy-Item $builtDll "$stage/ace$bits.dll"
+          Copy-Item $builtLib "$stage/ace$bits.lib"
+          foreach ($req in @(
+              "openace$bits.dll", "openace$bits.lib",
+              "ace$bits.dll",     "ace$bits.lib")) {
+              if (-not (Test-Path "$stage/$req")) {
+                  throw "Release staging incomplete: missing $req"
+              }
+          }
           # Per-compiler import libraries (MSVC / MinGW-GCC / Borland) for
           # ace<bits>.dll — prebuilt under dist/import-libs because the CI
           # runners have no Borland toolchain (see dist/import-libs/gen.ps1).
