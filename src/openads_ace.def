@@ -233,6 +233,7 @@ EXPORTS
     AdsIsIndexDescending
     AdsIsIndexUnique
     AdsIsNull
+    AdsIsNullable
     AdsIsRecordInAOF
     AdsIsRecordLocked
     AdsIsServerLoaded

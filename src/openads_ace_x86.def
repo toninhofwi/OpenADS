@@ -281,6 +281,7 @@ EXPORTS
     AdsIsIndexDescending@8      = AdsIsIndexDescending
     AdsIsIndexUnique@8          = AdsIsIndexUnique
     AdsIsNull@12                = AdsIsNull
+    AdsIsNullable@12            = AdsIsNullable
     AdsIsRecordDeleted@8        = AdsIsRecordDeleted
     AdsIsRecordEncrypted@8      = AdsIsRecordEncrypted
     AdsIsRecordInAOF@12         = AdsIsRecordInAOF

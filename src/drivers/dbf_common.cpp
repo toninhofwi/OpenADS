@@ -245,6 +245,15 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
     }
     const std::uint8_t* p = record_buf + field.record_offset;
 
+    // M13 — ADT NULL sentinel (see adt_field_is_null). Without this, a
+    // SAP-written NULL INTEGER (0x80000000) decodes as -2147483648 and a
+    // NULL DOUBLE as a garbage denormal.
+    if (field.adt && adt_field_is_null(field, record_buf, record_size)) {
+        DbfFieldValue nul;
+        nul.is_null = true;
+        return nul;
+    }
+
     switch (field.type) {
         case DbfFieldType::Character:
             v.as_string = make_string(p, field.length);
@@ -516,6 +525,113 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             break;
     }
     return v;
+}
+
+// M13 — test a field region against the ADT per-type NULL sentinel
+// (representations documented at the declaration in dbf_common.h).
+bool adt_field_is_null(const DbfField& f,
+                       const std::uint8_t* rec, std::size_t rec_size) {
+    if (static_cast<std::size_t>(f.record_offset) +
+        static_cast<std::size_t>(f.length) > rec_size) {
+        return false;
+    }
+    const std::uint8_t* p = rec + f.record_offset;
+    auto all_bytes = [&](std::uint8_t b) {
+        for (std::uint16_t i = 0; i < f.length; ++i) {
+            if (p[i] != b) return false;
+        }
+        return f.length > 0;
+    };
+    switch (f.type) {
+        case DbfFieldType::Character:
+        case DbfFieldType::CiCharacter:
+        case DbfFieldType::Numeric:
+        case DbfFieldType::Float:
+        case DbfFieldType::Memo:
+        case DbfFieldType::Binary:
+            return all_bytes(0x00);
+        case DbfFieldType::Integer:
+            return f.length >= 4 &&
+                   static_cast<std::uint32_t>(read_i32_le(p)) == 0x80000000u;
+        case DbfFieldType::ShortInt:
+            return f.length >= 2 &&
+                   (static_cast<std::uint16_t>(p[0]) |
+                    (static_cast<std::uint16_t>(p[1]) << 8)) == 0x8000u;
+        case DbfFieldType::Double:
+            return f.length >= 8 && p[0] == 0x20 && p[1] == 0 && p[2] == 0 &&
+                   p[3] == 0 && p[4] == 0 && p[5] == 0 && p[6] == 0 &&
+                   p[7] == 0x80;
+        case DbfFieldType::AdtMoney:
+        case DbfFieldType::Currency:
+            return f.length >= 8 &&
+                   static_cast<std::uint64_t>(read_i64_le(p)) ==
+                       0x8000000000000000ull;
+        case DbfFieldType::AdtDate:
+            return f.length >= 4 && read_i32_le(p) == 0;
+        case DbfFieldType::Time:
+            return f.length >= 4 &&
+                   static_cast<std::uint32_t>(read_i32_le(p)) == 0xFFFFFFFFu;
+        case DbfFieldType::AdtTimestamp:
+        case DbfFieldType::ModTime:
+        case DbfFieldType::DateTime:
+            return all_bytes(0x00);
+        case DbfFieldType::Logical:
+            return f.length >= 1 && p[0] == 0x20;
+        // AutoInc and RowVersion can never be NULL; Varchar/Varbinary use a
+        // trailing length word (0xFFFF = NULL) but ADT VARCHAR (type 23) is
+        // not classified yet, so no field reaches here with those types.
+        default:
+            return false;
+    }
+}
+
+// M13 — write the ADT NULL sentinel for `f` into the record buffer.
+util::Result<void> encode_field_null(const DbfField& f,
+                                     std::uint8_t* rec, std::size_t rec_size) {
+    if (static_cast<std::size_t>(f.record_offset) +
+        static_cast<std::size_t>(f.length) > rec_size) {
+        return util::Error{5000, 0, "field range past record buffer", ""};
+    }
+    std::uint8_t* p = rec + f.record_offset;
+    switch (f.type) {
+        case DbfFieldType::AutoInc:
+        case DbfFieldType::RowVersion:
+            // 5147 = AE_COLUMN_CANNOT_BE_NULL (SAP SDK).
+            return util::Error{5147, 0, "column cannot be NULL", f.name};
+        case DbfFieldType::Integer:
+            if (f.length >= 4) { write_i32_le(p, static_cast<std::int32_t>(0x80000000u)); return {}; }
+            break;
+        case DbfFieldType::ShortInt:
+            if (f.length >= 2) { p[0] = 0x00; p[1] = 0x80; return {}; }
+            break;
+        case DbfFieldType::Double:
+            if (f.length >= 8) {
+                std::memset(p, 0, 8);
+                p[0] = 0x20;
+                p[7] = 0x80;
+                return {};
+            }
+            break;
+        case DbfFieldType::AdtMoney:
+        case DbfFieldType::Currency:
+            if (f.length >= 8) {
+                write_i64_le(p, static_cast<std::int64_t>(0x8000000000000000ull));
+                return {};
+            }
+            break;
+        case DbfFieldType::Time:
+            if (f.length >= 4) { std::memset(p, 0xFF, 4); return {}; }
+            break;
+        case DbfFieldType::Logical:
+            if (f.length >= 1) { p[0] = 0x20; return {}; }
+            break;
+        default:
+            break;
+    }
+    // Character/CiCharacter/Numeric/AdtDate/AdtTimestamp/ModTime/Memo/
+    // Binary — and any short-length fallthrough above — NULL as all zeros.
+    std::memset(p, 0x00, f.length);
+    return {};
 }
 
 bool record_is_deleted(const std::uint8_t* record_buf,

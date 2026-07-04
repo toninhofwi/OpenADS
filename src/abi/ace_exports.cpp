@@ -19240,6 +19240,12 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                             (openads::engine::Table& t) {
                     auto v = t.read_field(fi);
                     if (!v) return false;
+                    if (op == openads::sql::WhereOp::IsNull ||
+                        op == openads::sql::WhereOp::IsNotNull) {
+                        bool null_ish = t.is_field_empty(fi);
+                        return op == openads::sql::WhereOp::IsNull
+                            ? null_ish : !null_ish;
+                    }
                     int cmp = 0;
                     if (is_num) {
                         double d = v.value().as_double;
@@ -19282,11 +19288,8 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                 if (tbl->is_deleted()) continue;
                 if (!tbl->passes_filter()) continue;
                 for (const auto& a : assns) {
-                    // RCB 2026-07-03 — UPDATE ... SET col = NULL: same
-                    // blank-out treatment as the INSERT VALUES NULL literal
-                    // above; see that comment for the DBF-has-no-NULL caveat.
                     if (a.value.is_null) {
-                        auto wr = tbl->set_field(a.field_index, std::string());
+                        auto wr = tbl->set_field_null(a.field_index);
                         if (!wr) return fail(wr.error());
                     } else if (a.value.is_numeric) {
                         auto wr = tbl->set_field(a.field_index, a.value.number);
@@ -19377,6 +19380,12 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                             (openads::engine::Table& t) {
                     auto v = t.read_field(fi);
                     if (!v) return false;
+                    if (op == openads::sql::WhereOp::IsNull ||
+                        op == openads::sql::WhereOp::IsNotNull) {
+                        bool null_ish = t.is_field_empty(fi);
+                        return op == openads::sql::WhereOp::IsNull
+                            ? null_ish : !null_ish;
+                    }
                     int cmp = 0;
                     if (is_num) {
                         double d = v.value().as_double;
@@ -19562,15 +19571,9 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                         ins.value().columns[i].c_str(), ""};
                 }
                 const auto& v = vals[i];
-                // RCB 2026-07-03 — INSERT ... VALUES (NULL, ...): blank the
-                // field the same way AdsSetEmpty/AdsSetNull already do for a
-                // direct table-field call. DBF has no SQL NULL representation
-                // (see AdsSetNull), so this is the closest we can store; a
-                // real _NullFlags bit write for nullable ADT/VFP columns is
-                // deferred (tracked separately from the statement-param fix).
                 if (v.is_null) {
-                    auto wr = tbl->set_field(
-                        static_cast<std::uint16_t>(fidx), std::string());
+                    auto wr = tbl->set_field_null(
+                        static_cast<std::uint16_t>(fidx));
                     if (!wr) return wr.error();
                 } else if (v.is_numeric) {
                     auto wr = tbl->set_field(
@@ -24822,8 +24825,20 @@ UNSIGNED32 ENTRYPOINT AdsIsConnectionAlive(ADSHANDLE hConnect, UNSIGNED16* p) {
     }
     return ok();
 }
-UNSIGNED32 ENTRYPOINT AdsIsEmpty(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
-    { if (p) *p = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 ENTRYPOINT AdsIsEmpty(ADSHANDLE hTable, UNSIGNED8* pucField,
+                     UNSIGNED16* pbEmpty) {
+    if (pbEmpty == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pbEmpty = 0;
+    if (get_remote_table(hTable) != nullptr) return ok();
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pbEmpty = t->is_field_empty(idx) ? 1 : 0;
+    return ok();
+}
 UNSIGNED32 ENTRYPOINT AdsIsExprValid(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
     { if (p) *p = 1; return openads::AE_SUCCESS; }
 // AdsIsFound already defined elsewhere in this file.
@@ -24882,6 +24897,26 @@ UNSIGNED32 ENTRYPOINT AdsIsNull(ADSHANDLE hTable, UNSIGNED8* pucField,
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     *pbNull = t->is_field_null(idx) ? 1 : 0;
+    return ok();
+}
+UNSIGNED32 ENTRYPOINT AdsIsNullable(ADSHANDLE hTable, UNSIGNED8* pucField,
+                         UNSIGNED16* pbNullable) {
+    if (pbNullable == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pbNullable = 0;
+    if (get_remote_table(hTable) != nullptr) return ok();
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    const auto& f = t->field_descriptor(idx);
+    if (f.adt) {
+        using FT = openads::drivers::DbfFieldType;
+        *pbNullable = (f.type != FT::AutoInc && f.type != FT::RowVersion) ? 1 : 0;
+    } else {
+        *pbNullable = f.nullable ? 1 : 0;
+    }
     return ok();
 }
 UNSIGNED32 ENTRYPOINT AdsIsRecordInAOF(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
@@ -26246,14 +26281,37 @@ UNSIGNED32 ENTRYPOINT AdsSetEmpty(ADSHANDLE hObj, UNSIGNED8* pId) {
 // parameterized queries on typed (numeric/date) columns and changing
 // IS NULL semantics on text columns. Try the statement-handle path
 // first with the unquoted literal NULL (matching the raw-literal
-// convention AdsSetLogical/AdsSetDouble already use for stmt params)
-// before falling back to the table-field blank-out path.
+// convention AdsSetLogical/AdsSetDouble already use for stmt params).
+// For local table handles, route through Table::set_field_null so VFP
+// nullable columns set _NullFlags and ADT columns receive their native
+// NULL sentinel; CDX/NTX still blank through that same primitive.
 UNSIGNED32 ENTRYPOINT AdsSetNull(ADSHANDLE hObj, UNSIGNED8* pId) {
     if (pId != nullptr &&
         set_stmt_param(hObj, reinterpret_cast<const char*>(pId), "NULL")) {
         return ok();
     }
-    return AdsSetEmpty(hObj, pId);     // DBF has no SQL NULL — store empty
+    if (auto* rt = get_remote_table(hObj)) {
+        if (pId == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        std::string fname(reinterpret_cast<const char*>(pId));
+        remote_settle_cursor(rt);
+        rt->row_valid = false;
+        auto r = rt->conn->set_field(rt->id, fname, std::string());
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    Table* t = get_table(hObj);
+    if (t != nullptr) {
+        UNSIGNED8 nm[64];
+        std::uint16_t idx = 0;
+        if (!resolve_field_index(t,
+                as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))), &idx)) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        auto r = t->set_field_null(idx);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    return AdsSetEmpty(hObj, pId);
 }
 UNSIGNED32 ENTRYPOINT AdsSetShort(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED32 sValue) {
     UNSIGNED8 nm[64];

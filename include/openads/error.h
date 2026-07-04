@@ -29,6 +29,8 @@
 #undef AE_NO_CURRENT_RECORD
 #undef AE_INSUFFICIENT_BUFFER
 #undef AE_INVALID_EXPRESSION
+#undef AE_COLUMN_CANNOT_BE_NULL
+#undef AE_NOT_VFP_NULLABLE_FIELD
 
 namespace openads {
 
@@ -71,7 +73,13 @@ enum : std::uint32_t {
     // 5079 = AE_INVALID_EXPRESSION (SAP SDK). Returned by AdsSetAOF when the
     // filter expression cannot be optimised into a server-side AOF, causing
     // the stock rddads RDD to fall back to its client-side row filter.
-    AE_INVALID_EXPRESSION       = 5079
+    AE_INVALID_EXPRESSION       = 5079,
+    // 5147 = AE_COLUMN_CANNOT_BE_NULL (SAP SDK). Setting NULL on a column
+    // that can never hold one (ADT AutoInc / RowVersion).
+    AE_COLUMN_CANNOT_BE_NULL    = 5147,
+    // 5205 = AE_NOT_VFP_NULLABLE_FIELD (SAP SDK). AdsSetNull on a VFP
+    // column that was not declared with the NULL option.
+    AE_NOT_VFP_NULLABLE_FIELD   = 5205
 };
 
 } // namespace openads

@@ -79,6 +79,13 @@ struct DbfField {
     // ordinal among nullable fields. `null_bit` is that ordinal.
     bool          nullable      = false;
     std::uint16_t null_bit      = 0;
+    // M13 — set only by AdtDriver. ADT tables store NULL as a per-type
+    // in-field sentinel (verified against a real SAP ADS 12 local server;
+    // see adt_field_is_null); this flag routes decode/NULL tests to that
+    // convention without affecting DBF/VFP/memory-driver fields, whose
+    // Integer/Double/... payloads may legitimately contain the sentinel
+    // bit patterns.
+    bool          adt           = false;
 };
 
 util::Result<std::vector<DbfField>>
@@ -100,6 +107,24 @@ bool record_is_deleted(const std::uint8_t* record_buf,
                        std::size_t record_size) noexcept;
 
 std::vector<std::uint8_t> make_empty_record(std::uint16_t record_length);
+
+// M13 — ADT NULL sentinels. SAP ADS stores ADT NULL as a per-type in-field
+// value (there is no record-level null bitmap; bytes 1-4 of the record
+// prefix stay zero for NULL and non-NULL rows alike). Representations were
+// captured from tables written by the real SAP ADS 12 local server:
+//   Character/CiCharacter  all 0x00 bytes (values are space-padded)
+//   Numeric (ASCII)        all 0x00 bytes (values are ASCII digits)
+//   Integer                0x80000000        ShortInt   0x8000
+//   Double/CurDouble       20 00 00 00 00 00 00 80
+//   AdtMoney               0x8000000000000000
+//   AdtDate                0x00000000        Time       0xFFFFFFFF
+//   AdtTimestamp/ModTime   all 0x00          Logical    0x20 (space)
+//   Memo/Binary blob ref   all 0x00 (block 0 = no data)
+// AutoInc and RowVersion can never be NULL.
+bool adt_field_is_null(const DbfField& f,
+                       const std::uint8_t* rec, std::size_t rec_size);
+util::Result<void> encode_field_null(const DbfField& f,
+                                     std::uint8_t* rec, std::size_t rec_size);
 
 util::Result<void> encode_field_string (const DbfField& f,
                                         std::uint8_t* rec, std::size_t rec_size,

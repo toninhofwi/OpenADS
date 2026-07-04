@@ -650,6 +650,14 @@ Table::read_field(std::uint16_t field_index) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
     const auto& f = driver_->fields().at(field_index);
+    // M13 — a VFP column whose _NullFlags bit is set holds undefined data
+    // bytes; report NULL instead of decoding the stale payload. (ADT
+    // sentinel NULLs are recognized inside decode_field via f.adt.)
+    if (type_ == TableType::Vfp && is_field_null(field_index)) {
+        drivers::DbfFieldValue nul;
+        nul.is_null = true;
+        return nul;
+    }
     auto v = drivers::decode_field(f, record_buf_.data(), record_buf_.size());
     if (!v) return v.error();
 
@@ -707,6 +715,41 @@ util::Result<void> Table::append_record() {
         return util::Error{5000, 0, "table opened read-only", ""};
     }
     auto rec = drivers::make_empty_record(driver_->record_length());
+
+    // M13 — make_empty_record fills the buffer with spaces, which is only
+    // right for CDX/NTX. ADT rows initialize every field to its per-type
+    // NULL sentinel (SAP: "all fields are initialized with their NULL
+    // value") with the 4 reserved prefix bytes zeroed; VFP rows must zero
+    // the _NullFlags bitmap bytes or the 0x20 fill makes bits 5, 13, ...
+    // read as spurious NULLs.
+    {
+        const auto& f0 = driver_->fields();
+        if (!f0.empty() && f0.front().adt) {
+            if (rec.size() >= 5) std::memset(rec.data() + 1, 0x00, 4);
+            for (const auto& f : f0) {
+                if (f.type == drivers::DbfFieldType::AutoInc ||
+                    f.type == drivers::DbfFieldType::RowVersion) {
+                    if (static_cast<std::size_t>(f.record_offset) + f.length
+                            <= rec.size()) {
+                        std::memset(rec.data() + f.record_offset, 0x00,
+                                    f.length);
+                    }
+                    continue;
+                }
+                (void)drivers::encode_field_null(f, rec.data(), rec.size());
+            }
+        } else {
+            std::int32_t nf = field_index("_NullFlags");
+            if (nf >= 0) {
+                const auto& nff = f0[static_cast<std::size_t>(nf)];
+                if (static_cast<std::size_t>(nff.record_offset) + nff.length
+                        <= rec.size()) {
+                    std::memset(rec.data() + nff.record_offset, 0x00,
+                                nff.length);
+                }
+            }
+        }
+    }
 
     // M10.11: pre-fill VFP autoinc fields with their current counter
     // value, then bump the on-disk counter so the next append picks
@@ -777,6 +820,7 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
             }
             std::memcpy(dst, buf, f.length);
         }
+        clear_field_null_(idx);
         if (auto wb = writeback_record_(); !wb) return wb.error();
         return sync_all_indexes_(snap);
     }
@@ -784,6 +828,7 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
     auto r = drivers::encode_field_string(f, record_buf_.data(),
                                           record_buf_.size(), v);
     if (!r) return r.error();
+    clear_field_null_(idx);
     if (auto wb = writeback_record_(); !wb) return wb.error();
     return sync_all_indexes_(snap);
 }
@@ -802,6 +847,7 @@ util::Result<void> Table::set_field(std::uint16_t idx, double v) {
                                           record_buf_.data(),
                                           record_buf_.size(), v);
     if (!r) return r.error();
+    clear_field_null_(idx);
     if (auto wb = writeback_record_(); !wb) return wb.error();
     return sync_all_indexes_(snap);
 }
@@ -820,6 +866,7 @@ util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
                                            record_buf_.data(),
                                            record_buf_.size(), v);
     if (!r) return r.error();
+    clear_field_null_(idx);
     if (auto wb = writeback_record_(); !wb) return wb.error();
     return sync_all_indexes_(snap);
 }
@@ -860,6 +907,7 @@ Table::set_field_binary(std::uint16_t idx, const std::string& payload,
         }
         std::memcpy(dst, buf, f.length);
     }
+    clear_field_null_(idx);
     if (auto wb = writeback_record_(); !wb) return wb.error();
     return sync_all_indexes_(snap);
 }
@@ -1516,11 +1564,19 @@ std::optional<std::string> Table::get_scope(bool top) const {
 }
 
 bool Table::is_field_null(std::uint16_t field_idx) {
-    // M11.6 — peek the table-wide _NullFlags column for this row,
-    // test the bit assigned to `field_idx` during schema parse.
     if (state_ != State::Positioned) return false;
     const auto& fields = driver_->fields();
     if (field_idx >= fields.size()) return false;
+
+    // M13 — ADT stores NULL as a per-type in-field sentinel.
+    if (fields[field_idx].adt) {
+        return drivers::adt_field_is_null(fields[field_idx],
+                                          record_buf_.data(),
+                                          record_buf_.size());
+    }
+
+    // M11.6 — VFP: peek the table-wide _NullFlags column for this row,
+    // test the bit assigned to `field_idx` during schema parse.
     if (!fields[field_idx].nullable) return false;
     std::int32_t nf_idx = field_index("_NullFlags");
     if (nf_idx < 0) return false;
@@ -1530,6 +1586,107 @@ bool Table::is_field_null(std::uint16_t field_idx) {
                            static_cast<std::size_t>(bit / 8);
     if (byte_off >= record_buf_.size()) return false;
     return (record_buf_[byte_off] & (1u << (bit & 7u))) != 0;
+}
+
+bool Table::is_field_empty(std::uint16_t field_idx) {
+    if (state_ != State::Positioned) return false;
+    const auto& fields = driver_->fields();
+    if (field_idx >= fields.size()) return false;
+    const auto& f = fields[field_idx];
+
+    // ADT: empty ≡ NULL (AdsIsEmpty "determines if a given field is
+    // empty (null)"; the sentinel IS the empty value). A VFP NULL also
+    // reports empty.
+    if (f.adt) return is_field_null(field_idx);
+    if (is_field_null(field_idx)) return true;
+
+    if (static_cast<std::size_t>(f.record_offset) + f.length >
+        record_buf_.size()) {
+        return false;
+    }
+    const std::uint8_t* p = record_buf_.data() + f.record_offset;
+    // Binary VFP payloads have no space-padded form; their empty value is
+    // all-zero bytes. Everything else (Character/Numeric/Date/Logical/...)
+    // is empty when blank.
+    bool binary_payload =
+        f.type == drivers::DbfFieldType::Integer   ||
+        f.type == drivers::DbfFieldType::Currency  ||
+        f.type == drivers::DbfFieldType::Double    ||
+        f.type == drivers::DbfFieldType::DateTime  ||
+        f.type == drivers::DbfFieldType::Varchar   ||
+        f.type == drivers::DbfFieldType::Varbinary;
+    const std::uint8_t blank = binary_payload ? 0x00 : ' ';
+    for (std::uint16_t i = 0; i < f.length; ++i) {
+        if (p[i] != blank) return false;
+    }
+    return f.length > 0;
+}
+
+util::Result<void> Table::set_field_null(std::uint16_t field_idx) {
+    if (state_ != State::Positioned) {
+        // rddads special-cases 5068 to blank out at BOF/EOF; see set_field.
+        return util::Error{5068, 0, "no record positioned", ""};
+    }
+    const auto& fields = driver_->fields();
+    if (field_idx >= fields.size()) {
+        return util::Error{5063, 0, "field index out of range", ""};
+    }
+    const auto& f = fields[field_idx];
+    auto snap = snapshot_index_keys_();
+
+    if (f.adt) {
+        auto r = drivers::encode_field_null(f, record_buf_.data(),
+                                            record_buf_.size());
+        if (!r) return r.error();
+    } else if (type_ == TableType::Vfp) {
+        std::int32_t nf_idx = field_index("_NullFlags");
+        if (!f.nullable || nf_idx < 0) {
+            // 5205 = AE_NOT_VFP_NULLABLE_FIELD (SAP SDK).
+            return util::Error{5205, 0,
+                "field was not declared nullable", f.name};
+        }
+        const auto& nf = fields[static_cast<std::size_t>(nf_idx)];
+        std::size_t byte_off = nf.record_offset +
+                               static_cast<std::size_t>(f.null_bit / 8);
+        if (byte_off >= record_buf_.size()) {
+            return util::Error{5000, 0, "_NullFlags past record buffer", ""};
+        }
+        record_buf_[byte_off] |=
+            static_cast<std::uint8_t>(1u << (f.null_bit & 7u));
+        // The data bytes are undefined while the bit is set; zero them so
+        // raw readers (and index key builders) see deterministic content.
+        if (static_cast<std::size_t>(f.record_offset) + f.length <=
+            record_buf_.size()) {
+            std::memset(record_buf_.data() + f.record_offset, 0x00, f.length);
+        }
+    } else {
+        // CDX/NTX have no NULL concept: AdsSetNull is documented to behave
+        // identically to AdsSetEmpty — blank the field region.
+        if (static_cast<std::size_t>(f.record_offset) + f.length >
+            record_buf_.size()) {
+            return util::Error{5000, 0, "field range past record buffer", ""};
+        }
+        std::memset(record_buf_.data() + f.record_offset, ' ', f.length);
+    }
+
+    if (auto wb = writeback_record_(); !wb) return wb.error();
+    return sync_all_indexes_(snap);
+}
+
+void Table::clear_field_null_(std::uint16_t field_idx) {
+    if (type_ != TableType::Vfp) return;
+    const auto& fields = driver_->fields();
+    if (field_idx >= fields.size()) return;
+    const auto& f = fields[field_idx];
+    if (!f.nullable) return;
+    std::int32_t nf_idx = field_index("_NullFlags");
+    if (nf_idx < 0) return;
+    const auto& nf = fields[static_cast<std::size_t>(nf_idx)];
+    std::size_t byte_off = nf.record_offset +
+                           static_cast<std::size_t>(f.null_bit / 8);
+    if (byte_off >= record_buf_.size()) return;
+    record_buf_[byte_off] &=
+        static_cast<std::uint8_t>(~(1u << (f.null_bit & 7u)));
 }
 
 } // namespace openads::engine

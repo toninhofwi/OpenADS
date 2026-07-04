@@ -92,11 +92,25 @@ public:
     const drivers::DbfField& field_descriptor(std::uint16_t idx) const;
     std::int32_t field_index(const std::string& name) const noexcept;
 
-    // M11.6 — VFP NULL bitmap query. Returns true when `field_idx`
-    // is a nullable column AND the current row's `_NullFlags` bit
-    // for that column is set. Returns false for non-nullable
-    // columns or when the table doesn't carry a _NullFlags field.
+    TableType table_type() const noexcept { return type_; }
+
+    // M11.6 / M13 — true NULL query. VFP: nullable column whose
+    // `_NullFlags` bit is set for the current row. ADT: the field
+    // holds its per-type NULL sentinel (adt_field_is_null). CDX/NTX
+    // have no NULL concept and always report false.
     bool is_field_null(std::uint16_t field_idx);
+
+    // M13 — AdsIsEmpty semantics. ADT: empty ≡ NULL (sentinel test).
+    // DBF/VFP: the field region is blank (all spaces for ASCII types,
+    // all zero bytes for binary VFP payloads); a VFP NULL also counts.
+    bool is_field_empty(std::uint16_t field_idx);
+
+    // M13 — AdsSetNull write path. VFP: sets the `_NullFlags` bit
+    // (error 5205 AE_NOT_VFP_NULLABLE_FIELD when the column was not
+    // declared nullable). ADT: writes the per-type NULL sentinel
+    // (error 5147 for AutoInc/RowVersion). CDX/NTX: blanks the field
+    // (NULL ≡ empty, per AdsSetNull's documented behavior).
+    util::Result<void> set_field_null(std::uint16_t field_idx);
 
     std::uint32_t record_count() const noexcept;
     // Clipper / SAP-ACE convention: phantom position past last
@@ -432,6 +446,12 @@ private:
 
     bool key_in_top_scope_   (const std::string& key) const;
     bool key_in_bottom_scope_(const std::string& key) const;
+
+    // M13 — clear the VFP `_NullFlags` bit for `field_idx` in the
+    // current record buffer. Called by every set_field overload so
+    // writing a value un-NULLs the column; no-op for non-VFP tables,
+    // non-nullable columns, and tables without a _NullFlags field.
+    void clear_field_null_(std::uint16_t field_idx);
 
     TableTypeForLock to_lock_type_() const noexcept;
 

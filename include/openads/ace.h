@@ -1048,7 +1048,9 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirectW  (ADSHANDLE hStatement, UNSIGNED16* p
 #define AE_VALUE_OVERFLOW          5057
 #define AE_INVALID_EXPRESSION      5079
 #define AE_INDEX_ALREADY_OPEN      5108
+#define AE_COLUMN_CANNOT_BE_NULL   5147
 #define AE_SAP_PERMS_NEED_IMPORT   5174  /* DD has SAP-format permissions; run import tool */
+#define AE_NOT_VFP_NULLABLE_FIELD  5205
 
 // ---- Management API struct typedefs (Harbour contrib/rddads) ----
 // Field names taken from public Sybase / SAP ace.h documentation;
@@ -1338,6 +1340,9 @@ UNSIGNED32 ENTRYPOINT AdsIsIndexUnique     (ADSHANDLE hIndex,
 UNSIGNED32 ENTRYPOINT AdsIsNull            (ADSHANDLE hTable,
                                              UNSIGNED8* pucField,
                                              UNSIGNED16* pbNull);
+UNSIGNED32 ENTRYPOINT AdsIsNullable        (ADSHANDLE hTable,
+                                             UNSIGNED8* pucField,
+                                             UNSIGNED16* pbNullable);
 UNSIGNED32 ENTRYPOINT AdsIsRecordInAOF     (ADSHANDLE hTable,
                                              UNSIGNED32 ulRecord,
                                              UNSIGNED16* pbInAOF);

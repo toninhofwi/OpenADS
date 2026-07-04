@@ -39,6 +39,7 @@ std::uint32_t read_u32_le(const std::uint8_t* p) {
 DbfFieldType classify_adt_field(std::uint16_t raw_type) {
     switch (raw_type) {
         case  1: return DbfFieldType::Logical;
+        case  2: return DbfFieldType::Numeric;  // ASCII digits, right-aligned
         case  3: return DbfFieldType::AdtDate;
         case  4: return DbfFieldType::Character;
         case  5: return DbfFieldType::Memo;
@@ -144,6 +145,12 @@ AdtDriver::open(const std::string& path, DriverOpenMode mode) {
         std::uint8_t flags = fd[128];
         f.nullable = (flags & 0x02u) != 0;
         if (f.nullable) f.null_bit = null_bit++;
+
+        // M13 — ADT NULL is a per-type in-field sentinel, not a bitmap
+        // (SAP leaves this flags byte 0 even though every non-autoinc ADT
+        // field is nullable). Mark the field so decode_field and the
+        // Table NULL paths apply the sentinel convention.
+        f.adt = true;
 
         // AutoInc: autoinc_next at 139 (uint32 LE), step at 143.
         if (f.type == DbfFieldType::AutoInc) {

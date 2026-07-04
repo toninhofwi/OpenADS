@@ -217,6 +217,7 @@ EXPORTS
     AdsIsIndexDescending
     AdsIsIndexUnique
     AdsIsNull
+    AdsIsNullable
     AdsIsRecordInAOF
     AdsIsRecordLocked
     AdsIsServerLoaded
@@ -370,5 +371,4 @@ EXPORTS
     AdsSetTime
     AdsSetTimeStamp
     AdsGetDate
-
 
