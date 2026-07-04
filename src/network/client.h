@@ -265,6 +265,17 @@ struct RemoteTable {
     // cache instead of a separate RTT each.
     std::uint32_t            current_recno   = 0;
     bool                     current_deleted = false;
+    // Logical 1-based key position within the active index order.
+    // Updated on remote nav when active_index_id != 0 so AdsGetKeyNum
+    // (FWH xBrowse scrollbar) returns a non-zero position over TCP.
+    std::uint32_t            current_keyno   = 0;
+    bool                     keyno_valid     = false;
+    // Set when a backward Skip cannot move (top of order). Cleared on
+    // forward nav / GoTop. Without this, AdsAtBOF always answers "not
+    // BOF" while row_valid and xBrowse GoUp rubber-bands at key #1.
+    bool                     nav_at_bof      = false;
+    // Set when a forward Skip cannot move (bottom of order).
+    bool                     nav_at_eof      = false;
     // M12.19 — cached record count. Serves AdsGetRecordCount and
     // AdsGetRelKeyPos (scrollbar) without an extra RTT. Invalidated
     // on writes that may change the row count: AppendBlank /

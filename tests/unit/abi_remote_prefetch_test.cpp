@@ -127,6 +127,51 @@ TEST_CASE("remote prefetch: forward scan is correct and round-trip-thrifty") {
     srv.stop();
 }
 
+TEST_CASE("remote prefetch: single Skip(+1)/Skip(-1) roundtrip") {
+    using openads::network::Server;
+    auto dir = fs::temp_directory_path() / "openads_prefetch_rt1";
+    make_dbf(dir, "pf", 50);
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(dir, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[16] = "pf.dbf";
+    UNSIGNED8 alias[8]  = "pf";
+    REQUIRE(AdsOpenTable(hConn, tname, alias, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED32 r0 = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &r0) == 0);
+    CHECK(r0 == 1u);
+
+    // First forward skip may drain a GotoTop lookahead row; the very
+    // next backward skip must land back on the same record.
+    REQUIRE(AdsSkip(hTable, 1) == 0);
+    REQUIRE(AdsSkip(hTable, -1) == 0);
+    UNSIGNED32 r1 = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &r1) == 0);
+    CHECK(r1 == 1u);
+
+    // Same after the prefetch queue has been populated.
+    for (int i = 0; i < 5; ++i) REQUIRE(AdsSkip(hTable, 1) == 0);
+    UNSIGNED32 r6 = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &r6) == 0);
+    CHECK(r6 == 6u);
+    REQUIRE(AdsSkip(hTable, -1) == 0);
+    UNSIGNED32 r5 = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &r5) == 0);
+    CHECK(r5 == 5u);
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    srv.stop();
+}
+
 TEST_CASE("remote prefetch: mixed forward/backward lands on the right recno") {
     using openads::network::Server;
     auto dir = fs::temp_directory_path() / "openads_prefetch_mixed";

@@ -1774,6 +1774,15 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!tbl) { reply = err("GotoRecord: lookup failed"); break; }
             auto r = tbl->goto_record(recno);
             if (!r) { reply = err("GotoRecord: failed"); break; }
+            // Physical GOTO moves only the engine cursor. When an order
+            // is active the parallel ABI handle (used by ordered Skip) must
+            // land on the same recno or xBrowse's bookmark DbGoto restore
+            // leaves the next index Skip walking from a stale key.
+            if (ordered_tables_.count(id)) {
+                if (ADSHANDLE hord = ensure_abi_handle(id)) {
+                    (void)AdsGotoRecord(hord, recno);
+                }
+            }
             reply.opcode = Opcode::GotoRecordAck;
             pack_row_trailer(reply, id);
             break;

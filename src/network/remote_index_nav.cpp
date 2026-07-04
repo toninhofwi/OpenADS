@@ -8,7 +8,6 @@ void remote_index_nav_preamble(RemoteIndex* ri) {
     if (ri == nullptr || ri->parent == nullptr) return;
     ri->parent->found_cached  = true;
     ri->parent->current_found = false;
-    ri->parent->row_valid     = false;
     ri->parent->prefetch_queue.clear();
     ri->parent->prefetch_consumed = 0;
 }
@@ -42,9 +41,18 @@ util::Result<void> remote_index_goto_bottom(RemoteIndex* ri) {
 }
 
 util::Result<void> remote_index_skip(RemoteIndex* ri, std::int32_t rows) {
-    remote_index_nav_preamble(ri);
+    if (ri == nullptr || ri->parent == nullptr || ri->conn == nullptr) {
+        return util::Error{
+            openads::AE_INTERNAL_ERROR, 0,
+            "remote index skip: missing parent or connection", ""};
+    }
     auto act = remote_activate_index(ri);
     if (!act) return act.error();
+    // Skip(0) settles prefetch lag — must not clear prefetch_consumed first.
+    if (rows == 0) {
+        return ri->conn->skip(ri->parent, 0);
+    }
+    remote_index_nav_preamble(ri);
     return ri->conn->skip(ri->parent, rows);
 }
 

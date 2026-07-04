@@ -6,11 +6,39 @@ nav_order: 0
 permalink: /es/novedades/
 ---
 
-# Novedades (v1.0.0-rc29 → v1.5.1)
+# Novedades (v1.0.0-rc29 → v1.6.3)
 
 Esta página resume los cambios más destacados desde la versión
 v1.0.0-rc29. Para el historial completo de commits, consulta el
 [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md).
+
+---
+
+## Destacados v1.6.3
+
+### REMOTO / FWH — xBrowse sobre `tcp://`
+
+Correcciones para Harbour `ADSCDX` + FWH `xBrowse` / `TDataBase` con tags
+CDX de producción (`OrdSetFocus`, p. ej. `CUSTNAME`):
+
+- **Scrollbar (`AdsKeyNo`)** — posición lógica en el orden (`1..n`), no
+  `RecNo` físico; `AdsGetRelKeyPos` / `AdsSetRelKeyPos` en índice remoto.
+- **`DbGoto` tras pintar** — el servidor sincroniza el cursor ABI del
+  índice en `GotoRecord`; las filas dejan de cambiar en cada `Refresh`.
+- **Subir en el tope** — `AdsAtBOF` tras `Skip(-1)` en la clave #1; evita
+  repetir la primera fila.
+
+Requiere `openace64.dll` actualizado y `openads_serverd` con el sync en
+`GotoRecord`. Tests en `abi_remote_index_nav_test`.
+
+---
+
+## Destacados v1.6.2
+
+### Nombres de tags CDX SAP y `FieldGet` en fila nueva
+
+Nombres correctos en CDX compuesto (`CUSTNAME`); `AdsGetField` en blanco
+en BOF/EOF para `td_blankrow()` de FWH.
 
 ---
 

@@ -202,6 +202,20 @@ TEST_CASE("remote DbSetOrder by number/name uses production index") {
     REQUIRE(AdsGetIndexHandle(hTable, want, &hByName) == 0);
     CHECK(hByName == hOrd);
 
+    // FWH xBrowse: ADSKEYCOUNT(,,1) passes filter option 1 (Harbour
+    // ADS_RESPECTFILTERS). AdsGetScope must report empty scope on the
+    // RemoteIndex handle so rddads takes the direct AdsGetRecordCount
+    // path instead of a broken key-walk that returns 0.
+    UNSIGNED32 key_cnt = 0, key_no = 0;
+    REQUIRE(AdsGetRecordCount(hOrd, 1, &key_cnt) == 0);
+    CHECK(key_cnt == 3u);
+    REQUIRE(AdsGetKeyNum(hOrd, 0, &key_no) == 0);
+    CHECK(key_no == 1u);
+
+    UNSIGNED16 scope_len = 99;
+    REQUIRE(AdsGetScope(hOrd, ADS_BOTTOM, nullptr, &scope_len) == 0);
+    CHECK(scope_len == 0u);
+
     REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
 
@@ -369,6 +383,213 @@ TEST_CASE("remote customer.dbf CUSTNAME order via table handle") {
     for (std::size_t i = 1; i < names.size(); ++i) {
         CHECK(names[i] >= names[i - 1]);
     }
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+}
+
+TEST_CASE("remote skip roundtrip restores same record") {
+    using openads::network::Server;
+    fs::path data = "C:/OpenADS/testdata/invoices";
+    if (const char* root = std::getenv("OPENADS_ROOT"))
+        data = fs::path(root) / "testdata" / "invoices";
+    if (!fs::exists(data / "customer.dbf")) return;
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(data, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "customer.dbf";
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    auto snap = [&](const char* label) {
+        UNSIGNED32 rec = 0;
+        REQUIRE(AdsGetRecordNum(hTable, 0, &rec) == 0);
+        UNSIGNED8 buf[64] = {0};
+        UNSIGNED32 cap = sizeof(buf) - 1;
+        REQUIRE(AdsGetField(hTable, (UNSIGNED8*)"NAME", buf, &cap, 0) == 0);
+        std::string name(reinterpret_cast<char*>(buf), cap);
+        INFO(label << " rec=" << rec << " name=" << name);
+        return std::pair<UNSIGNED32, std::string>{rec, name};
+    };
+
+    auto roundtrip = [&](int steps) {
+        auto before = snap("before");
+        for (int i = 0; i < steps; ++i) REQUIRE(AdsSkip(hTable, 1) == 0);
+        for (int i = 0; i < steps; ++i) REQUIRE(AdsSkip(hTable, -1) == 0);
+        auto after = snap("after");
+        CHECK(before.first == after.first);
+        CHECK(before.second == after.second);
+    };
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    roundtrip(1);
+    roundtrip(3);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 2, &hOrd) == 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == 0);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    roundtrip(1);
+    roundtrip(5);
+
+    REQUIRE(AdsGotoTop(hOrd) == 0);
+    auto before = snap("ix-before");
+    REQUIRE(AdsSkip(hOrd, 1) == 0);
+    REQUIRE(AdsSkip(hOrd, -1) == 0);
+    auto after = snap("ix-after");
+    CHECK(before.first == after.first);
+    CHECK(before.second == after.second);
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+}
+
+// FWH xBrowse Paint() bookmark pattern: save RecNo, skip visible rows,
+// DbGoto(bookmark). KeyNo must still describe the saved row, not the
+// paint walk.
+TEST_CASE("remote bookmark restore keeps AdsGetKeyNum coherent") {
+    using openads::network::Server;
+    fs::path data = "C:/OpenADS/testdata/invoices";
+    if (const char* root = std::getenv("OPENADS_ROOT"))
+        data = fs::path(root) / "testdata" / "invoices";
+    if (!fs::exists(data / "customer.dbf")) return;
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(data, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "customer.dbf";
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 2, &hOrd) == 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == 0);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+
+    UNSIGNED32 rec0 = 0, key0 = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec0) == 0);
+    REQUIRE(AdsGetKeyNum(hTable, 0, &key0) == 0);
+    CHECK(key0 == 1u);
+
+    const int paint_rows = 5;
+    for (int i = 0; i < paint_rows; ++i) REQUIRE(AdsSkip(hTable, 1) == 0);
+
+    UNSIGNED32 key_mid = 0;
+    REQUIRE(AdsGetKeyNum(hTable, 0, &key_mid) == 0);
+    CHECK(key_mid == static_cast<UNSIGNED32>(paint_rows + 1));
+
+    REQUIRE(AdsGotoRecord(hTable, rec0) == 0);
+
+    UNSIGNED32 rec1 = 0, key1 = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec1) == 0);
+    REQUIRE(AdsGetKeyNum(hTable, 0, &key1) == 0);
+    CHECK(rec1 == rec0);
+    CHECK(key1 == key0);
+
+    // CalcRowSelPos-style skip after bookmark restore.
+    REQUIRE(AdsSkip(hTable, 3) == 0);
+    UNSIGNED32 key_after = 0;
+    REQUIRE(AdsGetKeyNum(hTable, 0, &key_after) == 0);
+    CHECK(key_after == 4u);
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+}
+
+// xBrowse Paint() + OrdSetFocus: skips use hOrdCurrent (RemoteIndex),
+// bookmark restore uses AdsGotoRecord on the table handle. The server
+// must re-anchor the ABI index cursor on GOTO or the next index Skip
+// walks from the paint-walk position instead of the bookmark.
+TEST_CASE("remote index skip after GotoRecord bookmark restore") {
+    using openads::network::Server;
+    fs::path data = "C:/OpenADS/testdata/invoices";
+    if (const char* root = std::getenv("OPENADS_ROOT"))
+        data = fs::path(root) / "testdata" / "invoices";
+    if (!fs::exists(data / "customer.dbf")) return;
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(data, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "customer.dbf";
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 2, &hOrd) == 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == 0);
+    REQUIRE(AdsGotoTop(hOrd) == 0);
+
+    auto read_name = [&](ADSHANDLE h) -> std::string {
+        UNSIGNED8 buf[64] = {0};
+        UNSIGNED32 cap = sizeof(buf) - 1;
+        REQUIRE(AdsGetField(h, (UNSIGNED8*)"NAME", buf, &cap, 0) == 0);
+        return std::string(reinterpret_cast<char*>(buf), cap);
+    };
+
+    const std::string top_name = read_name(hTable);
+    UNSIGNED32 top_rec = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &top_rec) == 0);
+    REQUIRE(!top_name.empty());
+
+    const int paint_rows = 5;
+    for (int i = 0; i < paint_rows; ++i) REQUIRE(AdsSkip(hOrd, 1) == 0);
+    const std::string walk_name = read_name(hTable);
+    CHECK(walk_name != top_name);
+
+    REQUIRE(AdsGotoRecord(hTable, top_rec) == 0);
+    CHECK(read_name(hTable) == top_name);
+
+    REQUIRE(AdsSkip(hOrd, 1) == 0);
+    const std::string after_name = read_name(hTable);
+    CHECK(after_name != top_name);
+    CHECK(after_name != walk_name);
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+}
+
+TEST_CASE("remote index skip(-1) at top sets BOF for xBrowse GoUp") {
+    using openads::network::Server;
+    fs::path data = "C:/OpenADS/testdata/invoices";
+    if (const char* root = std::getenv("OPENADS_ROOT"))
+        data = fs::path(root) / "testdata" / "invoices";
+    if (!fs::exists(data / "customer.dbf")) return;
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(data, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "customer.dbf";
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 2, &hOrd) == 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == 0);
+    REQUIRE(AdsGotoTop(hOrd) == 0);
+
+    UNSIGNED32 rec0 = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec0) == 0);
+    UNSIGNED16 bof = 0;
+    REQUIRE(AdsAtBOF(hTable, &bof) == 0);
+    CHECK(bof == 0u);
+
+    REQUIRE(AdsSkip(hOrd, -1) == 0);
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec0) == 0);
+    REQUIRE(AdsAtBOF(hTable, &bof) == 0);
+    CHECK(bof == 1u);
 
     REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);

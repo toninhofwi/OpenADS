@@ -5,6 +5,48 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.6.3 — 2026-07-04
+
+### REMOTE / FWH — xBrowse index navigation over `tcp://`
+
+Harbour `ADSCDX` + FWH `xBrowse` / `TDataBase` with `OrdSetFocus` and
+production CDX tags (e.g. `customer.dbf` / `CUSTNAME` on `openads_serverd`)
+had chaotic browse behaviour: scrollbar misaligned, rows shifting on
+`Refresh`, and the first row repeating when scrolling up from the top.
+
+- **Bug fix: `AdsGetKeyNum` returned physical `RecNo` instead of logical
+  key position** — FWH `xBrowse:SetRDD()` uses `AdsKeyNo(, , 1)` for the
+  vertical scrollbar. Remote indexed tables now track `current_keyno` across
+  `AdsGotoTop` / `AdsSkip` / `AdsGotoRecord` and implement
+  `AdsGetRelKeyPos` / `AdsSetRelKeyPos` against the active order.
+
+- **Bug fix: `GotoRecord` left the server ABI index cursor stale** —
+  `xBrowse:Paint()` saves `RecNo()`, walks visible rows via `hOrdCurrent`
+  (`AdsSkip` on the index handle), then restores with `DbGoto(bookmark)`.
+  The server engine moved to the bookmark recno but the parallel ABI
+  handle (used for ordered `Skip`) did not, so the next index skip walked
+  from the paint position instead of the selected row. `Session::GotoRecord`
+  now calls `AdsGotoRecord(hord, recno)` when the table is in
+  `ordered_tables_`.
+
+- **Bug fix: `AdsAtBOF` always answered “not BOF” while `row_valid`** —
+  After `Skip(-1)` at key #1, Harbour's `hb_adsUpdateAreaFlags` never saw
+  BOF, so FWH `GoUp` rubber-banded and repainted the first row. The client
+  now sets `nav_at_bof` / `nav_at_eof` when a skip does not change recno.
+
+- **Client: `remote_index_skip(0)`** — `Skip(0)` settles prefetch lag
+  without clearing `prefetch_consumed` first; index-nav preamble no longer
+  invalidates `row_valid` before every skip ack.
+
+- **Regression tests** — `remote bookmark restore keeps AdsGetKeyNum
+  coherent`, `remote index skip after GotoRecord bookmark restore`,
+  `remote index skip(-1) at top sets BOF for xBrowse GoUp`, plus extended
+  `abi_remote_index_nav_test` / `abi_remote_prefetch_test` coverage.
+
+Reported while validating FWH `testads.prg` / `TDataBase` + `xBrowse`
+against `tcp://192.168.18.184:16262//tmp/openads_mac` (Harbour `rddads`
+unchanged).
+
 ## 1.6.2 — 2026-07-04
 
 ### REMOTE / FWH — production CDX tag names & append-row FieldGet

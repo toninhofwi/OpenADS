@@ -920,6 +920,262 @@ Handle handle_for_remote_table(openads::network::RemoteTable* rt) {
     return state().registry.find_handle(HandleKind::RemoteTable, rt);
 }
 
+bool remote_table_has_index(const openads::network::RemoteTable* rt) {
+    return rt != nullptr &&
+           (rt->active_index_id != 0 || !rt->index_by_tag.empty());
+}
+
+void remote_clear_nav_boundaries(openads::network::RemoteTable* rt) {
+    if (rt == nullptr) return;
+    rt->nav_at_bof = false;
+    rt->nav_at_eof = false;
+}
+
+void remote_ensure_rec_count(openads::network::RemoteTable* rt) {
+    if (rt == nullptr || rt->rec_count_cached) return;
+    if (auto r = rt->conn->record_count(rt->id)) {
+        rt->cached_rec_count = r.value();
+        rt->rec_count_cached = true;
+    }
+}
+
+void remote_update_nav_boundaries(openads::network::RemoteTable* rt,
+                                  std::int32_t step,
+                                  std::uint32_t rec_before,
+                                  bool row_valid_before) {
+    if (rt == nullptr || step == 0) return;
+    if (step < 0) {
+        rt->nav_at_eof = false;
+        if (!rt->row_valid) {
+            rt->nav_at_bof = true;
+            return;
+        }
+        rt->nav_at_bof =
+            row_valid_before && rt->current_recno == rec_before;
+        return;
+    }
+    rt->nav_at_bof = false;
+    if (!rt->row_valid) {
+        rt->nav_at_eof = true;
+        return;
+    }
+    rt->nav_at_eof =
+        row_valid_before && rt->current_recno == rec_before;
+}
+
+void remote_sync_keyno_gototop(openads::network::RemoteTable* rt) {
+    if (rt == nullptr) return;
+    remote_clear_nav_boundaries(rt);
+    if (remote_table_has_index(rt)) {
+        rt->current_keyno = 1;
+        rt->keyno_valid   = true;
+    } else if (rt->row_valid) {
+        rt->current_keyno = rt->current_recno;
+        rt->keyno_valid   = true;
+    } else {
+        rt->keyno_valid = false;
+    }
+}
+
+void remote_sync_keyno_gotobottom(openads::network::RemoteTable* rt) {
+    if (rt == nullptr) return;
+    remote_clear_nav_boundaries(rt);
+    if (remote_table_has_index(rt)) {
+        if (!rt->rec_count_cached) {
+            if (auto r = rt->conn->record_count(rt->id)) {
+                rt->cached_rec_count   = r.value();
+                rt->rec_count_cached   = true;
+            }
+        }
+        rt->current_keyno = rt->rec_count_cached ? rt->cached_rec_count : 1u;
+        rt->keyno_valid   = true;
+    } else if (rt->row_valid) {
+        rt->current_keyno = rt->current_recno;
+        rt->keyno_valid   = true;
+    } else {
+        rt->keyno_valid = false;
+    }
+}
+
+void remote_sync_keyno_skip(openads::network::RemoteTable* rt,
+                            std::int32_t step) {
+    if (rt == nullptr) return;
+    if (remote_table_has_index(rt)) {
+        // FWH xBrowse Paint() saves RecNo(), skips through visible rows,
+        // then DbGoto(bookmark). AdsGotoRecord invalidates keyno; do not
+        // invent a position here or KeyNo/CalcRowSelPos drift.
+        if (!rt->keyno_valid) return;
+        std::int64_t k = static_cast<std::int64_t>(rt->current_keyno) + step;
+        if (k < 1) k = 1;
+        if (rt->rec_count_cached &&
+            k > static_cast<std::int64_t>(rt->cached_rec_count)) {
+            k = static_cast<std::int64_t>(rt->cached_rec_count);
+        }
+        rt->current_keyno = static_cast<std::uint32_t>(k);
+        return;
+    }
+    if (rt->row_valid) {
+        rt->current_keyno = rt->current_recno;
+        rt->keyno_valid   = true;
+    }
+}
+
+// Walk from top (server honours ordered_tables_ even when the client's
+// active_index_id was never set) until current_recno matches.
+UNSIGNED32 remote_measure_keyno(openads::network::RemoteTable* rt) {
+    if (rt == nullptr) return 0;
+    if (!rt->row_valid) {
+        remote_sync_keyno_gototop(rt);
+        return rt->current_keyno;
+    }
+    const std::uint32_t target = rt->current_recno;
+    remote_ensure_rec_count(rt);
+    const std::uint32_t limit =
+        rt->rec_count_cached ? rt->cached_rec_count : 1000000u;
+
+    rt->found_cached      = true;
+    rt->current_found     = false;
+    rt->prefetch_queue.clear();
+    rt->prefetch_consumed = 0;
+    if (auto r = rt->conn->goto_top(rt); !r) return 0;
+    remote_sync_keyno_gototop(rt);
+    if (rt->row_valid && rt->current_recno == target) {
+        return 1u;
+    }
+    for (std::uint32_t kn = 1; kn < limit; ++kn) {
+        if (rt->row_valid && rt->current_recno == target) {
+            rt->current_keyno = kn;
+            rt->keyno_valid   = true;
+            return kn;
+        }
+        auto eo = rt->conn->at_eof(rt->id);
+        if (eo && eo.value()) break;
+        if (auto sk = rt->conn->skip(rt, 1); !sk) break;
+        remote_sync_keyno_skip(rt, 1);
+    }
+    rt->current_keyno = rt->keyno_valid ? rt->current_keyno : 1u;
+    rt->keyno_valid   = true;
+    return rt->current_keyno;
+}
+
+UNSIGNED32 remote_query_key_num(openads::network::RemoteTable* rt,
+                                openads::network::RemoteIndex* ri,
+                                UNSIGNED32* pulKeyNum) {
+    if (rt == nullptr || pulKeyNum == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    if (ri != nullptr) {
+        auto act = openads::network::remote_activate_index(ri);
+        if (!act) return fail(act.error());
+    }
+    const bool has_index = rt->active_index_id != 0 ||
+                           !rt->index_by_tag.empty();
+    if (!has_index) {
+        if (rt->row_valid) {
+            *pulKeyNum = rt->current_recno;
+            return ok();
+        }
+        auto r = rt->conn->get_record_num(rt->id);
+        if (!r) return fail(r.error());
+        *pulKeyNum = r.value();
+        return ok();
+    }
+    if (rt->keyno_valid) {
+        *pulKeyNum = rt->current_keyno;
+        return ok();
+    }
+    const UNSIGNED32 kn = remote_measure_keyno(rt);
+    rt->current_keyno = kn;
+    rt->keyno_valid   = true;
+    *pulKeyNum = kn;
+    return ok();
+}
+
+UNSIGNED32 remote_goto_key_num(openads::network::RemoteTable* rt,
+                               openads::network::RemoteIndex* ri,
+                               UNSIGNED32 keyno) {
+    if (rt == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (keyno < 1u) keyno = 1u;
+    if (ri != nullptr) {
+        auto act = openads::network::remote_activate_index(ri);
+        if (!act) return fail(act.error());
+    }
+    remote_ensure_rec_count(rt);
+    if (rt->rec_count_cached && keyno > rt->cached_rec_count) {
+        keyno = rt->cached_rec_count;
+    }
+    if (!remote_table_has_index(rt)) {
+        rt->found_cached      = true;
+        rt->current_found     = false;
+        rt->prefetch_queue.clear();
+        rt->prefetch_consumed = 0;
+        if (auto r = rt->conn->goto_record(rt, keyno); !r) {
+            return fail(r.error());
+        }
+        rt->current_keyno = keyno;
+        rt->keyno_valid   = true;
+        return ok();
+    }
+    rt->found_cached      = true;
+    rt->current_found     = false;
+    rt->prefetch_queue.clear();
+    rt->prefetch_consumed = 0;
+    if (auto r = rt->conn->goto_top(rt); !r) return fail(r.error());
+    remote_sync_keyno_gototop(rt);
+    if (keyno > 1u) {
+        const auto step = static_cast<std::int32_t>(keyno - 1u);
+        if (auto sk = rt->conn->skip(rt, step); !sk) return fail(sk.error());
+        remote_sync_keyno_skip(rt, step);
+    }
+    rt->current_keyno = keyno;
+    rt->keyno_valid   = true;
+    return ok();
+}
+
+UNSIGNED32 remote_query_rel_key_pos(openads::network::RemoteTable* rt,
+                                    openads::network::RemoteIndex* ri,
+                                    double* p) {
+    if (rt == nullptr || p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (ri != nullptr) {
+        auto act = openads::network::remote_activate_index(ri);
+        if (!act) return fail(act.error());
+    }
+    remote_ensure_rec_count(rt);
+    const std::uint32_t rc =
+        rt->rec_count_cached ? rt->cached_rec_count : 0u;
+    if (rc <= 1u) {
+        *p = 0.0;
+        return ok();
+    }
+    if (rt->active_index_id != 0 || !rt->index_by_tag.empty()) {
+        UNSIGNED32 kn = 0;
+        if (UNSIGNED32 rc2 = remote_query_key_num(rt, nullptr, &kn);
+            rc2 != openads::AE_SUCCESS) {
+            return rc2;
+        }
+        if (kn < 1u) kn = 1u;
+        if (kn > rc) kn = rc;
+        *p = static_cast<double>(kn - 1u) /
+             static_cast<double>(rc - 1u);
+        return ok();
+    }
+    std::uint32_t rn = 0;
+    if (rt->row_valid) {
+        rn = rt->current_recno;
+    } else {
+        auto rnr = rt->conn->get_record_num(rt->id);
+        if (!rnr) return fail(rnr.error());
+        rn = rnr.value();
+    }
+    if (rn == 0u) {
+        *p = 0.0;
+        return ok();
+    }
+    if (rn > rc) rn = rc;
+    *p = static_cast<double>(rn - 1u) / static_cast<double>(rc - 1u);
+    return ok();
+}
+
 } // namespace
 
 // Latch set by AdsSeekLast. AdsSeek consults this to suppress its
@@ -6973,8 +7229,17 @@ UNSIGNED32 ENTRYPOINT AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoTo clears Found()
+        remote_clear_nav_boundaries(rt);
         auto r = rt->conn->goto_record(rt, ulRecord);
         if (!r) return fail(r.error());
+        if (remote_table_has_index(rt)) {
+            rt->keyno_valid = false;
+        } else if (ulRecord > 0u) {
+            rt->current_keyno = ulRecord;
+            rt->keyno_valid   = true;
+        } else {
+            rt->keyno_valid = false;
+        }
         apply_relations_for_handle(hTable);
         return ok();
     }
@@ -7104,6 +7369,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
     if (auto* ri = get_remote_index(hTable)) {
         auto r = openads::network::remote_index_goto_top(ri);
         if (!r) return fail(r.error());
+        remote_sync_keyno_gototop(ri->parent);
         if (Handle th = handle_for_remote_table(ri->parent))
             apply_relations_for_handle(th);
         return ok();
@@ -7115,6 +7381,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoTop clears Found()
         auto r = rt->conn->goto_top(rt);
         if (!r) return fail(r.error());
+        remote_sync_keyno_gototop(rt);
         apply_relations_for_handle(hTable);
         return ok();
     }
@@ -7138,6 +7405,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
     if (auto* ri = get_remote_index(hTable)) {
         auto r = openads::network::remote_index_goto_bottom(ri);
         if (!r) return fail(r.error());
+        remote_sync_keyno_gotobottom(ri->parent);
         if (Handle th = handle_for_remote_table(ri->parent))
             apply_relations_for_handle(th);
         return ok();
@@ -7146,6 +7414,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: GoBottom clears Found()
         auto r = rt->conn->goto_bottom(rt);
         if (!r) return fail(r.error());
+        remote_sync_keyno_gotobottom(rt);
         apply_relations_for_handle(hTable);
         return ok();
     }
@@ -7168,14 +7437,23 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
 UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* ri = get_remote_index(hTable)) {
+        openads::network::RemoteTable* rt = ri->parent;
+        const std::uint32_t rec_before =
+            (rt != nullptr && rt->row_valid) ? rt->current_recno : 0u;
+        const bool row_valid_before = rt != nullptr && rt->row_valid;
         auto r = openads::network::remote_index_skip(ri, lRows);
         if (!r) return fail(r.error());
-        if (Handle th = handle_for_remote_table(ri->parent))
+        remote_sync_keyno_skip(rt, lRows);
+        remote_update_nav_boundaries(rt, lRows, rec_before, row_valid_before);
+        if (Handle th = handle_for_remote_table(rt))
             apply_relations_for_handle(th);
         return ok();
     }
     if (auto* rt = get_remote_table(hTable)) {
         rt->found_cached = true; rt->current_found = false;  // M12.21: Skip clears Found()
+        const std::uint32_t rec_before =
+            rt->row_valid ? rt->current_recno : 0u;
+        const bool row_valid_before = rt->row_valid;
         // M12.21 — sequential prefetch: Skip(1) drains the queue
         // populated by the previous Skip's lookahead block. Zero
         // RTT for every cached step.
@@ -7190,6 +7468,8 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
             // we are one logical row further ahead so the next wire op
             // resyncs by (step + prefetch_consumed).
             ++rt->prefetch_consumed;
+            remote_sync_keyno_skip(rt, lRows);
+            remote_update_nav_boundaries(rt, lRows, rec_before, row_valid_before);
             apply_relations_for_handle(hTable);
             return ok();
         }
@@ -7197,6 +7477,8 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
         // parse_row_trailer_into when the new ack arrives).
         auto r = rt->conn->skip(rt, lRows);
         if (!r) return fail(r.error());
+        remote_sync_keyno_skip(rt, lRows);
+        remote_update_nav_boundaries(rt, lRows, rec_before, row_valid_before);
         apply_relations_for_handle(hTable);
         return ok();
     }
@@ -7219,6 +7501,7 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
 UNSIGNED32 ENTRYPOINT AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        if (rt->nav_at_eof) { *pbAtEnd = 1; return ok(); }
         // M12.21 option C — a valid cached current row (including one
         // served locally from the prefetch queue) means the cursor is
         // on a record, so it cannot be at EOF: answer with no round
@@ -7241,6 +7524,7 @@ UNSIGNED32 ENTRYPOINT AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
 UNSIGNED32 ENTRYPOINT AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
     if (pbAtBegin == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
+        if (rt->nav_at_bof) { *pbAtBegin = 1; return ok(); }
         // M12.21 option C — a valid cached current row means the cursor
         // is on a record, so it cannot be at BOF: answer with no round
         // trip (see AdsAtEOF).
@@ -7861,6 +8145,17 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOpti
 
 UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
                              UNSIGNED32* pulRecordCount) {
+    // rddads AdsKeyCount / OrdKeyCount pass hOrdCurrent (a RemoteIndex
+    // handle) here. Route through the parent table so FWH xBrowse gets a
+    // non-zero nLen instead of an error that blanks the grid.
+    if (auto* ri = get_remote_index(hTable)) {
+        if (ri->parent == nullptr || pulRecordCount == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "remote index");
+        }
+        ADSHANDLE th = handle_for_remote_table(ri->parent);
+        if (th == 0) return fail(openads::AE_INTERNAL_ERROR, "remote index parent");
+        return AdsGetRecordCount(th, bFilterOption, pulRecordCount);
+    }
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
         // M12.19 — record count is invariant outside of explicit
@@ -11756,6 +12051,7 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
         if (!r) return fail(r.error());
         if (name.empty()) {
             rt->active_index_id = 0;
+            rt->keyno_valid     = false;
         } else {
             for (auto& [tag, wid] : rt->index_by_tag) {
                 if (tag.size() == name.size()) {
@@ -11767,7 +12063,11 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
                             break;
                         }
                     }
-                    if (eq) { rt->active_index_id = wid; break; }
+                    if (eq) {
+                        rt->active_index_id = wid;
+                        rt->keyno_valid     = false;
+                        break;
+                    }
                 }
             }
         }
@@ -11895,10 +12195,16 @@ UNSIGNED32 ENTRYPOINT AdsSetIndexOrder(ADSHANDLE hTable, UNSIGNED8* pucName) {
 
 UNSIGNED32 ENTRYPOINT AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hIndex) {
     if (auto* rt = get_remote_table(hTable)) {
+        if (hIndex == 0) {
+            rt->active_index_id = 0;
+            rt->keyno_valid     = false;
+            return ok();
+        }
         if (auto* ri = get_remote_index(hIndex)) {
             auto r = rt->conn->set_order(rt->id, ri->id);
             if (!r) return fail(r.error());
             rt->active_index_id = ri->id;
+            rt->keyno_valid     = false;
             return ok();
         }
         return fail(openads::AE_INTERNAL_ERROR,
@@ -14271,8 +14577,22 @@ UNSIGNED32 ENTRYPOINT AdsClearScope(ADSHANDLE hIndex, UNSIGNED16 usScope) {
 
 UNSIGNED32 ENTRYPOINT AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
                        UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    // rddads' ADSKEYCOUNT (filter option != ADS_IGNOREFILTERS) seeds
+    // *pusLen with sizeof(buffer) then calls AdsGetScope. A failure that
+    // leaves *pusLen untouched makes the caller think a scope is set and
+    // enter the key-walk branch — which returns KeyCount=0 and blanks
+    // FWH xBrowse over remote tables/indexes. Remote handles carry no
+    // client-side scope; report empty scope explicitly.
+    if (get_remote_index(hIndex) != nullptr || get_remote_table(hIndex)) {
+        *pusLen = 0;
+        return ok();
+    }
     Table* t = table_for_index(hIndex);
-    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    if (!t) {
+        *pusLen = 0;
+        return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    }
     auto s = t->get_scope(usScope == ADS_TOP);
     openads::abi::copy_to_caller(pucBuf, pusLen, s.value_or(""));
     return ok();
@@ -24111,12 +24431,14 @@ UNSIGNED32 ENTRYPOINT AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/
                         UNSIGNED32* pulKeyNum) {
     if (pulKeyNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulKeyNum = 0;
+    if (auto* ri = get_remote_index(hObj)) {
+        if (ri->parent == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "remote index");
+        }
+        return remote_query_key_num(ri->parent, ri, pulKeyNum);
+    }
     if (auto* rt = get_remote_table(hObj)) {
-        if (rt->row_valid) { *pulKeyNum = rt->current_recno; return ok(); }
-        auto r = rt->conn->get_record_num(rt->id);
-        if (!r) return fail(r.error());
-        *pulKeyNum = r.value();
-        return ok();
+        return remote_query_key_num(rt, nullptr, pulKeyNum);
     }
     Table* t = get_table(hObj);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
@@ -24333,34 +24655,14 @@ UNSIGNED32 ENTRYPOINT AdsGetRelKeyPos(ADSHANDLE h, double* p) {
         return ok();
     }
 #endif
+    if (auto* ri = get_remote_index(h)) {
+        if (ri->parent == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "remote index");
+        }
+        return remote_query_rel_key_pos(ri->parent, ri, p);
+    }
     if (auto* rt = get_remote_table(h)) {
-        // M12.19 — scrollbar callers (xbrowse) hit this every paint.
-        // current_recno arrives with the row trailer (M12.18) and
-        // cached_rec_count survives every nav, so the hot path is
-        // 0 RTT. Fall back to a wire RTT only if either piece of
-        // state is cold (e.g. just-opened table before first nav).
-        std::uint32_t rc = 0;
-        if (rt->rec_count_cached) {
-            rc = rt->cached_rec_count;
-        } else {
-            auto rcr = rt->conn->record_count(rt->id);
-            if (!rcr) return fail(rcr.error());
-            rc = static_cast<std::uint32_t>(rcr.value());
-            rt->cached_rec_count = rc;
-            rt->rec_count_cached = true;
-        }
-        std::uint32_t rn = 0;
-        if (rt->row_valid) {
-            rn = rt->current_recno;
-        } else {
-            auto rnr = rt->conn->get_record_num(rt->id);
-            if (!rnr) return fail(rnr.error());
-            rn = rnr.value();
-        }
-        if (rc <= 1 || rn == 0) { *p = 0.0; return ok(); }
-        if (rn > rc) rn = rc;
-        *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
-        return ok();
+        return remote_query_rel_key_pos(rt, nullptr, p);
     }
     Table* t = get_table(h);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
@@ -24701,6 +25003,43 @@ UNSIGNED32 ENTRYPOINT AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
     return ok();
 }
 UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
+    if (auto* ri = get_remote_index(h)) {
+        if (ri->parent == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "remote index");
+        }
+        openads::network::RemoteTable* rt = ri->parent;
+        auto act = openads::network::remote_activate_index(ri);
+        if (!act) return fail(act.error());
+        remote_ensure_rec_count(rt);
+        const std::uint32_t rc =
+            rt->rec_count_cached ? rt->cached_rec_count : 0u;
+        if (rc <= 1u) return ok();
+        if (pos < 0.0) pos = 0.0;
+        if (pos > 1.0) pos = 1.0;
+        std::uint32_t target = static_cast<std::uint32_t>(
+            pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
+        if (target > rc) target = rc;
+        return remote_goto_key_num(rt, ri, target);
+    }
+    if (auto* rt = get_remote_table(h)) {
+        remote_ensure_rec_count(rt);
+        const std::uint32_t rc =
+            rt->rec_count_cached ? rt->cached_rec_count : 0u;
+        if (rc <= 1u) return ok();
+        if (pos < 0.0) pos = 0.0;
+        if (pos > 1.0) pos = 1.0;
+        if (remote_table_has_index(rt)) {
+            std::uint32_t target = static_cast<std::uint32_t>(
+                pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
+            if (target > rc) target = rc;
+            return remote_goto_key_num(rt, nullptr, target);
+        }
+        std::uint32_t rn = static_cast<std::uint32_t>(
+            pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
+        if (rn < 1u) rn = 1u;
+        if (rn > rc) rn = rc;
+        return remote_goto_key_num(rt, nullptr, rn);
+    }
     Table* t = get_table(h);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     std::uint32_t rc = t->record_count();

@@ -6,11 +6,41 @@ nav_order: 0
 permalink: /en/whatsnew/
 ---
 
-# What's New (v1.0.0-rc29 → v1.5.1)
+# What's New (v1.0.0-rc29 → v1.6.3)
 
 This page summarises the most notable changes since the
 v1.0.0-rc29 release. For the full commit-by-commit history see
 the [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md).
+
+---
+
+## v1.6.3 Highlights
+
+### REMOTE / FWH — xBrowse over `tcp://`
+
+Fixes Harbour `ADSCDX` + FWH `xBrowse` / `TDataBase` with production CDX
+tags (`OrdSetFocus`, e.g. `CUSTNAME`):
+
+- **`AdsKeyNo` / scrollbar** — logical key position (`1..n`) instead of
+  physical `RecNo`; `AdsGetRelKeyPos` / `AdsSetRelKeyPos` for remote
+  indexed tables.
+- **Bookmark `DbGoto` after paint** — server syncs the ABI index cursor
+  on `GotoRecord` so rows no longer shift on every `Refresh`.
+- **GoUp at top** — `AdsAtBOF` reports BOF after `Skip(-1)` at key #1;
+  stops the first-row rubber-band repeat.
+
+Requires **both** `openace64.dll` (client) and an updated
+`openads_serverd` (GotoRecord ABI sync). Regression tests in
+`abi_remote_index_nav_test`.
+
+---
+
+## v1.6.2 Highlights
+
+### Production CDX tag names & append-row `FieldGet`
+
+SAP/BCC compound CDX tag names (`CUSTNAME`, not `AME`); blank
+`AdsGetField` at BOF/EOF for FWH `td_blankrow()`.
 
 ---
 
