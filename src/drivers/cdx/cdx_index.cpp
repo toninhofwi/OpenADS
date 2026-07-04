@@ -53,6 +53,24 @@ std::string trim_nul(const std::uint8_t* p, std::size_t n) {
     return std::string(reinterpret_cast<const char*>(p), len);
 }
 
+std::string trim_cdx_tag_name(std::string s) {
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    while (!s.empty() && s.front() == ' ') s.erase(s.begin());
+    return s;
+}
+
+// Canonical tag name from a sub-tag CDXTAGHEADER (FoxPro offset +24, 11 bytes).
+std::string read_subtag_name(platform::File& file, std::uint32_t sub_offset) {
+    std::array<std::uint8_t, 11> nm{};
+    auto got = file.read_at(static_cast<std::uint64_t>(sub_offset) + 24,
+                            nm.data(), nm.size());
+    if (!got || got.value() == 0) return {};
+    return trim_cdx_tag_name(trim_nul(nm.data(), nm.size()));
+}
+
+util::Result<std::vector<std::pair<std::string, std::uint32_t>>>
+decode_compact_leaf_static(const CdxIndex::Page& p, std::uint16_t key_size);
+
 platform::OpenMode map_mode(IndexOpenMode m) {
     switch (m) {
         case IndexOpenMode::ReadOnly:  return platform::OpenMode::ReadOnly;
@@ -283,7 +301,8 @@ decode_compact_leaf_static(const CdxIndex::Page& p, std::uint16_t key_size) {
         std::uint32_t tmp = read_u32_le(entry + key_bytes - 4) >> shift;
         // Match the on-disk standard: dup occupies the low DCBits of the
         // dup+trl field (right above recno), trl the high TCBits.
-        std::uint32_t dup = tmp & dup_mask;
+        // Harbour hb_cdxPageLeafDecode forces dup=0 on the first key.
+        std::uint32_t dup = (i == 0) ? 0u : (tmp & dup_mask);
         std::uint32_t trl = (tmp >> dup_bits) & trl_mask;
 
         if (dup > key_size || trl > key_size || dup + trl > key_size) {
@@ -308,6 +327,30 @@ decode_compact_leaf_static(const CdxIndex::Page& p, std::uint16_t key_size) {
         out.emplace_back(key, recno);
     }
     return out;
+}
+
+// Struct-tag leaf -> (tag name, sub-header file offset) in creation order.
+// Names come from each sub-tag header, not the compact leaf key (SAP CDX
+// right-pads keys and dup-compresses them differently than Harbour DBFCDX).
+util::Result<std::vector<std::pair<std::string, std::uint32_t>>>
+struct_tag_entries(platform::File& file,
+                   const std::array<std::uint8_t, CDX_PAGE_LEN>& leaf) {
+    auto dec = decode_compact_leaf_static(leaf, CDX_STRUCT_KEY_LEN);
+    if (!dec) return dec.error();
+    auto entries = std::move(dec).value();
+    std::stable_sort(entries.begin(), entries.end(),
+                     [](const std::pair<std::string, std::uint32_t>& a,
+                        const std::pair<std::string, std::uint32_t>& b) {
+                         return a.second < b.second;
+                     });
+    for (auto& e : entries) {
+        std::string canon = read_subtag_name(file, e.second);
+        if (!canon.empty())
+            e.first = std::move(canon);
+        else
+            e.first = trim_cdx_tag_name(std::move(e.first));
+    }
+    return entries;
 }
 
 // Branch (interior) node helpers. Layout per FoxPro CDX, mirroring
@@ -528,25 +571,19 @@ CdxIndex::open_named(const std::string& path,
     if (got2.value() < CDX_PAGE_LEN) {
         return util::Error{6106, 0, "CDX struct-tag leaf truncated", path};
     }
-    auto sdec = decode_compact_leaf_static(struct_leaf, CDX_STRUCT_KEY_LEN);
+    auto sdec = struct_tag_entries(file_, struct_leaf);
     if (!sdec) return sdec.error();
     auto& sentries = sdec.value();
     if (sentries.empty()) {
         return util::Error{6106, 0, "CDX structure tag has no entries", path};
     }
 
-    auto trim_tag = [](const std::string& s) {
-        std::string t = s;
-        while (!t.empty() && t.back() == ' ') t.pop_back();
-        return t;
-    };
-
     const std::pair<std::string, std::uint32_t>* picked = nullptr;
     if (tag_name.empty()) {
         picked = &sentries.front();
     } else {
         for (auto& e : sentries) {
-            if (trim_tag(e.first) == tag_name) { picked = &e; break; }
+            if (e.first == tag_name) { picked = &e; break; }
         }
         if (!picked) {
             return util::Error{5044, 0,
@@ -554,7 +591,7 @@ CdxIndex::open_named(const std::string& path,
         }
     }
     sub_header_offset_ = picked->second;
-    tag_name_          = trim_tag(picked->first);
+    tag_name_          = picked->first;
 
     // 3) Sub-tag CDXTAGHEADER (1024B) at sub_header_offset_.
     std::array<std::uint8_t, CDX_HEADER_LEN> sub_hdr{};
@@ -1794,28 +1831,12 @@ CdxIndex::list_tags(const std::string& path) {
     if (got2.value() < CDX_PAGE_LEN) {
         return util::Error{6106, 0, "CDX struct-tag leaf truncated", path};
     }
-    auto dec = decode_compact_leaf_static(leaf, CDX_STRUCT_KEY_LEN);
+    auto dec = struct_tag_entries(f, leaf);
     if (!dec) return dec.error();
-    // ADS enumerates CDX tags in CREATION order = ascending tag-header offset
-    // (the 2nd field of each struct-leaf entry), NOT the leaf's alphabetical
-    // key order. A CDX written by ADS-SAP / BCC keeps its structure tag sorted
-    // by tag NAME, so returning the leaf order here renumbers the tags and the
-    // RDD's DBSETORDER(n) picks the wrong order. Sorting by the tag-header
-    // offset matches ADS-SAP's tag numbering. A CDX written by OpenADS already
-    // has its struct leaf in creation order, so this is a no-op there.
-    auto entries = std::move(dec).value();
-    std::stable_sort(entries.begin(), entries.end(),
-                     [](const std::pair<std::string, std::uint32_t>& a,
-                        const std::pair<std::string, std::uint32_t>& b) {
-                         return a.second < b.second;
-                     });
     std::vector<std::string> out;
-    out.reserve(entries.size());
-    for (auto& e : entries) {
-        std::string t = e.first;
-        while (!t.empty() && t.back() == ' ') t.pop_back();
-        out.push_back(std::move(t));
-    }
+    out.reserve(dec.value().size());
+    for (auto& e : dec.value())
+        out.push_back(e.first);
     return out;
 }
 

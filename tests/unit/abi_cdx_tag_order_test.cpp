@@ -148,3 +148,16 @@ TEST_CASE("CDX list_tags enumerates tags in CREATION order, not alphabetical") {
 
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("SAP production CDX list_tags reads sub-header tag names") {
+    const char* env = std::getenv("OPENADS_TEST_CUSTOMER_CDX");
+    fs::path path = env ? fs::path(env)
+                        : fs::path("C:/OpenADS/tmp_rel/customer.cdx");
+    if (!fs::exists(path)) return;
+
+    auto r = CdxIndex::list_tags(path.string());
+    REQUIRE(static_cast<bool>(r));
+    REQUIRE(r.value().size() >= 2u);
+    CHECK(r.value()[0] == "CUSTNO");
+    CHECK(r.value()[1] == "CUSTNAME");
+}

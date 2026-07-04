@@ -5,6 +5,33 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.6.2 — 2026-07-04
+
+### REMOTE / FWH — production CDX tag names & append-row FieldGet
+
+- **Bug fix: SAP production CDX tag names corrupted** — `CdxIndex::list_tags()`
+  and `open_named()` decoded struct-tag compact keys incorrectly for
+  ADS-SAP / BCC compound CDX files (e.g. `customer.cdx` on the iMac test
+  dataset). Tag 2 surfaced as `AME` instead of `CUSTNAME`; tag 1 as
+  `    CUSTNO` instead of `CUSTNO`. OpenADS now reads the canonical tag
+  name from each sub-tag CDXTAGHEADER (+24) and forces `dup=0` on the
+  first struct-leaf key (Harbour `hb_cdxPageLeafDecode` parity). Fixes
+  `AdsGetIndexName` / rddads `OrdName()` / FWH `TDataBase:IndexName()`
+  over REMOTE mode.
+
+- **Bug fix: `AdsGetField` at BOF/EOF returned 5000** — FWH
+  `TDataBase:td_blankrow()` does `DBGOBOTTOM` + `DBSKIP(1)` then
+  `FieldGet` on the append-row position. OpenADS now returns
+  `AE_SUCCESS` with a type-default blank field (spaces / `F` for logical)
+  instead of `AE_INTERNAL_ERROR`, for local tables and remote
+  `GetField` wire ops. Unblocks Harbour `ADSCDX` / xBrowse on OpenADS
+  without patching FiveWin.
+
+- **Regression tests** — `abi_no_current_record_test`,
+  `engine_navigation_empty_test`, `abi_cdx_tag_order_test` (SAP
+  `customer.cdx` fixture), `abi_remote_prodcdx_test` (expects
+  `CUSTNO` + `CUSTNAME` when `OPENADS_TEST_REMOTE` is set).
+
 ## 1.6.1 — 2026-07-02
 
 ### REMOTE mode — production CDX auto-open in subdirectories

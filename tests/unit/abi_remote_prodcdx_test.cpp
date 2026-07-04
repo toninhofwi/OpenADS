@@ -128,10 +128,24 @@ TEST_CASE("REMOTE: AdsGetIndexName returns tag names for all orders"
         rc = AdsGetIndexName(hIdx, name, &namelen);
         CHECK(rc == 0);
         std::string tagname(reinterpret_cast<char*>(name), namelen);
-        // The call must succeed. Tag name may be empty for structural
-        // CDX tags whose names are all-padding (valid in dBASE CDX).
+        CHECK(!tagname.empty());
         std::printf("  Order %u: tag='%s' (len=%u)\n", ord,
                     tagname.c_str(), static_cast<unsigned>(namelen));
+    }
+
+    // customer.cdx on the iMac test dataset: CUSTNO + CUSTNAME (expr NAME).
+    {
+        ADSHANDLE h1 = 0, h2 = 0;
+        REQUIRE(AdsGetIndexHandleByOrder(f.hTable, 1, &h1) == 0);
+        REQUIRE(AdsGetIndexHandleByOrder(f.hTable, 2, &h2) == 0);
+        UNSIGNED8 n1[32] = {0}, n2[32] = {0};
+        UNSIGNED16 l1 = sizeof(n1), l2 = sizeof(n2);
+        REQUIRE(AdsGetIndexName(h1, n1, &l1) == 0);
+        REQUIRE(AdsGetIndexName(h2, n2, &l2) == 0);
+        std::string t1(reinterpret_cast<char*>(n1), l1);
+        std::string t2(reinterpret_cast<char*>(n2), l2);
+        CHECK(t1 == "CUSTNO");
+        CHECK(t2 == "CUSTNAME");
     }
 
     f.close();
