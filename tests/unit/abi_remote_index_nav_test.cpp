@@ -7,6 +7,7 @@
 #include "network/server.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -244,6 +245,133 @@ TEST_CASE("remote production CDX auto-open in subdirectory") {
 
     std::error_code ec;
     fs::remove_all(base, ec);
+    srv.stop();
+}
+
+// xBrowse / TDataBase navigate via the TABLE handle after
+// AdsSetIndexOrderByHandle — not via hOrdCurrent. The server must
+// honour ordered_tables_ on GotoTop/Skip for the table id.
+TEST_CASE("remote SetIndexOrderByHandle + table-handle GotoTop/Skip") {
+    using openads::network::Server;
+    auto dir = fs::temp_directory_path() / "openads_remote_setorder_tbl";
+    make_colonias_dbf_with_prod_index(dir);
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(dir, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "CCOLONIA.DBF";
+    UNSIGNED8 alias[] = "CCOLONIA";
+    REQUIRE(AdsOpenTable(hConn, tname, alias, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    UNSIGNED16 nidx = 0;
+    REQUIRE(AdsGetNumIndexes(hTable, &nidx) == 0);
+    REQUIRE(nidx >= 1u);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 1, &hOrd) == 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == 0);
+
+    // Navigate by TABLE handle (xBrowse path), not index handle.
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED32 rec = 0;
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec) == 0);
+    CHECK(rec == 3u);
+
+    UNSIGNED32 rec2 = 0;
+    REQUIRE(AdsSkip(hTable, 1) == 0);
+    REQUIRE(AdsGetRecordNum(hTable, 0, &rec2) == 0);
+    CHECK(rec2 == 1u);
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    srv.stop();
+}
+
+TEST_CASE("local customer.dbf CUSTNAME order via table handle") {
+    fs::path data = "C:/OpenADS/testdata/invoices";
+    if (const char* root = std::getenv("OPENADS_ROOT"))
+        data = fs::path(root) / "testdata" / "invoices";
+    if (!fs::exists(data / "customer.dbf")) return;
+
+    std::string sp = data.string();
+    std::vector<UNSIGNED8> srv(sp.begin(), sp.end());
+    srv.push_back(0);
+    ADSHANDLE hConn = 0, hTable = 0;
+    REQUIRE(AdsConnect60(srv.data(), ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    UNSIGNED8 tname[] = "customer.dbf";
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 2, &hOrd) == 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == 0);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+
+    std::vector<std::string> names;
+    for (int i = 0; i < 8; ++i) {
+        UNSIGNED16 eof = 0;
+        AdsAtEOF(hTable, &eof);
+        if (eof) break;
+        UNSIGNED8 buf[64] = {0};
+        UNSIGNED32 cap = sizeof(buf) - 1;
+        AdsGetField(hTable, (UNSIGNED8*)"NAME", buf, &cap, 0);
+        names.emplace_back(reinterpret_cast<char*>(buf), cap);
+        AdsSkip(hTable, 1);
+    }
+    REQUIRE(names.size() >= 2u);
+    for (std::size_t i = 1; i < names.size(); ++i) {
+        CHECK(names[i] >= names[i - 1]);
+    }
+
+    AdsCloseTable(hTable);
+    AdsDisconnect(hConn);
+}
+
+TEST_CASE("remote customer.dbf CUSTNAME order via table handle") {
+    using openads::network::Server;
+    fs::path data = "C:/OpenADS/testdata/invoices";
+    if (const char* root = std::getenv("OPENADS_ROOT"))
+        data = fs::path(root) / "testdata" / "invoices";
+    if (!fs::exists(data / "customer.dbf")) return;
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = srv.port();
+
+    ADSHANDLE hConn = remote_connect(data, port);
+    ADSHANDLE hTable = 0;
+    UNSIGNED8 tname[] = "customer.dbf";
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+
+    ADSHANDLE hOrd = 0;
+    REQUIRE(AdsGetIndexHandleByOrder(hTable, 2, &hOrd) == 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == 0);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+
+    std::vector<std::string> names;
+    for (int i = 0; i < 8; ++i) {
+        UNSIGNED16 eof = 0;
+        AdsAtEOF(hTable, &eof);
+        if (eof) break;
+        UNSIGNED8 buf[64] = {0};
+        UNSIGNED32 cap = sizeof(buf) - 1;
+        AdsGetField(hTable, (UNSIGNED8*)"NAME", buf, &cap, 0);
+        names.emplace_back(reinterpret_cast<char*>(buf), cap);
+        AdsSkip(hTable, 1);
+    }
+    REQUIRE(names.size() >= 2u);
+    for (std::size_t i = 1; i < names.size(); ++i) {
+        CHECK(names[i] >= names[i - 1]);
+    }
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
     srv.stop();
 }
 

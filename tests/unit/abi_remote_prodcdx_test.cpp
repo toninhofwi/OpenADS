@@ -8,8 +8,8 @@
 //   2. OrdBagName returns bag path after auto-open
 //   3. AdsSetIndexOrder by name/handle changes cursor order
 //
-// Run with:
-//   $env:OPENADS_TEST_REMOTE = "tcp://192.168.18.184:16262/"
+// Run with (include the server data path when serverd uses --data):
+//   $env:OPENADS_TEST_REMOTE = "tcp://127.0.0.1:16262/C:/OpenADS/testdata/invoices"
 //   openads_unit_tests -tc="REMOTE*"
 #include "doctest.h"
 #include "openads/ace.h"
@@ -22,7 +22,8 @@
 
 // ---------------------------------------------------------------------------
 // Configuration: set OPENADS_TEST_REMOTE to e.g.
-// "tcp://192.168.18.184:16262/" to run against a live remote server.
+// "tcp://127.0.0.1:16262/C:/OpenADS/testdata/invoices" (path required
+// when the server was started with --data).
 // Without it, every test is skipped.
 // ---------------------------------------------------------------------------
 namespace {
@@ -45,6 +46,11 @@ struct RemoteFixture {
         buf.push_back(0);
         UNSIGNED32 rc = AdsConnect60(buf.data(), ADS_REMOTE_SERVER,
                                      nullptr, nullptr, 0, &hConn);
+        if (rc != 0 || hConn == 0) {
+            std::fprintf(stderr,
+                "REMOTE connect failed: uri='%s' rc=%u hConn=%llu\n",
+                uri, rc, static_cast<unsigned long long>(hConn));
+        }
         connected = (rc == 0 && hConn != 0);
         return connected;
     }
@@ -336,7 +342,8 @@ TEST_CASE("REMOTE: ordered full-scan counts match record count"
 // TEST 6b: workorders in subdirectory (iMac /tmp/openads_mac/orders/)
 // ===========================================================================
 TEST_CASE("REMOTE: workorders subdirectory auto-binds production CDX"
-          * doctest::skip(remote_uri_env() == nullptr)) {
+          * doctest::skip(remote_uri_env() == nullptr ||
+                         std::getenv("OPENADS_TEST_WORKORDERS") == nullptr)) {
     RemoteFixture f;
     REQUIRE(f.connect(remote_uri_env()));
     ADSHANDLE hTable = 0;

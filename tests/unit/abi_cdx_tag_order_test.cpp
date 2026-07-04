@@ -9,6 +9,7 @@
 
 namespace fs = std::filesystem;
 using openads::drivers::cdx::CdxIndex;
+using openads::drivers::IndexOpenMode;
 
 // Regression for the "ordenamiento por columna" bug: a real ERP browse over a
 // CDX created by ADS-SAP / BCC / Harbour DBFCDX did not sort by column because
@@ -153,11 +154,48 @@ TEST_CASE("SAP production CDX list_tags reads sub-header tag names") {
     const char* env = std::getenv("OPENADS_TEST_CUSTOMER_CDX");
     fs::path path = env ? fs::path(env)
                         : fs::path("C:/OpenADS/tmp_rel/customer.cdx");
-    if (!fs::exists(path)) return;
+    if (!fs::exists(path)) {
+        path = "C:/OpenADS/testdata/invoices/customer.cdx";
+        if (!fs::exists(path)) return;
+    }
 
     auto r = CdxIndex::list_tags(path.string());
     REQUIRE(static_cast<bool>(r));
     REQUIRE(r.value().size() >= 2u);
     CHECK(r.value()[0] == "CUSTNO");
     CHECK(r.value()[1] == "CUSTNAME");
+}
+
+static std::vector<std::string> walk_cdx_keys(const fs::path& cdx,
+                                              const char* tag) {
+    CdxIndex ix;
+    if (!ix.open_named(cdx.string(), IndexOpenMode::Shared, tag)
+             .has_value())
+        return {};
+    std::vector<std::string> keys;
+    auto pos = ix.seek_first();
+    if (!pos.has_value()) return {};
+    while (pos.value().positioned) {
+        keys.push_back(ix.current_key());
+        pos = ix.next();
+        if (!pos.has_value()) break;
+    }
+    return keys;
+}
+
+TEST_CASE("production customer.cdx CUSTNAME btree walk is sorted") {
+    fs::path cdx = "C:/OpenADS/testdata/invoices/customer.cdx";
+    if (const char* env = std::getenv("OPENADS_TEST_CUSTOMER_CDX"))
+        cdx = env;
+    if (!fs::exists(cdx)) return;
+
+    auto name_keys = walk_cdx_keys(cdx, "CUSTNAME");
+    auto no_keys   = walk_cdx_keys(cdx, "CUSTNO");
+    REQUIRE(name_keys.size() >= 8u);
+    REQUIRE(no_keys.size() >= 8u);
+    // CUSTNAME must not alias the CUSTNO sub-tree.
+    CHECK(name_keys != no_keys);
+    for (std::size_t i = 1; i < name_keys.size(); ++i) {
+        CHECK(name_keys[i] >= name_keys[i - 1]);
+    }
 }
