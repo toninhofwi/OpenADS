@@ -84,7 +84,7 @@ TEST_CASE("Navigation empty table: Skip(-1) from Limbo stays at BOF") {
     CHECK(bof == 1);
 }
 
-TEST_CASE("Navigation empty table: AdsGetField at EOF/Limbo returns AE_NO_CURRENT_RECORD") {
+TEST_CASE("Navigation empty table: AdsGetField at EOF/Limbo returns blank") {
     EmptyTable et("openads_nav_empty_getfield");
     REQUIRE(AdsGotoTop(et.hT) == 0);
 
@@ -97,8 +97,6 @@ TEST_CASE("Navigation empty table: AdsGetField at EOF/Limbo returns AE_NO_CURREN
     UNSIGNED8 buf[16] = {};
     UNSIGNED32 cap    = sizeof(buf);
     UNSIGNED32 rc     = AdsGetField(et.hT, fld, buf, &cap, 0);
-    // Must not silently succeed when there is no current record.
-    // The canonical error for this state is AE_NO_CURRENT_RECORD (5026).
     INFO("AdsGetField on empty-table Limbo returned: " << rc);
-    CHECK(rc == AE_NO_CURRENT_RECORD);
+    CHECK(rc == AE_SUCCESS);
 }

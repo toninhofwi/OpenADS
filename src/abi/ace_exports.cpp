@@ -1022,6 +1022,60 @@ std::string pad_char_field(std::string s, std::size_t width) {
     return s;
 }
 
+// Blank ABI value for BOF/EOF / append-row reads. Harbour FWH
+// TDataBase:td_blankrow does DBGOBOTTOM+DBSKIP then FieldGet; rddads
+// must not see AE_INTERNAL_ERROR (5000) here.
+static bool is_no_current_record(const openads::util::Error& e) {
+    return e.code == static_cast<std::int32_t>(openads::AE_NO_CURRENT_RECORD);
+}
+
+static std::string blank_abi_field_from_dbf(
+        const openads::drivers::DbfField& fd) {
+    using FT = openads::drivers::DbfFieldType;
+    switch (fd.type) {
+        case FT::Character:
+        case FT::Varchar:
+        case FT::Numeric:
+        case FT::Float:
+        case FT::Double:
+        case FT::Currency:
+        case FT::Integer:
+        case FT::Date:
+        case FT::DateTime:
+            return std::string(fd.length > 0 ? fd.length : 1, ' ');
+        case FT::Logical:
+            return std::string(1, 'F');
+        default:
+            return {};
+    }
+}
+
+static std::string blank_abi_field_from_ads(std::uint16_t ads_type,
+                                            std::uint32_t length) {
+    switch (ads_type) {
+        case ADS_STRING:
+            return std::string(length > 0 ? length : 1, ' ');
+        case ADS_LOGICAL:
+            return "F";
+        case ADS_NUMERIC:
+        case ADS_INTEGER:
+        case ADS_DATE:
+        default:
+            return std::string(length > 0 ? length : 1, ' ');
+    }
+}
+
+static UNSIGNED32 ads_get_field_blank_out(UNSIGNED8* pucBuf,
+                                          UNSIGNED32* pulLen,
+                                          std::string val,
+                                          std::uint16_t ads_type,
+                                          std::uint32_t width) {
+    if (ads_type == ADS_STRING)
+        val = pad_char_field(std::move(val), width);
+    openads::abi::copy_to_caller(pucBuf, pulLen, val);
+    return ok();
+}
+
 // ---------------------------------------------------------------------------
 // Task 3: Lifted SQLite table ops + accessor
 // Placed after pad_char_field (sqlite_get_field uses it).
@@ -7896,36 +7950,24 @@ UNSIGNED32 ENTRYPOINT AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         // xbrowse-style W cols × H rows repaint: 1 RTT per row,
         // zero RTT per cell.
         if (!rt->row_valid) {
-            auto fr = rt->conn->fetch_current_row(rt);
-            if (!fr) return fail(fr.error());
+            (void)rt->conn->fetch_current_row(rt);
+        }
+        auto fi = remote_field_index(rt, pucField);
+        if (fi == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
         if (rt->row_valid) {
-            auto i = remote_field_index(rt, pucField);
-            if (i == std::numeric_limits<std::size_t>::max()) {
-                return fail(openads::AE_COLUMN_NOT_FOUND, "");
-            }
-            // ADS_STRING == 4; pad CHARACTER fields to declared width.
-            std::string val = rt->current_row[i];
-            if (rt->fields[i].type == ADS_STRING)
-                val = pad_char_field(std::move(val), rt->fields[i].length);
+            std::string val = rt->current_row[fi];
+            if (rt->fields[fi].type == ADS_STRING)
+                val = pad_char_field(std::move(val), rt->fields[fi].length);
             openads::abi::copy_to_caller(pucBuf, pulLen, val);
             return ok();
         }
-        // EoF / no row — fall through to a plain GetField round-
-        // trip; preserves the prior behaviour for callers that
-        // probe past the end of the table.
-        auto fname = openads::abi::to_internal(pucField, 0);
-        auto r = rt->conn->get_field(rt->id, fname);
-        if (!r) return fail(r.error());
-        // Pad if we can resolve the field descriptor from the cached schema.
-        std::string val = r.value();
-        auto fi = remote_field_index(rt, pucField);
-        if (fi != std::numeric_limits<std::size_t>::max() &&
-            rt->fields[fi].type == ADS_STRING) {
-            val = pad_char_field(std::move(val), rt->fields[fi].length);
-        }
-        openads::abi::copy_to_caller(pucBuf, pulLen, val);
-        return ok();
+        // BOF/EOF — blank template (FWH td_blankrow, TBrowse append row).
+        return ads_get_field_blank_out(
+            pucBuf, pulLen,
+            blank_abi_field_from_ads(rt->fields[fi].type, rt->fields[fi].length),
+            rt->fields[fi].type, rt->fields[fi].length);
     }
     if (auto* ops = openads::abi::backend_table_ops_for(hTable))
         if (ops->get_field) return ops->get_field(hTable, pucField, pucBuf, pulLen, 0);
@@ -7936,7 +7978,22 @@ UNSIGNED32 ENTRYPOINT AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     auto v = t->read_field(idx);
-    if (!v) return fail(v.error());
+    if (!v) {
+        if (is_no_current_record(v.error())) {
+            const auto& fd = t->field_descriptor(idx);
+            std::uint16_t ads_type = ADS_STRING;
+            if (fd.type == openads::drivers::DbfFieldType::Logical)
+                ads_type = ADS_LOGICAL;
+            else if (fd.type == openads::drivers::DbfFieldType::Numeric ||
+                     fd.type == openads::drivers::DbfFieldType::Float ||
+                     fd.type == openads::drivers::DbfFieldType::Integer)
+                ads_type = ADS_NUMERIC;
+            return ads_get_field_blank_out(
+                pucBuf, pulLen, blank_abi_field_from_dbf(fd),
+                ads_type, fd.length);
+        }
+        return fail(v.error());
+    }
     // Re-pad CHARACTER fields to the declared field width on the way out.
     // The internal decode (make_string) trims for the SQL/index engine;
     // ABI callers expect the full fixed-width value.

@@ -1,16 +1,12 @@
 // abi_no_current_record_test.cpp
 //
-// Verifies that AdsGetField returns AE_NO_CURRENT_RECORD (5068) when the
-// cursor is positioned at BOF or EOF.
+// Verifies that AdsGetField at BOF/EOF returns AE_SUCCESS with a blank
+// field template (not AE_INTERNAL_ERROR / 5000).
 //
-// Background: the Harbour rddads contrib driver (contrib/rddads/ads1.c)
-// special-cases error code 5068 to return blank-typed field values when the
-// cursor is before the first or after the last record. Any other error code
-// is treated as a hard error. The ADS SDK documents 5068 as
-// AE_NO_CURRENT_RECORD; 5026 is AE_INVALID_WORKAREA — a different condition.
-// Using 5026 at these sites caused hard errors in Harbour applications that
-// read fields while navigating past the record set (TBrowse painting,
-// FOR...NEXT loops at EOF, WHILE .NOT. EOF() patterns, etc.).
+// Background: FWH TDataBase:td_blankrow does DBGOBOTTOM+DBSKIP then FieldGet
+// on the append-row position. rddads treats any non-success other than a
+// handled no-current-record as a hard error (ADSCDX/5000). OpenADS serves
+// type-default blanks with AE_SUCCESS so Harbour xBase callers keep working.
 
 #include "doctest.h"
 #include "openads/ace.h"
@@ -68,9 +64,7 @@ fs::path make_dbf_fixture(const char* tag) {
 
 } // namespace
 
-TEST_CASE("AdsGetField at EOF returns AE_NO_CURRENT_RECORD (5068)") {
-    // The Harbour rddads contrib driver special-cases 5068 to substitute
-    // blank-typed field values at EOF. Any other code is a hard error.
+TEST_CASE("AdsGetField at EOF returns blank field (AE_SUCCESS)") {
     const auto dir = fs::temp_directory_path() / "openads_nocurrec_eof";
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -101,12 +95,13 @@ TEST_CASE("AdsGetField at EOF returns AE_NO_CURRENT_RECORD (5068)") {
     REQUIRE(AdsAtEOF(hT, &at_eof) == AE_SUCCESS);
     REQUIRE(at_eof == 1);
 
-    // Reading any field at EOF must return 5068, not 5026 or 5000.
     UNSIGNED8 fname[] = "NAME";
     UNSIGNED8 buf[64] = {0};
     UNSIGNED32 cap = sizeof(buf);
     UNSIGNED32 rc = AdsGetField(hT, fname, buf, &cap, 0);
-    CHECK(rc == AE_NO_CURRENT_RECORD);  // 5068
+    CHECK(rc == AE_SUCCESS);
+    CHECK(cap == 5);
+    CHECK(std::string(reinterpret_cast<char*>(buf), cap) == "     ");
 
     AdsCloseTable(hT);
     AdsDisconnect(hConn);
@@ -114,7 +109,7 @@ TEST_CASE("AdsGetField at EOF returns AE_NO_CURRENT_RECORD (5068)") {
     fs::remove(src, ec);
 }
 
-TEST_CASE("AdsGetField at BOF returns AE_NO_CURRENT_RECORD (5068)") {
+TEST_CASE("AdsGetField at BOF returns blank field (AE_SUCCESS)") {
     const auto dir = fs::temp_directory_path() / "openads_nocurrec_bof";
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -144,12 +139,13 @@ TEST_CASE("AdsGetField at BOF returns AE_NO_CURRENT_RECORD (5068)") {
     REQUIRE(AdsAtBOF(hT, &at_bof) == AE_SUCCESS);
     REQUIRE(at_bof == 1);
 
-    // Reading any field at BOF must return 5068.
     UNSIGNED8 fname[] = "NAME";
     UNSIGNED8 buf[64] = {0};
     UNSIGNED32 cap = sizeof(buf);
     UNSIGNED32 rc = AdsGetField(hT, fname, buf, &cap, 0);
-    CHECK(rc == AE_NO_CURRENT_RECORD);  // 5068
+    CHECK(rc == AE_SUCCESS);
+    CHECK(cap == 5);
+    CHECK(std::string(reinterpret_cast<char*>(buf), cap) == "     ");
 
     AdsCloseTable(hT);
     AdsDisconnect(hConn);

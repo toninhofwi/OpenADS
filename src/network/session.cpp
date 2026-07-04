@@ -772,7 +772,27 @@ DispatchResult Session::dispatch(const Frame& f) {
             std::int32_t fi = tbl->field_index(fname);
             if (fi < 0) { reply = err("GetField: column not found"); break; }
             auto v = tbl->read_field(static_cast<std::uint16_t>(fi));
-            if (!v) { reply = err("GetField: read failed"); break; }
+            if (!v) {
+                if (v.error().code ==
+                        static_cast<std::int32_t>(openads::AE_NO_CURRENT_RECORD)) {
+                    const auto& fd =
+                        tbl->field_descriptor(static_cast<std::uint16_t>(fi));
+                    std::string blank;
+                    using FT = openads::drivers::DbfFieldType;
+                    switch (fd.type) {
+                        case FT::Logical:
+                            blank = "F";
+                            break;
+                        default:
+                            blank.assign(fd.length > 0 ? fd.length : 1, ' ');
+                            break;
+                    }
+                    reply.opcode = Opcode::GetFieldAck;
+                    reply.payload.assign(blank.begin(), blank.end());
+                    break;
+                }
+                reply = err("GetField: read failed"); break;
+            }
             reply.opcode = Opcode::GetFieldAck;
             auto& sval = v.value().as_string;
             reply.payload.assign(sval.begin(), sval.end());
