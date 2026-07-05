@@ -317,6 +317,7 @@ EXPORTS
     AdsConnect26
     AdsCreateTable71
     AdsCreateTable90
+    AdsOpenTable101
     AdsOpenTable90
     AdsCreateIndex90
     AdsCancelUpdate90

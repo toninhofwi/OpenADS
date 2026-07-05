@@ -178,6 +178,8 @@ TEST_CASE("AdsConnect101 parses documented connection strings") {
     std::string conn =
         " Data Source = '" + dir.string() + "' ; "
         " ServerType = LOCAL ; "
+        " TableType = ADS_CDX ; "
+        " ReadOnly = TRUE ; "
         " Decimals = 6 ; "
         " Exact = TRUE ; "
         " SQLTimeout = 9 ; ";
@@ -196,6 +198,27 @@ TEST_CASE("AdsConnect101 parses documented connection strings") {
     UNSIGNED16 exact = 0;
     CHECK(AdsGetExact(&exact) == openads::AE_SUCCESS);
     CHECK(exact == 1);
+
+    UNSIGNED8 name[32] = "open101";
+    UNSIGNED8 fields[64] = "ID,Numeric,5,0";
+    ADSHANDLE hCreated = 0;
+    CHECK(AdsCreateTable(hConn, name, nullptr, ADS_CDX, ADS_ANSI,
+                         ADS_DEFAULT, ADS_DEFAULT, 64, fields, &hCreated)
+          == openads::AE_SUCCESS);
+    REQUIRE(hCreated != 0);
+    CHECK(AdsCloseTable(hCreated) == openads::AE_SUCCESS);
+
+    ADSHANDLE hOpened = 0;
+    CHECK(AdsOpenTable101(hConn, name, &hOpened) == openads::AE_SUCCESS);
+    REQUIRE(hOpened != 0);
+    UNSIGNED16 table_type = 0;
+    CHECK(AdsGetTableType(hOpened, &table_type) == openads::AE_SUCCESS);
+    CHECK(table_type == ADS_CDX);
+    UNSIGNED32 open_options = 0;
+    CHECK(AdsGetTableOpenOptions(hOpened, &open_options)
+          == openads::AE_SUCCESS);
+    CHECK(open_options == ADS_READONLY);
+    CHECK(AdsCloseTable(hOpened) == openads::AE_SUCCESS);
 
     CHECK(AdsDisconnect(hConn) == openads::AE_SUCCESS);
 

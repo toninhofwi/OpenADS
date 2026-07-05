@@ -205,6 +205,18 @@ openads::engine::TableType map_type(UNSIGNED16 t) {
     }
 }
 
+openads::engine::OpenMode map_open_mode(UNSIGNED16 mode) {
+    if (mode == ADS_READONLY) return openads::engine::OpenMode::Read;
+    if (mode == ADS_EXCLUSIVE) return openads::engine::OpenMode::Exclusive;
+    return openads::engine::OpenMode::Shared;
+}
+
+openads::engine::LockingMode map_locking_mode(UNSIGNED16 lock_type) {
+    return (lock_type == ADS_PROPRIETARY_LOCKING)
+           ? openads::engine::LockingMode::Proprietary
+           : openads::engine::LockingMode::Compatible;
+}
+
 // Stamp DBF header bytes [1..3] (YY MM DD, year as offset from 1900)
 // with today's UTC date — what a real ADS server records when it
 // creates or modifies a table. Without this a freshly-created table
@@ -5047,6 +5059,82 @@ std::uint16_t connect101_server_type(const std::string& value) {
     return 0;
 }
 
+struct Connect101OpenOptions {
+    UNSIGNED16 table_type   = ADS_DEFAULT;
+    UNSIGNED16 char_type    = ADS_DEFAULT;
+    UNSIGNED16 lock_type    = ADS_DEFAULT;
+    UNSIGNED16 check_rights = ADS_DEFAULT;
+    UNSIGNED16 mode         = ADS_DEFAULT;
+};
+
+std::unordered_map<ADSHANDLE, Connect101OpenOptions>&
+connect101_open_options() {
+    static std::unordered_map<ADSHANDLE, Connect101OpenOptions> opts;
+    return opts;
+}
+
+UNSIGNED16 connect101_table_type(const std::string& value) {
+    std::string v = connect101_key(value);
+    if (v.rfind("ads_", 0) == 0) v.erase(0, 4);
+    if (v == "ntx") return ADS_NTX;
+    if (v == "cdx") return ADS_CDX;
+    if (v == "adt") return ADS_ADT;
+    if (v == "vfp") return ADS_VFP;
+    if (v == "default") return ADS_DEFAULT;
+    return static_cast<UNSIGNED16>(std::strtoul(v.c_str(), nullptr, 10));
+}
+
+UNSIGNED16 connect101_char_type(const std::string& value) {
+    std::string v = connect101_key(value);
+    if (v.rfind("ads_", 0) == 0) v.erase(0, 4);
+    if (v == "ansi") return ADS_ANSI;
+    if (v == "oem") return ADS_OEM;
+    return static_cast<UNSIGNED16>(std::strtoul(v.c_str(), nullptr, 10));
+}
+
+UNSIGNED16 connect101_lock_type(const std::string& value) {
+    std::string v = connect101_key(value);
+    if (v.find("proprietary") != std::string::npos) {
+        return ADS_PROPRIETARY_LOCKING;
+    }
+    if (v.find("compatible") != std::string::npos) {
+        return ADS_COMPATIBLE_LOCKING;
+    }
+    return static_cast<UNSIGNED16>(std::strtoul(v.c_str(), nullptr, 10));
+}
+
+UNSIGNED16 connect101_security_mode(const std::string& value) {
+    std::string v = connect101_key(value);
+    if (v.find("check") != std::string::npos) return ADS_CHECKRIGHTS;
+    if (v.find("ignore") != std::string::npos) return ADS_IGNORERIGHTS;
+    return static_cast<UNSIGNED16>(std::strtoul(v.c_str(), nullptr, 10));
+}
+
+UNSIGNED16 connect101_open_mode(
+    const std::unordered_map<std::string, std::string>& options) {
+    auto readonly = options.find("readonly");
+    if (readonly != options.end() && connect101_truthy(readonly->second)) {
+        return ADS_READONLY;
+    }
+    auto shared = options.find("shared");
+    if (shared != options.end()) {
+        return connect101_truthy(shared->second) ? ADS_SHARED : ADS_EXCLUSIVE;
+    }
+    return ADS_DEFAULT;
+}
+
+UNSIGNED16 infer_table_type_from_name(UNSIGNED8* pucName) {
+    if (pucName == nullptr) return ADS_CDX;
+    std::filesystem::path p(openads::abi::to_internal(pucName, 0));
+    std::string ext = p.extension().string();
+    for (auto& ch : ext) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (ext == ".adt") return ADS_ADT;
+    if (ext == ".dbf") return ADS_CDX;
+    return ADS_CDX;
+}
+
 }  // namespace
 
 extern "C++" {
@@ -5507,6 +5595,25 @@ UNSIGNED32 ENTRYPOINT AdsConnect101(UNSIGNED8* pucConnectString,
             return rc;
         }
     }
+    Connect101OpenOptions open_opts;
+    if (auto v = get_opt("tabletype"); !v.empty()) {
+        open_opts.table_type = connect101_table_type(v);
+    }
+    if (auto v = get_opt("chartype"); !v.empty()) {
+        open_opts.char_type = connect101_char_type(v);
+    }
+    if (auto v = get_opt("lockmode"); !v.empty()) {
+        open_opts.lock_type = connect101_lock_type(v);
+    }
+    if (auto v = get_opt("securitymode"); !v.empty()) {
+        open_opts.check_rights = connect101_security_mode(v);
+    }
+    open_opts.mode = connect101_open_mode(options);
+    {
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        connect101_open_options()[*phConnect] = open_opts;
+    }
     return ok();
 }
 
@@ -5514,6 +5621,7 @@ UNSIGNED32 ENTRYPOINT AdsDisconnect(ADSHANDLE hConnect) {
     {
         auto& s_local = state();
         std::lock_guard<std::recursive_mutex> lk_local(s_local.mu);
+        connect101_open_options().erase(hConnect);
 #if defined(OPENADS_WITH_SQLITE)
         if (auto* sc = s_local.registry.lookup<openads::sql_backend::SqliteConnection>(
                 hConnect, HandleKind::SqliteConnection)) {
@@ -5661,7 +5769,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                         UNSIGNED8* /*pucAlias*/,
                         UNSIGNED16 usTableType,
                         UNSIGNED16 /*usCharType*/,
-                        UNSIGNED16 /*usLockType*/,
+                        UNSIGNED16 usLockType,
                         UNSIGNED16 usCheckRights,
                         UNSIGNED16 usMode,
                         ADSHANDLE* phTable) {
@@ -6089,7 +6197,9 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                 return fail(openads::AE_ACCESS_DENIED, alias.c_str());
         }
     }
-    auto th = conn->open_table(name, map_type(usTableType));
+    auto th = conn->open_table(name, map_type(usTableType),
+                               map_open_mode(usMode),
+                               map_locking_mode(usLockType));
     if (!th) return fail(th.error());
     Table* tbl = conn->lookup_table(th.value());
     Handle gh = s.registry.register_object(HandleKind::Table, tbl);
@@ -6145,6 +6255,23 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         }
     }
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsOpenTable101(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                           ADSHANDLE* phTable) {
+    Connect101OpenOptions opts;
+    {
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        auto it = connect101_open_options().find(hConnect);
+        if (it != connect101_open_options().end()) opts = it->second;
+    }
+    if (opts.table_type == ADS_DEFAULT) {
+        opts.table_type = infer_table_type_from_name(pucName);
+    }
+    return AdsOpenTable(hConnect, pucName, nullptr, opts.table_type,
+                        opts.char_type, opts.lock_type, opts.check_rights,
+                        opts.mode, phTable);
 }
 
 UNSIGNED32 ENTRYPOINT AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {

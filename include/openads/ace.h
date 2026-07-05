@@ -58,6 +58,9 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable     (ADSHANDLE  hConnect,
                               UNSIGNED16 usCheckRights,
                               UNSIGNED16 usMode,
                               ADSHANDLE* phTable);
+UNSIGNED32 ENTRYPOINT AdsOpenTable101  (ADSHANDLE hConnect,
+                              UNSIGNED8* pucName,
+                              ADSHANDLE* phTable);
 UNSIGNED32 ENTRYPOINT AdsCloseTable    (ADSHANDLE hTable);
 
 UNSIGNED32 ENTRYPOINT AdsGotoTop       (ADSHANDLE hTable);
