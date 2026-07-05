@@ -6,6 +6,7 @@
 LIBRARY openace64
 EXPORTS
     AdsConnect60
+    AdsConnect101
     AdsDisconnect
     AdsOpenTable
     AdsCloseTable

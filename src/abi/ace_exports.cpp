@@ -4956,7 +4956,102 @@ bool sql_uri_system_suffix(const std::string& name, std::string& suffix) {
     return true;
 }
 
+std::string trim_ascii(std::string s) {
+    auto is_ws = [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    };
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) {
+        s.pop_back();
+    }
+    return s;
+}
+
+std::string connect101_key(std::string s) {
+    std::string out;
+    for (unsigned char ch : s) {
+        if (!std::isspace(ch)) {
+            out.push_back(static_cast<char>(std::tolower(ch)));
+        }
+    }
+    return out;
+}
+
+std::unordered_map<std::string, std::string>
+parse_connect101_options(const std::string& text) {
+    std::unordered_map<std::string, std::string> opts;
+    std::size_t start = 0;
+    char quote = 0;
+    auto add_pair = [&](std::size_t end) {
+        std::string part = text.substr(start, end - start);
+        std::size_t eq = std::string::npos;
+        char q = 0;
+        for (std::size_t i = 0; i < part.size(); ++i) {
+            char ch = part[i];
+            if ((ch == '\'' || ch == '"') && (q == 0 || q == ch)) {
+                q = q == 0 ? ch : 0;
+            } else if (ch == '=' && q == 0) {
+                eq = i;
+                break;
+            }
+        }
+        if (eq == std::string::npos) return;
+        std::string key = connect101_key(part.substr(0, eq));
+        std::string val = trim_ascii(part.substr(eq + 1));
+        if (val.size() >= 2) {
+            char first = val.front();
+            if ((first == '\'' || first == '"') && val.back() == first) {
+                val = val.substr(1, val.size() - 2);
+            }
+        }
+        if (!key.empty()) opts[key] = val;
+    };
+
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        char ch = text[i];
+        if ((ch == '\'' || ch == '"') && (quote == 0 || quote == ch)) {
+            quote = quote == 0 ? ch : 0;
+        } else if (ch == ';' && quote == 0) {
+            add_pair(i);
+            start = i + 1;
+        }
+    }
+    add_pair(text.size());
+    return opts;
+}
+
+bool connect101_truthy(const std::string& value) {
+    std::string v = connect101_key(value);
+    return v == "true" || v == "yes" || v == "1" || v == "on";
+}
+
+std::uint16_t connect101_server_type(const std::string& value) {
+    std::string v = connect101_key(value);
+    if (v.empty()) return 0;
+    char* end = nullptr;
+    long n = std::strtol(v.c_str(), &end, 10);
+    if (end != nullptr && *end == '\0') {
+        if ((n & ADS_REMOTE_SERVER) != 0 || (n & 4) != 0) {
+            return ADS_REMOTE_SERVER;
+        }
+        if ((n & ADS_LOCAL_SERVER) != 0) return ADS_LOCAL_SERVER;
+    }
+    if (v.find("remote") != std::string::npos ||
+        v.find("internet") != std::string::npos ||
+        v.find("ais") != std::string::npos) {
+        return ADS_REMOTE_SERVER;
+    }
+    if (v.find("local") != std::string::npos) return ADS_LOCAL_SERVER;
+    return 0;
+}
+
 }  // namespace
+
+extern "C++" {
+std::uint16_t& server_type_mask();
+}  // extern "C++"
 
 extern "C" {
 
@@ -5333,6 +5428,84 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             "OpenADS cannot open it directly. "
             "Run: import_dd <source.add> <dest.add>  "
             "to convert it to OpenADS format, then connect to the converted file.");
+    }
+    return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsConnect101(UNSIGNED8* pucConnectString,
+                         ADSHANDLE* phConnectOptions,
+                         ADSHANDLE* phConnect) {
+    if (phConnect == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "phConnect is null");
+    }
+    *phConnect = 0;
+    if (phConnectOptions != nullptr) *phConnectOptions = 0;
+    if (pucConnectString == nullptr || pucConnectString[0] == 0) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsConnect101: empty connection string");
+    }
+
+    auto options = parse_connect101_options(
+        openads::abi::to_internal(pucConnectString, 0));
+    auto get_opt = [&](const char* key) -> std::string {
+        auto it = options.find(key);
+        return it == options.end() ? std::string() : it->second;
+    };
+
+    std::string data_source = get_opt("datasource");
+    if (data_source.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsConnect101: Data Source is required");
+    }
+
+    if (auto v = get_opt("dateformat"); !v.empty()) {
+        AdsSetDateFormat(reinterpret_cast<UNSIGNED8*>(v.data()));
+    }
+    if (auto v = get_opt("decimals"); !v.empty()) {
+        AdsSetDecimals(static_cast<UNSIGNED16>(
+            std::strtoul(v.c_str(), nullptr, 10)));
+    }
+    if (auto v = get_opt("epoch"); !v.empty()) {
+        AdsSetEpoch(static_cast<UNSIGNED16>(
+            std::strtoul(v.c_str(), nullptr, 10)));
+    }
+    if (auto v = get_opt("exact"); !v.empty()) {
+        AdsSetExact(connect101_truthy(v) ? 1 : 0);
+    }
+    if (auto v = get_opt("showdeleted"); !v.empty()) {
+        AdsShowDeleted(connect101_truthy(v) ? 1 : 0);
+    }
+
+    std::uint16_t server_type = 0;
+    if (auto v = get_opt("servertype"); !v.empty()) {
+        server_type = connect101_server_type(v);
+    }
+    if (server_type == 0) {
+        std::uint16_t mask = server_type_mask();
+        server_type = (mask & ADS_LOCAL_SERVER) != 0
+            ? ADS_LOCAL_SERVER : ADS_REMOTE_SERVER;
+    }
+
+    std::string user = get_opt("userid");
+    std::string password = get_opt("password");
+    UNSIGNED32 rc = AdsConnect60(
+        reinterpret_cast<UNSIGNED8*>(data_source.data()),
+        server_type,
+        user.empty() ? nullptr : reinterpret_cast<UNSIGNED8*>(user.data()),
+        password.empty() ? nullptr : reinterpret_cast<UNSIGNED8*>(password.data()),
+        0,
+        phConnect);
+    if (rc != openads::AE_SUCCESS) return rc;
+
+    if (auto v = get_opt("sqltimeout"); !v.empty()) {
+        rc = AdsSetSQLTimeout(*phConnect,
+                              static_cast<UNSIGNED32>(
+                                  std::strtoul(v.c_str(), nullptr, 10)));
+        if (rc != openads::AE_SUCCESS) {
+            (void)AdsDisconnect(*phConnect);
+            *phConnect = 0;
+            return rc;
+        }
     }
     return ok();
 }

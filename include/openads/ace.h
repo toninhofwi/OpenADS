@@ -44,6 +44,9 @@ typedef uint64_t ADSHANDLE;
 UNSIGNED32 ENTRYPOINT AdsConnect60     (UNSIGNED8* pucServer, UNSIGNED16 usServerType,
                               UNSIGNED8* pucUserName, UNSIGNED8* pucPassword,
                               UNSIGNED32 ulOptions, ADSHANDLE* phConnect);
+UNSIGNED32 ENTRYPOINT AdsConnect101    (UNSIGNED8* pucConnectString,
+                              ADSHANDLE* phConnectOptions,
+                              ADSHANDLE* phConnect);
 UNSIGNED32 ENTRYPOINT AdsDisconnect    (ADSHANDLE hConnect);
 
 UNSIGNED32 ENTRYPOINT AdsOpenTable     (ADSHANDLE  hConnect,

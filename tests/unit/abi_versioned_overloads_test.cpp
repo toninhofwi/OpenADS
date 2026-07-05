@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <string>
 
 namespace fs = std::filesystem;
 
@@ -165,5 +166,43 @@ TEST_CASE("M12.22 versioned ACE overloads") {
 
     REQUIRE(AdsCloseTable(hTable) == openads::AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == openads::AE_SUCCESS);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AdsConnect101 parses documented connection strings") {
+    const auto dir = fs::temp_directory_path() / "openads_connect101";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    std::string conn =
+        " Data Source = '" + dir.string() + "' ; "
+        " ServerType = LOCAL ; "
+        " Decimals = 6 ; "
+        " Exact = TRUE ; "
+        " SQLTimeout = 9 ; ";
+
+    ADSHANDLE hOptions = 1234;
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect101(reinterpret_cast<UNSIGNED8*>(conn.data()),
+                          &hOptions, &hConn) == openads::AE_SUCCESS);
+    CHECK(hConn != 0);
+    CHECK(hOptions == 0);
+
+    UNSIGNED16 decimals = 0;
+    CHECK(AdsGetDecimals(&decimals) == openads::AE_SUCCESS);
+    CHECK(decimals == 6);
+
+    UNSIGNED16 exact = 0;
+    CHECK(AdsGetExact(&exact) == openads::AE_SUCCESS);
+    CHECK(exact == 1);
+
+    CHECK(AdsDisconnect(hConn) == openads::AE_SUCCESS);
+
+    ADSHANDLE missing = 99;
+    UNSIGNED8 bad[] = "ServerType=LOCAL";
+    CHECK(AdsConnect101(bad, nullptr, &missing) != openads::AE_SUCCESS);
+    CHECK(missing == 0);
+
     fs::remove_all(dir, ec);
 }
