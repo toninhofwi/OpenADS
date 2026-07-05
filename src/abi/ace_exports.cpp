@@ -8344,20 +8344,18 @@ UNSIGNED32 ENTRYPOINT AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 ENTRYPOINT AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
     if (plVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
         if (!rt->row_valid) {
-            auto fr = rt->conn->fetch_current_row(rt);
-            if (!fr) return fail(fr.error());
+            (void)rt->conn->fetch_current_row(rt);
         }
         std::string vstr;
-        if (rt->row_valid) {
-            auto i = remote_field_index(rt, pucField);
-            if (i == std::numeric_limits<std::size_t>::max()) {
-                return fail(openads::AE_COLUMN_NOT_FOUND, "");
-            }
+        if (rt->row_valid && i < rt->current_row.size()) {
             vstr = rt->current_row[i];
-        } else {
-            std::string fname = openads::abi::to_internal(pucField, 0);
-            auto v = rt->conn->get_field(rt->id, fname);
+        } else if (i < rt->fields.size()) {
+            auto v = rt->conn->get_field(rt->id, rt->fields[i].name);
             if (!v) return fail(v.error());
             vstr = std::move(v).value();
         }
@@ -8396,20 +8394,18 @@ UNSIGNED32 ENTRYPOINT AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32
 UNSIGNED32 ENTRYPOINT AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
     if (pdVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
         if (!rt->row_valid) {
-            auto fr = rt->conn->fetch_current_row(rt);
-            if (!fr) return fail(fr.error());
+            (void)rt->conn->fetch_current_row(rt);
         }
         std::string vstr;
-        if (rt->row_valid) {
-            auto i = remote_field_index(rt, pucField);
-            if (i == std::numeric_limits<std::size_t>::max()) {
-                return fail(openads::AE_COLUMN_NOT_FOUND, "");
-            }
+        if (rt->row_valid && i < rt->current_row.size()) {
             vstr = rt->current_row[i];
-        } else {
-            std::string fname = openads::abi::to_internal(pucField, 0);
-            auto v = rt->conn->get_field(rt->id, fname);
+        } else if (i < rt->fields.size()) {
+            auto v = rt->conn->get_field(rt->id, rt->fields[i].name);
             if (!v) return fail(v.error());
             vstr = std::move(v).value();
         }
@@ -8477,10 +8473,25 @@ UNSIGNED32 ENTRYPOINT AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED
         return 0;
     };
     if (auto* rt = get_remote_table(hTable)) {
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        auto v = rt->conn->get_field(rt->id, fname);
-        if (!v) return fail(v.error());
-        *plDate = decode_date(v.value());
+        // Use ordinal-safe index + row cache (or fallback get_field by
+        // resolved name) so that callers passing field ordinals (X#, FWH
+        // TDataBase) don't AV in to_internal, and Date fields work.
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        if (!rt->row_valid) {
+            (void)rt->conn->fetch_current_row(rt);
+        }
+        std::string vstr;
+        if (rt->row_valid && i < rt->current_row.size()) {
+            vstr = rt->current_row[i];
+        } else if (i < rt->fields.size()) {
+            auto v = rt->conn->get_field(rt->id, rt->fields[i].name);
+            if (!v) return fail(v.error());
+            vstr = std::move(v).value();
+        }
+        *plDate = decode_date(vstr);
         return ok();
     }
     Table* t = get_table(hTable);
@@ -9767,7 +9778,11 @@ UNSIGNED32 ENTRYPOINT AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
     }
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        std::string fname(reinterpret_cast<const char*>(pucField));
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        std::string fname = rt->fields[i].name;
         std::string val;
         if (pucValue != nullptr && ulLen > 0) {
             val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
@@ -9886,7 +9901,11 @@ UNSIGNED32 ENTRYPOINT AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
             return ok();
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        std::string fname(reinterpret_cast<const char*>(pucField));
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        std::string fname = rt->fields[i].name;
         remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, bValue ? "1" : "0");
@@ -9921,7 +9940,11 @@ UNSIGNED32 ENTRYPOINT AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
     }
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        std::string fname(reinterpret_cast<const char*>(pucField));
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        std::string fname = rt->fields[i].name;
         char nbuf[64];
         std::snprintf(nbuf, sizeof(nbuf), "%.17g", dValue);
         remote_settle_cursor(rt);                   // M12.21 option C
@@ -10005,8 +10028,11 @@ UNSIGNED32 ENTRYPOINT AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (auto* rt = get_remote_table(hTable)) {
         // Reuse the existing GetField wire op — the returned string
         // is the full memo content; size() is the memo length.
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        auto v = rt->conn->get_field(rt->id, fname);
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        auto v = rt->conn->get_field(rt->id, rt->fields[i].name);
         if (!v) return fail(v.error());
         *pulLen = static_cast<UNSIGNED32>(v.value().size());
         return ok();
@@ -10227,17 +10253,11 @@ UNSIGNED32 ENTRYPOINT AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
 
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        {
-            auto p = reinterpret_cast<std::uintptr_t>(pucField);
-            if (p != 0 && p < 0x10000u) {
-                auto i = remote_field_index(rt, pucField);
-                if (i == std::numeric_limits<std::size_t>::max()) {
-                    return fail(openads::AE_COLUMN_NOT_FOUND, "");
-                }
-                fname = rt->fields[i].name;
-            }
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
+        std::string fname = rt->fields[i].name;
         remote_settle_cursor(rt);
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, utf8);
@@ -10307,17 +10327,11 @@ UNSIGNED32 ENTRYPOINT AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
 
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        {
-            auto p = reinterpret_cast<std::uintptr_t>(pucField);
-            if (p != 0 && p < 0x10000u) {
-                auto i = remote_field_index(rt, pucField);
-                if (i == std::numeric_limits<std::size_t>::max()) {
-                    return fail(openads::AE_COLUMN_NOT_FOUND, "");
-                }
-                fname = rt->fields[i].name;
-            }
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
+        std::string fname = rt->fields[i].name;
         remote_settle_cursor(rt);
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, val);
@@ -12347,17 +12361,11 @@ UNSIGNED32 ENTRYPOINT AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
     }
     if (auto* rt = get_remote_table(hTable)) {
         if (pucField == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        {
-            auto p = reinterpret_cast<std::uintptr_t>(pucField);
-            if (p != 0 && p < 0x10000u) {
-                auto i = remote_field_index(rt, pucField);
-                if (i == std::numeric_limits<std::size_t>::max()) {
-                    return fail(openads::AE_COLUMN_NOT_FOUND, "");
-                }
-                fname = rt->fields[i].name;
-            }
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
+        std::string fname = rt->fields[i].name;
         remote_settle_cursor(rt);
         rt->row_valid = false;
         auto r = rt->conn->set_field(rt->id, fname, raw);
@@ -12410,6 +12418,16 @@ UNSIGNED32 ENTRYPOINT AdsFailedTransactionRecovery(UNSIGNED8* pucServer) {
 
 UNSIGNED32 ENTRYPOINT AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
                           UNSIGNED16* pusCount) {
+    if (auto* rt = get_remote_table(hTable)) {
+        // Remote record locks are server-managed. A full implementation
+        // would add a GetAllLocks wire opcode + server handler that calls
+        // AdsGetAllLocks on the server-side ABI handle and returns the
+        // list. For now return zero held locks (non-crashing) so RLockList
+        // doesn't blow up; callers that need self-lock checks can still
+        // use the write-probe + EG_UNLOCKED path once #6 is addressed.
+        if (pusCount != nullptr) *pusCount = 0;
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t || pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto held = t->held_record_locks();
@@ -15419,8 +15437,11 @@ UNSIGNED32 ENTRYPOINT AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
         return ok();
     };
     if (auto* rt = get_remote_table(hTable)) {
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        auto v = rt->conn->get_field(rt->id, fname);
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        auto v = rt->conn->get_field(rt->id, rt->fields[i].name);
         if (!v) return fail(v.error());
         return write_path(v.value());
     }
@@ -15462,7 +15483,11 @@ UNSIGNED32 ENTRYPOINT AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
     }
     if (auto* rt = get_remote_table(hTable)) {
         remote_settle_cursor(rt);                   // M12.21 option C
-        std::string fname = openads::abi::to_internal(pucField, 0);
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        std::string fname = rt->fields[i].name;
         auto r = rt->conn->set_field(rt->id, fname, payload);
         if (!r) return fail(r.error());
         return ok();

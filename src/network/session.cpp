@@ -176,8 +176,16 @@ bool Session::ensure_abi_conn() {
     };
     UNSIGNED8* user = make_arg(session_user_, userbuf);
     UNSIGNED8* pw = make_arg(session_password_, pwbuf);
-    return AdsConnect60(srvbuf.data(), ADS_LOCAL_SERVER,
-                        user, pw, 0, &abi_conn_) == 0;
+    UNSIGNED32 rc = AdsConnect60(srvbuf.data(), ADS_LOCAL_SERVER,
+                                 user, pw, 0, &abi_conn_);
+    if (rc == 0 && abi_conn_ != 0) {
+        // Force canonical YYYYMMDD for all date field reads performed
+        // through ABI handles on the server (pack_row, GetField, etc).
+        // This makes AdsGetJulian / date FieldGet return usable values
+        // over remote and matches the engine's internal 8-digit strings.
+        (void)AdsSetDateFormat((UNSIGNED8*)"YYYYMMDD");
+    }
+    return rc == 0;
 }
 
 // M12.16 — open a parallel ABI handle alongside the engine
@@ -1216,11 +1224,19 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (f.payload.size() < 8) { reply = err("Lock: bad payload"); break; }
             std::uint32_t id = read_u32_le(f.payload.data());
             std::uint32_t rn = read_u32_le(f.payload.data() + 4);
+            ADSHANDLE h = 0;
             if (auto cit = cursor_tbls_.find(id); cit != cursor_tbls_.end()) {
+                h = cit->second;
+            } else if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
+                h = hit->second;
+            } else {
+                h = ensure_abi_handle(id);
+            }
+            if (h != 0) {
                 if (f.opcode == Opcode::LockRecord) {
-                    AdsLockRecord(cit->second, rn);
+                    AdsLockRecord(h, rn);
                 } else {
-                    AdsUnlockRecord(cit->second, rn);
+                    AdsUnlockRecord(h, rn);
                 }
             }
             reply.opcode = (f.opcode == Opcode::LockRecord)
@@ -1232,11 +1248,19 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::UnlockTable: {
             if (f.payload.size() < 4) { reply = err("Lock: bad payload"); break; }
             std::uint32_t id = read_u32_le(f.payload.data());
+            ADSHANDLE h = 0;
             if (auto cit = cursor_tbls_.find(id); cit != cursor_tbls_.end()) {
+                h = cit->second;
+            } else if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
+                h = hit->second;
+            } else {
+                h = ensure_abi_handle(id);
+            }
+            if (h != 0) {
                 if (f.opcode == Opcode::LockTable) {
-                    AdsLockTable(cit->second);
+                    AdsLockTable(h);
                 } else {
-                    AdsUnlockTable(cit->second);
+                    AdsUnlockTable(h);
                 }
             }
             reply.opcode = (f.opcode == Opcode::LockTable)
@@ -1673,6 +1697,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!tbl) { reply = err("AppendBlank: lookup failed"); break; }
             auto r = tbl->append_record();
             if (!r) { reply = err("AppendBlank: append_record failed"); break; }
+            tbl->set_pending_append(true);
             reply.opcode = Opcode::AppendBlankAck;
             break;
         }
@@ -1692,46 +1717,102 @@ DispatchResult Session::dispatch(const Frame& f) {
             std::string val(reinterpret_cast<const char*>(
                                 f.payload.data() + 6 + nlen),
                             f.payload.size() - 6 - nlen);
+
+            // Obtain engine tbl (source of truth for position / append state)
+            // and an ABI handle (for lock checks).
             auto it = tbls_.find(id);
-            if (it == tbls_.end() || !sess_conn_) {
-                reply = err("SetField: bad table id"); break;
+            openads::engine::Table* tbl = nullptr;
+            if (it != tbls_.end() && sess_conn_) {
+                tbl = sess_conn_->lookup_table(it->second);
             }
-            auto* tbl = sess_conn_->lookup_table(it->second);
-            if (!tbl) { reply = err("SetField: lookup failed"); break; }
-            std::int32_t fi = tbl->field_index(fname);
-            if (fi < 0) { reply = err("SetField: column not found"); break; }
-            const auto& fdesc =
-                tbl->field_descriptor(static_cast<std::uint16_t>(fi));
-            util::Result<void> r;
-            auto fi_u = static_cast<std::uint16_t>(fi);
-            switch (fdesc.type) {
-                case drivers::DbfFieldType::Logical: {
-                    bool lv = !val.empty() &&
-                        (val[0] == '1' || val[0] == 'T' || val[0] == 't' ||
-                         val[0] == 'Y' || val[0] == 'y');
-                    r = tbl->set_field(fi_u, lv);
+
+            ADSHANDLE h_abi = 0;
+            if (auto cit = cursor_tbls_.find(id); cit != cursor_tbls_.end()) {
+                h_abi = cit->second;
+            } else if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
+                h_abi = hit->second;
+            } else {
+                h_abi = ensure_abi_handle(id);
+            }
+
+            // Lock enforcement (engine tables): after Append the new record is
+            // writable without explicit LockRecord. For normal positioned writes
+            // on pre-existing rows we require a lock on the ABI handle.
+            if (h_abi != 0 && tbl) {
+                bool is_pending = tbl->pending_append();
+                std::uint32_t total = tbl->record_count();
+                // Treat the highest recno (typical just-appended row) leniently
+                // so Append + immediate field sets work without an explicit
+                // prior LockRecord (standard xBase/ADS semantics).
+                bool is_new_row = is_pending || (total == 0) || (tbl->recno() >= total);
+                if (!is_new_row) {
+                    UNSIGNED32 rn = tbl->recno();
+                    UNSIGNED16 locked = 0;
+                    if (AdsIsRecordLocked(h_abi, rn, &locked) == 0 && locked == 0) {
+                        reply = err("SetField: write failed", 5035);
+                        break;
+                    }
+                }
+            }
+
+            // Prefer engine tbl for mutation (same Table object after Append).
+            if (tbl) {
+                std::int32_t fi = tbl->field_index(fname);
+                if (fi < 0) { reply = err("SetField: column not found"); break; }
+                const auto& fdesc =
+                    tbl->field_descriptor(static_cast<std::uint16_t>(fi));
+                util::Result<void> r;
+                auto fi_u = static_cast<std::uint16_t>(fi);
+                switch (fdesc.type) {
+                    case drivers::DbfFieldType::Logical: {
+                        bool lv = !val.empty() &&
+                            (val[0] == '1' || val[0] == 'T' || val[0] == 't' ||
+                             val[0] == 'Y' || val[0] == 'y');
+                        r = tbl->set_field(fi_u, lv);
+                        break;
+                    }
+                    case drivers::DbfFieldType::Integer:
+                    case drivers::DbfFieldType::AutoInc:
+                    case drivers::DbfFieldType::Double:
+                    case drivers::DbfFieldType::ShortInt:
+                    case drivers::DbfFieldType::Currency:
+                    case drivers::DbfFieldType::AdtMoney:
+                    case drivers::DbfFieldType::Time:
+                    case drivers::DbfFieldType::Numeric:
+                        try {
+                            r = tbl->set_field(fi_u, std::stod(val));
+                        } catch (...) {
+                            r = tbl->set_field(fi_u, val);
+                        }
+                        break;
+                    default:
+                        r = tbl->set_field(fi_u, val);
+                        break;
+                }
+                if (!r) { reply = err("SetField: write failed", 5035); break; }
+                reply.opcode = Opcode::SetFieldAck;
+                break;
+            }
+
+            // Cursor/SQL or no-engine path: use ABI handle for the write so
+            // lock or other ACE errors are returned with their real code.
+            if (h_abi != 0) {
+                UNSIGNED8 fbuf[128] = {0};
+                auto n = std::min<std::size_t>(fname.size(), sizeof(fbuf) - 1);
+                std::memcpy(fbuf, fname.data(), n);
+                fbuf[n] = 0;
+                UNSIGNED32 rrc = AdsSetField(h_abi, fbuf,
+                    val.empty() ? nullptr : reinterpret_cast<UNSIGNED8*>(const_cast<char*>(val.data())),
+                    static_cast<UNSIGNED32>(val.size()));
+                if (rrc != 0) {
+                    reply = err("SetField: write failed", rrc);
                     break;
                 }
-                case drivers::DbfFieldType::Integer:
-                case drivers::DbfFieldType::AutoInc:
-                case drivers::DbfFieldType::Double:
-                case drivers::DbfFieldType::ShortInt:
-                case drivers::DbfFieldType::Currency:
-                case drivers::DbfFieldType::AdtMoney:
-                case drivers::DbfFieldType::Time:
-                case drivers::DbfFieldType::Numeric:
-                    try {
-                        r = tbl->set_field(fi_u, std::stod(val));
-                    } catch (...) {
-                        r = tbl->set_field(fi_u, val);
-                    }
-                    break;
-                default:
-                    r = tbl->set_field(fi_u, val);
-                    break;
+                reply.opcode = Opcode::SetFieldAck;
+                break;
             }
-            if (!r) { reply = err("SetField: write failed"); break; }
-            reply.opcode = Opcode::SetFieldAck;
+
+            reply = err("SetField: bad table id");
             break;
         }
         case Opcode::DeleteRecord: {

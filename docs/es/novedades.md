@@ -6,13 +6,31 @@ nav_order: 0
 permalink: /es/novedades/
 ---
 
-# Novedades (v1.0.0-rc29 → v1.6.3)
+# Novedades (v1.0.0-rc29 → v1.6.4)
 
 Esta página resume los cambios más destacados desde la versión
 v1.0.0-rc29. Para el historial completo de commits, consulta el
 [CHANGELOG](https://github.com/FiveTechSoft/OpenADS/blob/main/CHANGELOG.md).
 
 ---
+
+## Destacados v1.6.4
+
+### REMOTO — Correcciones para FiveWin TDataBase / ADSRDD (fechas y escrituras sin lock)
+
+- **Campos Date**: `FieldGet` / `AdsGetJulian` sobre columnas `ADS_DATE` ya
+  no crashea con ACCESS_VIOLATION en modo remoto. Resolución segura de
+  ordinales + caché de fila + normalización a `YYYYMMDD` en el servidor.
+- **FieldPut sin lock**: Ya no da AV. Devuelve `AE_RECORD_NOT_LOCKED` (5035)
+  cuando se escribe sin `RLock` previo. El idiom "escribir el mismo valor
+  para probar el lock" ahora funciona y genera `EG_UNLOCKED` esperado.
+- Todos los paths de Get/Set remoto ahora son seguros con ordinales como
+  punteros pequeños; lecturas repetidas y post-open/EOF son estables.
+- `AdsGetAllLocks` ya no crashea (5000) en handles remotos.
+- Mejor forwarding de locks y manejo de writes tras `AppendRecord`.
+
+Requiere `openace64.dll` y `openads_serverd` actualizados. Ver CHANGELOG
+completo.
 
 ## Destacados v1.6.3
 

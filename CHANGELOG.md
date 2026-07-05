@@ -5,6 +5,60 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track
 the real ACE SDK.
 
+## 1.6.4 — 2026-07-05
+
+### REMOTE — FiveWin TDataBase / ADSRDD integration (critical fixes)
+
+Fixes reported while using Harbour `ADSCDX` + FiveWin `TDataBase` over
+remote connections (`tcp://` against `openads_serverd`):
+
+- **Date fields (#4)**: `FieldGet` (and `AdsGetJulian` / `AdsGetField`) on
+  `ADS_DATE` columns (e.g. `WRKDAT`) no longer ACCESS_VIOLATION crashes.
+  All remote value paths now resolve fields via `remote_field_index`
+  first (handles the ordinal-as-small-pointer idiom used by X#/FWH/rddads
+  safely) before any `to_internal` or name lookup. Server-side ABI
+  connections now force `YYYYMMDD` date format so the row cache always
+  carries canonical 8-digit strings (matching local engine behaviour).
+  `AdsGetLong`/`AdsGetDouble` fallbacks and memo paths also hardened.
+
+- **FieldPut on unlocked record (#6)**: No longer crashes with AV (or
+  succeeds silently). `SetField` on the server now obtains the ABI handle
+  (via `tbls_h_` or `ensure_abi_handle`) and returns `AE_RECORD_NOT_LOCKED`
+  (5035) for writes to existing records that are not locked. The classic
+  Clipper "write value back to test lock, catch EG_UNLOCKED" idiom now
+  works over REMOTE. `LockRecord`/`LockTable` (and unlock) are forwarded
+  to ABI handles for regular remote tables. Engine table is still used
+  for the actual mutation to preserve `append_record` + immediate set
+  state machine. `pending_append` is explicitly set after server
+  `AppendBlank`; post-append sets are allowed without prior lock (standard
+  behaviour).
+
+- **Ordinal safety & repeated FieldGet (#5, #1, #2)**: Removed direct
+  `to_internal(pucField)` / `reinterpret_cast` on `pucField` in every
+  remote `AdsGet*` and `AdsSet*` (String, StringW, Double, Logical, Julian,
+  Long, MemoLength, FieldRaw, FileTo/FromField, etc.). All now go through
+  `remote_field_index` (which already handled the <0x10000 ordinal case).
+  This prevents AVs on first Get after open, at EOF, on Date fields, and
+  on the redundant second Get that some FWH helpers perform.
+
+- **Other remote robustness (#3, #7)**: `AdsGetAllLocks` no longer returns
+  5000 / crashes on remote table handles (returns count=0 as safe stub;
+  full wire impl still pending). `DbInfo(DBI_FULLPATH)` paths remain stable
+  (remote name returned). Row cache / blank handling at open/EOF/BOF made
+  more consistent so fewer workarounds are required.
+
+- **Server lock & append hygiene**: Lock opcodes now also act on `tbls_h_`
+  handles. `AppendBlank` handler explicitly marks `pending_append`.
+  `SetField` prefers the engine `Table*` for data writes (correct cursor
+  after append) while using ABI only for the lock pre-check.
+
+All changes are covered by existing remote wire unit tests (including
+`AdsAppendRecord` + multi-Set including Date columns + navigation).
+`openace64.dll` and `openads_serverd` must both be updated for full effect.
+
+Reported by users integrating OpenADS REMOTE mode with FiveWin
+`TDataBase`.
+
 ## 1.6.3 — 2026-07-04
 
 ### REMOTE / FWH — xBrowse index navigation over `tcp://`
