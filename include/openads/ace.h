@@ -1367,6 +1367,7 @@ UNSIGNED32 ENTRYPOINT AdsRegisterProgressCallback(void* pCallback);
 UNSIGNED32 ENTRYPOINT AdsSetDateFormat     (UNSIGNED8* pucFormat);
 UNSIGNED32 ENTRYPOINT AdsSetDateFormat60   (ADSHANDLE hConnect,
                                              UNSIGNED8* pucFormat);
+UNSIGNED32 ENTRYPOINT AdsGetDecimals       (UNSIGNED16* pusDecimals);
 UNSIGNED32 ENTRYPOINT AdsSetDecimals       (UNSIGNED16 usDecimals);
 UNSIGNED32 ENTRYPOINT AdsSetDefault        (UNSIGNED8* pucDir);
 UNSIGNED32 ENTRYPOINT AdsSetEpoch          (UNSIGNED16 usEpoch);
@@ -1879,14 +1880,20 @@ UNSIGNED32 ENTRYPOINT AdsSetProperty     (ADSHANDLE hObj, UNSIGNED32 ulOperation
 UNSIGNED32 ENTRYPOINT AdsSetRightsChecking(UNSIGNED32 ulOptions);
 UNSIGNED32 ENTRYPOINT AdsSetTableTransactionFree(ADSHANDLE hTable,
                                           UNSIGNED16 usTransFree);
+UNSIGNED32 ENTRYPOINT AdsIsTableTransactionFree(ADSHANDLE hTable,
+                                          UNSIGNED16* pusTransFree);
 UNSIGNED32 ENTRYPOINT AdsFindConnection25(UNSIGNED8* pucFullPath,
                                           ADSHANDLE* phConnect);
+UNSIGNED32 ENTRYPOINT AdsGetTableHandle(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                                          ADSHANDLE* phTable);
 UNSIGNED32 ENTRYPOINT AdsGetTableHandle25(ADSHANDLE hConnect, UNSIGNED8* pucName,
                                           ADSHANDLE* phTable);
 UNSIGNED32 ENTRYPOINT AdsGetBookmark60   (ADSHANDLE hObj, UNSIGNED8* pucBookmark,
                                           UNSIGNED32* pulLength);
 UNSIGNED32 ENTRYPOINT AdsGotoBookmark60  (ADSHANDLE hObj, UNSIGNED8* pucBookmark,
                               UNSIGNED32 ulLength);
+UNSIGNED32 ENTRYPOINT AdsGotoBOF         (ADSHANDLE hTable);
+UNSIGNED32 ENTRYPOINT AdsGotoEOF         (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsGetMemoBlockSize(ADSHANDLE hObj, UNSIGNED16* pusBlockSize);
 
 // ---- Further X# Advantage RDD entry points (M12.23) ----

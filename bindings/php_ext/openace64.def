@@ -171,6 +171,7 @@ EXPORTS
     AdsGetBinary
     AdsGetBinaryLength
     AdsGetConnectionType
+    AdsGetDecimals
     AdsGetDateFormat
     AdsGetDefault
     AdsGetDeleted
@@ -210,7 +211,10 @@ EXPORTS
     AdsGetTableCharType
     AdsGetTableConnection
     AdsGetTableFilename
+    AdsGetTableHandle
     AdsGetTableType
+    AdsGotoBOF
+    AdsGotoEOF
     AdsGotoRecord
     AdsIsConnectionAlive
     AdsIsEmpty
@@ -225,6 +229,7 @@ EXPORTS
     AdsIsRecordLocked
     AdsIsServerLoaded
     AdsIsTableLocked
+    AdsIsTableTransactionFree
     AdsMgConnect
     AdsMgDisconnect
     AdsMgGetActivityInfo

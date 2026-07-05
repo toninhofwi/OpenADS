@@ -25001,6 +25001,11 @@ UNSIGNED32 ENTRYPOINT AdsSetDecimals(UNSIGNED16 usDecimals) {
     g_set_decimals = usDecimals;
     return openads::AE_SUCCESS;
 }
+UNSIGNED32 ENTRYPOINT AdsGetDecimals(UNSIGNED16* pusDecimals) {
+    if (pusDecimals == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pusDecimals = g_set_decimals;
+    return ok();
+}
 UNSIGNED32 ENTRYPOINT AdsSetDefault(UNSIGNED8* pucPath) {
     g_default_path = pucPath
         ? openads::abi::to_internal(pucPath, 0) : std::string();
@@ -25794,6 +25799,14 @@ UNSIGNED32 ENTRYPOINT AdsSetTableTransactionFree(ADSHANDLE hTable,
     t->set_transaction_free(usTransFree != 0);
     return ok();
 }
+UNSIGNED32 ENTRYPOINT AdsIsTableTransactionFree(ADSHANDLE hTable,
+                                     UNSIGNED16* pusTransFree) {
+    if (pusTransFree == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pusTransFree = t->transaction_free() ? 1 : 0;
+    return ok();
+}
 
 // OpenADS keys connections/tables by handle, not by path/name, so
 // report "not found" — X# then opens a fresh connection/table.
@@ -25801,6 +25814,10 @@ UNSIGNED32 ENTRYPOINT AdsFindConnection25(UNSIGNED8* /*pucFullPath*/,
                                ADSHANDLE* phConnect) {
     if (phConnect) *phConnect = 0;
     return fail(openads::AE_NO_CONNECTION, "no connection for path");
+}
+UNSIGNED32 ENTRYPOINT AdsGetTableHandle(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                              ADSHANDLE* phTable) {
+    return AdsGetTableHandle25(hConnect, pucName, phTable);
 }
 UNSIGNED32 ENTRYPOINT AdsGetTableHandle25(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucName*/,
                                ADSHANDLE* phTable) {
@@ -25844,6 +25861,16 @@ UNSIGNED32 ENTRYPOINT AdsGotoBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
                      | (static_cast<UNSIGNED32>(pucBookmark[2]) << 16)
                      | (static_cast<UNSIGNED32>(pucBookmark[3]) << 24);
     return AdsGotoRecord(hObj, recno);
+}
+UNSIGNED32 ENTRYPOINT AdsGotoBOF(ADSHANDLE hTable) {
+    UNSIGNED32 rc = AdsGotoTop(hTable);
+    if (rc != openads::AE_SUCCESS) return rc;
+    return AdsSkip(hTable, -1);
+}
+UNSIGNED32 ENTRYPOINT AdsGotoEOF(ADSHANDLE hTable) {
+    UNSIGNED32 rc = AdsGotoBottom(hTable);
+    if (rc != openads::AE_SUCCESS) return rc;
+    return AdsSkip(hTable, 1);
 }
 
 // X#'s ADSRDD calls this during table OPEN to size its memo buffers.

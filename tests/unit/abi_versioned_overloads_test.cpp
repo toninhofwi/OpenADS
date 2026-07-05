@@ -117,6 +117,36 @@ TEST_CASE("M12.22 versioned ACE overloads") {
               == openads::AE_INVALID_CONNECTION_HANDLE);
     }
 
+    SUBCASE("additional SAP compatibility wrappers expose existing state") {
+        CHECK(AdsSetDecimals(7) == openads::AE_SUCCESS);
+        UNSIGNED16 decimals = 0;
+        CHECK(AdsGetDecimals(&decimals) == openads::AE_SUCCESS);
+        CHECK(decimals == 7);
+
+        UNSIGNED16 trans_free = 99;
+        CHECK(AdsIsTableTransactionFree(hTable, &trans_free)
+              == openads::AE_SUCCESS);
+        CHECK(trans_free == 0);
+        CHECK(AdsSetTableTransactionFree(hTable, 1) == openads::AE_SUCCESS);
+        CHECK(AdsIsTableTransactionFree(hTable, &trans_free)
+              == openads::AE_SUCCESS);
+        CHECK(trans_free == 1);
+
+        CHECK(AdsGotoBOF(hTable) == openads::AE_SUCCESS);
+        UNSIGNED16 at_bof = 0;
+        UNSIGNED16 at_eof = 0;
+        CHECK(AdsAtBOF(hTable, &at_bof) == openads::AE_SUCCESS);
+        CHECK(AdsAtEOF(hTable, &at_eof) == openads::AE_SUCCESS);
+        CHECK(at_bof == 1);
+        CHECK(at_eof == 0);
+
+        CHECK(AdsGotoEOF(hTable) == openads::AE_SUCCESS);
+        CHECK(AdsAtBOF(hTable, &at_bof) == openads::AE_SUCCESS);
+        CHECK(AdsAtEOF(hTable, &at_eof) == openads::AE_SUCCESS);
+        CHECK(at_bof == 0);
+        CHECK(at_eof == 1);
+    }
+
     SUBCASE("by-name lookups report not-found rather than crash") {
         ADSHANDLE h = 1234;
         UNSIGNED8 path[8] = "x";
@@ -126,6 +156,10 @@ TEST_CASE("M12.22 versioned ACE overloads") {
         h = 1234;
         UNSIGNED8 tname[8] = "vtab";
         CHECK(AdsGetTableHandle25(hConn, tname, &h) == openads::AE_TABLE_NOT_FOUND);
+        CHECK(h == 0);
+
+        h = 1234;
+        CHECK(AdsGetTableHandle(hConn, tname, &h) == openads::AE_TABLE_NOT_FOUND);
         CHECK(h == 0);
     }
 
