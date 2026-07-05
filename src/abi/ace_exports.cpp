@@ -14890,6 +14890,12 @@ UNSIGNED32 ENTRYPOINT AdsSetAOF100(ADSHANDLE hTable, void* pvFilter,
     return AdsSetAOF(hTable, reinterpret_cast<UNSIGNED8*>(pvFilter), 0);
 }
 
+UNSIGNED32 ENTRYPOINT AdsEvalAOF100(ADSHANDLE hTable, void* pvExpr,
+                         UNSIGNED32 /*ulOptions*/, UNSIGNED16* pusOptLevel) {
+    return AdsEvalAOF(hTable, reinterpret_cast<UNSIGNED8*>(pvExpr),
+                      pusOptLevel);
+}
+
 UNSIGNED32 ENTRYPOINT AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                              UNSIGNED8* /*pucBuf*/, UNSIGNED16* /*pusLen*/) {
     if (auto* rt = get_remote_table(hTable)) {
@@ -14968,6 +14974,13 @@ UNSIGNED32 ENTRYPOINT AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
         *pusLevel = static_cast<UNSIGNED16>(lvl);
     }
     return ok();
+}
+
+UNSIGNED32 ENTRYPOINT AdsGetAOFOptLevel100(ADSHANDLE hTable,
+                             UNSIGNED16* pusLevel, void* pvBuf,
+                             UNSIGNED16* pusLen, UNSIGNED32 /*ulOptions*/) {
+    return AdsGetAOFOptLevel(hTable, pusLevel,
+                             reinterpret_cast<UNSIGNED8*>(pvBuf), pusLen);
 }
 
 UNSIGNED32 ENTRYPOINT AdsClearAOF(ADSHANDLE hTable) {
@@ -24208,6 +24221,10 @@ UNSIGNED32 ENTRYPOINT AdsGetAOF(ADSHANDLE hTable, UNSIGNED8* pucFilter, UNSIGNED
     openads::abi::copy_to_caller(pucFilter, pusLen, t->aof_expr());
     return ok();
 }
+UNSIGNED32 ENTRYPOINT AdsGetAOF100(ADSHANDLE hTable, void* pvFilter,
+                        UNSIGNED16* pusLen, UNSIGNED32 /*ulOptions*/) {
+    return AdsGetAOF(hTable, reinterpret_cast<UNSIGNED8*>(pvFilter), pusLen);
+}
 UNSIGNED32 ENTRYPOINT AdsGetConnectionType(ADSHANDLE hConnect, UNSIGNED16* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = ADS_LOCAL_SERVER;
@@ -25017,6 +25034,10 @@ UNSIGNED32 ENTRYPOINT AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
     t->set_filter_expr(openads::abi::to_internal(pucFilter, 0));
     return ok();
 }
+UNSIGNED32 ENTRYPOINT AdsSetFilter100(ADSHANDLE hTable, void* pvFilter,
+                           UNSIGNED32 /*ulOptions*/) {
+    return AdsSetFilter(hTable, reinterpret_cast<UNSIGNED8*>(pvFilter));
+}
 // AdsSetJulian, AdsSetLongLong already defined elsewhere in this file.
 UNSIGNED32 ENTRYPOINT AdsSetMilliseconds(ADSHANDLE, UNSIGNED8*, SIGNED32) { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
 UNSIGNED32 ENTRYPOINT AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
@@ -25560,6 +25581,10 @@ UNSIGNED32 ENTRYPOINT AdsMgKillUser(ADSHANDLE h, UNSIGNED8* /*pucUser*/,
     return send_mg_mutator(*be,
                openads::network::MgRequestKind::KillUser, usConnNo)
         ? openads::AE_SUCCESS : openads::AE_NO_CONNECTION;
+}
+UNSIGNED32 ENTRYPOINT AdsMgKillUser90(ADSHANDLE h, UNSIGNED8* pucUser,
+                           UNSIGNED16 usConnNo, UNSIGNED32 /*ulOptions*/) {
+    return AdsMgKillUser(h, pucUser, usConnNo);
 }
 UNSIGNED32 ENTRYPOINT AdsMgResetCommStats(ADSHANDLE h) {
     const MgBackend* be = lookup_mg(h);

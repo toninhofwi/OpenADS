@@ -60,6 +60,7 @@ EXPORTS
     AdsZapTable
     AdsSetAOF
     AdsGetAOFOptLevel
+    AdsGetAOFOptLevel100
     AdsClearAOF
     AdsGetMemoLength
     AdsGetMemoDataType
@@ -158,6 +159,7 @@ EXPORTS
     AdsDeleteCustomKey
     AdsDeleteFile
     AdsEvalAOF
+    AdsEvalAOF100
     AdsExtractKey
     AdsFailedTransactionRecovery
     AdsFindClose
@@ -165,6 +167,7 @@ EXPORTS
     AdsFindNextTable
     AdsGetAllLocks
     AdsGetAOF
+    AdsGetAOF100
     AdsGetBinary
     AdsGetBinaryLength
     AdsGetConnectionType
@@ -236,6 +239,7 @@ EXPORTS
     AdsMgGetUserNames
     AdsMgGetWorkerThreadActivity
     AdsMgKillUser
+    AdsMgKillUser90
     AdsMgResetCommStats
     AdsRefreshAOF
     AdsRefreshRecord
@@ -250,6 +254,7 @@ EXPORTS
     AdsSetExact
     AdsSetFieldRaw
     AdsSetFilter
+    AdsSetFilter100
     AdsSetJulian
     AdsSetLongLong
     AdsSetMilliseconds
@@ -371,4 +376,3 @@ EXPORTS
     AdsSetTime
     AdsSetTimeStamp
     AdsGetDate
-

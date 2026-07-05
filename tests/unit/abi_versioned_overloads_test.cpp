@@ -96,6 +96,27 @@ TEST_CASE("M12.22 versioned ACE overloads") {
         CHECK(AdsSetProperty90(hTable, 1, &v) == openads::AE_SUCCESS);
     }
 
+    SUBCASE("100/90 compatibility wrappers forward to base APIs") {
+        UNSIGNED8 filter[] = "ID = 1";
+        CHECK(AdsSetFilter100(hTable, filter, 0) == openads::AE_SUCCESS);
+
+        UNSIGNED16 opt = 99;
+        CHECK(AdsEvalAOF100(hTable, filter, 0, &opt) == openads::AE_SUCCESS);
+        CHECK(opt == 0);
+
+        UNSIGNED8 aof[64] = "";
+        UNSIGNED16 aof_len = sizeof(aof);
+        CHECK(AdsGetAOF100(hTable, aof, &aof_len, 0) == openads::AE_SUCCESS);
+
+        opt = 99;
+        aof_len = sizeof(aof);
+        CHECK(AdsGetAOFOptLevel100(hTable, &opt, aof, &aof_len, 0)
+              == openads::AE_SUCCESS);
+
+        CHECK(AdsMgKillUser90(0, nullptr, 0, 0)
+              == openads::AE_INVALID_CONNECTION_HANDLE);
+    }
+
     SUBCASE("by-name lookups report not-found rather than crash") {
         ADSHANDLE h = 1234;
         UNSIGNED8 path[8] = "x";
