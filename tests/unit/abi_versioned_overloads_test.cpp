@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -189,7 +190,35 @@ TEST_CASE("AdsConnect101 parses documented connection strings") {
     REQUIRE(AdsConnect101(reinterpret_cast<UNSIGNED8*>(conn.data()),
                           &hOptions, &hConn) == openads::AE_SUCCESS);
     CHECK(hConn != 0);
-    CHECK(hOptions == 0);
+    REQUIRE(hOptions != 0);
+
+    UNSIGNED32 option_count = 0;
+    CHECK(AdsGetRecordCount(hOptions, 0, &option_count) == openads::AE_SUCCESS);
+    CHECK(option_count == 7);
+    std::map<std::string, std::string> parsed_options;
+    REQUIRE(AdsGotoTop(hOptions) == openads::AE_SUCCESS);
+    UNSIGNED8 option_name_field[] = "Name";
+    UNSIGNED8 option_value_field[] = "Value";
+    for (UNSIGNED32 i = 0; i < option_count; ++i) {
+        char key[128] = {};
+        UNSIGNED32 key_len = sizeof(key);
+        char value[1200] = {};
+        UNSIGNED32 value_len = sizeof(value);
+        CHECK(AdsGetString(hOptions, option_name_field,
+                           reinterpret_cast<UNSIGNED8*>(key), &key_len,
+                           0) == openads::AE_SUCCESS);
+        CHECK(AdsGetString(hOptions, option_value_field,
+                           reinterpret_cast<UNSIGNED8*>(value), &value_len,
+                           0) == openads::AE_SUCCESS);
+        parsed_options[key] = value;
+        if (i + 1 < option_count) {
+            CHECK(AdsSkip(hOptions, 1) == openads::AE_SUCCESS);
+        }
+    }
+    CHECK(parsed_options["datasource"] == dir.string());
+    CHECK(parsed_options["readonly"] == "TRUE");
+    CHECK(parsed_options["tabletype"] == "ADS_CDX");
+    CHECK(AdsCloseTable(hOptions) == openads::AE_SUCCESS);
 
     UNSIGNED16 decimals = 0;
     CHECK(AdsGetDecimals(&decimals) == openads::AE_SUCCESS);

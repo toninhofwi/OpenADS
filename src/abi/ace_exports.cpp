@@ -99,6 +99,8 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 extern "C++" {
 namespace {
@@ -5073,6 +5075,72 @@ connect101_open_options() {
     return opts;
 }
 
+std::unordered_map<ADSHANDLE, std::unique_ptr<Table>>&
+connect101_option_tables() {
+    static std::unordered_map<ADSHANDLE, std::unique_ptr<Table>> tables;
+    return tables;
+}
+
+openads::util::Result<Table> build_connect101_options_table(
+    const std::unordered_map<std::string, std::string>& options) {
+    struct Col {
+        const char* colname;
+        std::uint16_t length;
+    };
+    const std::vector<Col> cols = {
+        {"Name", 64},
+        {"Value", 1024},
+    };
+
+    std::vector<std::pair<std::string, std::string>> sorted;
+    sorted.reserve(options.size());
+    for (const auto& kv : options) sorted.emplace_back(kv.first, kv.second);
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    std::vector<openads::drivers::DbfField> fields;
+    fields.reserve(cols.size());
+    std::uint32_t rlen = 1;
+    for (const auto& col : cols) {
+        openads::drivers::DbfField f;
+        f.name = col.colname;
+        f.raw_type = 20;
+        f.type = openads::drivers::DbfFieldType::CiCharacter;
+        f.length = col.length;
+        f.decimals = 0;
+        f.record_offset = static_cast<std::uint16_t>(rlen);
+        rlen += f.length;
+        fields.push_back(std::move(f));
+    }
+
+    std::vector<std::vector<std::uint8_t>> records;
+    records.reserve(sorted.size());
+    for (const auto& kv : sorted) {
+        std::vector<std::uint8_t> rec(rlen, 0x20u);
+        rec[0] = ' ';
+        const std::string values[] = {kv.first, kv.second};
+        for (std::size_t i = 0; i < cols.size(); ++i) {
+            const auto& f = fields[i];
+            const std::string& val = values[i];
+            std::size_t n = std::min<std::size_t>(val.size(), f.length);
+            std::memcpy(rec.data() + f.record_offset, val.data(), n);
+        }
+        records.push_back(std::move(rec));
+    }
+
+    char name[80];
+    std::snprintf(name, sizeof(name), "memory://adsconnect101/%llx",
+                  static_cast<unsigned long long>(
+                      openads::platform::monotonic_nanos()));
+    auto drv = std::make_unique<openads::drivers::memory::MemoryDriver>(
+        name, std::move(fields), std::move(records),
+        static_cast<std::uint16_t>(rlen));
+    return Table::from_driver(std::move(drv), name,
+                              openads::engine::TableType::Adt,
+                              openads::engine::OpenMode::Read,
+                              openads::engine::LockingMode::Compatible);
+}
+
 UNSIGNED16 connect101_table_type(const std::string& value) {
     std::string v = connect101_key(value);
     if (v.rfind("ads_", 0) == 0) v.erase(0, 4);
@@ -5613,6 +5681,22 @@ UNSIGNED32 ENTRYPOINT AdsConnect101(UNSIGNED8* pucConnectString,
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         connect101_open_options()[*phConnect] = open_opts;
+    }
+    if (phConnectOptions != nullptr) {
+        auto opt_table = build_connect101_options_table(options);
+        if (!opt_table) {
+            (void)AdsDisconnect(*phConnect);
+            *phConnect = 0;
+            *phConnectOptions = 0;
+            return fail(opt_table.error());
+        }
+        auto holder = std::make_unique<Table>(std::move(opt_table).value());
+        Table* raw = holder.get();
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        Handle h = s.registry.register_object(HandleKind::Table, raw);
+        connect101_option_tables().emplace(h, std::move(holder));
+        *phConnectOptions = h;
     }
     return ok();
 }
@@ -7612,6 +7696,7 @@ UNSIGNED32 ENTRYPOINT AdsCloseAllTables(void) {
             (void)t->flush();
             purge_bindings_for_table(t);
             purge_pending_binaries_for_table(t);
+            connect101_option_tables().erase(h);
             if (owning) owning->close_table_ptr(t);
         }
         s.registry.release(h);
@@ -7658,6 +7743,7 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
         purge_pending_binaries_for_table(t);
         forget_relations(hTable);
         t->ri_snapshot().clear();
+        connect101_option_tables().erase(hTable);
         if (owning) owning->close_table_ptr(t);
     }
     cursor_projections().erase(hTable);
