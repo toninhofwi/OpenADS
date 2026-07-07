@@ -133,7 +133,7 @@ Both pass end-to-end against OpenADS:
   order → `DbCloseArea`.
 - **Remote smoke**: opens `customer.dbf` on the server and does
   read / nav (`RecCount` / `GoTop` / `Skip ±` / `GoBottom` /
-  `Eof` / `FieldGet`).
+  `Eof` / `FieldGet` / `OrdKeyCount`).
 
 Doctest coverage: `tests/abi_versioned_overloads_test.cpp` (local)
 and `tests/abi_remote_overloads_test.cpp` (over the wire, gated

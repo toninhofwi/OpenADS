@@ -20,4 +20,7 @@ util::Result<void> remote_index_goto_top(RemoteIndex* ri);
 util::Result<void> remote_index_goto_bottom(RemoteIndex* ri);
 util::Result<void> remote_index_skip(RemoteIndex* ri, std::int32_t rows);
 
+// Return the filtered key count from the active index order via the wire.
+util::Result<std::uint32_t> remote_index_key_count(RemoteIndex* ri);
+
 } // namespace openads::network

@@ -94,6 +94,7 @@ public:
     util::Result<std::string>   get_field(std::uint32_t id,
                                            const std::string& field_name);
     util::Result<std::uint32_t> record_count(std::uint32_t id);
+    util::Result<std::uint32_t> key_count(std::uint32_t table_id);
     util::Result<bool>          at_eof(std::uint32_t id);
     // M12.14 — remote field metadata + extended cursor state.
     struct FieldDesc {

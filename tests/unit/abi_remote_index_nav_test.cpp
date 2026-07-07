@@ -628,3 +628,219 @@ TEST_CASE("remote legacy AdsCreateIndex routes to AdsCreateIndex61") {
     fs::remove_all(dir, ec);
     srv.stop();
 }
+// M12.28 — AdsGetKeyCount over the wire for a remote alias with an active
+// conditional FOR index. Before the fix, AdsGetKeyCount returned 0 for
+// remote index handles (no get_remote_index guard) and the server never
+// had a GetKeyCount opcode — so OrdKeyCount() in xBrowse returned 0 and
+// the grid showed no rows.
+TEST_CASE("remote AdsGetKeyCount with conditional FOR index returns filtered count") {
+    using openads::network::Server;
+    auto dir = fs::temp_directory_path() / "openads_remote_keycount";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // Stage: create table with 200 rows, CODIGO = 1..200, then a
+    // conditional tag TF with FOR CODIGO>100 → index has exactly 100 entries.
+    UNSIGNED8 srv[512];
+    const auto sp = dir.string();
+    std::memcpy(srv, sp.c_str(), sp.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 fields[] = "CODIGO,Numeric,6,0;NOME,Character,20";
+    UNSIGNED8 tname[]  = "kctest.dbf";
+    ADSHANDLE hT = 0;
+    REQUIRE(AdsCreateTable(hConn, tname, nullptr, ADS_CDX,
+                           0, 0, 0, 64, fields, &hT) == 0);
+
+    for (int i = 1; i <= 200; ++i) {
+        REQUIRE(AdsAppendRecord(hT) == 0);
+        UNSIGNED8 fCod[] = "CODIGO";
+        REQUIRE(AdsSetDouble(hT, fCod, static_cast<double>(i)) == 0);
+        UNSIGNED8 fNome[] = "NOME";
+        std::string v = "n" + std::to_string(i);
+        REQUIRE(AdsSetString(hT, fNome,
+                             reinterpret_cast<UNSIGNED8*>(v.data()),
+                             static_cast<UNSIGNED32>(v.size())) == 0);
+        REQUIRE(AdsWriteRecord(hT) == 0);
+    }
+
+    // Create conditional tag: key CODIGO, FOR CODIGO>100.
+    UNSIGNED8 bag[]  = "kctest.cdx";
+    UNSIGNED8 tag[]  = "TF";
+    UNSIGNED8 expr[] = "CODIGO";
+    UNSIGNED8 cond[] = "CODIGO>100";
+    ADSHANDLE hIdx = 0;
+    REQUIRE(AdsCreateIndex61(hT, bag, tag, expr,
+                             cond, nullptr, 0, 512, &hIdx) == 0);
+
+    REQUIRE(AdsCloseTable(hT) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    // --- Now connect remotely and verify key count ---
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = server.port();
+
+    ADSHANDLE hRC = remote_connect(dir, port);
+    ADSHANDLE hRT = 0;
+    REQUIRE(AdsOpenTable(hRC, tname, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hRT) == 0);
+
+    // Activate the conditional order via the RemoteIndex handle.
+    ADSHANDLE hOrd = 0;
+    UNSIGNED8 want_tag[] = "TF";
+    REQUIRE(AdsGetIndexHandle(hRT, want_tag, &hOrd) == 0);
+    REQUIRE(hOrd != 0);
+    REQUIRE(AdsSetIndexOrderByHandle(hRT, hOrd) == 0);
+
+    // AdsGetKeyCount via the ORDER handle — the rddads OrdKeyCount path.
+    UNSIGNED32 key_cnt = 0;
+    REQUIRE(AdsGetKeyCount(hOrd, 0, &key_cnt) == 0);
+    CHECK(key_cnt == 100u);
+
+    // AdsGetKeyCount via the TABLE handle — with an active order, returns
+    // filtered key count (same as local AdsGetKeyCount behaviour).
+    UNSIGNED32 tbl_cnt = 0;
+    REQUIRE(AdsGetKeyCount(hRT, 0, &tbl_cnt) == 0);
+    CHECK(tbl_cnt == 100u);
+
+    // AdsGetRecordCount via the ORDER handle — remote route passes through
+    // to the parent table's physical record_count() (200). The filtered
+    // count is served by AdsGetKeyCount, which is the correct path for
+    // OrdKeyCount / DBOI_KEYCOUNT.
+    UNSIGNED32 rec_cnt = 0;
+    REQUIRE(AdsGetRecordCount(hOrd, 1, &rec_cnt) == 0);
+    CHECK(rec_cnt == 200u);
+
+    // Verify the index walk: GotoTop + Skip should only visit CODIGO > 100.
+    REQUIRE(AdsGotoTop(hOrd) == 0);
+    double first_cod = 0.0;
+    UNSIGNED8 fCod[] = "CODIGO";
+    REQUIRE(AdsGetDouble(hRT, fCod, &first_cod) == 0);
+    CHECK(first_cod == 101.0);
+
+    REQUIRE(AdsCloseTable(hRT) == 0);
+    REQUIRE(AdsDisconnect(hRC) == 0);
+    fs::remove_all(dir, ec);
+    server.stop();
+}
+
+// M12.28 — AdsGetDate over the wire. Before the fix, rddads resolved
+// Date-type field access to AdsGetDate(hOrdCurrent, ...) which passed
+// the RemoteIndex handle to AdsGetField — but AdsGetField only checks
+// get_remote_table(), so the remote path was skipped entirely and the
+// function fell through to a null local table pointer -> crash.
+TEST_CASE("remote AdsGetDate on Date field via index handle does not crash") {
+    using openads::network::Server;
+    auto dir = fs::temp_directory_path() / "openads_remote_date";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // Stage: create table with a Date field + production index.
+    UNSIGNED8 srv[512];
+    const auto sp = dir.string();
+    std::memcpy(srv, sp.c_str(), sp.size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 fields[] = "NOME,Character,20;WHEN,Date,8";
+    UNSIGNED8 tname[]  = "dttest.dbf";
+    ADSHANDLE hT = 0;
+    REQUIRE(AdsCreateTable(hConn, tname, nullptr, ADS_CDX,
+                           0, 0, 0, 64, fields, &hT) == 0);
+
+    // Insert 3 rows with dates.
+    struct Row { const char* nome; const char* when; };
+    const Row rows[] = {
+        {"Alpha", "2024-01-15"},
+        {"Beta",  "2025-06-20"},
+        {"Gamma", "2026-12-31"},
+    };
+    for (const auto& r : rows) {
+        REQUIRE(AdsAppendRecord(hT) == 0);
+        UNSIGNED8 fNome[] = "NOME";
+        AdsSetString(hT, fNome, (UNSIGNED8*)r.nome,
+                     static_cast<UNSIGNED32>(std::strlen(r.nome)));
+        UNSIGNED8 fWhen[] = "WHEN";
+        AdsSetDate(hT, fWhen, (UNSIGNED8*)r.when,
+                   static_cast<UNSIGNED16>(std::strlen(r.when)));
+        REQUIRE(AdsWriteRecord(hT) == 0);
+    }
+
+    // Create an order tag on NOME for navigation.
+    UNSIGNED8 bag[]  = "dttest.cdx";
+    UNSIGNED8 tag[]  = "TNOME";
+    UNSIGNED8 expr[] = "NOME";
+    ADSHANDLE hIdx = 0;
+    REQUIRE(AdsCreateIndex61(hT, bag, tag, expr,
+                             nullptr, nullptr, 0, 512, &hIdx) == 0);
+
+    REQUIRE(AdsCloseTable(hT) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    // --- Connect remotely ---
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    const std::uint16_t port = server.port();
+
+    ADSHANDLE hRC = remote_connect(dir, port);
+    ADSHANDLE hRT = 0;
+    REQUIRE(AdsOpenTable(hRC, tname, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hRT) == 0);
+
+    // Navigate to the first record via the index handle.
+    ADSHANDLE hOrd = 0;
+    UNSIGNED8 want_tag[] = "TNOME";
+    REQUIRE(AdsGetIndexHandle(hRT, want_tag, &hOrd) == 0);
+    REQUIRE(hOrd != 0);
+    REQUIRE(AdsGotoTop(hOrd) == 0);
+
+    // AdsGetField on the TABLE handle should work (baseline).
+    UNSIGNED8 out[32] = {0};
+    UNSIGNED32 cap = sizeof(out);
+    UNSIGNED8 fNome[] = "NOME";
+    REQUIRE(AdsGetField(hRT, fNome, out, &cap, 0) == 0);
+    std::string nomeVal(reinterpret_cast<char*>(out), cap);
+    CHECK(nomeVal.substr(0, 5) == "Alpha");
+
+    // AdsGetDate via the INDEX handle — this was the crash path.
+    // Before the fix, hOrd (RemoteIndex) was passed to AdsGetField
+    // which didn't check get_remote_index() -> segfault.
+    UNSIGNED8 dtBuf[32] = {0};
+    UNSIGNED16 dtLen = sizeof(dtBuf);
+    UNSIGNED8 fWhen[] = "WHEN";
+    REQUIRE(AdsGetDate(hOrd, fWhen, dtBuf, &dtLen) == 0);
+    std::string dateStr(reinterpret_cast<char*>(dtBuf), dtLen);
+    CHECK(dateStr == "20240115");
+
+    // Also verify AdsGetDate via the TABLE handle works.
+    std::memset(dtBuf, 0, sizeof(dtBuf));
+    dtLen = sizeof(dtBuf);
+    REQUIRE(AdsGetDate(hRT, fWhen, dtBuf, &dtLen) == 0);
+    dateStr = std::string(reinterpret_cast<char*>(dtBuf), dtLen);
+    CHECK(dateStr == "20240115");
+
+    // Walk all 3 records via the index, read Date from each.
+    std::vector<std::string> dates;
+    for (int i = 0; i < 3; ++i) {
+        std::memset(dtBuf, 0, sizeof(dtBuf));
+        dtLen = sizeof(dtBuf);
+        REQUIRE(AdsGetDate(hOrd, fWhen, dtBuf, &dtLen) == 0);
+        dates.emplace_back(reinterpret_cast<char*>(dtBuf), dtLen);
+        if (i < 2) AdsSkip(hOrd, 1);
+    }
+    CHECK(dates.size() == 3u);
+    CHECK(dates[0] == "20240115");
+    CHECK(dates[1] == "20250620");
+    CHECK(dates[2] == "20261231");
+
+    REQUIRE(AdsCloseTable(hRT) == 0);
+    REQUIRE(AdsDisconnect(hRC) == 0);
+    fs::remove_all(dir, ec);
+    server.stop();
+}

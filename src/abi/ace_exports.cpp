@@ -4985,7 +4985,8 @@ std::string trim_ascii(std::string s) {
 
 std::string connect101_key(std::string s) {
     std::string out;
-    for (unsigned char ch : s) {
+    for (char raw_ch : s) {
+        auto ch = static_cast<unsigned char>(raw_ch);
         if (!std::isspace(ch)) {
             out.push_back(static_cast<char>(std::tolower(ch)));
         }
@@ -26373,6 +26374,21 @@ UNSIGNED32 ENTRYPOINT AdsGetKeyCount(ADSHANDLE hIndex, UNSIGNED16 /*usFilter*/,
                           UNSIGNED32* pulCount) {
     if (pulCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulCount = 0;
+    // M12.28 - route remote index handles through the wire.
+    if (auto* ri = get_remote_index(hIndex)) {
+        auto r = openads::network::remote_index_key_count(ri);
+        if (!r) return fail(r.error());
+        *pulCount = r.value();
+        return ok();
+    }
+    // M12.28 - route remote table handles: key_count = physical count.
+    if (auto* rt = get_remote_table(hIndex)) {
+        if (rt->conn == nullptr) return fail(openads::AE_INTERNAL_ERROR, "remote table: no connection");
+        auto r = rt->conn->key_count(rt->id);
+        if (!r) return fail(r.error());
+        *pulCount = r.value();
+        return ok();
+    }
     Table* t = get_table(hIndex);
     if (t == nullptr) return ok();
     // With an active order, the KEY count can be far fewer than the table's
@@ -26811,8 +26827,14 @@ UNSIGNED32 ENTRYPOINT AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucB
                       UNSIGNED16* pusLen) {
     UNSIGNED8 nm[64];
     UNSIGNED32 cap = pusLen ? *pusLen : 0;
-    UNSIGNED32 rc = AdsGetField(hObj,
-                                as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+    // rddads passes hOrdCurrent (a RemoteIndex handle) for Date fields.
+    // AdsGetField only checks get_remote_table(); resolve index -> parent.
+    ADSHANDLE real_hObj = hObj;
+    if (auto* ri = get_remote_index(hObj)) {
+        if (ri->parent) real_hObj = handle_for_remote_table(ri->parent);
+    }
+    UNSIGNED32 rc = AdsGetField(real_hObj,
+                                as_field(resolve_field_id(real_hObj, pId, nm, sizeof(nm))),
                                 pucBuf, &cap, 0);
     if (pusLen) *pusLen = static_cast<UNSIGNED16>(cap);
     return rc;

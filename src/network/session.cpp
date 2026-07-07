@@ -827,6 +827,36 @@ DispatchResult Session::dispatch(const Frame& f) {
             write_u32_le(rc, reply.payload);
             break;
         }
+        case Opcode::GetKeyCount: {
+            if (f.payload.size() < 4) { reply = err("GetKeyCount: bad payload"); break; }
+            std::uint32_t id = read_u32_le(f.payload.data());
+            if (auto cit = cursor_tbls_.find(id); cit != cursor_tbls_.end()) {
+                UNSIGNED32 kc = 0;
+                AdsGetRecordCount(cit->second, 0, &kc);
+                reply.opcode = Opcode::GetKeyCountAck;
+                write_u32_le(kc, reply.payload);
+                break;
+            }
+            auto it = tbls_.find(id);
+            if (it == tbls_.end() || !sess_conn_) {
+                reply = err("GetKeyCount: bad table id"); break; }
+            ADSHANDLE ht = ensure_abi_handle(id);
+            if (ht != 0 && ordered_tables_.count(id)) {
+                UNSIGNED32 kc = 0;
+                UNSIGNED32 rrc = AdsGetKeyCount(ht, 0, &kc);
+                if (rrc == 0) {
+                    reply.opcode = Opcode::GetKeyCountAck;
+                    write_u32_le(kc, reply.payload);
+                    break;
+                }
+            }
+            auto* tbl = sess_conn_->lookup_table(it->second);
+            if (!tbl) { reply = err("GetKeyCount: lookup failed"); break; }
+            std::uint32_t kc = tbl->record_count();
+            reply.opcode = Opcode::GetKeyCountAck;
+            write_u32_le(kc, reply.payload);
+            break;
+        }
         case Opcode::AtEOF: {
             if (f.payload.size() < 4) { reply = err("AtEOF: bad payload"); break; }
             std::uint32_t id = read_u32_le(f.payload.data());

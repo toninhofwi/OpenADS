@@ -204,6 +204,14 @@ enum class Opcode : std::uint8_t {
     GetRecordCRC       = 0xAE,
     GetRecordCRAck     = 0xAF,
 
+    // M12.28 -- remote AdsGetKeyCount: filtered key count from the
+    // active index order (conditional FOR tags index only matching
+    // rows, so this differs from GetRecordCount's physical row count).
+    // Request:  [u32 table_id]
+    // Reply:    [u32 key_count LE]
+    GetKeyCount        = 0xB0,
+    GetKeyCountAck     = 0xB1,
+
     Error              = 0xFF,
 };
 

@@ -394,6 +394,21 @@ RemoteConnection::record_count(std::uint32_t id) {
     return read_u32_le(rep.value().payload.data());
 }
 
+util::Result<std::uint32_t>
+RemoteConnection::key_count(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::GetKeyCount;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetKeyCountAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0,
+            "GetKeyCount: server error", ""};
+    }
+    return read_u32_le(rep.value().payload.data());
+}
+
 util::Result<bool> RemoteConnection::at_eof(std::uint32_t id) {
     Frame req;
     req.opcode = Opcode::AtEOF;

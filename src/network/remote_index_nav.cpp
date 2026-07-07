@@ -56,4 +56,17 @@ util::Result<void> remote_index_skip(RemoteIndex* ri, std::int32_t rows) {
     return ri->conn->skip(ri->parent, rows);
 }
 
+util::Result<std::uint32_t> remote_index_key_count(RemoteIndex* ri) {
+    if (ri == nullptr || ri->parent == nullptr || ri->conn == nullptr) {
+        return util::Error{
+            openads::AE_INTERNAL_ERROR, 0,
+            "remote index key count: missing parent or connection", ""};
+    }
+    auto act = remote_activate_index(ri);
+    if (!act) return act.error();
+    auto r = ri->conn->key_count(ri->parent->id);
+    if (!r) return r.error();
+    return r.value();
+}
+
 } // namespace openads::network

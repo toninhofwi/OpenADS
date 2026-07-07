@@ -1,3 +1,34 @@
+## 1.6.5 — 2026-07-07
+
+### REMOTE — OrdKeyCount() fix + AdsGetDate() crash fix
+
+Two critical blockers for Harbour `rddads` + FiveWin `TDataBase` /
+`xBrowse` over remote connections:
+
+- **OrdKeyCount() returns 0 on remote aliases (#128)**: `xBrowse`
+  grids showed no rows because `OrdKeyCount()` internally called
+  `AdsGetKeyCount(hOrdCurrent)` which had no remote code path.
+  Added new wire opcode `GetKeyCount` / `GetKeyCountAck`
+  (0xB0/0xB1), `RemoteConnection::key_count()` client method,
+  `remote_index_key_count()` bridge, and a server handler that routes
+  through the ABI's `AdsGetKeyCount` to compute the true filtered key
+  count from the active index order (e.g. 100 for a `FOR CODIGO>100`
+  tag on a 200-row table). Also added a `get_remote_table()` guard
+  so table handles route correctly too.
+
+- **AdsGetDate() crashes on remote Date-type fields (#128)**:
+  rddads resolves `FieldGet` on `ADS_DATE` columns to
+  `AdsGetDate(hOrdCurrent, ...)`, passing the `RemoteIndex` handle.
+  `AdsGetDate` delegated to `AdsGetField` which only checks
+  `get_remote_table()` -- never sees the `RemoteIndex` and falls through
+  to a null local pointer -> ACCESS_VIOLATION. Fixed by resolving
+  `RemoteIndex` -> parent `RemoteTable` via `handle_for_remote_table`
+  before calling `AdsGetField`.
+
+Files: `wire.h`, `client.h`, `client.cpp`, `remote_index_nav.h`,
+`remote_index_nav.cpp`, `session.cpp`, `ace_exports.cpp`.
+Tests: 2 new unit tests in `abi_remote_index_nav_test.cpp`.
+
 # Changelog
 
 All notable changes to OpenADS are recorded here. The project follows
